@@ -1,0 +1,28 @@
+{
+  "activeVersionID" : "A35FFFA9-CB86-42B7-ACBE-ACD4F9FE9028",
+  "canonicalTitle" : "opening",
+  "notes" : "",
+  "songID" : "E5535758-3FBC-4B2C-A36E-1DABC651F9F7",
+  "title" : "Opening",
+  "updatedAt" : "2026-03-22T00:37:33.888Z",
+  "versions" : [
+    {
+      "createdAt" : "2026-03-22T00:32:43.888Z",
+      "id" : "A35FFFA9-CB86-42B7-ACBE-ACD4F9FE9028",
+      "isBookmarked" : false,
+      "label" : "Active",
+      "lyrics" : "Active lyrics",
+      "saveType" : "manual",
+      "updatedAt" : "2026-03-22T00:34:23.888Z"
+    },
+    {
+      "createdAt" : "2026-03-22T00:36:03.888Z",
+      "id" : "B5435F35-DDE6-430F-AD36-341B1107CC0C",
+      "isBookmarked" : false,
+      "label" : "Newest",
+      "lyrics" : "Newest lyrics",
+      "saveType" : "manual",
+      "updatedAt" : "2026-03-22T00:37:33.888Z"
+    }
+  ]
+}
