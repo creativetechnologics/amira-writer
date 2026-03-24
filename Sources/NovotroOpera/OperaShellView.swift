@@ -1052,6 +1052,7 @@ private struct OperaWindowAccessor: NSViewRepresentable {
         private weak var view: NSView?
         private weak var window: NSWindow?
         private var observers: [NSObjectProtocol] = []
+        private var isRepositioningTrafficLights = false
 
 
         func attach(to view: NSView) {
@@ -1090,26 +1091,47 @@ private struct OperaWindowAccessor: NSViewRepresentable {
             repositionTrafficLights()
         }
 
-        /// Vertically centers the traffic light buttons within the 36px custom tab bar.
-        /// NSTitlebarView uses a flipped coordinate system (y=0 at top, increases downward),
-        /// so increasing y moves buttons DOWN on screen.
+        /// Vertically centers the traffic light buttons to align with content
+        /// in our 36px custom tab bar.
+        ///
+        /// Measured geometry (non-flipped NSTitlebarView, 32px tall):
+        ///   - Default button y = 9 (centered in 32px: (32-14)/2 = 9)
+        ///   - Our tab bar is 36px, so text center is at 18px from top
+        ///   - Target button center = 18px from top = 14px from bottom
+        ///   - Target button y = 14 - 7 = 7 (non-flipped, y from bottom)
+        ///
+        /// Non-flipped coords: y=0 at bottom, decreasing y moves DOWN on screen.
         private func repositionTrafficLights() {
+            guard !isRepositioningTrafficLights else { return }
+            isRepositioningTrafficLights = true
+            defer { isRepositioningTrafficLights = false }
+
             guard let window else { return }
             let tabBarHeight: CGFloat = 36
             let buttonTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+
             for type in buttonTypes {
                 guard let button = window.standardWindowButton(type) else { continue }
                 guard let superview = button.superview else { continue }
+
                 let buttonHeight = button.frame.height
-                let centeredY: CGFloat
+                let superviewHeight = superview.bounds.height
+
+                let targetY: CGFloat
                 if superview.isFlipped {
-                    // Flipped: y=0 at top, y increases downward
-                    centeredY = (tabBarHeight - buttonHeight) / 2
+                    // Flipped: y=0 at top, increasing y moves DOWN
+                    targetY = (tabBarHeight - buttonHeight) / 2
                 } else {
-                    // Non-flipped: y=0 at bottom, y increases upward
-                    centeredY = superview.bounds.height - (tabBarHeight + buttonHeight) / 2
+                    // Non-flipped: y=0 at bottom, decreasing y moves DOWN
+                    // We want button center at tabBarHeight/2 from the top of the superview.
+                    // From bottom: center = superviewHeight - tabBarHeight/2
+                    // Origin = center - buttonHeight/2
+                    targetY = superviewHeight - (tabBarHeight + buttonHeight) / 2
                 }
-                button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: centeredY))
+
+                if abs(button.frame.origin.y - targetY) > 0.5 {
+                    button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: targetY))
+                }
             }
         }
 
@@ -1117,12 +1139,14 @@ private struct OperaWindowAccessor: NSViewRepresentable {
             observers.forEach(NotificationCenter.default.removeObserver)
             observers.removeAll()
 
-            let names: [Notification.Name] = [
+            // Window-level events that may reset traffic light positions
+            let windowNames: [Notification.Name] = [
                 NSWindow.didBecomeKeyNotification,
-                NSWindow.didEndSheetNotification
+                NSWindow.didEndSheetNotification,
+                NSWindow.didResizeNotification
             ]
 
-            for name in names {
+            for name in windowNames {
                 let observer = NotificationCenter.default.addObserver(
                     forName: name,
                     object: window,
@@ -1131,6 +1155,24 @@ private struct OperaWindowAccessor: NSViewRepresentable {
                     Task { @MainActor [weak self] in
                         self?.applyConfiguration()
                         self?.applyBurst()
+                    }
+                }
+                observers.append(observer)
+            }
+
+            // Observe the titlebar view's frame changes — macOS resets button
+            // positions during layout, so we re-apply after each change.
+            if let closeButton = window.standardWindowButton(.closeButton),
+               let titlebarView = closeButton.superview {
+                titlebarView.postsFrameChangedNotifications = true
+                let observer = NotificationCenter.default.addObserver(
+                    forName: NSView.frameDidChangeNotification,
+                    object: titlebarView,
+                    queue: .main
+                ) { [weak self] _ in
+                    // Defer to run after macOS completes its own layout pass
+                    DispatchQueue.main.async { [weak self] in
+                        self?.repositionTrafficLights()
                     }
                 }
                 observers.append(observer)
