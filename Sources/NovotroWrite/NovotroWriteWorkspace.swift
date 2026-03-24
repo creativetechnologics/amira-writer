@@ -1,4 +1,5 @@
 import SwiftUI
+import NovotroProjectKit
 
 @available(macOS 26.0, *)
 @MainActor
@@ -8,7 +9,17 @@ public final class NovotroWriteWorkspaceController: ObservableObject {
     @Published public private(set) var isLoadingProject = false
     @Published public private(set) var loadStatusMessage = "Ready"
 
+    public var saveIndicator: SaveIndicatorState { store.saveIndicator }
+
     public init() {}
+
+    public func suspendBackgroundWork() {
+        store.suspendBackgroundWork()
+    }
+
+    public func save() {
+        store.save()
+    }
 
     public func ensureProjectLoaded(_ projectURL: URL) async -> String? {
         let normalizedURL = projectURL.standardizedFileURL
@@ -16,6 +27,7 @@ public final class NovotroWriteWorkspaceController: ObservableObject {
         if loadedProjectPath == normalizedPath,
            store.projectURL?.standardizedFileURL.path == normalizedPath,
            store.presentedLoadError == nil {
+            store.resumeBackgroundWork()
             return nil
         }
 

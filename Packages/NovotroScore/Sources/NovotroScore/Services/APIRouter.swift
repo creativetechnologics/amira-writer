@@ -101,6 +101,14 @@ final class APIRouter {
         // Song management
         case ("POST", "/api/song/delete"):         return deleteSong(request)
 
+        // Instrument mode endpoints
+        case ("GET",  "/api/instruments/mode"):      return getInstrumentMode(request)
+        case ("POST", "/api/instruments/mode"):      return setInstrumentMode(request)
+
+        // Debug endpoints
+        case ("GET",  "/api/debug/playback-state"): return debugPlaybackState(request)
+        case ("POST", "/api/debug/try-play"):        return debugTryPlay(request)
+
         default:
             return .error(404, "Unknown endpoint: \(method) \(path)")
         }
@@ -1240,5 +1248,72 @@ final class APIRouter {
         store.deleteSong(midiID: songID)
         store.isDirty = true
         return .ok(APISuccessResponse("Song deleted"))
+    }
+
+    // MARK: - Debug Endpoints
+
+    // MARK: - Instrument Mode
+
+    private func getInstrumentMode(_ req: HTTPRequest) -> HTTPResponse {
+        guard let store = requireStore() else { return .error(500, "Store unavailable") }
+        struct ModeResponse: Encodable {
+            var mode: String
+            var mappingCount: Int
+        }
+        return .ok(ModeResponse(
+            mode: store.masterInstrumentMode == .soundFont ? "soundFont" : "audioUnit",
+            mappingCount: store.instrumentMappings.count
+        ))
+    }
+
+    private func setInstrumentMode(_ req: HTTPRequest) -> HTTPResponse {
+        guard let store = requireStore() else { return .error(500, "Store unavailable") }
+        struct ModeRequest: Decodable {
+            var mode: String  // "soundFont" or "audioUnit"
+        }
+        guard let body = req.body,
+              let parsed = try? JSONDecoder().decode(ModeRequest.self, from: body) else {
+            return .error(400, "Expected JSON body with 'mode': 'soundFont' or 'audioUnit'")
+        }
+        let newMode: InstrumentSourceType
+        switch parsed.mode.lowercased() {
+        case "soundfont", "sf2", "lightweight":
+            newMode = .soundFont
+        case "audiounit", "au", "heavyweight":
+            newMode = .audioUnit
+        default:
+            return .error(400, "Unknown mode '\(parsed.mode)'. Use 'soundFont' or 'audioUnit'.")
+        }
+        store.setMasterInstrumentMode(newMode)
+        struct ModeResult: Encodable {
+            var previousMode: String
+            var newMode: String
+            var mappingCount: Int
+        }
+        let prev = store.masterInstrumentMode == newMode ? parsed.mode : (newMode == .soundFont ? "audioUnit" : "soundFont")
+        return .ok(ModeResult(
+            previousMode: prev,
+            newMode: parsed.mode,
+            mappingCount: store.instrumentMappings.count
+        ))
+    }
+
+    // MARK: - Debug
+
+    private func debugPlaybackState(_ req: HTTPRequest) -> HTTPResponse {
+        guard let store = requireStore() else { return .error(500, "Store unavailable") }
+        return .ok(store.playbackDiagnostics())
+    }
+
+    private func debugTryPlay(_ req: HTTPRequest) -> HTTPResponse {
+        guard let store = requireStore() else { return .error(500, "Store unavailable") }
+        let before = store.playbackDiagnostics()
+        store.playPianoRoll(startTick: 0, trackFilter: nil)
+        let after = store.playbackDiagnostics()
+        struct TryPlayResult: Encodable {
+            var before: ScoreStore.PlaybackDiagnostics
+            var after: ScoreStore.PlaybackDiagnostics
+        }
+        return .ok(TryPlayResult(before: before, after: after))
     }
 }

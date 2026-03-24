@@ -10,7 +10,8 @@ struct ContentView: View {
     @State private var selectedSongID: UUID?
     @AppStorage("novotro.score.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
     @AppStorage("novotro.score.sidebarVisible") private var showSidebar: Bool = true
-    @State private var sidebarDragOrigin: Double?
+
+    @AppStorage("novotro.score.inspector.width") private var inspectorWidth: Double = 360
 
     @State private var pianoRollController: PianoRollViewController?
 
@@ -75,7 +76,7 @@ struct ContentView: View {
 
                 OperaChromeSplitHandle(
                     onDragChanged: resizeSidebar,
-                    onDragEnded: { sidebarDragOrigin = nil }
+                    onDragEnded: { }
                 )
             }
 
@@ -113,23 +114,17 @@ struct ContentView: View {
                 }
             } content: {
                 VStack(spacing: 0) {
-                    TitleBarOverlay(store: store, controller: pianoRollController)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 8)
-                        .background(OperaChromeTheme.panelBackground)
-                    OperaChromeDivider()
                     PianoRollRepresentable(store: store, controller: $pianoRollController)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    OperaChromeDivider()
-                    let isSaving = store.saveIndicator == .saving
-                    let isSaved = store.saveIndicator == .saved
-                    OperaChromeStatusBar(isSaving: isSaving, isSaved: isSaved)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if store.showInspector {
-                OperaChromeDivider(.vertical)
+                OperaChromeSplitHandle(
+                    onDragChanged: resizeInspector,
+                    onDragEnded: { }
+                )
 
                 OperaChromeFlatPane {
                     OperaChromePaneHeader(
@@ -146,7 +141,7 @@ struct ContentView: View {
                 } content: {
                     ScoreInspectorView(store: store)
                 }
-                .frame(minWidth: 300, idealWidth: 360, maxWidth: 440)
+                .frame(width: inspectorWidth)
             }
         }
         .background(OperaChromeTheme.workspaceBackground)
@@ -154,15 +149,18 @@ struct ContentView: View {
 
 
 
-    private func resizeSidebar(_ translation: CGFloat) {
-        if sidebarDragOrigin == nil {
-            sidebarDragOrigin = sidebarWidth
-        }
-
-        let baseWidth = sidebarDragOrigin ?? sidebarWidth
+    private func resizeSidebar(_ delta: CGFloat) {
         sidebarWidth = min(
-            max(baseWidth + Double(translation), OperaChromeSidebarMetrics.minWidth),
+            max(sidebarWidth + Double(delta), OperaChromeSidebarMetrics.minWidth),
             OperaChromeSidebarMetrics.maxWidth
+        )
+    }
+
+    private func resizeInspector(_ delta: CGFloat) {
+        // For inspector on the right, dragging left (negative delta) makes it wider
+        inspectorWidth = min(
+            max(inspectorWidth - Double(delta), 250),
+            600
         )
     }
 }

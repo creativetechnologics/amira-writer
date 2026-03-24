@@ -336,12 +336,12 @@ struct PianoRollToolbarView: View {
                 // Using store.toolbarAvailableWidth (not GeometryReader or ViewThatFits)
                 // because NSHostingView with intrinsicContentSize proposes IDEAL width
                 // to SwiftUI — only this external width is reliable.
-                if store.toolbarAvailableWidth >= 960 {
-                    wideLayout       // preferred: 2-row
-                } else if store.toolbarAvailableWidth >= 700 {
-                    compactLayout    // medium: 3-row
+                if store.toolbarAvailableWidth >= 1100 {
+                    wideLayout       // preferred: 2-row with everything visible
+                } else if store.toolbarAvailableWidth >= 750 {
+                    mediumLayout     // medium: 2-row with overflow menus
                 } else {
-                    narrowLayout     // narrow: 4-row
+                    compactLayout    // compact: 2-row essentials + overflow
                 }
             } else {
                 HStack(spacing: 8) {
@@ -367,28 +367,23 @@ struct PianoRollToolbarView: View {
         }
     }
 
-    // MARK: - Compact Layout (3-row, medium)
+    // MARK: - Medium Layout (2-row with overflow)
+
+    private var mediumLayout: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            mediumRow1
+            activityProgressBar
+            mediumRow2
+        }
+    }
+
+    // MARK: - Compact Layout (2-row essentials + overflow)
 
     private var compactLayout: some View {
         VStack(alignment: .leading, spacing: 2) {
             compactRow1
-            compactRow2
             activityProgressBar
-            compactRow3
-            musicIntelligenceBar
-        }
-    }
-
-    // MARK: - Narrow Layout (4-row, most compact)
-
-    private var narrowLayout: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            compactRow1
             compactRow2
-            activityProgressBar
-            narrowRow3
-            narrowRow4
-            musicIntelligenceBar
         }
     }
 
@@ -1236,11 +1231,13 @@ struct PianoRollToolbarView: View {
         HStack(spacing: 0) {
             sectionSongNav; toolbarDivider
             sectionTransport; toolbarDivider
+            sectionLCD; toolbarDivider
             sectionModes; toolbarDivider
             sectionUndoRedo; toolbarDivider
             sectionQuickActions; toolbarDivider
             sectionViewToggles; toolbarDivider
-            sectionScale
+            sectionScale; toolbarDivider
+            sectionOverflow
         }
         .font(.caption)
         .padding(.horizontal, 8)
@@ -1256,9 +1253,8 @@ struct PianoRollToolbarView: View {
                     sectionChord(chord); toolbarDivider
                 }
                 if controller.tool == .stamp {
-                    toolbarSection { stampToolControls }; toolbarDivider
+                    toolbarSection { stampToolControls }
                 }
-                sectionMusicIntelligence
             }
         }
         .font(.caption)
@@ -1268,11 +1264,52 @@ struct PianoRollToolbarView: View {
 
     // MARK: - Compact Row Variants (3-row)
 
-    private var compactRow1: some View {
+    // MARK: - Medium Layout Rows (2-row with overflow)
+
+    private var mediumRow1: some View {
         HStack(spacing: 0) {
             sectionSongNav; toolbarDivider
             sectionTransport; toolbarDivider
-            sectionUndoRedo
+            sectionLCD; toolbarDivider
+            sectionModes; toolbarDivider
+            sectionUndoRedo; toolbarDivider
+            sectionOverflow
+        }
+        .font(.caption)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+    }
+
+    private var mediumRow2: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
+                sectionTools; toolbarDivider
+                sectionSnap; toolbarDivider
+                sectionScale; toolbarDivider
+                if let chord = controller.detectedChordName {
+                    sectionChord(chord); toolbarDivider
+                }
+                if controller.tool == .stamp {
+                    toolbarSection { stampToolControls }; toolbarDivider
+                }
+                sectionQuickActions; toolbarDivider
+                sectionViewToggles
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+    }
+
+    // MARK: - Compact Layout Rows (2-row essentials + overflow)
+
+    private var compactRow1: some View {
+        HStack(spacing: 0) {
+            sectionTransport; toolbarDivider
+            sectionLCD; toolbarDivider
+            sectionModes
+            Spacer()
+            sectionOverflow
         }
         .font(.caption)
         .padding(.horizontal, 8)
@@ -1280,66 +1317,141 @@ struct PianoRollToolbarView: View {
     }
 
     private var compactRow2: some View {
-        HStack(spacing: 0) {
-            sectionTools; toolbarDivider
-            sectionSnap
-        }
-        .font(.caption)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-    }
-
-    private var compactRow3: some View {
-        HStack(spacing: 0) {
-            sectionModes; toolbarDivider
-            sectionQuickActions; toolbarDivider
-            sectionViewToggles; toolbarDivider
-            sectionScale
-        }
-        .font(.caption)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-    }
-
-    // MARK: - Narrow Row Variants (4-row, splits compact row 3)
-
-    private var narrowRow3: some View {
-        HStack(spacing: 0) {
-            sectionModes; toolbarDivider
-            sectionQuickActions
-        }
-        .font(.caption)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-    }
-
-    private var narrowRow4: some View {
-        HStack(spacing: 0) {
-            sectionViewToggles; toolbarDivider
-            sectionScale
-        }
-        .font(.caption)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-    }
-
-    // MARK: - Music Intelligence Bar (dedicated scrollable row)
-
-    private var musicIntelligenceBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
-                if let chord = controller.detectedChordName {
-                    sectionChord(chord); toolbarDivider
-                }
-                if controller.tool == .stamp {
-                    toolbarSection { stampToolControls }; toolbarDivider
-                }
-                sectionMusicIntelligence
+                sectionTools; toolbarDivider
+                sectionSnap; toolbarDivider
+                sectionScale; toolbarDivider
+                sectionSongNav; toolbarDivider
+                sectionUndoRedo
             }
         }
         .font(.caption)
         .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .padding(.vertical, 5)
+    }
+
+    // MARK: - Overflow Menu (consolidated secondary controls)
+
+    @State private var showOverflowMenu = false
+
+    private var sectionOverflow: some View {
+        toolbarSection {
+            Button {
+                showOverflowMenu.toggle()
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 13))
+                    .frame(width: 26, height: 24)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(ToolSelectorStyle(isSelected: false))
+            .help("More options")
+            .popover(isPresented: $showOverflowMenu, arrowEdge: .bottom) {
+                overflowMenuContent
+            }
+        }
+    }
+
+    private var overflowMenuContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Additional Controls")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Divider()
+
+            // Quick Actions
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Quick Actions")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Button("Quantize") { controller.quantizeSelected() }
+                        .controlSize(.small)
+                    Button("Duplicate") { controller.duplicateSelected() }
+                        .controlSize(.small)
+                        .disabled(controller.selectedNoteIDs.isEmpty)
+                    Button("Delete") { controller.deleteSelected() }
+                        .controlSize(.small)
+                        .disabled(controller.selectedNoteIDs.isEmpty)
+                    Button("Select All") { controller.selectAllNotes() }
+                        .controlSize(.small)
+                }
+            }
+
+            Divider()
+
+            // View Toggles
+            VStack(alignment: .leading, spacing: 4) {
+                Text("View Options")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Toggle("Ghost Notes", isOn: Binding(
+                    get: { controller.showGhostNotes },
+                    set: { controller.showGhostNotes = $0 }
+                ))
+                .controlSize(.small)
+                Toggle("Voice Lanes", isOn: Binding(
+                    get: { controller.multiVoiceMode },
+                    set: { controller.multiVoiceMode = $0 }
+                ))
+                .controlSize(.small)
+                Toggle("Velocity Coloring", isOn: Binding(
+                    get: { controller.velocityColorEnabled },
+                    set: { controller.velocityColorEnabled = $0 }
+                ))
+                .controlSize(.small)
+            }
+
+            // Music Intelligence (moved to overflow)
+            if store.toolbarAvailableWidth < 1100 {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Music Intelligence")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    overflowMusicIntelligenceButtons
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 280)
+    }
+
+    private var overflowMusicIntelligenceButtons: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Button("Smart Align") { controller.smartAutoAlignLyrics() }
+                    .controlSize(.small)
+                #if canImport(MLXLLM)
+                Button("LLM Align") { store.performLLMAlignment() }
+                    .controlSize(.small)
+                #endif
+                Button("Fit MIDI") { store.fitMIDIToLyrics() }
+                    .controlSize(.small)
+            }
+            HStack(spacing: 4) {
+                Button("Analyze") { controller.analyzeStructure() }
+                    .controlSize(.small)
+                Button("Harmonize") { store.generateHarmonization() }
+                    .controlSize(.small)
+                Button("Part Gen") { showPartGenPopover = true }
+                    .controlSize(.small)
+            }
+            HStack(spacing: 4) {
+                Button("Style") { showStylePopover = true }
+                    .controlSize(.small)
+                Button("Compose") { showComposePopover = true }
+                    .controlSize(.small)
+                Button("Leitmotif") { showLeitmotifPopover = true }
+                    .controlSize(.small)
+            }
+            #if canImport(MLXLLM)
+            Button("AI Reasoning") { showLLMPopover = true }
+                .controlSize(.small)
+            #endif
+        }
     }
 
     // MARK: - Activity Progress Bar (downloads & renders)
@@ -1743,25 +1855,8 @@ struct TitleBarOverlay: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // --- Volume (leading) ---
-            HStack(spacing: 4) {
-                Image(systemName: titleBarVolumeIcon)
-                    .font(.caption)
-                    .foregroundStyle(OperaChromeTheme.textSecondary)
-                    .frame(width: 16)
-                Slider(value: Binding(
-                    get: { store.masterVolume },
-                    set: { store.setMasterVolume($0) }
-                ), in: 0...1)
-                    .frame(width: 80)
-                Text("\(Int((store.masterVolume * 100).rounded()))%")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(OperaChromeTheme.textSecondary)
-                    .frame(width: 32, alignment: .trailing)
-            }
-            .padding(.leading, 8)
-
-            // --- Suno A/B mode indicator ---
+            // --- Suno A/B mode indicator (centered) ---
+            Spacer()
             if store.sunoRenderLayer != nil {
                 Text(store.sunoRenderLayer?.playbackMode.rawValue ?? "—")
                     .font(.caption.monospaced())
@@ -1770,71 +1865,10 @@ struct TitleBarOverlay: View {
                     .background(OperaChromeTheme.accentMuted)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
-
             Spacer()
-
-            // --- LCD timecode (center, non-interactive) ---
-            PianoRollLCDView(store: store)
-
-            Spacer()
-
-            // --- Zoom sliders with +/- buttons (trailing) ---
-            if let ctl = controller {
-                HStack(spacing: 4) {
-                    // Horizontal zoom
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                    zoomButton(systemName: "minus") {
-                        ctl.pixelsPerQuarter = max(24, ctl.pixelsPerQuarter - 20)
-                    }
-                    Slider(value: Binding(
-                        get: { ctl.pixelsPerQuarter },
-                        set: { ctl.pixelsPerQuarter = $0 }
-                    ), in: 24...340)
-                        .frame(width: 80)
-                    zoomButton(systemName: "plus") {
-                        ctl.pixelsPerQuarter = min(340, ctl.pixelsPerQuarter + 20)
-                    }
-
-                    // Vertical zoom
-                    Image(systemName: "arrow.up.and.down")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                        .padding(.leading, 4)
-                    zoomButton(systemName: "minus") {
-                        ctl.editorRowHeight = max(11, ctl.editorRowHeight - 1)
-                    }
-                    Slider(value: Binding(
-                        get: { ctl.editorRowHeight },
-                        set: { ctl.editorRowHeight = $0 }
-                    ), in: 11...24)
-                        .frame(width: 60)
-                    zoomButton(systemName: "plus") {
-                        ctl.editorRowHeight = min(24, ctl.editorRowHeight + 1)
-                    }
-                }
-                .padding(.trailing, 8)
-            }
         }
     }
 
-    /// +/- button with a generous 22×22 hit target for easy clicking in the title bar.
-    private func zoomButton(systemName: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 10, weight: .semibold))
-                .frame(width: 22, height: 22)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(OperaChromeTheme.textSecondary)
-    }
-
-    private var titleBarVolumeIcon: String {
-        if store.masterVolume < 0.01 { return "speaker.slash.fill" }
-        if store.masterVolume < 0.33 { return "speaker.wave.1.fill" }
-        if store.masterVolume < 0.66 { return "speaker.wave.2.fill" }
-        return "speaker.wave.3.fill"
-    }
 }
 
 @available(macOS 26.0, *)
@@ -2004,4 +2038,94 @@ enum StepDuration: String, CaseIterable, Identifiable {
 // is correct even during intrinsicContentSize measurement at ideal width. The hosting
 // view keeps `sizingOptions = [.intrinsicContentSize]` so Auto Layout gets the correct
 // height automatically.
+
+// MARK: - Status Bar View (Bottom of Piano Roll)
+
+@available(macOS 26.0, *)
+struct PianoRollStatusBarView: View {
+    var store: ScoreStore
+    var controller: PianoRollViewController?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // --- Volume (leading) - compact version ---
+            HStack(spacing: 4) {
+                Image(systemName: statusBarVolumeIcon)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14)
+                Slider(value: Binding(
+                    get: { store.masterVolume },
+                    set: { store.setMasterVolume($0) }
+                ), in: 0...1)
+                    .frame(width: 60)
+                    .controlSize(.small)
+            }
+            .padding(.leading, 8)
+
+            Spacer()
+
+            // --- Zoom controls (trailing) - compact version ---
+            if let ctl = controller {
+                HStack(spacing: 3) {
+                    // Horizontal zoom
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                    statusBarZoomButton(systemName: "minus") {
+                        ctl.pixelsPerQuarter = max(24, ctl.pixelsPerQuarter - 20)
+                    }
+                    Slider(value: Binding(
+                        get: { ctl.pixelsPerQuarter },
+                        set: { ctl.pixelsPerQuarter = $0 }
+                    ), in: 24...340)
+                        .frame(width: 60)
+                        .controlSize(.small)
+                    statusBarZoomButton(systemName: "plus") {
+                        ctl.pixelsPerQuarter = min(340, ctl.pixelsPerQuarter + 20)
+                    }
+
+                    // Vertical zoom
+                    Image(systemName: "arrow.up.and.down")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 6)
+                    statusBarZoomButton(systemName: "minus") {
+                        ctl.editorRowHeight = max(11, ctl.editorRowHeight - 1)
+                    }
+                    Slider(value: Binding(
+                        get: { ctl.editorRowHeight },
+                        set: { ctl.editorRowHeight = $0 }
+                    ), in: 11...24)
+                        .frame(width: 50)
+                        .controlSize(.small)
+                    statusBarZoomButton(systemName: "plus") {
+                        ctl.editorRowHeight = min(24, ctl.editorRowHeight + 1)
+                    }
+                }
+                .padding(.trailing, 8)
+            }
+        }
+        .frame(height: 20)
+        .background(.black.opacity(0.2))
+    }
+
+    private func statusBarZoomButton(systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 8, weight: .semibold))
+                .frame(width: 16, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+    }
+
+    private var statusBarVolumeIcon: String {
+        if store.masterVolume < 0.01 { return "speaker.slash.fill" }
+        if store.masterVolume < 0.33 { return "speaker.wave.1.fill" }
+        if store.masterVolume < 0.66 { return "speaker.wave.2.fill" }
+        return "speaker.wave.3.fill"
+    }
+}
 #endif

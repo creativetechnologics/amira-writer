@@ -46,13 +46,11 @@ rtk scp -r "$HOME/Applications/Novotro Opera.app" gary@Garys-Laptop.local:~/Appl
 
 - Open projects from local project folders (with `Metadata/project.json` or `project.json`) for full write/score/animate loading.
 - The app is folder-first: choose the project directory directly from disk and it loads entirely local data.
-- The project server/browser workflow is intentionally disabled for Opera; loading uses local project data and local indexes only.
+- **The Novotro Project Server is abandoned and disabled.** Do not attempt to use it.
 - Default project location is currently `~/Documents/Amira - A Modern Opera/Amira` (preferred) and
   `~/Documents/Amira - A Modern Opera` (fallback).
 
-The Opera shell no longer depends on a remote service for project loading. It opens local project folders directly and builds local indexes for fast mode switching.
-
-No server deploy or remote sync workflow is required for this workspace.
+The Opera shell opens local project folders directly and builds local indexes for fast mode switching. No server, remote sync, or network project discovery is used.
 
 ### Local cache cleanup
 

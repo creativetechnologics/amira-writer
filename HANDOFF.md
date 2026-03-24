@@ -126,7 +126,7 @@ The following were flagged during review but confirmed to be intentional design:
 | `NovotroProjectDatabase` `deinit` calls `sqlite3_close` nonisolated | Safe in Swift 6: `deinit` runs only after ref count reaches zero, so no concurrent actor-isolated calls can be in flight. |
 | `AgentProcessManager.resolveExecutablePath()` calls `waitUntilExit()` on MainActor | Caching in `fullShellPath()` means the blocking call only fires once. `resolveExecutablePath()` checks `FileManager.isExecutableFile` (fast) first; shell fallbacks only occur on the very first miss. Refactoring risks breaking agent process launching. |
 | `ScriptStore.save()` silently no-ops if a save is already in-flight | Intentional: `dirtySongPaths` is cleared before the Task at line 1006; new edits during save re-dirty by adding to the set directly; `isSaving = false` unblocks the next manual Cmd+S. |
-| `NovotroProjectMirrorSession` has no `shutdown()` | Mirror/remote mode is disabled in Opera via `NOVOTRO_DISABLE_PROJECT_SERVICE=1`. Code path is never reached. |
+| `NovotroProjectMirrorSession` has no `shutdown()` | Mirror/remote mode is disabled — the Novotro Project Server is abandoned and never used. |
 
 ---
 

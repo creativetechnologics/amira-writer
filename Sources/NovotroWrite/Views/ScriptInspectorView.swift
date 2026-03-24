@@ -1,5 +1,6 @@
 import SwiftUI
 import NovotroProjectKit
+import Foundation
 
 // MARK: - Inspector Section ID
 
@@ -36,6 +37,7 @@ enum InspectorSectionID: String, CaseIterable, Identifiable, Sendable {
 struct ScriptInspectorView: View {
     @Bindable var store: ScriptStore
     @AppStorage("novotro.write.inspector.activeTab") private var activeTab: String = InspectorSectionID.synopsis.rawValue
+    @Environment(\.scenePhase) private var scenePhase
 
     private let tabOrder: [InspectorSectionID] = [.synopsis, .tools, .notes, .versionHistory]
 
@@ -54,10 +56,24 @@ struct ScriptInspectorView: View {
             }
         ) { sectionID in
             sectionContent(for: sectionID)
-        }
+        } 
         .onAppear {
             if InspectorSectionID(rawValue: activeTab) == nil {
                 activeTab = InspectorSectionID.synopsis.rawValue
+            }
+
+            if activeTab == InspectorSectionID.synopsis.rawValue {
+                store.refreshSynopsisFromProjectFile()
+            }
+        }
+        .onChange(of: activeTab) { _, newValue in
+            if newValue == InspectorSectionID.synopsis.rawValue {
+                store.refreshSynopsisFromProjectFile()
+            }
+        }
+        .onChange(of: scenePhase) { _, newValue in
+            if newValue == .active {
+                store.refreshSynopsisFromProjectFile()
             }
         }
     }

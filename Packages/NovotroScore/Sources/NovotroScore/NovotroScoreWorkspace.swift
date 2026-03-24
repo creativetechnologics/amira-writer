@@ -1,4 +1,5 @@
 import SwiftUI
+import NovotroProjectKit
 
 @available(macOS 26.0, *)
 @MainActor
@@ -8,17 +9,28 @@ public final class NovotroScoreWorkspaceController: ObservableObject {
     private var didStartAPIServer = false
     @Published public private(set) var isLoadingProject = false
     @Published public private(set) var loadStatusMessage = "Ready"
+
+    public var saveIndicator: SaveIndicatorState { store.saveIndicator }
     private var isAPIServerDisabled: Bool {
         ProcessInfo.processInfo.environment["NOVOTRO_DISABLE_SCORE_API_SERVER"] == "1"
     }
 
     public init() {}
 
+    public func suspendBackgroundWork() {
+        store.suspendBackgroundWork()
+    }
+
+    public func save() {
+        store.save()
+    }
+
     public func ensureProjectLoaded(_ projectURL: URL) async -> String? {
         let normalizedURL = projectURL.standardizedFileURL
         let normalizedPath = normalizedURL.path
         if loadedProjectPath == normalizedPath,
            store.projectURL?.standardizedFileURL.path == normalizedPath {
+            store.resumeBackgroundWork()
             return nil
         }
 

@@ -7,6 +7,7 @@ struct CharacterPackageCardView: View {
     let previewURL: URL?
     let isActive: Bool
     let onSetActive: () -> Void
+    let onDelete: (() -> Void)?
 
     private var errorCount: Int {
         package.validationReport.issues.filter { $0.severity == .error }.count
@@ -90,6 +91,13 @@ struct CharacterPackageCardView: View {
                     copyToPasteboard(package.packageDirectoryURL.path)
                 }
                 .buttonStyle(.bordered)
+
+                if let onDelete {
+                    Button("Delete", role: .destructive) {
+                        onDelete()
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
         }
         .padding(12)

@@ -129,9 +129,13 @@ struct OWPProjectLoader: Sendable {
 
     private func discoverSongs(in projectURL: URL, fm: FileManager) throws -> [OWPSongStub] {
         var songs: [OWPSongStub] = []
+        
+        // Only look in the Songs directory (same behavior as Score workspace)
+        let songsURL = projectURL.appendingPathComponent("Songs")
+        guard fm.fileExists(atPath: songsURL.path) else { return [] }
 
         let enumerator = fm.enumerator(
-            at: projectURL,
+            at: songsURL,
             includingPropertiesForKeys: [.fileSizeKey],
             options: [.skipsHiddenFiles]
         )
@@ -139,8 +143,8 @@ struct OWPProjectLoader: Sendable {
         while let fileURL = enumerator?.nextObject() as? URL {
             guard fileURL.pathExtension.lowercased() == "ows" else { continue }
 
-            let relativePath = fileURL.path.replacingOccurrences(
-                of: projectURL.path + "/",
+            let relativePath = "Songs/" + fileURL.path.replacingOccurrences(
+                of: songsURL.path + "/",
                 with: ""
             )
 

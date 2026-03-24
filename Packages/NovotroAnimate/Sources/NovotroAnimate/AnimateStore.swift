@@ -27,6 +27,8 @@ private struct AnimateExternalFileSnapshot: Equatable, Sendable {
 final class AnimateStore {
     // MARK: - OWP Project
 
+    /// When true, the external file watcher is disabled (e.g. in Opera multi-mode shell).
+    var disableExternalFileWatch = false
     var owpURL: URL?
     var workingOWPURL: URL?
     var animateMetadata: AnimateMetadata?
@@ -56,6 +58,13 @@ final class AnimateStore {
     var selectedCharacterID: UUID?
     var activePackageIDsByCharacterSlug: [String: UUID] = [:]
     var shotPresets: [SceneShotPreset] = []
+
+    // MARK: - Image Crop State
+
+    private let assetManager = AssetManager()
+    var pendingCropImagePath: String?
+    var pendingCropCharacterID: UUID?
+    var showImageCropper: Bool = false
 
     // MARK: - Song Data Cache
 
@@ -208,6 +217,7 @@ final class AnimateStore {
     var statusMessage: String = "Ready"
     var loadErrorMessage: String?
     private(set) var isLoadingProject: Bool = false
+    var saveIndicator: SaveIndicatorState = .idle
 
     private static let cameraTrackName = "camera"
     private static let cameraShotTrackName = "camera:shot"
@@ -1847,7 +1857,9 @@ final class AnimateStore {
     private func stopExternalFileWatch() {
         externalFileWatchWorkItem?.cancel()
         externalFileWatchWorkItem = nil
-        lastKnownExternalSnapshots.removeAll()
+        // Note: intentionally NOT clearing lastKnownExternalSnapshots here.
+        // Clearing them causes the next startExternalFileWatch() to detect
+        // ALL files as "changed", spawning massive concurrent reload Tasks.
     }
 
     private func recordExternalFileSnapshots() {
@@ -1942,7 +1954,7 @@ final class AnimateStore {
             if let database = self.projectDatabase {
                 try? await database.ensureCurrentIndex(forceRebuild: true)
             }
-            await self.openOWP(url: projectURL, preferService: false)
+            await self.openOWP(url: projectURL, preferService: false, skipBackgroundRefresh: true)
             await MainActor.run {
                 self.markAgentUpdated(paths: changedPaths.filter { $0.hasSuffix(".ows") })
                 self.statusMessage = "Reloaded external project changes"
@@ -2073,6 +2085,16 @@ final class AnimateStore {
         suppressSceneDatabasePaths.removeAll()
         backgroundIndexRefreshTask?.cancel()
         backgroundIndexRefreshTask = nil
+    }
+
+    func suspendBackgroundWork() {
+        stopDatabaseWatch()
+        stopExternalFileWatch()
+    }
+
+    func resumeBackgroundWork() {
+        startDatabaseWatch()
+        startExternalFileWatch()
     }
 
     private func pollDatabaseChanges() {
@@ -2652,9 +2674,10 @@ final class AnimateStore {
 
     // MARK: - OWP Open (replaces loadProject + importOWP)
 
-    func openOWP(url: URL, preferService: Bool? = nil) async {
+    func openOWP(url: URL, preferService: Bool? = nil, skipBackgroundRefresh: Bool = false) async {
         guard !isLoadingProject else { return }
 
+        let previousOWPURL = owpURL
         isLoadingProject = true
         loadErrorMessage = nil
         owpURL = url
@@ -2671,6 +2694,11 @@ final class AnimateStore {
         stopDatabaseWatch()
         projectDatabase = nil
         databaseChangeToken = 0
+
+        if let previousOWPURL, previousOWPURL != url {
+            characters = []
+            selectedCharacterID = nil
+        }
 
         defer {
             isLoadingProject = false
@@ -2795,9 +2823,10 @@ final class AnimateStore {
             loadErrorMessage = nil
             UserDefaults.standard.set(url.path, forKey: "lastProjectPath")
             startDatabaseWatch()
-            recordExternalFileSnapshots()
-            startExternalFileWatch()
-            startBackgroundIndexRefresh(projectURL: url, database: result.database)
+            if !disableExternalFileWatch {
+                recordExternalFileSnapshots()
+                startExternalFileWatch()
+            }
         } catch {
             loadErrorMessage = error.localizedDescription
             statusMessage = "Error opening project: \(error.localizedDescription)"
@@ -2820,6 +2849,7 @@ final class AnimateStore {
             return
         }
         guard let animateDir = animateURL else { return }
+        saveIndicator = .saving
 
         do {
             let fm = FileManager.default
@@ -2855,8 +2885,8 @@ final class AnimateStore {
             let scenesJSON = try encoder.encode(sceneData)
             try scenesJSON.write(to: animateDir.appendingPathComponent("scenes.json"))
 
-            // Save each character rig to Animate/characters/{slug}/rig.json
-            for character in characters where !character.parts.isEmpty || character.renderMode != nil {
+            // Save each character state to Animate/characters/{slug}/rig.json
+            for character in characters {
                 let charDir = animateDir
                     .appendingPathComponent("characters")
                     .appendingPathComponent(character.owpSlug)
@@ -2913,8 +2943,15 @@ final class AnimateStore {
             }
             recordExternalFileSnapshots()
             statusMessage = "Saved"
+            saveIndicator = .saved
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                if self?.saveIndicator == .saved {
+                    self?.saveIndicator = .idle
+                }
+            }
         } catch {
             statusMessage = "Save error: \(error.localizedDescription)"
+            saveIndicator = .idle
         }
     }
 
@@ -2951,8 +2988,11 @@ final class AnimateStore {
         backgroundIndexRefreshTask?.cancel()
         backgroundIndexRefreshTask = Task { [weak self] in
             do {
+                guard !Task.isCancelled else { return }
                 let previousToken = (try? await database.currentChangeToken()) ?? 0
+                guard !Task.isCancelled else { return }
                 try await database.ensureCurrentIndex()
+                guard !Task.isCancelled else { return }
                 let refreshedToken = (try? await database.currentChangeToken()) ?? previousToken
                 guard refreshedToken != previousToken else { return }
                 guard let self else { return }
@@ -2962,7 +3002,9 @@ final class AnimateStore {
                     }
                     return
                 }
-                await self.openOWP(url: projectURL, preferService: false)
+                NSLog("[AnimateStore] Background index refresh: token changed %lld→%lld, reloading project", previousToken, refreshedToken)
+                await self.openOWP(url: projectURL, preferService: false, skipBackgroundRefresh: true)
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self.markAgentUpdated()
                     self.statusMessage = "Loaded latest disk changes"
@@ -3278,6 +3320,355 @@ final class AnimateStore {
         persistCharacterPackageSelections()
     }
 
+    // MARK: - Character Profile Management
+
+    func setCharacterProfileImage(_ imagePath: String?, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else {
+            statusMessage = "Character not found"
+            return
+        }
+        characters[index].profileImagePath = imagePath
+        statusMessage = "Profile image updated"
+        save()
+    }
+
+    func setCharacterProfileImageFromPicker(for characterID: UUID) {
+        guard characters.first(where: { $0.id == characterID }) != nil else {
+            statusMessage = "Character not found"
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "Select Profile Image"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.png, .jpeg]
+
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                self?.pendingCropImagePath = url.path
+                self?.pendingCropCharacterID = characterID
+                self?.showImageCropper = true
+            }
+        }
+    }
+
+    func cropAndSetProfileImage(cropRect: CGRect, for characterID: UUID) {
+        guard let imagePath = pendingCropImagePath,
+              let image = NSImage(contentsOfFile: imagePath),
+              let index = characters.firstIndex(where: { $0.id == characterID }) else {
+            statusMessage = "No image to crop"
+            return
+        }
+
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            statusMessage = "Failed to get image data"
+            return
+        }
+
+        let pixelWidth = CGFloat(cgImage.width)
+        let pixelHeight = CGFloat(cgImage.height)
+        let cropPixelRect = CGRect(
+            x: cropRect.origin.x * pixelWidth,
+            y: cropRect.origin.y * pixelHeight,
+            width: cropRect.width * pixelWidth,
+            height: cropRect.height * pixelHeight
+        ).integral
+
+        guard let croppedCGImage = cgImage.cropping(to: cropPixelRect) else {
+            statusMessage = "Failed to crop image"
+            return
+        }
+
+        let croppedImage = NSImage(cgImage: croppedCGImage, size: cropPixelRect.size)
+
+        guard let tiffData = croppedImage.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            statusMessage = "Failed to save cropped image"
+            return
+        }
+
+        do {
+            let storedURL = try assetManager.writeCharacterImageData(
+                pngData,
+                suggestedFilename: "profile-cropped.png",
+                characterSlug: characters[index].owpSlug,
+                category: "profile",
+                animateURL: try requireAnimateURL()
+            )
+            setCharacterProfileImage(storedURL.path, for: characterID)
+            pendingCropImagePath = nil
+            pendingCropCharacterID = nil
+            showImageCropper = false
+        } catch {
+            statusMessage = "Failed to save cropped image: \(error.localizedDescription)"
+        }
+    }
+
+    func cancelImageCrop() {
+        pendingCropImagePath = nil
+        pendingCropCharacterID = nil
+        showImageCropper = false
+    }
+
+    // MARK: - Character Text Fields
+
+    func updateCharacterBackstory(_ text: String, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        characters[index].backstory = text
+        save()
+    }
+
+    func updateCharacterPersonality(_ text: String, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        characters[index].personality = text
+        save()
+    }
+
+    func updateCharacterNotes(_ text: String, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        characters[index].notes = text
+        save()
+    }
+
+    // MARK: - Inspiration Images
+
+    func addInspirationImage(_ imagePath: String, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard FileManager.default.fileExists(atPath: imagePath) else {
+            statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
+            return
+        }
+        guard !characters[index].inspirationImagePaths.contains(imagePath) else {
+            statusMessage = "Image already added"
+            return
+        }
+        characters[index].inspirationImagePaths.append(imagePath)
+        save()
+    }
+
+    func removeInspirationImage(at indexToRemove: Int, for characterID: UUID) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard characters[charIndex].inspirationImagePaths.indices.contains(indexToRemove) else { return }
+        let removedPath = characters[charIndex].inspirationImagePaths[indexToRemove]
+        characters[charIndex].inspirationImagePaths.remove(at: indexToRemove)
+        if characters[charIndex].inspirationReferenceImagePath == removedPath {
+            characters[charIndex].inspirationReferenceImagePath = nil
+        }
+        save()
+    }
+
+    func importInspirationImages(for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "Import Inspiration Images"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.png, .jpeg]
+
+        panel.begin { [weak self] response in
+            guard response == .OK else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                let slug = self.characters[index].owpSlug
+                let animateURL = self.animateURL
+                var importedCount = 0
+                for url in panel.urls {
+                    do {
+                        guard let animateURL else { continue }
+                        let storedURL = try self.assetManager.importCharacterImageURL(
+                            from: url,
+                            characterSlug: slug,
+                            category: "inspiration",
+                            animateURL: animateURL
+                        )
+                        self.addInspirationImage(storedURL.path, for: characterID)
+                        importedCount += 1
+                    } catch {
+                        self.statusMessage = "Failed to import inspiration image: \(url.lastPathComponent)"
+                    }
+                }
+                if importedCount > 0 {
+                    self.statusMessage = "Imported \(importedCount) inspiration images"
+                }
+            }
+        }
+    }
+
+    // MARK: - Inspiration Reference Image
+
+    func setInspirationReferenceImage(_ imagePath: String?, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        characters[index].inspirationReferenceImagePath = imagePath
+        save()
+    }
+
+    func setInspirationReferenceImageFromPicker(for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "Select Inspiration Reference Image"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.png, .jpeg]
+
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                guard let self, let animateURL = self.animateURL else { return }
+                do {
+                    let storedURL = try self.assetManager.importCharacterImageURL(
+                        from: url,
+                        characterSlug: self.characters[index].owpSlug,
+                        category: "reference",
+                        animateURL: animateURL
+                    )
+                    self.setInspirationReferenceImage(storedURL.path, for: characterID)
+                } catch {
+                    self.statusMessage = "Failed to import reference image"
+                }
+            }
+        }
+    }
+
+    // MARK: - Reference Images Gallery
+
+    func addReferenceImage(_ imagePath: String, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard FileManager.default.fileExists(atPath: imagePath) else {
+            statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
+            return
+        }
+        guard !characters[index].referenceImagePaths.contains(imagePath) else {
+            statusMessage = "Image already added"
+            return
+        }
+        characters[index].referenceImagePaths.append(imagePath)
+        save()
+    }
+
+    func removeReferenceImage(at indexToRemove: Int, for characterID: UUID) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard characters[charIndex].referenceImagePaths.indices.contains(indexToRemove) else { return }
+        characters[charIndex].referenceImagePaths.remove(at: indexToRemove)
+        save()
+    }
+
+    func importReferenceImages(for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "Import Reference Images"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.png, .jpeg]
+
+        panel.begin { [weak self] response in
+            guard response == .OK else { return }
+            Task { @MainActor in
+                guard let self, let animateURL = self.animateURL else { return }
+                for url in panel.urls {
+                    do {
+                        let storedURL = try self.assetManager.importCharacterImageURL(
+                            from: url,
+                            characterSlug: self.characters[index].owpSlug,
+                            category: "reference",
+                            animateURL: animateURL
+                        )
+                        self.addReferenceImage(storedURL.path, for: characterID)
+                    } catch {
+                        self.statusMessage = "Failed to import image: \(url.lastPathComponent)"
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Character Ordering
+
+    func moveCharacter(from source: IndexSet, to destination: Int) {
+        characters.move(fromOffsets: source, toOffset: destination)
+        updateCharacterSortOrders()
+        save()
+    }
+
+    func moveCharacterToEnd(characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        let character = characters.remove(at: index)
+        characters.append(character)
+        updateCharacterSortOrders()
+        save()
+    }
+
+    // MARK: - Animated Images
+
+    func addAnimatedImage(_ imagePath: String, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard FileManager.default.fileExists(atPath: imagePath) else {
+            statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
+            return
+        }
+        guard !characters[index].animatedImagePaths.contains(imagePath) else {
+            statusMessage = "Image already added"
+            return
+        }
+        characters[index].animatedImagePaths.append(imagePath)
+        save()
+    }
+
+    func removeAnimatedImage(at indexToRemove: Int, for characterID: UUID) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard characters[charIndex].animatedImagePaths.indices.contains(indexToRemove) else { return }
+        characters[charIndex].animatedImagePaths.remove(at: indexToRemove)
+        save()
+    }
+
+    func importAnimatedImages(for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "Import Animated Character Images"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.png, .jpeg]
+
+        panel.begin { [weak self] response in
+            guard response == .OK else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                let slug = self.characters[index].owpSlug
+                let animateURL = self.animateURL
+                var importedCount = 0
+                for url in panel.urls {
+                    do {
+                        guard let animateURL else { continue }
+                        let storedURL = try self.assetManager.importCharacterImageURL(
+                            from: url,
+                            characterSlug: slug,
+                            category: "animated",
+                            animateURL: animateURL
+                        )
+                        self.addAnimatedImage(storedURL.path, for: characterID)
+                        importedCount += 1
+                    } catch {
+                        self.statusMessage = "Failed to import animated image: \(url.lastPathComponent)"
+                    }
+                }
+                if importedCount > 0 {
+                    self.statusMessage = "Imported \(importedCount) animated images"
+                }
+            }
+        }
+    }
+
     // MARK: - Background Management
 
     func importBackground(from url: URL) {
@@ -3330,8 +3721,8 @@ final class AnimateStore {
         }
     }
 
-    private func loadPersistedCharacterRig(for slug: String) -> (parts: [RigPart], renderMode: CharacterCanvasRenderMode?, preferredViewAngle: AngleView?) {
-        guard let animateURL else { return ([], nil, nil) }
+    private func loadPersistedCharacterState(for slug: String) -> AnimationCharacter? {
+        guard let animateURL else { return nil }
 
         let rigURL = animateURL
             .appendingPathComponent("characters")
@@ -3340,10 +3731,10 @@ final class AnimateStore {
         guard FileManager.default.fileExists(atPath: rigURL.path),
               let rigData = try? Data(contentsOf: rigURL),
               let savedChar = try? JSONDecoder().decode(AnimationCharacter.self, from: rigData) else {
-            return ([], nil, nil)
+            return nil
         }
 
-        return (savedChar.parts, savedChar.renderMode, savedChar.preferredViewAngle)
+        return savedChar
     }
 
     private func syncCharactersFromOWP(_ sourceCharacters: [OPWCharacter]) {
@@ -3365,16 +3756,25 @@ final class AnimateStore {
                 continue
             }
 
-            let rig = loadPersistedCharacterRig(for: slug)
+            let persistedCharacter = loadPersistedCharacterState(for: slug)
             updatedCharacters.append(
                 AnimationCharacter(
-                    id: UUID(),
+                    id: persistedCharacter?.id ?? UUID(),
+                    sortOrder: persistedCharacter?.sortOrder ?? updatedCharacters.count,
                     name: sourceCharacter.name,
                     description: sourceCharacter.description ?? "",
                     owpSlug: slug,
-                    renderMode: rig.renderMode,
-                    preferredViewAngle: rig.preferredViewAngle,
-                    parts: rig.parts
+                    renderMode: persistedCharacter?.renderMode,
+                    preferredViewAngle: persistedCharacter?.preferredViewAngle,
+                    parts: persistedCharacter?.parts ?? [],
+                    profileImagePath: persistedCharacter?.profileImagePath,
+                    backstory: persistedCharacter?.backstory ?? "",
+                    personality: persistedCharacter?.personality ?? "",
+                    notes: persistedCharacter?.notes ?? "",
+                    inspirationImagePaths: persistedCharacter?.inspirationImagePaths ?? [],
+                    inspirationReferenceImagePath: persistedCharacter?.inspirationReferenceImagePath,
+                    referenceImagePaths: persistedCharacter?.referenceImagePaths ?? [],
+                    animatedImagePaths: persistedCharacter?.animatedImagePaths ?? []
                 )
             )
         }
@@ -3384,7 +3784,23 @@ final class AnimateStore {
             updatedCharacters.append(existing)
         }
 
-        characters = updatedCharacters
+        characters = updatedCharacters.sorted {
+            ($0.sortOrder ?? .max, $0.name) < ($1.sortOrder ?? .max, $1.name)
+        }
+        updateCharacterSortOrders()
+    }
+
+    private func requireAnimateURL() throws -> URL {
+        guard let animateURL else {
+            throw NSError(domain: "AnimateStore", code: 1, userInfo: [NSLocalizedDescriptionKey: "Open a project before importing images."])
+        }
+        return animateURL
+    }
+
+    private func updateCharacterSortOrders() {
+        for index in characters.indices {
+            characters[index].sortOrder = index
+        }
     }
 
     private func persistCharacterPackageSelections() {

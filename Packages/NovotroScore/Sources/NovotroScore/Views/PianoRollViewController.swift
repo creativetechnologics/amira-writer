@@ -51,6 +51,7 @@ final class PianoRollViewController: NSViewController {
     private var editorView: PianoRollEditorView?
     private var renderer: PianoRollMetalRenderer?
     private weak var toolbarHostView: NSView?
+    private var statusBarHost: NSHostingView<PianoRollStatusBarView>?
 
     // MARK: - Lane Views
     //
@@ -788,11 +789,17 @@ final class PianoRollViewController: NSViewController {
             self?.resizeTempoLane(by: delta)
         }
 
+        // --- Status Bar (bottom of window) ---
+        let statusBar = NSHostingView(rootView: PianoRollStatusBarView(store: store, controller: self))
+        statusBar.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(statusBar)
+        self.statusBarHost = statusBar
+
         // Layout
         // The bottom anchor uses high (but not required) priority so the window
         // can shrink below the ideal lane heights on smaller screens.
-        let bottomPin = tempoContainer.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
-        bottomPin.priority = .defaultHigh
+        let tempoBottomPin = tempoContainer.bottomAnchor.constraint(equalTo: statusBar.topAnchor)
+        tempoBottomPin.priority = .defaultHigh
 
         NSLayoutConstraint.activate([
             toolbarHost.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 8),
@@ -823,7 +830,12 @@ final class PianoRollViewController: NSViewController {
             tempoContainer.topAnchor.constraint(equalTo: velContainer.bottomAnchor),
             tempoContainer.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
             tempoContainer.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
-            bottomPin,
+            tempoBottomPin,
+
+            statusBar.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            statusBar.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+            statusBar.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
+            statusBar.heightAnchor.constraint(equalToConstant: 22),
 
             emptyHost.topAnchor.constraint(equalTo: toolbarHost.bottomAnchor, constant: 6),
             emptyHost.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),

@@ -12,7 +12,7 @@ struct NovotroOperaApp: App {
         // Opera is local-first in this workspace.
         // Force folder-based operation and avoid any remote/server-backed project sync in this process.
         setenv("NOVOTRO_DISABLE_PROJECT_SERVICE", "1", 1)
-        setenv("NOVOTRO_DISABLE_SCORE_API_SERVER", "1", 1)
+        // Note: Score API server is intentionally enabled for remote diagnostics.
     }
 
     var body: some Scene {
@@ -42,6 +42,13 @@ struct NovotroOperaApp: App {
                 NotificationCenter.default.post(name: OperaShellSignals.openRecentProjects, object: nil)
             }
             .keyboardShortcut("o", modifiers: [.command, .shift])
+
+            Divider()
+
+            Button("Save") {
+                NotificationCenter.default.post(name: OperaShellSignals.saveProject, object: nil)
+            }
+            .keyboardShortcut("s", modifiers: .command)
         }
     }
 }

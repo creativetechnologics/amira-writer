@@ -82,7 +82,7 @@ struct ScriptScrollContent: View {
                 .coordinateSpace(name: "scriptScroll")
                 .background(Color.black)
                 .onPreferenceChange(SectionVisibilityKey.self) { sections in
-                    updateActiveSection(from: sections)
+                    self.updateActiveSection(from: sections)
                 }
                 .onChange(of: store.scrollTarget) { _, target in
                     guard let target else { return }
@@ -98,26 +98,28 @@ struct ScriptScrollContent: View {
     }
 
     private func updateActiveSection(from sections: [SectionVisibility]) {
-        let viewportTop: CGFloat = 60
+        guard !sections.isEmpty else { return }
+        guard sections.contains(where: { $0.maxY > 0 }) else { return }
 
+        let scrollOffset: CGFloat = 100
         var best: String?
-        var bestDistance: CGFloat = .infinity
+        var bestScore: CGFloat = .infinity
 
         for section in sections {
-            if section.maxY > 0 && section.minY < 600 {
-                let distance = abs(section.minY - viewportTop)
-                if section.minY <= viewportTop + 40 && distance < bestDistance {
-                    best = section.path
-                    bestDistance = distance
-                }
+            guard section.maxY > scrollOffset else { continue }
+
+            let sectionTop = section.minY
+            let distanceFromTop = abs(sectionTop - scrollOffset)
+            let score = distanceFromTop
+
+            if score < bestScore {
+                best = section.path
+                bestScore = score
             }
         }
 
         if best == nil {
-            best = sections
-                .filter { $0.maxY > 0 }
-                .min(by: { abs($0.minY) < abs($1.minY) })?
-                .path
+            best = sections.first { $0.maxY > scrollOffset }?.path
         }
 
         if let best, best != store.activeSongPath {
@@ -180,6 +182,11 @@ struct ScriptSectionView: View {
     @State private var editorHeight: CGFloat = 60
     @State private var suppressWriteBack: Bool = false
     @State private var glowOpacity: Double = 0
+    
+    // Track external change highlighting
+    @State private var externalChangeRanges: [NSRange] = []
+    @State private var externalChangeHighlightOpacity: Double = 0
+    @State private var preChangeText: String = ""
 
     private var isPreviewingThisSection: Bool {
         store.previewingSongPath == path && store.previewingVersionID != nil
@@ -196,6 +203,57 @@ struct ScriptSectionView: View {
 
     private var hasPendingEdit: Bool {
         store.pendingAgentEdits[path] != nil
+    }
+
+    private var editorView: some View {
+        ScriptTextEditor(
+            text: $localText,
+            reportedHeight: $editorHeight,
+            showDirections: store.showDirections,
+            showStoryboarding: store.showStoryboarding,
+            showAnimateDirections: store.showAnimateDirections,
+            pendingHighlightRanges: pendingDiffRanges,
+            externalChangeRanges: externalChangeRanges,
+            externalChangeOpacity: externalChangeHighlightOpacity
+        )
+    }
+
+    private var editorContainer: some View {
+        ZStack(alignment: .topLeading) {
+            editorView
+                .frame(height: max(40, editorHeight))
+                .opacity(isPreviewingThisSection ? 0.15 : 1.0)
+                .disabled(isPreviewingThisSection || hasPendingEdit)
+
+            // Version preview overlay
+            if let preview = previewLyrics {
+                previewOverlay(content: preview)
+            }
+        }
+    }
+
+    private func previewOverlay(content: String) -> some View {
+        Text(
+            ScriptTextEditor.displayText(
+                from: content,
+                showDirections: store.showDirections,
+                showStoryboarding: store.showStoryboarding,
+                showAnimateDirections: store.showAnimateDirections
+            )
+        )
+        .font(.system(size: 13, weight: .regular, design: .monospaced))
+        .foregroundStyle(Color.white.opacity(0.90))
+        .textSelection(.enabled)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.black.opacity(0.80))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.orange.opacity(0.5), lineWidth: 1.5)
+        )
     }
 
     /// Compute NSRanges of changed lines between committed and pending text.
@@ -236,58 +294,28 @@ struct ScriptSectionView: View {
             .padding(.bottom, 8)
 
             // Editable libretto (dimmed when previewing, read-only when pending)
-            ZStack(alignment: .topLeading) {
-                ScriptTextEditor(
-                    text: $localText,
-                    reportedHeight: $editorHeight,
-                    showDirections: store.showDirections,
-                    showStoryboarding: store.showStoryboarding,
-                    showAnimateDirections: store.showAnimateDirections,
-                    pendingHighlightRanges: pendingDiffRanges
-                )
-                .frame(height: max(40, editorHeight))
-                .opacity(isPreviewingThisSection ? 0.15 : 1.0)
-                .disabled(isPreviewingThisSection || hasPendingEdit)
-
-                // Version preview overlay
-                if let preview = previewLyrics {
-                    Text(
-                        ScriptTextEditor.displayText(
-                            from: preview,
-                            showDirections: store.showDirections,
-                            showStoryboarding: store.showStoryboarding,
-                            showAnimateDirections: store.showAnimateDirections
-                        )
-                    )
-                        .font(.system(size: 13, weight: .regular, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.90))
-                        .textSelection(.enabled)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.black.opacity(0.80))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.orange.opacity(0.5), lineWidth: 1.5)
-                        )
-                }
-            }
+            editorContainer
             .onAppear {
                 if !hasLoaded {
-                    localText = store.librettoFiles
+                    let raw = store.librettoFiles
                         .first(where: { $0.relativePath == path })?.content ?? ""
+                    localText = SynopsisEmbedding.stripForDisplay(content: raw)
                     hasLoaded = true
                 }
             }
             .onChange(of: localText) { _, newValue in
                 guard hasLoaded, !suppressWriteBack else { return }
-                store.applyEditorChange(path: path, lyrics: newValue)
+                // Preserve the existing synopsis block when writing back editor changes
+                let existingSynopsis = store.synopsis(forScenePath: path)
+                let fullContent = SynopsisEmbedding.update(content: newValue, synopsis: existingSynopsis)
+                let current = store.librettoFiles.first(where: { $0.relativePath == path })?.content ?? ""
+                guard fullContent != current else { return }
+                store.applyEditorChange(path: path, lyrics: fullContent)
             }
             .onChange(of: store.librettoFiles) { _, files in
                 guard hasLoaded, !hasPendingEdit else { return }
-                let incoming = files.first(where: { $0.relativePath == path })?.content ?? ""
+                let raw = files.first(where: { $0.relativePath == path })?.content ?? ""
+                let incoming = SynopsisEmbedding.stripForDisplay(content: raw)
                 guard incoming != localText else { return }
                 suppressWriteBack = true
                 localText = incoming
@@ -299,16 +327,18 @@ struct ScriptSectionView: View {
                 guard hasLoaded else { return }
                 if let pending = edits[path] {
                     // Agent produced changes — show pending text with green highlights
-                    guard pending != localText else { return }
+                    let stripped = SynopsisEmbedding.stripForDisplay(content: pending)
+                    guard stripped != localText else { return }
                     suppressWriteBack = true
-                    localText = pending
+                    localText = stripped
                     DispatchQueue.main.async {
                         suppressWriteBack = false
                     }
                 } else if !edits.keys.contains(path) {
                     // Pending cleared (accept or reject) — restore committed text
-                    let committed = store.librettoFiles
+                    let raw = store.librettoFiles
                         .first(where: { $0.relativePath == path })?.content ?? ""
+                    let committed = SynopsisEmbedding.stripForDisplay(content: raw)
                     if localText != committed {
                         suppressWriteBack = true
                         localText = committed
@@ -320,45 +350,47 @@ struct ScriptSectionView: View {
             }
             .onChange(of: store.externalChangeTimes) { _, times in
                 guard times[path] != nil else { return }
+
+                // Store the text before the change for diff computation
+                let oldText = localText
+
                 // Reload text from librettoFiles — onChange(of: librettoFiles) can miss
                 // in-place element mutations with @Observable
-                let incoming = store.librettoFiles
+                let raw = store.librettoFiles
                     .first(where: { $0.relativePath == path })?.content ?? ""
+                let incoming = SynopsisEmbedding.stripForDisplay(content: raw)
+
                 if incoming != localText {
                     suppressWriteBack = true
                     localText = incoming
                     DispatchQueue.main.async {
                         suppressWriteBack = false
                     }
-                }
-                // Visual glow to indicate external change
-                withAnimation(.easeIn(duration: 0.5)) {
-                    glowOpacity = 1.0
-                }
-                // Fade out gradually over 3 minutes
-                DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
-                    withAnimation(.easeOut(duration: 150)) {
-                        glowOpacity = 0.0
+                    
+                    // Compute specific changed ranges
+                    externalChangeRanges = ScriptTextEditor.computeChangedCharacterRanges(original: oldText, modified: incoming)
+                    
+                    // Apply yellow highlighting immediately
+                    withAnimation(.easeIn(duration: 0.3)) {
+                        externalChangeHighlightOpacity = 1.0
+                    }
+                    
+                    // Keep highlighting visible for 10 minutes (600 seconds)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 600) {
+                        withAnimation(.easeOut(duration: 1.0)) {
+                            externalChangeHighlightOpacity = 0.0
+                        }
+                        // Clear ranges after fade out
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            externalChangeRanges = []
+                        }
                     }
                 }
-                // Clean up the timestamp after glow expires
-                DispatchQueue.main.asyncAfter(deadline: .now() + 180) {
+                
+                // Clean up the timestamp after a while (keep longer than highlight)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 630) {
                     store.externalChangeTimes.removeValue(forKey: path)
                 }
-            }
-            // External change glow overlay
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(red: 1.0, green: 0.85, blue: 0.4).opacity(glowOpacity * 0.06))
-                    .allowsHitTesting(false)
-            )
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(Color(red: 1.0, green: 0.85, blue: 0.4).opacity(glowOpacity * 0.5))
-                    .frame(width: 3)
-                    .shadow(color: Color(red: 1.0, green: 0.85, blue: 0.4).opacity(glowOpacity * 0.3), radius: 8, x: 2)
-                    .allowsHitTesting(false)
-                    .opacity(glowOpacity > 0.01 ? 1 : 0)
             }
         }
         .onAppear {
@@ -517,6 +549,8 @@ struct ScriptTextEditor: NSViewRepresentable {
     var showStoryboarding: Bool
     var showAnimateDirections: Bool
     var pendingHighlightRanges: [NSRange] = []
+    var externalChangeRanges: [NSRange] = []
+    var externalChangeOpacity: Double = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -557,7 +591,8 @@ struct ScriptTextEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.lineFragmentPadding = 0
         textView.delegate = context.coordinator
-        textView.string = text
+        // Strip syllable annotations completely so they don't take up space
+        textView.string = Self.stripSyllableAnnotations(from: text)
 
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = 5
@@ -585,9 +620,12 @@ struct ScriptTextEditor: NSViewRepresentable {
             || coordinator.lastShowStoryboarding != showStoryboarding
             || coordinator.lastShowAnimateDirections != showAnimateDirections
         let highlightChanged = coordinator.lastHighlightRanges != pendingHighlightRanges
+        let externalChanged = coordinator.lastExternalRanges != externalChangeRanges
+            || coordinator.lastExternalOpacity != externalChangeOpacity
 
         if textChanged {
-            host.textView.string = text
+            // Strip syllable annotations completely so they don't take up space
+            host.textView.string = Self.stripSyllableAnnotations(from: text)
         }
 
         if textChanged || toggleChanged {
@@ -601,6 +639,12 @@ struct ScriptTextEditor: NSViewRepresentable {
         if textChanged || highlightChanged {
             coordinator.lastHighlightRanges = pendingHighlightRanges
             Self.applyPendingHighlighting(to: host.textView, ranges: pendingHighlightRanges)
+        }
+        
+        if externalChanged {
+            coordinator.lastExternalRanges = externalChangeRanges
+            coordinator.lastExternalOpacity = externalChangeOpacity
+            Self.applyExternalChangeHighlighting(to: host.textView, ranges: externalChangeRanges, opacity: externalChangeOpacity)
         }
     }
 
@@ -755,6 +799,18 @@ struct ScriptTextEditor: NSViewRepresentable {
         return syllablePattern.matches(in: text, range: fullRange).map(\.range)
     }
 
+    /// Completely removes syllable annotations from text so they don't take up space.
+    static func stripSyllableAnnotations(from text: String) -> String {
+        let ranges = syllableAnnotationRanges(in: text)
+        guard !ranges.isEmpty else { return text }
+        
+        let mutable = NSMutableString(string: text)
+        for range in ranges.reversed() {
+            mutable.replaceCharacters(in: range, with: "")
+        }
+        return mutable as String
+    }
+
     static func displayText(
         from text: String,
         showDirections: Bool,
@@ -864,7 +920,8 @@ struct ScriptTextEditor: NSViewRepresentable {
         guard let layoutManager = textView.layoutManager else { return }
         let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
 
-        // Clear previous pending highlights
+        // Clear previous pending highlights (but preserve external change highlights)
+        // We'll use a different approach - clear all and re-apply both
         layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
 
         guard !ranges.isEmpty else { return }
@@ -879,6 +936,63 @@ struct ScriptTextEditor: NSViewRepresentable {
         }
     }
 
+    /// Apply yellow text color highlighting to external change ranges.
+    static func applyExternalChangeHighlighting(to textView: NSTextView, ranges: [NSRange], opacity: Double) {
+        guard let layoutManager = textView.layoutManager else { return }
+        let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+        
+        // Remove existing external change highlights (both foreground color and background)
+        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
+        
+        guard !ranges.isEmpty, opacity > 0 else { return }
+        
+        // Yellow text color with opacity based on the fade animation
+        let yellowText = NSColor(calibratedRed: 1.0, green: 0.85, blue: 0.2, alpha: opacity)
+        for range in ranges {
+            let clamped = NSIntersectionRange(range, fullRange)
+            guard clamped.length > 0 else { continue }
+            layoutManager.addTemporaryAttribute(
+                .foregroundColor, value: yellowText, forCharacterRange: clamped
+            )
+        }
+    }
+
+    /// Compute NSRanges of changed characters between original and modified text.
+    static func computeChangedCharacterRanges(original: String, modified: String) -> [NSRange] {
+        // Use a simple line-by-line diff first, then refine to character level
+        let originalLines = original.components(separatedBy: "\n")
+        let modifiedLines = modified.components(separatedBy: "\n")
+        
+        let diff = modifiedLines.difference(from: originalLines)
+        
+        var ranges: [NSRange] = []
+        var currentLocation = 0
+        
+        // Track which lines were modified
+        var modifiedLineIndices = Set<Int>()
+        for change in diff {
+            switch change {
+            case .insert(let offset, _, _):
+                modifiedLineIndices.insert(offset)
+            case .remove(let offset, _, _):
+                modifiedLineIndices.insert(offset)
+            }
+        }
+        
+        // Build ranges from modified lines
+        for (index, line) in modifiedLines.enumerated() {
+            let lineLength = line.utf16.count
+            if modifiedLineIndices.contains(index) {
+                // Include the newline in the range
+                let rangeLength = index < modifiedLines.count - 1 ? lineLength + 1 : lineLength
+                ranges.append(NSRange(location: currentLocation, length: rangeLength))
+            }
+            currentLocation += lineLength + 1 // +1 for newline
+        }
+        
+        return ranges
+    }
+
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ScriptTextEditor
@@ -889,6 +1003,8 @@ struct ScriptTextEditor: NSViewRepresentable {
         var lastShowStoryboarding = true
         var lastShowAnimateDirections = true
         var lastHighlightRanges: [NSRange] = []
+        var lastExternalRanges: [NSRange] = []
+        var lastExternalOpacity: Double = 0
         private var stylingWorkItem: DispatchWorkItem?
 
         init(parent: ScriptTextEditor) {

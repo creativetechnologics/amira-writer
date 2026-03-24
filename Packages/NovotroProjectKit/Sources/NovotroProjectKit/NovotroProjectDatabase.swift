@@ -1149,6 +1149,7 @@ public actor NovotroProjectDatabase {
                 NSLocalizedDescriptionKey: message
             ])
         }
+        sqlite3_busy_timeout(pointer, 5000)
         db = pointer
     }
 

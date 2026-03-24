@@ -43,28 +43,41 @@ enum OperaShellSignals {
     static let openProjectFromDisk = Notification.Name("novotro.opera.openProjectFromDisk")
     static let openProjectFromURL = Notification.Name("novotro.opera.openProjectFromURL")
     static let openRecentProjects = Notification.Name("novotro.opera.openRecentProjects")
+    static let saveProject = Notification.Name("novotro.opera.saveProject")
 }
 
 private enum OperaRecentProjectsStore {
     private static let storageKey = "novotro.opera.recentProjectPaths"
+    private static let legacyStorageKeys = [
+        "recentProjectPaths"
+    ]
     private static let maxProjects = 12
+    private static let controlFileCandidates = [
+        "Metadata/project.json",
+        "project.json"
+    ]
 
     static func recentProjects(
         userDefaults: UserDefaults = .standard,
         fileManager: FileManager = .default
     ) -> [URL] {
-        let storedPaths = userDefaults.array(forKey: storageKey) as? [String] ?? []
+        let primaryPaths = userDefaults.array(forKey: storageKey) as? [String] ?? []
+        let legacyPaths = legacyStorageKeys.flatMap { key in
+            userDefaults.array(forKey: key) as? [String] ?? []
+        }
+        let storedPaths = primaryPaths + legacyPaths
         var seen: Set<String> = []
         var urls: [URL] = []
 
         for path in storedPaths {
             let url = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
             guard seen.insert(url.path).inserted else { continue }
-            guard fileManager.fileExists(atPath: url.path) else { continue }
+            guard isSupportedProjectURL(url, fileManager: fileManager) else { continue }
             urls.append(url)
         }
 
-        if urls.map(\.path) != storedPaths {
+        let normalizedPaths = urls.map(\.path)
+        if normalizedPaths != primaryPaths {
             userDefaults.set(urls.map(\.path), forKey: storageKey)
         }
 
@@ -74,15 +87,29 @@ private enum OperaRecentProjectsStore {
     @discardableResult
     static func noteProject(
         _ url: URL,
-        userDefaults: UserDefaults = .standard
+        userDefaults: UserDefaults = .standard,
+        fileManager: FileManager = .default
     ) -> [URL] {
         let normalized = url.resolvingSymlinksInPath().standardizedFileURL
+        guard isSupportedProjectURL(normalized, fileManager: fileManager) else {
+            return recentProjects(userDefaults: userDefaults, fileManager: fileManager)
+        }
         var urls = recentProjects(userDefaults: userDefaults)
         urls.removeAll { $0.path == normalized.path }
         urls.insert(normalized, at: 0)
         let trimmed = Array(urls.prefix(maxProjects))
         userDefaults.set(trimmed.map(\.path), forKey: storageKey)
         return trimmed
+    }
+
+    private static func isSupportedProjectURL(_ url: URL, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return false
+        }
+        return controlFileCandidates.contains { candidate in
+            fileManager.fileExists(atPath: url.appendingPathComponent(candidate).path)
+        }
     }
 }
 
@@ -107,6 +134,13 @@ private enum OperaLoadState: Equatable {
 }
 
 @available(macOS 26.0, *)
+private enum OperaModeLoadResult {
+    case success
+    case failure(String)
+    case timedOut
+}
+
+@available(macOS 26.0, *)
 struct OperaShellView: View {
     @Binding var selectedMode: OperaMode
     @StateObject private var progressCenter = NovotroProjectOpenProgressCenter.shared
@@ -122,6 +156,7 @@ struct OperaShellView: View {
     @State private var activeProjectLoadError: String?
     @State private var isOpeningFromPanel = false
     @State private var didInitialize = false
+    @State private var modeSwitchTask: Task<Void, Never>?
     private static let controlFileCandidates = [
         "Metadata/project.json",
         "project.json"
@@ -151,8 +186,30 @@ struct OperaShellView: View {
         .task {
             await initializeShellIfNeeded()
         }
+        .task {
+            // File-based remote control for diagnostics via SSH
+            let commandPath = "/tmp/novotro-command.txt"
+            let fm = FileManager.default
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard fm.fileExists(atPath: commandPath),
+                      let data = fm.contents(atPath: commandPath),
+                      let command = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !command.isEmpty else { continue }
+                try? fm.removeItem(atPath: commandPath)
+                await MainActor.run {
+                    switch command.lowercased() {
+                    case "write":  selectedMode = .write
+                    case "score":  selectedMode = .score
+                    case "animate": selectedMode = .animate
+                    default: break
+                    }
+                }
+            }
+        }
         .onChange(of: selectedMode) { _, newMode in
-            Task {
+            modeSwitchTask?.cancel()
+            modeSwitchTask = Task {
                 await handleModeSelectionChange(newMode)
             }
         }
@@ -168,7 +225,11 @@ struct OperaShellView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: OperaShellSignals.openRecentProjects)) { _ in
+            recentProjects = OperaRecentProjectsStore.recentProjects()
             activeModal = .recentProjects
+        }
+        .onReceive(NotificationCenter.default.publisher(for: OperaShellSignals.saveProject)) { _ in
+            saveActiveWorkspace()
         }
         .alert("Couldn't Open Project", isPresented: Binding(
             get: { activeProjectLoadError != nil },
@@ -192,11 +253,23 @@ struct OperaShellView: View {
         }
     }
 
+    private var activeSaveIndicator: SaveIndicatorState {
+        switch renderedMode {
+        case .write: return writeController.saveIndicator
+        case .score: return scoreController.saveIndicator
+        case .animate: return animateController.saveIndicator
+        }
+    }
+
     private var tabBar: some View {
         HStack(spacing: 14) {
-            Text("Novotro Opera")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(OperaChromeTheme.textPrimary)
+            HStack(spacing: 8) {
+                Text("Novotro Opera")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(OperaChromeTheme.textPrimary)
+
+                OperaChromeCompactSaveIndicator(state: activeSaveIndicator)
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 8) {
@@ -278,7 +351,14 @@ struct OperaShellView: View {
         didInitialize = true
         renderedMode = selectedMode
         recentProjects = OperaRecentProjectsStore.recentProjects()
-        if activeProjectURL == nil {
+        if activeProjectURL == nil,
+           let mostRecentProject = recentProjects.first {
+            let opened = await openProject(mostRecentProject)
+            if !opened {
+                recentProjects = OperaRecentProjectsStore.recentProjects()
+                activeModal = .recentProjects
+            }
+        } else if activeProjectURL == nil {
             activeModal = .recentProjects
         }
     }
@@ -350,6 +430,14 @@ struct OperaShellView: View {
         }
         guard newMode != renderedMode else { return }
 
+        // Suspend background watchers on the mode we're leaving so they don't
+        // contend with the incoming mode's database and file-system access.
+        switch renderedMode {
+        case .write: writeController.suspendBackgroundWork()
+        case .score: scoreController.suspendBackgroundWork()
+        case .animate: animateController.suspendBackgroundWork()
+        }
+
         let projectName = activeProjectTitle ?? displayName(for: activeProjectURL)
         loadState = .loading(mode: newMode, projectName: projectName, projectPath: activeProjectURL.path)
         progressCenter.start(
@@ -359,12 +447,28 @@ struct OperaShellView: View {
         )
         activeProjectLoadError = nil
         await Task.yield()
+        guard !Task.isCancelled else {
+            progressCenter.finish(projectURL: activeProjectURL)
+            loadState = .idle
+            return
+        }
 
-        if let error = await load(mode: newMode, projectURL: activeProjectURL) {
+        switch await loadForModeSwitch(mode: newMode, projectURL: activeProjectURL) {
+        case .success:
+            guard !Task.isCancelled else { break }
+            renderedMode = newMode
+        case let .failure(error):
+            guard !Task.isCancelled else { break }
             activeProjectLoadError = error
             selectedMode = renderedMode
-        } else {
+        case .timedOut:
+            guard !Task.isCancelled else { break }
             renderedMode = newMode
+            progressCenter.update(
+                projectURL: activeProjectURL,
+                phaseTitle: "Switching Workspace",
+                detail: "Animate is still indexing local files. Showing the workspace now and applying updates when indexing completes."
+            )
         }
 
         progressCenter.finish(projectURL: activeProjectURL)
@@ -381,6 +485,45 @@ struct OperaShellView: View {
         case .animate:
             return await animateController.ensureProjectLoaded(projectURL)
         }
+    }
+
+    @MainActor
+    private func loadForModeSwitch(mode: OperaMode, projectURL: URL) async -> OperaModeLoadResult {
+        guard mode == .animate else {
+            if let error = await load(mode: mode, projectURL: projectURL) {
+                return .failure(error)
+            }
+            return .success
+        }
+
+        let animateLoadTask = Task { await animateController.ensureProjectLoaded(projectURL) }
+        let timeoutNanoseconds: UInt64 = 8_000_000_000
+
+        let result = await withTaskGroup(of: OperaModeLoadResult.self, returning: OperaModeLoadResult.self) { group in
+            group.addTask {
+                if let error = await animateLoadTask.value {
+                    return .failure(error)
+                }
+                return .success
+            }
+
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return .timedOut
+            }
+
+            let first = await group.next() ?? .success
+            group.cancelAll()
+            return first
+        }
+
+        if case .timedOut = result {
+            Task {
+                _ = await animateLoadTask.value
+            }
+        }
+
+        return result
     }
 
     private func openProjectFromDisk() async {
@@ -496,6 +639,19 @@ struct OperaShellView: View {
             return Color(red: 0.72, green: 0.78, blue: 0.46)
         case .animate:
             return Color(red: 0.72, green: 0.58, blue: 0.82)
+        }
+    }
+
+    private func saveActiveWorkspace() {
+        guard activeProjectURL != nil else { return }
+
+        switch renderedMode {
+        case .write:
+            writeController.save()
+        case .score:
+            scoreController.save()
+        case .animate:
+            animateController.save()
         }
     }
 }

@@ -96,6 +96,28 @@ struct CharacterPackageLibrary: Sendable {
         ).first
     }
 
+    func deletePackage(_ packageID: UUID, for characterSlug: String, in animateURL: URL) -> Bool {
+        let packages = installedPackages(
+            for: characterSlug,
+            in: animateURL,
+            preferredActivePackageID: nil
+        )
+
+        guard let package = packages.first(where: { $0.id == packageID }) else {
+            NSLog("[CharacterPackageLibrary] Package not found: \(packageID)")
+            return false
+        }
+
+        do {
+            try FileManager.default.removeItem(at: package.packageDirectoryURL)
+            NSLog("[CharacterPackageLibrary] Deleted package at: \(package.packageDirectoryURL.path)")
+            return true
+        } catch {
+            NSLog("[CharacterPackageLibrary] Failed to delete: \(error)")
+            return false
+        }
+    }
+
     func primaryAsset(for package: InstalledCharacterPackage) -> CharacterPackageAsset? {
         package.manifest.assets
             .filter { asset in

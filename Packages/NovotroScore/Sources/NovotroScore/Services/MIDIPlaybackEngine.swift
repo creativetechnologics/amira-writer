@@ -638,29 +638,113 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     func reloadAllInstruments(mappings: [String: InstrumentMapping]) {
         audioQueue.async { [weak self] in
             guard let self else { return }
+            self.fileLog("reloadAllInstruments: \(mappings.count) mappings, \(self.samplerByMappingKey.count) samplers, \(self.auInstrumentByMappingKey.count) AUs")
             NSLog("[Engine] reloadAllInstruments: tearing down %d samplers, %d AUs",
                   self.samplerByMappingKey.count, self.auInstrumentByMappingKey.count)
 
             // Clear all patch signatures to force reload
             self.patchSignatureByMappingKey.removeAll()
 
-            // Rebuild graph with current mappings
+            // Determine which keys are switching TO SF2 so we can clean up their old AU nodes
+            let keysNowSF2 = Set(mappings.filter { $0.value.effectiveSourceType != .audioUnit }.keys)
+
+            // STRATEGY: Do ALL work in a single engine stop/start cycle.
+            // Intermediate engine.start() calls cause loadSoundBankInstrument()
+            // to deadlock (even after AU nodes are removed). One clean cycle:
+            // dealloc AU resources → stop engine → detach AUs → create samplers →
+            // load SF2s → start engine → load AUs.
+
+            // 1. Collect AU nodes to remove
+            var auKeys: [(key: String, au: AVAudioUnit, panMixer: AVAudioMixerNode?)] = []
+            for key in keysNowSF2 {
+                if let oldAU = self.auInstrumentByMappingKey.removeValue(forKey: key) {
+                    self.auObservations.removeValue(forKey: key)
+                    let pm = self.panMixerByMappingKey.removeValue(forKey: key)
+                    auKeys.append((key: key, au: oldAU, panMixer: pm))
+                }
+            }
+
+            // 2. Stop engine FIRST — must stop before deallocating render resources
+            //    ("You must not call deallocateRenderResources while the host is rendering")
+            self.engine.stop()
+            self.fileLog("reloadAll: engine stopped")
+
+            // 3. Deallocate AU render resources (engine is stopped — safe)
+            for item in auKeys {
+                if item.au.auAudioUnit.renderResourcesAllocated {
+                    item.au.auAudioUnit.deallocateRenderResources()
+                    self.fileLog("reloadAll: deallocated render key=\(item.key)")
+                }
+            }
+
+            // Brief yield to let XPC host processes finish cleanup
+            Thread.sleep(forTimeInterval: 0.2)
+
+            // 4. Detach AU nodes
+            for item in auKeys {
+                self.engine.disconnectNodeOutput(item.au)
+                self.engine.detach(item.au)
+                if let pm = item.panMixer {
+                    self.engine.disconnectNodeOutput(pm)
+                    self.engine.detach(pm)
+                }
+                self.fileLog("reloadAll: detached AU key=\(item.key)")
+            }
+
+            // 5. Create new samplers + load SF2s OFF the audioQueue
+            // loadSoundBankInstrument() deadlocks when called on audioQueue after
+            // out-of-process AU plugins have been instantiated. Dispatch to global queue.
+            var sf2Loads: [(sampler: AVAudioUnitSampler, mapping: InstrumentMapping, key: String)] = []
+            for (key, mapping) in mappings {
+                if mapping.effectiveSourceType != .audioUnit {
+                    let s: AVAudioUnitSampler
+                    if let existing = self.samplerByMappingKey[key] {
+                        s = existing
+                    } else {
+                        s = AVAudioUnitSampler()
+                        self.engine.attach(s)
+                        self.engine.connect(s, to: self.engine.mainMixerNode, format: nil)
+                        self.samplerByMappingKey[key] = s
+                        self.fileLog("reloadAll: created sampler key=\(key)")
+                    }
+                    s.volume = 1.0
+                    sf2Loads.append((sampler: s, mapping: mapping, key: key))
+                }
+            }
+            
+            // Load SF2s on global queue to avoid audioQueue deadlock
+            let sf2Group = DispatchGroup()
+            for item in sf2Loads {
+                sf2Group.enter()
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    self?.loadInstrumentOffQueue(item.mapping, into: item.sampler, mappingKey: item.key)
+                    sf2Group.leave()
+                }
+            }
+            sf2Group.wait()
+            self.fileLog("reloadAll: all SF2 instruments loaded")
+
+            // 6. Start engine ONCE
+            do {
+                try self.engine.start()
+                self.fileLog("reloadAll: engine started")
+            } catch {
+                self.fileLog("reloadAll: engine start FAILED: \(error)")
+            }
+
+            // 7. Load AU instruments (need running engine)
             for (key, mapping) in mappings {
                 if mapping.effectiveSourceType == .audioUnit,
                    let desc = mapping.audioComponentDescription {
+                    if let placeholder = self.samplerByMappingKey[key] {
+                        placeholder.volume = 0
+                    }
                     self.loadAudioUnitIfNeeded(mappingKey: key, mapping: mapping, description: desc)
-                } else {
-                    let s = self.samplerByMappingKey[key] ?? {
-                        let newSampler = AVAudioUnitSampler()
-                        self.engine.attach(newSampler)
-                        self.samplerByMappingKey[key] = newSampler
-                        return newSampler
-                    }()
-                    self.loadInstrument(mapping, into: s, mappingKey: key)
                 }
             }
 
             _ = self.configureAudioGraphIfNeeded()
+            self.fileLog("reloadAllInstruments complete — samplers=\(self.samplerByMappingKey.count) AUs=\(self.auInstrumentByMappingKey.count)")
             NSLog("[Engine] reloadAllInstruments complete")
         }
     }
@@ -1710,9 +1794,11 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         )
         if patchSignatureByMappingKey[mappingKey] == sig {
             if auInstrumentByMappingKey[mappingKey] != nil {
+                fileLog("loadAU CACHED key=\(mappingKey) renderAlloc=\(auInstrumentByMappingKey[mappingKey]!.auAudioUnit.renderResourcesAllocated)")
                 applyAUGain(mapping.gainDB, mappingKey: mappingKey)
                 return
             }
+            fileLog("loadAU STALE CACHE key=\(mappingKey) — AU missing, will retry")
             // Signature was cached but AU is missing (e.g. failed previous load).
             // Clear stale cache so we retry instantiation.
             patchSignatureByMappingKey.removeValue(forKey: mappingKey)
@@ -1734,6 +1820,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
         // Instantiate AU synchronously with timeout — blocks audio queue but NOT main thread.
         // Out-of-process loading prevents beach balls with large plugins.
+        fileLog("loadAU INSTANTIATING key=\(mappingKey) subType=\(description.componentSubType) mfr=\(description.componentManufacturer)")
         let semaphore = DispatchSemaphore(value: 0)
         let loadResult = AULoadResultBox()
 
@@ -1745,7 +1832,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         let timeout = semaphore.wait(timeout: .now() + 10.0) // 10s timeout for large plugins
         let (loadedUnit, loadError) = loadResult.snapshot()
         guard timeout == .success, let audioUnit = loadedUnit else {
-            NSLog("[Engine] AU load timeout/failed for %@: %@", mappingKey, loadError?.localizedDescription ?? "timeout")
+            fileLog("loadAU FAILED key=\(mappingKey) error=\(loadError?.localizedDescription ?? "timeout")")
             patchSignatureByMappingKey.removeValue(forKey: mappingKey)
             return
         }
@@ -1767,16 +1854,37 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
         // Restore preset if available (try plist first, fall back to JSON for legacy data)
         if let presetData = mapping.auPresetData {
+            fileLog("loadAU PRESET key=\(mappingKey) dataSize=\(presetData.count)")
             do {
                 if let preset = try PropertyListSerialization.propertyList(from: presetData, format: nil) as? [String: Any] {
+                    // Log any file paths in the preset
+                    if let zones = preset["Zones"] as? [[String: Any]] {
+                        for zone in zones.prefix(2) {
+                            if let path = zone["Sample Path"] as? String {
+                                let exists = FileManager.default.fileExists(atPath: path)
+                                fileLog("  preset zone SF2 path=\(path) exists=\(exists)")
+                            }
+                        }
+                    }
+                    // Also check for file refs in Instrument data
+                    if let inst = preset["Instrument"] as? [String: Any],
+                       let path = inst["file references"] as? [String: Any] {
+                        for (k, v) in path.prefix(2) {
+                            fileLog("  preset fileRef \(k)=\(v)")
+                        }
+                    }
                     audioUnit.auAudioUnit.fullState = preset
+                    fileLog("  preset restored OK")
                 } else if let preset = try JSONSerialization.jsonObject(with: presetData) as? [String: Any] {
                     audioUnit.auAudioUnit.fullState = preset
+                    fileLog("  preset restored OK (JSON)")
                 }
             } catch {
-                NSLog("[Engine] Failed to restore AU preset for %@: %@", mappingKey, error.localizedDescription)
+                fileLog("loadAU PRESET FAILED key=\(mappingKey) error=\(error.localizedDescription)")
                 reportError("Could not restore AU preset for \(mappingKey)")
             }
+        } else {
+            fileLog("loadAU NO PRESET key=\(mappingKey)")
         }
 
         auInstrumentByMappingKey[mappingKey] = audioUnit
@@ -1799,7 +1907,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         auObservations[mappingKey] = observation
         patchSignatureByMappingKey[mappingKey] = sig
 
-        NSLog("[Engine] Loaded AU instrument for %@", mappingKey)
+        fileLog("loadAU OK key=\(mappingKey) renderAlloc=\(audioUnit.auAudioUnit.renderResourcesAllocated)")
     }
 
     /// Handle an out-of-process AU that has disconnected.
@@ -1888,6 +1996,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         let gain = Float(gainDB)
 
         let soundBankPath = mapping?.sf2Path?.trimmingCharacters(in: .whitespacesAndNewlines)
+        fileLog("loadInstrument key=\(mappingKey) sf2=\(soundBankPath ?? "nil") program=\(resolvedProgram) bankMSB=\(resolvedBankMSB) bankLSB=\(bankLSB) sourceType=\(String(describing: mapping?.effectiveSourceType))")
         let signature = SamplerPatchSignature(
             soundBankPath: soundBankPath?.isEmpty == true ? nil : soundBankPath,
             bankMSB: resolvedBankMSB,
@@ -1898,8 +2007,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             auManufacturer: nil
         )
         if patchSignatureByMappingKey[mappingKey] == signature {
-            NSLog("[Engine] loadInstrument SKIPPED (cached) key=%@ sf2=%@",
-                  mappingKey, soundBankPath ?? "nil")
+            fileLog("loadInstrument SKIPPED (cached) key=\(mappingKey)")
             return
         }
 
@@ -1907,9 +2015,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         if let sf2Path = signature.soundBankPath, !sf2Path.isEmpty {
             let sf2URL = URL(fileURLWithPath: sf2Path)
             let exists = FileManager.default.fileExists(atPath: sf2URL.path)
-            NSLog("[Engine] loadInstrument key=%@ sf2=%@ exists=%@ program=%d bankMSB=%d bankLSB=%d",
-                  mappingKey, sf2URL.lastPathComponent, String(describing: exists),
-                  resolvedProgram, resolvedBankMSB, bankLSB)
+            fileLog("loadInstrument SF2 key=\(mappingKey) file=\(sf2URL.lastPathComponent) exists=\(exists) path=\(sf2Path)")
             if exists {
 
                 // Retry chain for SF2 loading. The program-0 and default-bank
@@ -1984,10 +2090,10 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                     }
                 }
             } else {
-                NSLog("[Engine] File does not exist at path: %@", sf2URL.path)
+                fileLog("loadInstrument SF2 FILE NOT FOUND key=\(mappingKey) path=\(sf2URL.path)")
             }
         } else {
-            NSLog("[Engine] No sf2Path for mappingKey: %@", mappingKey)
+            fileLog("loadInstrument NO SF2 PATH for key=\(mappingKey)")
         }
 
         // If no instrument was loaded, explicitly mute the sampler.
@@ -1995,7 +2101,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         // piano tone that plays even without an explicit loadSoundBankInstrument
         // call.  Setting gain to -96 dB effectively silences it.
         if !loaded {
-            NSLog("[Engine] No instrument loaded for %@ — muting sampler", mappingKey)
+            fileLog("loadInstrument MUTING sampler key=\(mappingKey) — no instrument loaded")
             if let gainParam = sampler.auAudioUnit.parameterTree?.parameter(
                 withAddress: AUParameterAddress(kAUSamplerParam_Gain)
             ) {
@@ -2003,6 +2109,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             }
             sampler.volume = 0
         } else {
+            fileLog("loadInstrument OK key=\(mappingKey) gain=\(gain)dB")
             if let gainParam = sampler.auAudioUnit.parameterTree?.parameter(
                 withAddress: AUParameterAddress(kAUSamplerParam_Gain)
             ) {
@@ -2011,6 +2118,92 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             sampler.volume = 1
         }
         patchSignatureByMappingKey[mappingKey] = signature
+    }
+
+    /// Load an SF2 instrument from a global queue (NOT audioQueue).
+    /// Used during reloadAllInstruments to avoid deadlock after AU plugins have been loaded.
+    /// Does NOT check cache (caller should ensure fresh load is needed).
+    private func loadInstrumentOffQueue(_ mapping: InstrumentMapping?, into sampler: AVAudioUnitSampler, mappingKey: String) {
+        let resolvedProgram = UInt8(min(max(mapping?.program ?? 0, 0), 127))
+        let resolvedBankMSB = UInt8(min(max(mapping?.bankMSB ?? Int(kAUSampler_DefaultMelodicBankMSB), 0), 127))
+        let bankLSB = UInt8(min(max(mapping?.bankLSB ?? 0, 0), 127))
+        let gainDB = mapping?.gainDB ?? 0
+        let gain = Float(gainDB)
+
+        let soundBankPath = mapping?.sf2Path?.trimmingCharacters(in: .whitespacesAndNewlines)
+        fileLog("loadInstrumentOffQueue key=\(mappingKey) sf2=\(soundBankPath ?? "nil") program=\(resolvedProgram)")
+
+        var loaded = false
+        if let sf2Path = soundBankPath, !sf2Path.isEmpty {
+            let sf2URL = URL(fileURLWithPath: sf2Path)
+            let exists = FileManager.default.fileExists(atPath: sf2URL.path)
+            if exists {
+                do {
+                    try sampler.loadSoundBankInstrument(at: sf2URL, program: resolvedProgram, bankMSB: resolvedBankMSB, bankLSB: bankLSB)
+                    loaded = true
+                } catch {
+                    if resolvedBankMSB != 0 || bankLSB != 0 {
+                        do {
+                            try sampler.loadSoundBankInstrument(at: sf2URL, program: resolvedProgram, bankMSB: 0, bankLSB: 0)
+                            loaded = true
+                        } catch {
+                            NSLog("[SF2] Bank 0/0 fallback failed for %@ (prog=%d): %@", mappingKey, resolvedProgram, error.localizedDescription)
+                        }
+                    }
+                }
+                if !loaded && resolvedProgram != 0 {
+                    do {
+                        try sampler.loadSoundBankInstrument(at: sf2URL, program: 0, bankMSB: 0, bankLSB: 0)
+                        loaded = true
+                    } catch {
+                        NSLog("[SF2] Program 0 bank 0/0 fallback failed for %@: %@", mappingKey, error.localizedDescription)
+                    }
+                }
+                if !loaded {
+                    let defaultMelodicMSB = UInt8(kAUSampler_DefaultMelodicBankMSB)
+                    do {
+                        try sampler.loadSoundBankInstrument(at: sf2URL, program: resolvedProgram, bankMSB: defaultMelodicMSB, bankLSB: 0)
+                        loaded = true
+                    } catch {
+                        if resolvedProgram != 0 {
+                            do {
+                                try sampler.loadSoundBankInstrument(at: sf2URL, program: 0, bankMSB: defaultMelodicMSB, bankLSB: 0)
+                                loaded = true
+                            } catch {
+                                NSLog("[SF2] Apple default melodic bank prog 0 fallback failed for %@: %@", mappingKey, error.localizedDescription)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !loaded {
+            fileLog("loadInstrumentOffQueue MUTING sampler key=\(mappingKey) — no instrument loaded")
+            if let gainParam = sampler.auAudioUnit.parameterTree?.parameter(withAddress: AUParameterAddress(kAUSamplerParam_Gain)) {
+                gainParam.value = -96
+            }
+            sampler.volume = 0
+        } else {
+            fileLog("loadInstrumentOffQueue OK key=\(mappingKey)")
+            if let gainParam = sampler.auAudioUnit.parameterTree?.parameter(withAddress: AUParameterAddress(kAUSamplerParam_Gain)) {
+                gainParam.value = gain
+            }
+            sampler.volume = 1
+        }
+
+        let signature = SamplerPatchSignature(
+            soundBankPath: soundBankPath?.isEmpty == true ? nil : soundBankPath,
+            bankMSB: resolvedBankMSB,
+            bankLSB: bankLSB,
+            program: resolvedProgram,
+            gainDB: gainDB,
+            auSubType: nil,
+            auManufacturer: nil
+        )
+        audioQueue.async { [weak self] in
+            self?.patchSignatureByMappingKey[mappingKey] = signature
+        }
     }
 
     private func schedulePlaybackEndWork(
@@ -2076,8 +2269,16 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         }
     }
 
+    private var loggedMIDIDeliveryKeys: Set<String> = []
     private func sendHostedMIDIEvent(_ event: HostedMIDIEvent) {
         if let auUnit = auInstrumentByMappingKey[event.mappingKey] {
+            if !loggedMIDIDeliveryKeys.contains(event.mappingKey) {
+                loggedMIDIDeliveryKeys.insert(event.mappingKey)
+                let hasMIDIBlock = auUnit.auAudioUnit.scheduleMIDIEventBlock != nil
+                let renderAlloc = auUnit.auAudioUnit.renderResourcesAllocated
+                let outputFormat = auUnit.outputFormat(forBus: 0)
+                fileLog("MIDI delivery \(event.mappingKey): hasMIDIBlock=\(hasMIDIBlock) renderAlloc=\(renderAlloc) outputFormat=\(outputFormat)")
+            }
             sendImmediateMIDIEvent(event.bytes, to: auUnit)
             return
         }
@@ -2340,11 +2541,12 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     /// buffers (EXC_BAD_ACCESS on com.apple.audio.IOThread.client).
     /// If the engine is already paused/stopped, the work runs directly with no restart.
     private func withEnginePaused(_ work: () -> Void) {
-        // Only force pause/start cycles while transport is actively rendering MIDI.
-        // A lightweight natural-end stop flips isPlaying=false before the old sequencer
-        // has necessarily drained, so also respect the sequencer's live state.
-        let sequencerStillPlaying = sequencer?.isPlaying ?? false
-        let shouldPause = engine.isRunning && (isPlaying || sequencerStillPlaying)
+        // Always pause the engine when it's running before topology changes.
+        // Apple requires the engine be stopped/paused for attach/detach/connect.
+        // Previously this only paused during active playback, but that caused
+        // loadSoundBankInstrument() to deadlock when out-of-process AU nodes
+        // were attached to a running (but not playing) engine.
+        let shouldPause = engine.isRunning
         if shouldPause {
             engineStopIsOursDepth += 1
             fileLog("withEnginePaused: pause → depth=\(engineStopIsOursDepth)")
@@ -2499,7 +2701,13 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             }
         }
 
+        fileLog("playOnAudioQueue noteGroups: \(noteGroups.count) keys, totalNotes=\(noteGroups.values.reduce(0) { $0 + $1.count }), hasAudio=\(hasAudio), mutedKeys=\(mutedKeys.count)")
+        for (key, notes) in noteGroups.sorted(by: { $0.key < $1.key }) {
+            fileLog("  group \(key): \(notes.count) notes")
+        }
+
         guard !noteGroups.isEmpty || hasAudio else {
+            fileLog("playOnAudioQueue BAIL: no note groups and no audio")
             setPlaying(false)
             isReconfiguring = false
             return
@@ -2540,6 +2748,9 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             var newSamplerPairs: [(key: String, node: AVAudioUnitSampler, mapping: InstrumentMapping?)] = []
             for mappingKey in orderedMappingKeys {
                 let mapping = instrumentMappings[mappingKey]
+                let srcType = mapping?.effectiveSourceType
+                let hasAUDesc = mapping?.audioComponentDescription != nil
+                fileLog("  setup \(mappingKey): sourceType=\(String(describing: srcType)) hasAUDesc=\(hasAUDesc) hasSampler=\(samplerByMappingKey[mappingKey] != nil) hasAU=\(auInstrumentByMappingKey[mappingKey] != nil)")
                 if let mapping, mapping.effectiveSourceType == .audioUnit, let desc = mapping.audioComponentDescription {
                     // AU instruments are hosted directly; do not create placeholder sampler nodes
                     // during playback setup unless we actually need a silent fallback.

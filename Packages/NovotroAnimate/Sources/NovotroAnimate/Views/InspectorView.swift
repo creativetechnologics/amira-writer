@@ -43,10 +43,6 @@ struct InspectorView: View {
                 case .timeline:
                     timelineInspector
                 }
-
-                Divider()
-
-                geminiSection
             }
             .padding()
         }
@@ -99,84 +95,24 @@ struct InspectorView: View {
     private var characterInspector: some View {
         if let character = store.selectedCharacter {
             VStack(alignment: .leading, spacing: 12) {
-                Label("Character", systemImage: "person.fill")
-                    .font(.headline)
-
-                LabeledContent("Name") {
-                    Text(character.name)
-                }
-
-                LabeledContent("Parts") {
-                    Text("\(character.parts.count)")
-                }
-
-                if !character.description.isEmpty {
-                    Text(character.description)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Rig", systemImage: "figure.arms.open")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    HStack(spacing: 8) {
-                        Button("Edit Rig") {
-                            store.showRigEditor = true
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button("Save Rig") {
-                            store.saveCharacterRig(character.id)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    if character.parts.isEmpty {
-                        Button("Create Default Rig") {
-                            store.createDefaultRig(for: character.id)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
+                characterRigSection(character)
 
                 Divider()
 
                 characterPackageInspectorSection(character)
 
+                Divider()
+
+                canvasRenderInspectorSection(character)
+
+                Divider()
+
+                characterActionsInspectorSection(character)
+
                 if !character.parts.isEmpty {
                     Divider()
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Angle Coverage", systemImage: "rotate.3d")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                        let coverageByAngle = angleCoverage(for: character)
-                        ForEach(AngleView.allCases, id: \.self) { angle in
-                            HStack {
-                                Text(angle.rawValue)
-                                    .font(.caption)
-                                Spacer()
-                                let count = coverageByAngle[angle] ?? 0
-                                Text("\(count) drawings")
-                                    .font(.caption)
-                                    .foregroundStyle(count > 0 ? Color.green : Color.gray)
-                            }
-                        }
-                    }
-                }
-
-                if !store.geminiAPIKey.isEmpty {
-                    Divider()
-
-                    Button("Generate Assets...") {
-                        store.showGenerationSheet = true
-                    }
-                    .buttonStyle(.borderedProminent)
+                    angleCoverageInspectorSection(character)
                 }
             }
         } else {
@@ -187,6 +123,125 @@ struct InspectorView: View {
                 Text("Select a character to view properties.")
                     .foregroundStyle(.secondary)
                     .font(.callout)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func characterRigSection(_ character: AnimationCharacter) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Rig", systemImage: "figure.arms.open")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Button("Edit Rig") {
+                    store.showRigEditor = true
+                }
+                .buttonStyle(.bordered)
+
+                Button("Save Rig") {
+                    store.saveCharacterRig(character.id)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if character.parts.isEmpty {
+                Button("Create Default Rig") {
+                    store.createDefaultRig(for: character.id)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func canvasRenderInspectorSection(_ character: AnimationCharacter) -> some View {
+        let rigVariantCount = character.parts.reduce(into: 0) { total, part in
+            for drawingSet in part.drawingSets.values {
+                total += drawingSet.variants.count
+            }
+        }
+
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Canvas Render", systemImage: "play.rectangle.on.rectangle")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Picker("Render Mode", selection: Binding(
+                get: { character.resolvedRenderMode },
+                set: { store.setCharacterRenderMode($0, for: character.id) }
+            )) {
+                ForEach(CharacterCanvasRenderMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Picker("Preferred Angle", selection: Binding(
+                get: { character.preferredViewAngle },
+                set: { store.setCharacterPreferredViewAngle($0, for: character.id) }
+            )) {
+                Text("Automatic").tag(nil as AngleView?)
+                ForEach(AngleView.allCases, id: \.self) { angle in
+                    Text(angle.rawValue).tag(Optional(angle))
+                }
+            }
+
+            if character.resolvedRenderMode == .packagePreview {
+                Text("Canvas uses the selected active package.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if rigVariantCount > 0 {
+                Text("Canvas uses \(rigVariantCount) rig variants.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No synced rig drawings yet.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func characterActionsInspectorSection(_ character: AnimationCharacter) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Actions", systemImage: "figure.arms.open")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Button("Import Character Package...") {
+                    NotificationCenter.default.post(
+                        name: Notification.Name("OpenCharacterPackagePicker"),
+                        object: character.id
+                    )
+                }
+                .buttonStyle(.bordered)
+                .disabled(store.animateURL == nil)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func angleCoverageInspectorSection(_ character: AnimationCharacter) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Angle Coverage", systemImage: "rotate.3d")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            let coverageByAngle = angleCoverage(for: character)
+            ForEach(AngleView.allCases, id: \.self) { angle in
+                HStack {
+                    Text(angle.rawValue)
+                        .font(.caption)
+                    Spacer()
+                    let count = coverageByAngle[angle] ?? 0
+                    Text("\(count) drawings")
+                        .font(.caption)
+                        .foregroundStyle(count > 0 ? Color.green : Color.gray)
+                }
             }
         }
     }
@@ -1186,33 +1241,4 @@ struct InspectorView: View {
             .foregroundStyle(color)
     }
 
-    // MARK: - Gemini Settings
-
-    @ViewBuilder
-    private var geminiSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Gemini AI", systemImage: "sparkles")
-                .font(.headline)
-
-            Picker("Model", selection: $store.selectedGeminiModel) {
-                ForEach(GeminiModel.allCases, id: \.self) { model in
-                    Text(model.displayName).tag(model)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            SecureField("API Key", text: $store.geminiAPIKey)
-                .textFieldStyle(.roundedBorder)
-
-            if !store.geminiAPIKey.isEmpty {
-                Label("API key set", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.caption)
-            }
-
-            Text("Est. ~$\(store.selectedGeminiModel.estimatedCostPerImage, specifier: "%.3f") per image")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
 }

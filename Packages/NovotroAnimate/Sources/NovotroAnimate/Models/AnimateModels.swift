@@ -282,6 +282,7 @@ enum CharacterCanvasRenderMode: String, Codable, Sendable, CaseIterable, Hashabl
 
 struct AnimationCharacter: Identifiable, Codable, Sendable {
     var id: UUID
+    var sortOrder: Int?
     var name: String
     var description: String
     var owpSlug: String
@@ -289,22 +290,49 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
     var preferredViewAngle: AngleView?
     var parts: [RigPart]
 
+    var profileImagePath: String?
+    var backstory: String
+    var personality: String
+    var notes: String
+    var inspirationImagePaths: [String]
+    var inspirationReferenceImagePath: String?
+    var referenceImagePaths: [String]
+    var animatedImagePaths: [String]
+
     init(
         id: UUID,
+        sortOrder: Int? = nil,
         name: String,
         description: String,
         owpSlug: String,
         renderMode: CharacterCanvasRenderMode? = nil,
         preferredViewAngle: AngleView? = nil,
-        parts: [RigPart]
+        parts: [RigPart],
+        profileImagePath: String? = nil,
+        backstory: String = "",
+        personality: String = "",
+        notes: String = "",
+        inspirationImagePaths: [String] = [],
+        inspirationReferenceImagePath: String? = nil,
+        referenceImagePaths: [String] = [],
+        animatedImagePaths: [String] = []
     ) {
         self.id = id
+        self.sortOrder = sortOrder
         self.name = name
         self.description = description
         self.owpSlug = owpSlug
         self.renderMode = renderMode
         self.preferredViewAngle = preferredViewAngle
         self.parts = parts
+        self.profileImagePath = profileImagePath
+        self.backstory = backstory
+        self.personality = personality
+        self.notes = notes
+        self.inspirationImagePaths = inspirationImagePaths
+        self.inspirationReferenceImagePath = inspirationReferenceImagePath
+        self.referenceImagePaths = referenceImagePaths
+        self.animatedImagePaths = animatedImagePaths
     }
 
     var resolvedRenderMode: CharacterCanvasRenderMode {

@@ -10,7 +10,8 @@ struct ContentView: View {
     @AppStorage("novotro.animate.sidebarVisible") private var sidebarVisible: Bool = true
     @AppStorage("novotro.animate.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
     @AppStorage("novotro.animate.selectedPage") private var selectedPage: AnimatePage = .animate
-    @State private var sidebarDragOrigin: Double?
+
+    @AppStorage("novotro.animate.inspector.width") private var inspectorWidth: Double = 320
 
     private var projectTitle: String {
         store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
@@ -72,22 +73,12 @@ struct ContentView: View {
     private var workspaceBody: some View {
         HStack(spacing: 0) {
             if sidebarVisible {
-                OperaChromeFlatPane(
-                    headerPadding: OperaChromeSidebarMetrics.headerPadding
-                ) {
-                    OperaChromePaneHeader(
-                        eyebrow: "ANIMATE",
-                        title: "Scenes",
-                        subtitle: "\(store.scenes.count) staged"
-                    ) { EmptyView() }
-                } content: {
-                    SidebarView(store: store)
-                }
-                .frame(width: sidebarWidth)
+                sidebarContent
+                    .frame(width: sidebarWidth)
 
                 OperaChromeSplitHandle(
                     onDragChanged: resizeSidebar,
-                    onDragEnded: { sidebarDragOrigin = nil }
+                    onDragEnded: { }
                 )
             }
 
@@ -153,7 +144,10 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if showInspector {
-                OperaChromeDivider(.vertical)
+                OperaChromeSplitHandle(
+                    onDragChanged: resizeInspector,
+                    onDragEnded: { }
+                )
 
                 OperaChromeFlatPane {
                     OperaChromePaneHeader(
@@ -170,10 +164,42 @@ struct ContentView: View {
                 } content: {
                     InspectorView(store: store, currentPage: selectedPage)
                 }
-                .frame(minWidth: 260, idealWidth: 320, maxWidth: 380)
+                .frame(width: inspectorWidth)
             }
         }
         .background(OperaChromeTheme.workspaceBackground)
+    }
+
+    @ViewBuilder
+    private var sidebarContent: some View {
+        switch selectedPage {
+        case .characters:
+            // Characters page shows character list in sidebar
+            OperaChromeFlatPane(
+                headerPadding: OperaChromeSidebarMetrics.headerPadding
+            ) {
+                OperaChromePaneHeader(
+                    eyebrow: "ANIMATE",
+                    title: "Characters",
+                    subtitle: "\(store.characters.count) characters"
+                ) { EmptyView() }
+            } content: {
+                CharactersSidebarView(store: store)
+            }
+        default:
+            // All other pages show scenes in sidebar
+            OperaChromeFlatPane(
+                headerPadding: OperaChromeSidebarMetrics.headerPadding
+            ) {
+                OperaChromePaneHeader(
+                    eyebrow: "ANIMATE",
+                    title: "Scenes",
+                    subtitle: "\(store.scenes.count) staged"
+                ) { EmptyView() }
+            } content: {
+                SidebarView(store: store)
+            }
+        }
     }
 
     @ViewBuilder
@@ -182,7 +208,7 @@ struct ContentView: View {
         case .script:
             ScriptPageView(store: store)
         case .characters:
-            CharactersPageView(store: store)
+            CharactersPageView(store: store, showSidebar: false)
         case .animate:
             AnimatePageView(store: store)
         case .timeline:
@@ -192,15 +218,17 @@ struct ContentView: View {
 
 
 
-    private func resizeSidebar(_ translation: CGFloat) {
-        if sidebarDragOrigin == nil {
-            sidebarDragOrigin = sidebarWidth
-        }
-
-        let baseWidth = sidebarDragOrigin ?? sidebarWidth
+    private func resizeSidebar(_ delta: CGFloat) {
         sidebarWidth = min(
-            max(baseWidth + Double(translation), OperaChromeSidebarMetrics.minWidth),
+            max(sidebarWidth + Double(delta), OperaChromeSidebarMetrics.minWidth),
             OperaChromeSidebarMetrics.maxWidth
+        )
+    }
+
+    private func resizeInspector(_ delta: CGFloat) {
+        inspectorWidth = min(
+            max(inspectorWidth - Double(delta), 250),
+            600
         )
     }
 }

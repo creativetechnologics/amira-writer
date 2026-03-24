@@ -13,7 +13,8 @@ struct ContentView: View {
     @AppStorage("novotro.write.showSummaries") private var showSummaries: Bool = false
     @AppStorage("novotro.write.sidebarVisible") private var showSidebar: Bool = true
     @AppStorage("novotro.write.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
-    @State private var sidebarDragOrigin: Double?
+
+    @AppStorage("novotro.write.inspector.width") private var inspectorWidth: Double = 360
 
     private var projectTitle: String {
         store.projectURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
@@ -85,7 +86,7 @@ struct ContentView: View {
 
                 OperaChromeSplitHandle(
                     onDragChanged: resizeSidebar,
-                    onDragEnded: { sidebarDragOrigin = nil }
+                    onDragEnded: { }
                 )
             }
 
@@ -139,12 +140,8 @@ struct ContentView: View {
                         showScratchpad: showScratchpad
                     )
                     OperaChromeDivider()
-                    let isSaving = store.saveIndicator == .saving
-                    let isSaved = store.saveIndicator == .saved
                     OperaChromeStatusBar(
-                        isSaving: isSaving,
-                        isSaved: isSaved,
-                        statusMessage: (isSaving || isSaved) ? "" : store.statusMessage,
+                        statusMessage: store.statusMessage,
                         isDirty: store.isDirty,
                         itemCountText: "\(store.songAssets.count) scenes"
                     )
@@ -153,7 +150,10 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if showInspector {
-                OperaChromeDivider(.vertical)
+                OperaChromeSplitHandle(
+                    onDragChanged: resizeInspector,
+                    onDragEnded: { }
+                )
 
                 OperaChromeFlatPane {
                     OperaChromePaneHeader(
@@ -170,21 +170,23 @@ struct ContentView: View {
                 } content: {
                     ScriptInspectorView(store: store)
                 }
-                .frame(minWidth: 300, idealWidth: 360, maxWidth: 420)
+                .frame(width: inspectorWidth)
             }
         }
         .background(OperaChromeTheme.workspaceBackground)
     }
 
-    private func resizeSidebar(_ translation: CGFloat) {
-        if sidebarDragOrigin == nil {
-            sidebarDragOrigin = sidebarWidth
-        }
-
-        let baseWidth = sidebarDragOrigin ?? sidebarWidth
+    private func resizeSidebar(_ delta: CGFloat) {
         sidebarWidth = min(
-            max(baseWidth + Double(translation), OperaChromeSidebarMetrics.minWidth),
+            max(sidebarWidth + Double(delta), OperaChromeSidebarMetrics.minWidth),
             OperaChromeSidebarMetrics.maxWidth
+        )
+    }
+
+    private func resizeInspector(_ delta: CGFloat) {
+        inspectorWidth = min(
+            max(inspectorWidth - Double(delta), 250),
+            600
         )
     }
 }

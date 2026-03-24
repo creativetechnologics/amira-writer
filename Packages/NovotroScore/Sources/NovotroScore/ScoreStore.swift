@@ -9,6 +9,21 @@ import NovotroProjectKit
 import os
 import UniformTypeIdentifiers
 
+// MARK: - Debug Logging
+
+private func novotroDebugLog(_ message: String) {
+    let ts = ISO8601DateFormatter().string(from: Date())
+    let line = "[\(ts)] [Score] \(message)\n"
+    let url = URL(fileURLWithPath: "/tmp/novotro-debug.log")
+    if let fh = try? FileHandle(forWritingTo: url) {
+        fh.seekToEndOfFile()
+        fh.write(Data(line.utf8))
+        fh.closeFile()
+    } else {
+        try? line.write(to: url, atomically: false, encoding: .utf8)
+    }
+}
+
 // MARK: - Supporting Enums
 
 enum InstrumentProfileScope: String, CaseIterable, Identifiable, Sendable {
@@ -82,10 +97,6 @@ struct ChordMarker: Identifiable, Codable, Hashable, Sendable {
     var id: UUID = UUID()
     var tick: Int
     var name: String
-}
-
-enum SaveIndicatorState: Equatable, Sendable {
-    case idle, saving, saved
 }
 
 private struct ExternalProjectFileSnapshot: Equatable, Sendable {
@@ -1239,6 +1250,7 @@ final class ScoreStore {
     private static let autoSnapshotCooldown: TimeInterval = 300  // 5 minutes
 
     func startAPIServer() {
+        novotroDebugLog("startAPIServer: enabled=\(apiServerEnabled) existing=\(apiServer != nil) port=\(apiServerPort)")
         guard apiServerEnabled, apiServer == nil else { return }
         do {
             let server = try APIServer(store: self, port: apiServerPort)
@@ -1247,9 +1259,9 @@ final class ScoreStore {
             }
             server.start()
             apiServer = server
-            NSLog("[APIServer] Started on port %d", apiServerPort)
+            novotroDebugLog("startAPIServer: OK on port \(apiServerPort)")
         } catch {
-            NSLog("[APIServer] Failed to start: %@", error.localizedDescription)
+            novotroDebugLog("startAPIServer: FAILED — \(error.localizedDescription)")
             statusMessage = "API server failed to start: \(error.localizedDescription)"
         }
     }
@@ -1498,6 +1510,7 @@ final class ScoreStore {
     private var suppressDatabaseSyncPaths: Set<String> = []
     private var backgroundIndexRefreshTask: Task<Void, Never>?
     private var hydratedSongPaths: Set<String> = []
+    private var pendingPlaybackStartTask: Task<Void, Never>?
     private var externalFileWatchWorkItem: DispatchWorkItem?
     private var lastKnownExternalSnapshots: [String: ExternalProjectFileSnapshot] = [:]
     private static let autoSaveDefaultsKey = "autoSaveEnabled"
@@ -1805,6 +1818,7 @@ final class ScoreStore {
     // MARK: - Load Project
 
     func loadProject(url: URL, preferService: Bool? = nil) async {
+        novotroDebugLog("loadProject START url=\(url.path)")
         statusMessage = "Loading \(url.lastPathComponent)..."
         backgroundIndexRefreshTask?.cancel()
         stopExternalFileWatch()
@@ -1815,6 +1829,7 @@ final class ScoreStore {
         dirtySongPaths.removeAll()
         lastSelectedMidiID = nil
         hydratedSongPaths.removeAll()
+        cancelPendingPlaybackStart()
         externalChangeTimes.removeAll()
         hasPendingAgentChanges = false
         showsRecentAgentUpdate = false
@@ -1859,17 +1874,18 @@ final class ScoreStore {
 
             isDirty = false
             statusMessage = "\(meta.name) — \(songAssets.count) songs loaded"
+            novotroDebugLog("loadProject LOADED \(songAssets.count) songs, hydratedPaths=\(hydratedSongPaths.count)")
 
             // Auto-select first song
             if let first = songAssets.first {
+                novotroDebugLog("loadProject auto-selecting first song: \(first.relativePath)")
                 setSelectedMidi(id: first.id)
             }
 
             startDatabaseWatch()
-            recordExternalFileSnapshots()
-            startExternalFileWatch()
-            if let database = loaded.database, !isStandalone {
-                startBackgroundIndexRefresh(projectURL: url, database: database)
+            if isStandaloneSongWorkspace {
+                recordExternalFileSnapshots()
+                startExternalFileWatch()
             }
         } catch {
             statusMessage = "Failed to load: \(error.localizedDescription)"
@@ -2062,7 +2078,9 @@ final class ScoreStore {
     private func stopExternalFileWatch() {
         externalFileWatchWorkItem?.cancel()
         externalFileWatchWorkItem = nil
-        lastKnownExternalSnapshots.removeAll()
+        // Note: intentionally NOT clearing lastKnownExternalSnapshots here.
+        // Clearing them causes the next startExternalFileWatch() to detect
+        // ALL files as "changed", spawning massive concurrent reload Tasks.
     }
 
     private func recordExternalFileSnapshots() {
@@ -2118,11 +2136,13 @@ final class ScoreStore {
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
 
         guard !changedPaths.isEmpty else { return }
+        novotroDebugLog("checkForExternalProjectChanges: \(changedPaths.count) changed: \(changedPaths.joined(separator: ", "))")
         lastKnownExternalSnapshots = currentSnapshots
 
         let currentSongPaths = Set(currentSnapshots.keys.filter { $0.hasSuffix(".ows") })
         let knownSongPaths = Set(songStubs.map(\.relativePath))
         if currentSongPaths != knownSongPaths {
+            novotroDebugLog("checkForExternalProjectChanges: song paths changed, full rescan triggered")
             handleExternalProjectRescan(projectURL: projectURL, changedPaths: changedPaths)
             return
         }
@@ -2138,6 +2158,7 @@ final class ScoreStore {
 
     private func handleExternalProjectRescan(projectURL: URL, changedPaths: [String]) {
         let sourceProjectURL = self.projectURL ?? projectURL
+        novotroDebugLog("handleExternalProjectRescan: \(changedPaths.count) changed paths")
 
         guard !isDirty else {
             hasPendingAgentChanges = true
@@ -2149,7 +2170,9 @@ final class ScoreStore {
         Task { [weak self, sourceProjectURL] in
             guard let self else { return }
             if let database = self.projectDatabase, sourceProjectURL.pathExtension.lowercased() != "ows" {
+                novotroDebugLog("handleExternalProjectRescan: calling ensureCurrentIndex(forceRebuild: true)")
                 try? await database.ensureCurrentIndex(forceRebuild: true)
+                novotroDebugLog("handleExternalProjectRescan: ensureCurrentIndex done")
             }
             await self.loadProject(url: sourceProjectURL, preferService: false)
             await MainActor.run {
@@ -2301,6 +2324,7 @@ final class ScoreStore {
     // MARK: - Song Selection
 
     func setSelectedMidi(id: MidiAsset.ID?, stopPlaybackBeforeSelect: Bool = true) {
+        cancelPendingPlaybackStart()
         if stopPlaybackBeforeSelect {
             stopPlayback()
         }
@@ -2312,6 +2336,7 @@ final class ScoreStore {
         }
         persistCurrentMidiOverrideIfNeeded()
         selectedMidiID = id
+        deferredPlaybackAttempted.removeAll()
         if let selectedPath = selectedMidiAsset?.relativePath,
            let libretto = librettoFiles.first(where: { $0.relativePath == selectedPath }) {
             selectedLibrettoID = libretto.id
@@ -2332,6 +2357,7 @@ final class ScoreStore {
         }
 
         let playback = songAsset.document.activeVersion()?.playback
+        novotroDebugLog("loadSelectedMidiIfPossible: \(songAsset.relativePath) playback=\(playback != nil ? "YES (\(playback!.notes.count) notes)" : "nil")")
         if let playback {
             // Load from playback snapshot (most common path for OWS files)
             pianoRollNotes = playback.notes.sorted {
@@ -2358,9 +2384,16 @@ final class ScoreStore {
         } else {
             clearPianoRollData()
             let selectedID = selectedMidiID
-            Task { [weak self, selectedID] in
-                guard let self else { return }
-                _ = await self.hydrateSongDetailsIfNeeded(id: selectedID, includePlayback: true)
+            let alreadyAttempted = hydratedSongPaths.contains(songAsset.relativePath)
+            if alreadyAttempted {
+                // Hydration already ran but produced no playback data — song has no MIDI.
+                NSLog("[ScoreStore] loadSelectedMidiIfPossible: %@ already hydrated but has no playback", songAsset.relativePath)
+                statusMessage = "No MIDI data in \(songAsset.displayName)."
+            } else {
+                Task { [weak self, selectedID] in
+                    guard let self else { return }
+                    _ = await self.hydrateSongDetailsIfNeeded(id: selectedID, includePlayback: true)
+                }
             }
         }
 
@@ -2429,10 +2462,12 @@ final class ScoreStore {
 
     private func hydrateSongDetailsIfNeeded(id: MidiAsset.ID, includePlayback: Bool) async -> Bool {
         guard let songIndex = songAssets.firstIndex(where: { $0.id == id }) else {
+            novotroDebugLog("hydrateSongDetailsIfNeeded: song id not found")
             return false
         }
 
         let relativePath = songAssets[songIndex].relativePath
+        novotroDebugLog("hydrateSongDetailsIfNeeded START: \(relativePath) includePlayback=\(includePlayback)")
         let hasPlayback = songAssets[songIndex].document.activeVersion()?.playback != nil
         if hydratedSongPaths.contains(relativePath) && (!includePlayback || hasPlayback) {
             return true
@@ -2440,18 +2475,36 @@ final class ScoreStore {
 
         var hydratedAsset: OWSSongAsset?
         if let database = projectDatabase {
-            hydratedAsset = try? await ProjectDatabaseBridge.loadSceneAsset(
-                database: database,
-                relativePath: relativePath,
-                includePlayback: includePlayback
-            )
+            do {
+                let dbAsset = try await ProjectDatabaseBridge.loadSceneAsset(
+                    database: database,
+                    relativePath: relativePath,
+                    includePlayback: includePlayback
+                )
+                if includePlayback && dbAsset?.document.activeVersion()?.playback == nil {
+                    NSLog("[ScoreStore] hydrateSongDetailsIfNeeded: DB has scene for %@ but playback_json is NULL — falling through to disk", relativePath)
+                } else {
+                    hydratedAsset = dbAsset
+                }
+            } catch {
+                NSLog("[ScoreStore] hydrateSongDetailsIfNeeded: DB load failed for %@: %@", relativePath, error.localizedDescription)
+            }
         }
         if hydratedAsset == nil,
            let stub = songStubs.first(where: { $0.relativePath == relativePath }) {
-            hydratedAsset = try? await OWPProjectIO.loadSongAsync(stub: stub)
+            do {
+                hydratedAsset = try await OWPProjectIO.loadSongAsync(stub: stub)
+            } catch {
+                NSLog("[ScoreStore] hydrateSongDetailsIfNeeded: disk load failed for %@: %@", relativePath, error.localizedDescription)
+            }
         }
 
-        guard let hydratedAsset else { return false }
+        guard let hydratedAsset else {
+            novotroDebugLog("hydrateSongDetailsIfNeeded FAILED: no asset loaded for \(relativePath)")
+            return false
+        }
+        let hydPlayback = hydratedAsset.document.activeVersion()?.playback
+        novotroDebugLog("hydrateSongDetailsIfNeeded OK: \(relativePath) playback=\(hydPlayback != nil ? "YES (\(hydPlayback!.notes.count) notes)" : "nil")")
 
         if let latestIndex = songAssets.firstIndex(where: { $0.relativePath == relativePath }) {
             songAssets[latestIndex] = hydratedAsset
@@ -2568,6 +2621,16 @@ final class ScoreStore {
         suppressDatabaseSyncPaths.removeAll()
         backgroundIndexRefreshTask?.cancel()
         backgroundIndexRefreshTask = nil
+    }
+
+    func suspendBackgroundWork() {
+        stopDatabaseWatch()
+        stopExternalFileWatch()
+    }
+
+    func resumeBackgroundWork() {
+        startDatabaseWatch()
+        startExternalFileWatch()
     }
 
     private func pollDatabaseChanges() {
@@ -2694,11 +2757,15 @@ final class ScoreStore {
     }
 
     private func startBackgroundIndexRefresh(projectURL: URL, database: NovotroProjectConnection) {
+        novotroDebugLog("⚠️ startBackgroundIndexRefresh CALLED — this should NOT happen on initial load!")
         backgroundIndexRefreshTask?.cancel()
         backgroundIndexRefreshTask = Task { [weak self] in
             do {
+                guard !Task.isCancelled else { return }
                 let previousToken = (try? await database.currentChangeToken()) ?? 0
+                guard !Task.isCancelled else { return }
                 try await database.ensureCurrentIndex()
+                guard !Task.isCancelled else { return }
                 let refreshedToken = (try? await database.currentChangeToken()) ?? previousToken
                 guard refreshedToken != previousToken else { return }
                 guard let self else { return }
@@ -2709,6 +2776,7 @@ final class ScoreStore {
                     return
                 }
                 await self.loadProject(url: projectURL, preferService: false)
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self.markAgentUpdated()
                     self.statusMessage = "Loaded latest disk changes"
@@ -2953,12 +3021,57 @@ final class ScoreStore {
 
     // MARK: - Playback
 
+    // MARK: - API Diagnostics
+
+    struct PlaybackDiagnostics: Encodable {
+        var selectedMidiID: String?
+        var selectedMidiAssetPath: String?
+        var pianoRollNotesCount: Int
+        var pianoRollAudioClipsCount: Int
+        var isPlaying: Bool
+        var selectedSongHasPlayback: Bool
+        var hydratedSongPaths: [String]
+        var deferredPlaybackAttempted: [String]
+        var songAssetsCount: Int
+        var songAssetPlaybackStates: [String: SongAssetPlaybackState]
+        var statusMessage: String
+
+        struct SongAssetPlaybackState: Encodable {
+            var hasPlayback: Bool
+            var noteCount: Int
+        }
+    }
+
+    func playbackDiagnostics() -> PlaybackDiagnostics {
+        let assetStates = Dictionary(uniqueKeysWithValues: songAssets.map { asset in
+            let playback = asset.document.activeVersion()?.playback
+            return (asset.relativePath, PlaybackDiagnostics.SongAssetPlaybackState(
+                hasPlayback: playback != nil,
+                noteCount: playback?.notes.count ?? 0
+            ))
+        })
+        return PlaybackDiagnostics(
+            selectedMidiID: selectedMidiID?.uuidString,
+            selectedMidiAssetPath: selectedMidiAsset?.relativePath,
+            pianoRollNotesCount: pianoRollNotes.count,
+            pianoRollAudioClipsCount: pianoRollAudioClips.count,
+            isPlaying: isPlaying,
+            selectedSongHasPlayback: selectedMidiID.flatMap { id in songAssets.first(where: { $0.id == id }) }?.document.activeVersion()?.playback != nil,
+            hydratedSongPaths: Array(hydratedSongPaths).sorted(),
+            deferredPlaybackAttempted: deferredPlaybackAttempted.map(\.uuidString).sorted(),
+            songAssetsCount: songAssets.count,
+            songAssetPlaybackStates: assetStates,
+            statusMessage: statusMessage
+        )
+    }
+
     func playPianoRoll(startTick: Int = 0, trackFilter: Set<Int>? = nil, cancelPendingAdvance: Bool = true) {
         if cancelPendingAdvance {
             cancelPendingAdvanceStart()
         }
-        NSLog("[ScoreStore] playPianoRoll called — song=%@ startTick=%d userInitiatedStop=%d isPlaying=%d",
-              selectedMidiAsset?.relativePath ?? "nil", startTick, userInitiatedStop ? 1 : 0, isPlaying ? 1 : 0)
+        novotroDebugLog("playPianoRoll: song=\(selectedMidiAsset?.relativePath ?? "nil") notes=\(pianoRollNotes.count) clips=\(pianoRollAudioClips.count)")
+        NSLog("[ScoreStore] playPianoRoll — song=%@ notes=%d clips=%d startTick=%d",
+              selectedMidiAsset?.relativePath ?? "nil", pianoRollNotes.count, pianoRollAudioClips.count, startTick)
         let unmuted = pianoRollNotes.filter { !$0.muted }
         let filteredNotes: [PianoRollNote]
         if let filter = trackFilter, !filter.isEmpty {
@@ -2968,7 +3081,15 @@ final class ScoreStore {
         }
         // Apply dynamics annotations to note velocities
         let playbackNotes = applyDynamicsToNotes(filteredNotes)
-        guard !playbackNotes.isEmpty else {
+        let playableAudioClips = pianoRollAudioClips.filter { !$0.muted && !$0.filePath.isEmpty }
+        guard !playbackNotes.isEmpty || !playableAudioClips.isEmpty else {
+            if queueDeferredPlaybackStartIfNeeded(
+                startTick: startTick,
+                trackFilter: trackFilter,
+                cancelPendingAdvance: cancelPendingAdvance
+            ) {
+                return
+            }
             statusMessage = "No MIDI notes to play."
             isPlaying = false
             pendingAdvance = false
@@ -2987,12 +3108,13 @@ final class ScoreStore {
         let resolvedMappings = resolvedInstrumentMappings()
 
         // Debug: log mapping state to help diagnose silent playback
-        NSLog("[Playback] pianoRollChannelKeyByTrackChannel: %d entries", pianoRollChannelKeyByTrackChannel.count)
+        novotroDebugLog("playPianoRoll mappings: \(pianoRollChannelKeyByTrackChannel.count) entries, sampleRoot=\(sampleRootDirectoryPath)")
         for (pairKey, mappingKey) in pianoRollChannelKeyByTrackChannel.sorted(by: { $0.key < $1.key }) {
             let mapping = resolvedMappings[mappingKey]
             let sf2 = mapping?.sf2Path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let status = sf2.isEmpty ? "NO SF2" : URL(fileURLWithPath: sf2).lastPathComponent
-            NSLog("[Playback]   %@ → %@ [%@] muted=%@", pairKey, mappingKey, status, String(describing: mapping?.muted ?? false))
+            let exists = !sf2.isEmpty && FileManager.default.fileExists(atPath: sf2)
+            let status = sf2.isEmpty ? "NO SF2" : "\(URL(fileURLWithPath: sf2).lastPathComponent) exists=\(exists)"
+            novotroDebugLog("  mapping \(pairKey) → \(mappingKey) [\(status)] muted=\(mapping?.muted ?? false) sourceType=\(String(describing: mapping?.effectiveSourceType))")
         }
 
         playbackEngine.metronomeTimeSignatures = pianoRollTimeSignatures
@@ -3012,7 +3134,7 @@ final class ScoreStore {
             startTick: startTick,
             trackChannelToMappingKey: pianoRollChannelKeyByTrackChannel,
             instrumentMappings: resolvedMappings,
-            audioClips: pianoRollAudioClips.filter { !$0.muted && !$0.filePath.isEmpty },
+            audioClips: playableAudioClips,
             renderMode: playbackRenderMode,
             mutedTracks: effectiveMutedTracks
         )
@@ -3027,15 +3149,78 @@ final class ScoreStore {
     private var pendingAdvance = false
     private var pendingAdvanceWorkItem: DispatchWorkItem?
 
+    private func cancelPendingPlaybackStart() {
+        pendingPlaybackStartTask?.cancel()
+        pendingPlaybackStartTask = nil
+    }
+
+    // Tracks song IDs for which a deferred playback start has already been attempted this
+    // selection. Cleared when selectedMidiID changes. Prevents infinite retry when a song
+    // has been hydrated but genuinely contains no MIDI data.
+    private var deferredPlaybackAttempted: Set<MidiAsset.ID> = []
+
+    private func queueDeferredPlaybackStartIfNeeded(
+        startTick: Int,
+        trackFilter: Set<Int>?,
+        cancelPendingAdvance: Bool
+    ) -> Bool {
+        guard let selectedMidiID,
+              let songAsset = songAssets.first(where: { $0.id == selectedMidiID }),
+              songAsset.document.activeVersion()?.playback == nil,
+              !deferredPlaybackAttempted.contains(selectedMidiID) else {
+            return false
+        }
+
+        deferredPlaybackAttempted.insert(selectedMidiID)
+        cancelPendingPlaybackStart()
+        statusMessage = "Loading playback for \(songAsset.displayName)..."
+
+        pendingPlaybackStartTask = Task { @MainActor [weak self, selectedMidiID] in
+            guard let self else { return }
+            let didHydrate = await self.hydrateSongDetailsIfNeeded(id: selectedMidiID, includePlayback: true)
+            guard !Task.isCancelled else { return }
+            self.pendingPlaybackStartTask = nil
+
+            guard didHydrate, self.selectedMidiID == selectedMidiID else {
+                if self.selectedMidiID == selectedMidiID,
+                   self.statusMessage.hasPrefix("Loading playback for") {
+                    self.statusMessage = "No MIDI notes to play."
+                }
+                return
+            }
+
+            self.playPianoRoll(
+                startTick: startTick,
+                trackFilter: trackFilter,
+                cancelPendingAdvance: cancelPendingAdvance
+            )
+        }
+
+        return true
+    }
+
     private func cancelPendingAdvanceStart() {
+        let hadPendingAdvance = pendingAdvance || pendingAdvanceWorkItem != nil
         pendingAdvanceWorkItem?.cancel()
         pendingAdvanceWorkItem = nil
         pendingAdvance = false
+        // `advanceToNextSongAndPlay()` sets `isPlaying = true` optimistically while a
+        // delayed start is pending. If that pending start is canceled while the engine is
+        // already stopped, no playback-state callback may arrive to clear the flag.
+        if hadPendingAdvance && !playbackEngine.isPlaying {
+            isPlaying = false
+        }
     }
 
     func stopPlayback() {
         cancelPendingAdvanceStart()
+        cancelPendingPlaybackStart()
         userInitiatedStop = true
+        // Keep UI state honest even when engine transport is already idle.
+        // In that case stopOnAudioQueue() may not emit a state-change callback.
+        if !playbackEngine.isPlaying {
+            isPlaying = false
+        }
         playbackEngine.stop()
     }
 

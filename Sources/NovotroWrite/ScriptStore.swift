@@ -2,6 +2,21 @@ import Foundation
 import NovotroProjectKit
 import SwiftUI
 
+// MARK: - Debug Logging
+
+private func novotroDebugLog(_ message: String) {
+    let ts = ISO8601DateFormatter().string(from: Date())
+    let line = "[\(ts)] [Write] \(message)\n"
+    let url = URL(fileURLWithPath: "/tmp/novotro-debug.log")
+    if let fh = try? FileHandle(forWritingTo: url) {
+        fh.seekToEndOfFile()
+        fh.write(Data(line.utf8))
+        fh.closeFile()
+    } else {
+        try? line.write(to: url, atomically: false, encoding: .utf8)
+    }
+}
+
 // MARK: - Model Types (self-contained, matching OperaWriter formats)
 
 struct ProjectMetadata: Codable, Sendable {
@@ -449,14 +464,6 @@ enum ConsoleAgentModel: String, CaseIterable, Sendable {
     }
 }
 
-// MARK: - Save Indicator State
-
-enum SaveIndicatorState: Equatable, Sendable {
-    case idle
-    case saving
-    case saved
-}
-
 enum SaveConflictError: LocalizedError {
     case externalChanges(paths: [String])
 
@@ -805,7 +812,11 @@ final class ScriptStore {
     // MARK: - Load Project
 
     func loadProject(url: URL, preferService: Bool? = nil) async {
-        guard !isLoadingProject else { return }
+        novotroDebugLog("loadProject START url=\(url.path)")
+        guard !isLoadingProject else {
+            novotroDebugLog("loadProject SKIPPED: already loading")
+            return
+        }
 
         scratchpadSaveWorkItem?.cancel()
         backgroundIndexRefreshTask?.cancel()
@@ -927,7 +938,9 @@ final class ScriptStore {
                 }
             }
 
-            // Load synopsis
+            // Load synopsis from database first (for compatibility) and then
+            // immediately reconcile with the on-disk synopsis file to avoid
+            // stale cache on startup.
             if let loaded,
                let synopsisData = try? await ProjectDatabaseBridge.loadProjectFile(
                     from: loaded.database,
@@ -935,9 +948,8 @@ final class ScriptStore {
                ),
                let synopsis = String(data: synopsisData, encoding: .utf8) {
                 synopsisText = synopsis
-            } else {
-                loadSynopsis(from: effectiveProjectURL)
             }
+            loadSynopsis(from: effectiveProjectURL)
 
             await loadScratchpad(
                 from: effectiveProjectURL,
@@ -963,14 +975,16 @@ final class ScriptStore {
             }
 
             isDirty = false
+
+            // Migrate legacy synopsis (Synopsis/synopsis.txt with {{{SCENE:...}}} markers)
+            // into per-scene embedded {{{SYNOPSIS}}} blocks in each libretto file.
+            migrateLegacySynopsisIfNeeded()
+
             statusMessage = "\(meta.name) - \(songAssets.count) songs loaded"
             persistProjectHistoryState()
             refreshGitHistory(for: url)
             startFileWatching()
             startDatabaseWatch()
-            if !isStandalone, let projectDatabase {
-                startBackgroundIndexRefresh(projectURL: url, database: projectDatabase)
-            }
         } catch {
             statusMessage = "Failed to load: \(error.localizedDescription)"
             presentedLoadError = error.localizedDescription
@@ -984,7 +998,9 @@ final class ScriptStore {
         guard !dirtySongPaths.isEmpty || isScratchpadDirty else { return }
 
         if dirtySongPaths.isEmpty {
+            isSaving = true
             saveScratchpad()
+            isSaving = false
             saveIndicator = .saved
             statusMessage = "Saved scratchpad"
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
@@ -1114,6 +1130,65 @@ final class ScriptStore {
 
         markDirty(path: path)
         syncSongTextToDatabase(path: path, lyrics: lyrics)
+    }
+
+    // MARK: - Per-Scene Synopsis (embedded in libretto)
+
+    /// Extract synopsis text from a libretto file's content.
+    /// Synopsis is stored as {{{SYNOPSIS}}}...{{{/SYNOPSIS}}} at the start of the file.
+    func synopsis(forScenePath path: String) -> String {
+        guard let file = librettoFiles.first(where: { $0.relativePath == path }) else { return "" }
+        return SynopsisEmbedding.extract(from: file.content)
+    }
+
+    /// Update the embedded synopsis for a specific scene.
+    func updateSynopsis(forScenePath path: String, text: String) {
+        guard let idx = librettoFiles.firstIndex(where: { $0.relativePath == path }) else { return }
+        let updated = SynopsisEmbedding.update(content: librettoFiles[idx].content, synopsis: text)
+        updateLyricsForSong(atPath: path, lyrics: updated)
+    }
+
+    /// Migrate legacy Synopsis/synopsis.txt content (with {{{SCENE:path}}} markers)
+    /// into per-scene embedded {{{SYNOPSIS}}} blocks within each libretto file.
+    /// Only runs if the old synopsisText has scene markers AND no libretto files
+    /// have embedded synopsis blocks yet.
+    private func migrateLegacySynopsisIfNeeded() {
+        guard !synopsisText.isEmpty else { return }
+
+        // Check if any libretto already has embedded synopsis — skip if so
+        let alreadyMigrated = librettoFiles.contains { SynopsisEmbedding.extract(from: $0.content).isEmpty == false }
+        guard !alreadyMigrated else { return }
+
+        // Parse the legacy format
+        let sections = LegacySynopsisParser.parse(synopsisText)
+        let availablePaths = librettoFiles.map(\.relativePath)
+        var migrated = false
+
+        for section in sections {
+            guard let scenePath = section.scenePath else { continue }
+            let text = section.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+
+            // Resolve the scene path
+            guard let resolvedPath = LegacySynopsisParser.resolvePath(
+                scenePath,
+                availablePaths: availablePaths
+            ) else { continue }
+
+            guard let idx = librettoFiles.firstIndex(where: { $0.relativePath == resolvedPath }) else { continue }
+            let updated = SynopsisEmbedding.update(content: librettoFiles[idx].content, synopsis: text)
+            librettoFiles[idx].content = updated
+            migrated = true
+        }
+
+        if migrated {
+            // Mark all migrated files dirty so they get saved
+            for file in librettoFiles {
+                if SynopsisEmbedding.extract(from: file.content).isEmpty == false {
+                    markDirty(path: file.relativePath)
+                }
+            }
+        }
     }
 
     // MARK: - Rename Song
@@ -1353,15 +1428,49 @@ final class ScriptStore {
         markDirty(path: path)
     }
 
-    // MARK: - Synopsis
+        // MARK: - Synopsis
 
     func loadSynopsis(from projectURL: URL) {
         let synopsisURL = projectURL.appendingPathComponent(OWPProjectIO.synopsisFile)
         if let data = try? Data(contentsOf: synopsisURL),
            let text = String(data: data, encoding: .utf8) {
             synopsisText = text
+            if let snapshot = fileSnapshot(for: synopsisURL) {
+                lastKnownModDates["__synopsis__"] = snapshot.modificationDate
+                lastKnownFileSnapshots[OWPProjectIO.synopsisFile] = snapshot
+            }
         } else {
             synopsisText = ""
+        }
+    }
+
+    func refreshSynopsisFromProjectFile() {
+        guard let url = fileProjectURL,
+              url.pathExtension.lowercased() != "ows" else {
+            return
+        }
+
+        let synopsisURL = url.appendingPathComponent(OWPProjectIO.synopsisFile)
+        let nextText: String
+        if let data = try? Data(contentsOf: synopsisURL),
+           let text = String(data: data, encoding: .utf8) {
+            nextText = text
+        } else {
+            nextText = ""
+        }
+
+        guard nextText != synopsisText else {
+            if let snapshot = fileSnapshot(for: synopsisURL) {
+                lastKnownModDates["__synopsis__"] = snapshot.modificationDate
+                lastKnownFileSnapshots[OWPProjectIO.synopsisFile] = snapshot
+            }
+            return
+        }
+
+        synopsisText = nextText
+        if let snapshot = fileSnapshot(for: synopsisURL) {
+            lastKnownModDates["__synopsis__"] = snapshot.modificationDate
+            lastKnownFileSnapshots[OWPProjectIO.synopsisFile] = snapshot
         }
     }
 
@@ -2154,6 +2263,16 @@ final class ScriptStore {
         backgroundIndexRefreshTask = nil
     }
 
+    func suspendBackgroundWork() {
+        stopFileWatching()
+        stopDatabaseWatch()
+    }
+
+    func resumeBackgroundWork() {
+        startFileWatching()
+        startDatabaseWatch()
+    }
+
     private func pollDatabaseChanges() {
         guard let projectDatabase else { return }
         Task {
@@ -2353,8 +2472,10 @@ final class ScriptStore {
         backgroundIndexRefreshTask?.cancel()
         backgroundIndexRefreshTask = Task { [weak self] in
             do {
+                guard !Task.isCancelled else { return }
                 try await database.ensureCurrentIndex()
             } catch {
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self, self.projectURL == projectURL else { return }
                     if self.statusMessage.isEmpty {

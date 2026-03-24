@@ -1,5 +1,13 @@
 # Novotro Opera Instructions
 
+## IMPORTANT: Novotro Project Server is DEPRECATED
+
+**The Novotro Project Server is abandoned and will never be used again.**
+- Do NOT attempt to use, configure, or reference the Novotro Project Server in any workflow
+- Do NOT look for project files in `~/Documents/Novotro Project Server/`
+- All project loading is fully local — the app opens project folders directly from disk
+- If you encounter code referencing "Project Server", "NovotroProjectServerBrowser", "NovotroProjectServerClient", or similar, ignore it entirely
+
 ## Canonical Workspace
 
 - Treat `/Volumes/Storage VIII/Programming/Novotro Opera` as the canonical home for the unified Opera app.

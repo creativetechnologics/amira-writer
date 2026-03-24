@@ -338,15 +338,15 @@ final class ScriptStoreTests: XCTestCase {
         ]
 
         XCTAssertEqual(
-            SynopsisScenePathResolver.resolve(" Songs/01 Opening.ows \n", availablePaths: availablePaths),
+            LegacySynopsisParser.resolvePath(" Songs/01 Opening.ows \n", availablePaths: availablePaths),
             "Songs/01 Opening.ows"
         )
         XCTAssertEqual(
-            SynopsisScenePathResolver.resolve("02 Finale.ows", availablePaths: availablePaths),
+            LegacySynopsisParser.resolvePath("02 Finale.ows", availablePaths: availablePaths),
             "Songs/02 Finale.ows"
         )
         XCTAssertEqual(
-            SynopsisScenePathResolver.resolve(".\\Songs\\02 Finale.ows", availablePaths: availablePaths),
+            LegacySynopsisParser.resolvePath(".\\Songs\\02 Finale.ows", availablePaths: availablePaths),
             "Songs/02 Finale.ows"
         )
     }

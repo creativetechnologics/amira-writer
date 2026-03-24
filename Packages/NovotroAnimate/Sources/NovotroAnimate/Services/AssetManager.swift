@@ -21,6 +21,20 @@ final class AssetManager {
         category: String,
         animateURL: URL
     ) throws -> String {
+        try importCharacterImageURL(
+            from: sourceURL,
+            characterSlug: characterSlug,
+            category: category,
+            animateURL: animateURL
+        ).lastPathComponent
+    }
+
+    func importCharacterImageURL(
+        from sourceURL: URL,
+        characterSlug: String,
+        category: String,
+        animateURL: URL
+    ) throws -> URL {
         let charDir = animateURL
             .appendingPathComponent("characters")
             .appendingPathComponent(characterSlug)
@@ -31,7 +45,26 @@ final class AssetManager {
         let destURL = uniqueDestination(for: sourceURL.lastPathComponent, in: charDir)
         try FileManager.default.copyItem(at: sourceURL, to: destURL)
 
-        return destURL.lastPathComponent
+        return destURL
+    }
+
+    func writeCharacterImageData(
+        _ data: Data,
+        suggestedFilename: String,
+        characterSlug: String,
+        category: String,
+        animateURL: URL
+    ) throws -> URL {
+        let charDir = animateURL
+            .appendingPathComponent("characters")
+            .appendingPathComponent(characterSlug)
+            .appendingPathComponent(category)
+
+        try FileManager.default.createDirectory(at: charDir, withIntermediateDirectories: true)
+
+        let destURL = uniqueDestination(for: suggestedFilename, in: charDir)
+        try data.write(to: destURL)
+        return destURL
     }
 
     /// Import a background image into the Animate/backgrounds/ directory.

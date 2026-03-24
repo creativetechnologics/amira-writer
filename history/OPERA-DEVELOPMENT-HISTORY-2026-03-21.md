@@ -31,7 +31,6 @@
 - `Sources/NovotroOpera/NovotroOperaApp.swift`
 - `Packages/NovotroProjectKit/Sources/NovotroProjectKit/OperaChrome.swift`
 - `Packages/NovotroProjectKit/Sources/NovotroProjectKit/NovotroProjectMirrorSync.swift`
-- `Packages/NovotroProjectKit/Sources/NovotroProjectKit/NovotroProjectServerBrowser.swift`
 - `Sources/NovotroWrite/ScriptStore.swift`
 - `Packages/NovotroScore/Sources/NovotroScore/NovotroScoreWorkspace.swift`
 - `Packages/NovotroAnimate/Sources/NovotroAnimate/NovotroAnimateWorkspace.swift`

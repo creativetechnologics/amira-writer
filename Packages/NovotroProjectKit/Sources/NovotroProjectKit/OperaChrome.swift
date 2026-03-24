@@ -565,6 +565,8 @@ public struct OperaChromeSplitHandle: View {
     private let onDragChanged: (CGFloat) -> Void
     private let onDragEnded: () -> Void
     @State private var isHovering = false
+    @State private var dragStartX: CGFloat?
+    @State private var lastTranslation: CGFloat = 0
 
     public init(
         onDragChanged: @escaping (CGFloat) -> Void,
@@ -591,11 +593,22 @@ public struct OperaChromeSplitHandle: View {
             isHovering = hovering
         }
         .gesture(
-            DragGesture(minimumDistance: 0)
+            DragGesture(minimumDistance: 0, coordinateSpace: .global)
                 .onChanged { value in
-                    onDragChanged(value.translation.width)
+                    if dragStartX == nil {
+                        dragStartX = value.location.x
+                        lastTranslation = 0
+                    }
+                    let currentX = value.location.x
+                    let delta = currentX - dragStartX!
+                    // Only report the delta from the last update
+                    let deltaDiff = delta - lastTranslation
+                    lastTranslation = delta
+                    onDragChanged(deltaDiff)
                 }
                 .onEnded { _ in
+                    dragStartX = nil
+                    lastTranslation = 0
                     onDragEnded()
                 }
         )
@@ -649,6 +662,54 @@ public struct OperaChromeEmptyState: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(28)
         .background(OperaChromeTheme.workspaceBackground)
+    }
+}
+
+// MARK: - Shared Save Indicator State
+
+public enum SaveIndicatorState: Equatable, Sendable {
+    case idle
+    case saving
+    case saved
+}
+
+// MARK: - Compact Save Indicator (for the shell tab bar)
+
+@available(macOS 26.0, *)
+public struct OperaChromeCompactSaveIndicator: View {
+    public let state: SaveIndicatorState
+
+    public init(state: SaveIndicatorState) {
+        self.state = state
+    }
+
+    public var body: some View {
+        Group {
+            switch state {
+            case .saving:
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("Saving...")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                }
+                .transition(.opacity)
+            case .saved:
+                HStack(spacing: 3) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(OperaChromeTheme.success)
+                    Text("Saved")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                }
+                .transition(.opacity)
+            case .idle:
+                EmptyView()
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: state)
     }
 }
 #endif
