@@ -1087,6 +1087,30 @@ private struct OperaWindowAccessor: NSViewRepresentable {
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.styleMask.insert(.fullSizeContentView)
+            repositionTrafficLights()
+        }
+
+        /// Vertically centers the traffic light buttons within the 36px custom tab bar.
+        /// NSTitlebarView uses a flipped coordinate system (y=0 at top, increases downward),
+        /// so increasing y moves buttons DOWN on screen.
+        private func repositionTrafficLights() {
+            guard let window else { return }
+            let tabBarHeight: CGFloat = 36
+            let buttonTypes: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+            for type in buttonTypes {
+                guard let button = window.standardWindowButton(type) else { continue }
+                guard let superview = button.superview else { continue }
+                let buttonHeight = button.frame.height
+                let centeredY: CGFloat
+                if superview.isFlipped {
+                    // Flipped: y=0 at top, y increases downward
+                    centeredY = (tabBarHeight - buttonHeight) / 2
+                } else {
+                    // Non-flipped: y=0 at bottom, y increases upward
+                    centeredY = superview.bounds.height - (tabBarHeight + buttonHeight) / 2
+                }
+                button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: centeredY))
+            }
         }
 
         private func configureObservers(for window: NSWindow) {
