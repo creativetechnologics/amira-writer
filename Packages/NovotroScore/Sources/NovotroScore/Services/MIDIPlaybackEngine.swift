@@ -140,13 +140,12 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     nonisolated(unsafe) var loopRegionEndTick: Int? = nil
 
     // MARK: - Silent Export
-    /// When true, hardware audio output is muted by inserting a zero-volume mixer
-    /// between mainMixerNode and outputNode. The recording tap on mainMixerNode
-    /// still captures at full volume, so WAV files are unaffected.
+    /// When true, the hardware output AudioUnit volume is set to 0 after
+    /// engine.start(). The recording tap on mainMixerNode still captures at
+    /// full volume (it reads upstream of the output node), so WAV files are
+    /// unaffected while speakers stay silent.
     /// Set this BEFORE calling play() or configureAudioGraphIfNeeded().
     nonisolated(unsafe) var muteHardwareOutput: Bool = false
-    /// The mute node inserted when muteHardwareOutput is true.
-    private var hardwareMuteNode: AVAudioMixerNode?
 
     // MARK: - Recording
     /// Lock protecting recordingFile and isRecordingAudio from concurrent access
@@ -2586,25 +2585,6 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             }
             engine.mainMixerNode.outputVolume = masterOutputVolume
 
-            // Silent export: insert a zero-volume mixer between mainMixerNode
-            // and outputNode so the recording tap on mainMixerNode captures at
-            // full volume while hardware speakers stay silent.
-            if muteHardwareOutput && hardwareMuteNode == nil {
-                let muteNode = AVAudioMixerNode()
-                muteNode.outputVolume = 0
-                engine.attach(muteNode)
-                // AVAudioEngine auto-connects mainMixerNode → outputNode.
-                // We break that by inserting our mute node in between.
-                let mainMixer = engine.mainMixerNode
-                let outputNode = engine.outputNode
-                let format = mainMixer.outputFormat(forBus: 0)
-                engine.disconnectNodeOutput(mainMixer)
-                engine.connect(mainMixer, to: muteNode, format: format)
-                engine.connect(muteNode, to: outputNode, format: format)
-                hardwareMuteNode = muteNode
-                fileLog("Silent export: mute node inserted between mainMixer and outputNode")
-            }
-
             applyRenderBufferSettingsOnAudioQueue()
         }
 
@@ -2618,12 +2598,40 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         // asyncAfter so we don't block the serial audioQueue during back-off.
         do {
             try engine.start()
+            // Silent export: mute the hardware output AU after engine starts.
+            // This zeroes the signal going to speakers without affecting the
+            // recording tap on mainMixerNode (which captures upstream of the
+            // output node). kHALOutputParam_Volume = 14.
+            if muteHardwareOutput {
+                applyHardwareMute()
+            }
             return true
         } catch {
             fileLog("engine.start() failed (attempt 1): \(error.localizedDescription) — scheduling async retries")
             retryEngineStart(attempt: 1, maxAttempts: 3)
             // Return false here; callers that need immediate success handle this path.
             return false
+        }
+    }
+
+    /// Mute the hardware output node's underlying AudioUnit.
+    /// This sets the HAL output volume to 0, silencing speakers without
+    /// affecting the recording tap on mainMixerNode.
+    private func applyHardwareMute() {
+        guard let outputAU = engine.outputNode.audioUnit else {
+            fileLog("Silent export: could not access outputNode audioUnit")
+            return
+        }
+        // kHALOutputParam_Volume = 14 (from AudioUnit/AudioUnitProperties.h)
+        let status = AudioUnitSetParameter(outputAU, 14, kAudioUnitScope_Global, 0, 0, 0)
+        if status == noErr {
+            fileLog("Silent export: hardware output volume set to 0")
+        } else {
+            fileLog("Silent export: AudioUnitSetParameter failed with status \(status)")
+            // Fallback: set the output node's volume via AVAudioEngine API
+            // This is less ideal but better than audible output
+            engine.mainMixerNode.outputVolume = 0
+            fileLog("Silent export: fell back to mainMixerNode.outputVolume = 0 (tap may capture silence)")
         }
     }
 
@@ -2638,6 +2646,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             guard let self else { return }
             do {
                 try self.engine.start()
+                if self.muteHardwareOutput { self.applyHardwareMute() }
                 self.fileLog("engine.start() succeeded on attempt \(attempt + 1)")
             } catch {
                 self.fileLog("engine.start() failed (attempt \(attempt + 1)): \(error.localizedDescription)")
