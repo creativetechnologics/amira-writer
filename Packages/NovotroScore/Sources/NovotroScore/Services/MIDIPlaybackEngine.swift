@@ -139,6 +139,15 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     nonisolated(unsafe) var loopRegionStartTick: Int? = nil
     nonisolated(unsafe) var loopRegionEndTick: Int? = nil
 
+    // MARK: - Silent Export
+    /// When true, hardware audio output is muted by inserting a zero-volume mixer
+    /// between mainMixerNode and outputNode. The recording tap on mainMixerNode
+    /// still captures at full volume, so WAV files are unaffected.
+    /// Set this BEFORE calling play() or configureAudioGraphIfNeeded().
+    nonisolated(unsafe) var muteHardwareOutput: Bool = false
+    /// The mute node inserted when muteHardwareOutput is true.
+    private var hardwareMuteNode: AVAudioMixerNode?
+
     // MARK: - Recording
     /// Lock protecting recordingFile and isRecordingAudio from concurrent access
     /// between audioQueue (writes) and the AVAudioEngine IOThread (reads in tap callback).
@@ -2576,6 +2585,26 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 _ = sampler(for: previewSamplerKey, mapping: nil)
             }
             engine.mainMixerNode.outputVolume = masterOutputVolume
+
+            // Silent export: insert a zero-volume mixer between mainMixerNode
+            // and outputNode so the recording tap on mainMixerNode captures at
+            // full volume while hardware speakers stay silent.
+            if muteHardwareOutput && hardwareMuteNode == nil {
+                let muteNode = AVAudioMixerNode()
+                muteNode.outputVolume = 0
+                engine.attach(muteNode)
+                // AVAudioEngine auto-connects mainMixerNode → outputNode.
+                // We break that by inserting our mute node in between.
+                let mainMixer = engine.mainMixerNode
+                let outputNode = engine.outputNode
+                let format = mainMixer.outputFormat(forBus: 0)
+                engine.disconnectNodeOutput(mainMixer)
+                engine.connect(mainMixer, to: muteNode, format: format)
+                engine.connect(muteNode, to: outputNode, format: format)
+                hardwareMuteNode = muteNode
+                fileLog("Silent export: mute node inserted between mainMixer and outputNode")
+            }
+
             applyRenderBufferSettingsOnAudioQueue()
         }
 

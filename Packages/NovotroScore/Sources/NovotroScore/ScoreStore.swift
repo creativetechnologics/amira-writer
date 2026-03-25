@@ -1403,10 +1403,16 @@ final class ScoreStore {
     var statusMessage: String = "Open a local OWP/OWS project to begin."
     var isDirty: Bool = false {
         didSet {
-            guard isDirty else { return }
-            changeGeneration &+= 1
-            scheduleAutoSaveIfNeeded()
-            scheduleDatabaseSyncIfNeeded()
+            if isDirty {
+                changeGeneration &+= 1
+                if saveIndicator != .saving {
+                    saveIndicator = .unsavedChanges
+                }
+                scheduleAutoSaveIfNeeded()
+                scheduleDatabaseSyncIfNeeded()
+            } else if saveIndicator != .saving {
+                saveIndicator = projectURL == nil ? .idle : .saved
+            }
         }
     }
 
@@ -1566,7 +1572,6 @@ final class ScoreStore {
         autoSaveEnabled = false
         UserDefaults.standard.set(false, forKey: Self.autoSaveDefaultsKey)
         setupPlaybackCallbacks()
-        setupMIDIInput()
         sunoServerManager.onStateChange = { [weak self] state, step, error in
             self?.sunoServerState = state
             self?.sunoBootstrapStep = step
@@ -1578,11 +1583,15 @@ final class ScoreStore {
                 self?.sunoLoggedIn = true
             }
         }
-        sunoServerManager.checkExistingLogin()
-        sunoServerManager.autoStartIfNeeded()
         setupAppTerminationHandler()
-        // Discover installed Audio Unit instruments
-        Task { await audioUnitManager.scanInstalledAudioUnits() }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard let self else { return }
+            self.setupMIDIInput()
+            self.sunoServerManager.checkExistingLogin()
+            self.sunoServerManager.autoStartIfNeeded()
+            await self.audioUnitManager.scanInstalledAudioUnits()
+        }
     }
 
     private func setupMIDIInput() {
@@ -1820,6 +1829,7 @@ final class ScoreStore {
     func loadProject(url: URL, preferService: Bool? = nil) async {
         novotroDebugLog("loadProject START url=\(url.path)")
         statusMessage = "Loading \(url.lastPathComponent)..."
+        saveIndicator = .idle
         backgroundIndexRefreshTask?.cancel()
         stopExternalFileWatch()
         loadedMidiCache.removeAll()
@@ -1976,7 +1986,7 @@ final class ScoreStore {
                 guard let self else { return }
                 self.isSavingInternal = false
                 if let errorMessage {
-                    self.saveIndicator = .idle
+                    self.saveIndicator = .unsavedChanges
                     self.statusMessage = "Save failed: \(errorMessage)"
                     // dirtyPaths were never cleared — they remain in dirtySongPaths
                 } else {
@@ -1993,13 +2003,13 @@ final class ScoreStore {
                         }
                     }
                     self.syncSongsToDatabase(paths: dirtyPaths)
-                    if self.dirtySongPaths.isEmpty { self.isDirty = false }
-                    self.recordExternalFileSnapshots()
-                    self.saveIndicator = .saved
-                    self.statusMessage = "Saved \(capturedMetadata.name)"
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                        if self?.saveIndicator == .saved { self?.saveIndicator = .idle }
+                    if self.dirtySongPaths.isEmpty {
+                        self.isDirty = false
+                    } else {
+                        self.saveIndicator = .unsavedChanges
                     }
+                    self.recordExternalFileSnapshots()
+                    self.statusMessage = "Saved \(capturedMetadata.name)"
                 }
             }
         }
@@ -4915,6 +4925,7 @@ final class ScoreStore {
         }
 
         let exportEngine = MIDIPlaybackEngine()
+        exportEngine.muteHardwareOutput = true  // Silent export: don't play through speakers
         exportEngine.metronomeTimeSignatures = timeSignatures
         exportEngine.configureMetronome(enabled: false, volume: 0, countInBars: 0)
         exportEngine.setPreferredBufferFrames(preferredBufferFrames)

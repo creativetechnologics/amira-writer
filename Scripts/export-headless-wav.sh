@@ -8,6 +8,7 @@ COOLDOWN_SECONDS="${NOVOTRO_HEADLESS_EXPORT_COOLDOWN_SECONDS:-5}"
 COOLDOWN_STAMP="${TMPDIR:-/tmp}/novotro-headless-export.last-exit"
 ALLOW_BLUETOOTH_OUTPUT="${NOVOTRO_ALLOW_BLUETOOTH_OUTPUT:-0}"
 SCORE_BIN_OVERRIDE="${NOVOTRO_SCORE_BIN:-}"
+OUTPUT_PATH=""
 
 if [[ ! -f "$PACKAGE_ROOT/Package.swift" ]]; then
   echo "NovotroScore package not found at: $PACKAGE_ROOT" >&2
@@ -32,6 +33,14 @@ Notes:
 EOF
   exit 2
 fi
+
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [[ "${args[$i]}" == "--output" ]] && (( i + 1 < ${#args[@]} )); then
+    OUTPUT_PATH="${args[$((i + 1))]}"
+    break
+  fi
+done
 
 if [[ "$ALLOW_BLUETOOTH_OUTPUT" != "1" ]]; then
   default_output_device="$(
@@ -100,7 +109,111 @@ else
   RUNNER=(swift run --package-path "$PACKAGE_ROOT" -c release NovotroScore)
 fi
 
-"${RUNNER[@]}" --headless-export-wav "$@"
+"${RUNNER[@]}" --headless-export-wav "$@" &
+runner_pid=$!
+
+verify_waveform() {
+  local wav_path="$1"
+  if [[ ! -f "$wav_path" ]]; then
+    echo "ERROR: Output WAV file not found: $wav_path" >&2
+    return 1
+  fi
+
+  local file_size
+  file_size="$(stat -f%z "$wav_path" 2>/dev/null || echo 0)"
+  if (( file_size < 100000 )); then
+    echo "ERROR: Output WAV file too small (${file_size} bytes): $wav_path" >&2
+    return 1
+  fi
+
+  # Use afinfo to check for non-silence. afinfo reports "estimated duration"
+  # and "audio bytes". We also use sox (if available) or afinfo peak level.
+  local peak_db
+  if command -v sox &>/dev/null; then
+    # sox stat gives us Maximum amplitude directly
+    peak_db="$(sox "$wav_path" -n stat 2>&1 | awk '/Maximum amplitude/ { print $3 }')"
+    if [[ -n "$peak_db" ]] && (( $(echo "$peak_db < 0.001" | bc -l 2>/dev/null || echo 0) )); then
+      echo "WARNING: WAV appears silent (peak amplitude: $peak_db)" >&2
+      return 2
+    fi
+  else
+    # Fallback: use afclip or just check audio bytes > threshold
+    local audio_bytes
+    audio_bytes="$(afinfo "$wav_path" 2>/dev/null | awk '/audio bytes:/ { print $3; exit }')"
+    if [[ "$audio_bytes" =~ ^[0-9]+$ ]] && (( audio_bytes < 1000 )); then
+      echo "WARNING: WAV has very few audio bytes ($audio_bytes) — likely silent" >&2
+      return 2
+    fi
+  fi
+
+  echo "Waveform verified: ${file_size} bytes, non-silent" >&2
+  return 0
+}
+
+finalize_and_exit() {
+  local status="$1"
+  date +%s > "$COOLDOWN_STAMP"
+
+  # Verify waveform on successful export
+  if [[ "$status" -eq 0 ]] && [[ -n "$OUTPUT_PATH" ]]; then
+    verify_waveform "$OUTPUT_PATH"
+    local verify_status=$?
+    if [[ "$verify_status" -eq 2 ]]; then
+      echo "WARNING: Export completed but WAV may be silent. Check the file." >&2
+      # Exit with special code so callers can detect silent exports
+      exit 10
+    elif [[ "$verify_status" -ne 0 ]]; then
+      exit 11
+    fi
+  fi
+
+  exit "$status"
+}
+
+last_size=-1
+stable_polls=0
+
+while kill -0 "$runner_pid" 2>/dev/null; do
+  if [[ -n "$OUTPUT_PATH" ]] && [[ -f "$OUTPUT_PATH" ]]; then
+    current_size="$(stat -f%z "$OUTPUT_PATH" 2>/dev/null || echo 0)"
+    audio_bytes="$(
+      afinfo "$OUTPUT_PATH" 2>/dev/null | awk '
+        /audio bytes:/ {
+          print $3
+          exit
+        }
+      '
+    )"
+
+    if [[ "$current_size" =~ ^[0-9]+$ ]] && [[ "$audio_bytes" =~ ^[0-9]+$ ]] \
+      && (( current_size > 100000 )) && (( audio_bytes > 100000 )); then
+      if [[ "$current_size" == "$last_size" ]]; then
+        stable_polls=$(( stable_polls + 1 ))
+      else
+        stable_polls=0
+      fi
+
+      if (( stable_polls >= 2 )); then
+        kill -TERM "$runner_pid" 2>/dev/null || true
+        for _ in {1..10}; do
+          if ! kill -0 "$runner_pid" 2>/dev/null; then
+            finalize_and_exit 0
+          fi
+          sleep 1
+        done
+        kill -KILL "$runner_pid" 2>/dev/null || true
+        finalize_and_exit 0
+      fi
+    else
+      stable_polls=0
+    fi
+
+    last_size="$current_size"
+  fi
+
+  sleep 5
+done
+
+wait "$runner_pid"
 status=$?
-date +%s > "$COOLDOWN_STAMP"
-exit "$status"
+finalize_and_exit "$status"
