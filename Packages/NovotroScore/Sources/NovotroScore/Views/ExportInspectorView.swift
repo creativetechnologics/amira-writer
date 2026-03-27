@@ -19,6 +19,16 @@ struct ExportInspectorView: View {
             .controlSize(.small)
             .disabled(store.pianoRollNotes.isEmpty || store.isExportingFullMix)
 
+            if store.isExportingFullMix {
+                VStack(alignment: .leading, spacing: 3) {
+                    ProgressView(value: store.fullMixExportProgress)
+                        .progressViewStyle(.linear)
+                    Text("\(Int(store.fullMixExportProgress * 100))%")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Button {
                 store.exportRehearsalTrackWithPanel()
             } label: {

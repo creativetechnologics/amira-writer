@@ -1904,6 +1904,12 @@ final class VelocityLaneView: NSView {
 
     // Drag state
     private var dragNoteID: UUID?
+    /// When true, the drag paints velocity on every note the cursor passes over
+    /// (not just the initially clicked note). Activated as soon as the drag
+    /// moves horizontally away from the starting note.
+    private var isDragPainting = false
+    /// Collects (noteID, velocity) pairs during a drag-paint for batch commit on mouseUp.
+    private var dragPaintChanges: [(UUID, Int)] = []
 
     // Velocity curve painting state (Alt+drag)
     private var isLinePainting = false
@@ -2060,6 +2066,9 @@ final class VelocityLaneView: NSView {
             return
         }
 
+        isDragPainting = false
+        dragPaintChanges = []
+
         if let note = noteAtPoint(location) {
             dragNoteID = note.id
             applyVelocity(at: location, for: note.id)
@@ -2075,8 +2084,23 @@ final class VelocityLaneView: NSView {
             return
         }
 
-        guard let noteID = dragNoteID else { return }
-        applyVelocity(at: location, for: noteID)
+        guard dragNoteID != nil else { return }
+
+        // Find whichever note the cursor is currently over and paint its
+        // velocity to the cursor's Y position. This lets the user click a
+        // velocity dot and then sweep left/right to repaint all velocities.
+        if let noteUnderCursor = noteAtPoint(location) {
+            isDragPainting = true
+            let velocity = velocityAtY(location.y)
+            // Update via the single-note callback for immediate visual feedback
+            onVelocityChanged?(noteUnderCursor.id, velocity)
+            // Collect for batch commit — use latest velocity for each note
+            if let existing = dragPaintChanges.firstIndex(where: { $0.0 == noteUnderCursor.id }) {
+                dragPaintChanges[existing].1 = velocity
+            } else {
+                dragPaintChanges.append((noteUnderCursor.id, velocity))
+            }
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -2086,7 +2110,14 @@ final class VelocityLaneView: NSView {
             setNeedsDisplay(bounds)
             return
         }
+        // If we painted multiple notes during the drag, commit as a batch
+        // so it's a single undo step.
+        if isDragPainting, !dragPaintChanges.isEmpty {
+            onVelocityBatchChanged?(dragPaintChanges)
+        }
         dragNoteID = nil
+        isDragPainting = false
+        dragPaintChanges = []
     }
 
     override func scrollWheel(with event: NSEvent) {

@@ -1077,6 +1077,8 @@ final class ScoreStore {
     // MARK: - Full Mix Export
     var isExportingFullMix: Bool = false
     var fullMixExportStatus: String = ""
+    /// Export progress from 0.0 to 1.0 — updated during real-time render exports.
+    var fullMixExportProgress: Double = 0
 
     // MARK: - Suno Export
     var sunoSplitTicks: [Int] = []
@@ -5633,6 +5635,7 @@ final class ScoreStore {
         }
 
         isExportingFullMix = true
+        fullMixExportProgress = 0
         fullMixExportStatus = "Rendering full mix..."
 
         let endTick = pianoRollNotes.map { $0.startTick + $0.duration }.max() ?? pianoRollLengthTicks
@@ -5642,6 +5645,27 @@ final class ScoreStore {
             return
         }
 
+        // Estimate total duration for progress tracking
+        let estimatedSeconds = Self.ticksToSecondsStatic(
+            endTick,
+            ticksPerQuarter: ticksPerQuarter,
+            tempoEvents: pianoRollTempoEvents
+        )
+        let exportStartTime = Date()
+
+        // Progress timer — updates every 0.25s during the export
+        let progressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] timer in
+            guard let self, self.isExportingFullMix else {
+                timer.invalidate()
+                return
+            }
+            let elapsed = Date().timeIntervalSince(exportStartTime)
+            let progress = estimatedSeconds > 0 ? min(elapsed / (estimatedSeconds + 2), 0.99) : 0
+            Task { @MainActor in
+                self.fullMixExportProgress = progress
+            }
+        }
+
         do {
             try await renderChunkToWav(
                 notes: pianoRollNotes,
@@ -5649,6 +5673,7 @@ final class ScoreStore {
                 endTick: endTick,
                 outputURL: outputURL
             )
+            fullMixExportProgress = 1.0
             fullMixExportStatus = "Exported to \(outputURL.lastPathComponent)"
             NSLog("[FullMix] Exported full mix to %@", outputURL.path)
         } catch {
@@ -5656,7 +5681,9 @@ final class ScoreStore {
             NSLog("[FullMix] Export failed: %@", error.localizedDescription)
         }
 
+        progressTimer.invalidate()
         isExportingFullMix = false
+        fullMixExportProgress = 0
     }
 
     // MARK: - Rehearsal Track Export
