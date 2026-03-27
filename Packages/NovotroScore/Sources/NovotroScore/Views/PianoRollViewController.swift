@@ -2626,6 +2626,9 @@ final class PianoRollViewController: NSViewController {
     /// Called when the selected song changes — triggers full data reload.
     func refreshFromStore() {
         pushDataToEditor()
+        // Ensure the preview sampler is configured for the current track's
+        // instrument so keyboard/drawing preview plays the correct sound.
+        store.updatePreviewMappingForTrackFilter()
     }
 
     @objc private func spacebarPlayPauseReceived() {

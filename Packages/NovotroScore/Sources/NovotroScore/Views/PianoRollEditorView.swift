@@ -1755,6 +1755,7 @@ final class PianoRollKeyboardView: NSView {
                 context.saveGState()
                 context.translateBy(x: labelX, y: y + (rowHeight - lineHeight) / 2 + lineAscent)
                 context.scaleBy(x: 1, y: -1)
+                context.textPosition = .zero
                 CTLineDraw(line, context)
                 context.restoreGState()
             } else {
@@ -1771,6 +1772,7 @@ final class PianoRollKeyboardView: NSView {
                 context.saveGState()
                 context.translateBy(x: labelX, y: y + (rowHeight - lineHeight) / 2 + lineAscent)
                 context.scaleBy(x: 1, y: -1)
+                context.textPosition = .zero
                 CTLineDraw(line, context)
                 context.restoreGState()
             }
@@ -1830,6 +1832,14 @@ final class PianoRollKeyboardView: NSView {
         let location = convert(event.locationInWindow, from: nil)
         let row = Int((location.y + scrollOffset) / rowHeight)
         return maxPitch - row
+    }
+
+    // MARK: - Scroll Forwarding
+
+    /// Forward scroll-wheel events to the parent scroll view so the user can
+    /// scroll the piano roll vertically while hovering over the keyboard.
+    override func scrollWheel(with event: NSEvent) {
+        nextResponder?.scrollWheel(with: event)
     }
 
     // MARK: - Hit Testing

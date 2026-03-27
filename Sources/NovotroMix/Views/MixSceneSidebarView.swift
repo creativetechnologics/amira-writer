@@ -25,18 +25,10 @@ struct MixSceneSidebarView: View {
                                 Image(systemName: sessionInfo.hasContent ? "waveform" : "waveform.badge.plus")
                                     .font(.system(size: 11, weight: .medium))
                                     .foregroundStyle(OperaChromeTheme.textSecondary)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(scene.displayTitle)
-                                        .font(.system(size: 12.5, weight: .medium))
-                                        .foregroundStyle(OperaChromeTheme.textPrimary)
-                                        .lineLimit(1)
-                                    if sessionInfo.hasContent {
-                                        Text(sessionInfo.summary)
-                                            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                                            .foregroundStyle(OperaChromeTheme.textSecondary)
-                                            .lineLimit(1)
-                                    }
-                                }
+                                Text(scene.displayTitle)
+                                    .font(.system(size: 12.5, weight: .medium))
+                                    .foregroundStyle(OperaChromeTheme.textPrimary)
+                                    .lineLimit(1)
                             }
                         }
                     }

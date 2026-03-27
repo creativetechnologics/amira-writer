@@ -1359,7 +1359,9 @@ final class MixStore {
             let maximumFadeIn = Self.maximumFadeSeconds(for: clip)
             clip.fadeInSeconds = min(max(value, 0), maximumFadeIn)
         }
-        autoCrossfadeAroundClip(clipID)
+        // Do NOT call autoCrossfadeAroundClip here — that resets any fade
+        // above the 0.08s default back to 0.08s for non-overlapping clips,
+        // which would immediately wipe the user's manual adjustment.
     }
 
     func updateClipFadeOut(_ clipID: UUID, value: Double) {
@@ -1367,7 +1369,7 @@ final class MixStore {
             let maximumFadeOut = Self.maximumFadeSeconds(for: clip)
             clip.fadeOutSeconds = min(max(value, 0), maximumFadeOut)
         }
-        autoCrossfadeAroundClip(clipID)
+        // Do NOT call autoCrossfadeAroundClip here — same reason as above.
     }
 
     func addClip(from fileURL: URL, to trackID: UUID, at startSeconds: Double) {

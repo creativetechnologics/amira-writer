@@ -18,6 +18,11 @@ struct MixClipView: View {
     @State private var trailingTrimOffset: CGFloat = 0
     @State private var didPushDragCursor = false
     @State private var didPushHoverCursor = false
+    @State private var fadeInDragOffset: CGFloat = 0
+    @State private var fadeOutDragOffset: CGFloat = 0
+    @State private var isFadeInHovering = false
+    @State private var isFadeOutHovering = false
+    @State private var didPushFadeCursor = false
     /// Tracks whether we already called selectClip() for the current drag
     /// gesture so we don't trigger mutateCurrentSession → scheduleSave
     /// on every frame (60Hz+). Selection is committed once at drag start.
@@ -55,6 +60,55 @@ struct MixClipView: View {
 
     private var trackAccent: Color {
         Color(hex: clip.colorHex)
+    }
+
+    /// Fade-in width in pixels, accounting for live drag offset.
+    private var displayedFadeInWidth: CGFloat {
+        let baseWidth = CGFloat(clip.fadeInSeconds) * pixelsPerSecond
+        return max(baseWidth + fadeInDragOffset, 0)
+    }
+
+    /// Fade-out width in pixels, accounting for live drag offset.
+    private var displayedFadeOutWidth: CGFloat {
+        let baseWidth = CGFloat(clip.fadeOutSeconds) * pixelsPerSecond
+        return max(baseWidth + fadeOutDragOffset, 0)
+    }
+
+    private static let fadeHandleWidth: CGFloat = 16
+    private static let fadeHandleHeightFraction: CGFloat = 0.3
+
+    /// Diagonal resize cursor for fade handle corners.
+    /// northeast=true → ↗ (fade-in, top-left corner, drag right to increase)
+    /// northeast=false → ↖ (fade-out, top-right corner, drag left to increase)
+    private static func diagonalResizeCursor(northeast: Bool) -> NSCursor {
+        let size = NSSize(width: 16, height: 16)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let ctx = NSGraphicsContext.current!.cgContext
+            ctx.setLineWidth(1.5)
+            ctx.setStrokeColor(NSColor.white.cgColor)
+            ctx.setShadow(offset: CGSize(width: 0, height: -0.5), blur: 1, color: NSColor.black.withAlphaComponent(0.6).cgColor)
+
+            if northeast {
+                // Arrow from bottom-left to top-right (↗)
+                ctx.move(to: CGPoint(x: 3, y: 3))
+                ctx.addLine(to: CGPoint(x: 13, y: 13))
+                // Arrowhead
+                ctx.move(to: CGPoint(x: 8, y: 13))
+                ctx.addLine(to: CGPoint(x: 13, y: 13))
+                ctx.addLine(to: CGPoint(x: 13, y: 8))
+            } else {
+                // Arrow from bottom-right to top-left (↖)
+                ctx.move(to: CGPoint(x: 13, y: 3))
+                ctx.addLine(to: CGPoint(x: 3, y: 13))
+                // Arrowhead
+                ctx.move(to: CGPoint(x: 8, y: 13))
+                ctx.addLine(to: CGPoint(x: 3, y: 13))
+                ctx.addLine(to: CGPoint(x: 3, y: 8))
+            }
+            ctx.strokePath()
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
     }
 
     /// Compact duration + gain label shown on selected clips.
@@ -118,33 +172,17 @@ struct MixClipView: View {
             }
             .onAppear { store.waveformCache.request(clip.filePath) }
 
-            // Fade-in triangle overlay
-            if clip.fadeInSeconds > 0.01 {
-                let fadeInWidth = CGFloat(clip.fadeInSeconds) * pixelsPerSecond
-                Path { path in
-                    path.move(to: .zero)
-                    path.addLine(to: CGPoint(x: fadeInWidth, y: 0))
-                    path.addLine(to: CGPoint(x: 0, y: laneHeight))
-                    path.closeSubpath()
-                }
-                .fill(.black.opacity(0.22))
-                .frame(width: fadeInWidth, height: laneHeight)
-                .allowsHitTesting(false)
+            // Fade-in S-curve overlay
+            if displayedFadeInWidth > 0.5 {
+                fadeCurveOverlay(width: displayedFadeInWidth, height: laneHeight, isFadeIn: true)
+                    .allowsHitTesting(false)
             }
 
-            // Fade-out triangle overlay
-            if clip.fadeOutSeconds > 0.01 {
-                let fadeOutWidth = CGFloat(clip.fadeOutSeconds) * pixelsPerSecond
-                Path { path in
-                    path.move(to: CGPoint(x: fadeOutWidth, y: 0))
-                    path.addLine(to: CGPoint(x: fadeOutWidth, y: laneHeight))
-                    path.addLine(to: .zero)
-                    path.closeSubpath()
-                }
-                .fill(.black.opacity(0.22))
-                .frame(width: fadeOutWidth, height: laneHeight)
-                .offset(x: displayedWidth - fadeOutWidth)
-                .allowsHitTesting(false)
+            // Fade-out S-curve overlay
+            if displayedFadeOutWidth > 0.5 {
+                fadeCurveOverlay(width: displayedFadeOutWidth, height: laneHeight, isFadeIn: false)
+                    .offset(x: displayedWidth - displayedFadeOutWidth)
+                    .allowsHitTesting(false)
             }
 
             // Clip name overlay — top-left; hidden on very narrow clips (<50px)
@@ -188,6 +226,13 @@ struct MixClipView: View {
         }
         .overlay(alignment: .trailing) {
             trimHandle(isLeading: false)
+        }
+        // Fade handles — top corners
+        .overlay(alignment: .topLeading) {
+            fadeHandle(isFadeIn: true)
+        }
+        .overlay(alignment: .topTrailing) {
+            fadeHandle(isFadeIn: false)
         }
         // Drag position tooltip — shows where the clip will land when snapped
         .overlay(alignment: .top) {
@@ -253,16 +298,32 @@ struct MixClipView: View {
                 NSCursor.pop()
                 didPushDragCursor = false
             }
+            if didPushFadeCursor {
+                NSCursor.pop()
+                didPushFadeCursor = false
+            }
         }
         // Update cursor when tool changes while hovering a clip (e.g. pressing
         // "1" or "2") — onHover only fires on mouse enter/exit, not state changes.
         .onChange(of: store.selectedTool) { _, newTool in
-            guard didPushHoverCursor else { return }
-            NSCursor.pop()
-            if newTool == .split {
-                NSCursor.crosshair.push()
-            } else {
-                NSCursor.openHand.push()
+            if didPushFadeCursor {
+                // Fade handle's diagonal cursor is on the stack — pop it and
+                // push the appropriate cursor for the new tool.
+                NSCursor.pop()
+                didPushFadeCursor = false
+                if newTool == .split {
+                    NSCursor.crosshair.push()
+                } else {
+                    NSCursor.openHand.push()
+                }
+                didPushHoverCursor = true
+            } else if didPushHoverCursor {
+                NSCursor.pop()
+                if newTool == .split {
+                    NSCursor.crosshair.push()
+                } else {
+                    NSCursor.openHand.push()
+                }
             }
         }
         .onChange(of: clip.startSeconds) { _, _ in
@@ -400,6 +461,149 @@ struct MixClipView: View {
         }
     }
 
+    // MARK: - Fade Handles
+
+    @ViewBuilder
+    private func fadeHandle(isFadeIn: Bool) -> some View {
+        // Hide fade handles on very narrow clips or when in split mode
+        if displayedWidth >= 60, store.selectedTool != .split {
+            let handleHeight = laneHeight * Self.fadeHandleHeightFraction
+            Color.clear
+                .frame(width: Self.fadeHandleWidth, height: handleHeight)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { value in
+                            let maxFadePixels = displayedWidth * 0.5
+                            if isFadeIn {
+                                let baseWidth = CGFloat(clip.fadeInSeconds) * pixelsPerSecond
+                                fadeInDragOffset = min(max(value.translation.width, -baseWidth), maxFadePixels - baseWidth)
+                            } else {
+                                let baseWidth = CGFloat(clip.fadeOutSeconds) * pixelsPerSecond
+                                // Dragging LEFT from the right edge increases fade-out
+                                fadeOutDragOffset = min(max(-value.translation.width, -baseWidth), maxFadePixels - baseWidth)
+                            }
+                        }
+                        .onEnded { value in
+                            let maxFadeSeconds = clip.durationSeconds * 0.5
+                            if isFadeIn {
+                                let newSeconds = min(max(clip.fadeInSeconds + Double(value.translation.width / pixelsPerSecond), 0), maxFadeSeconds)
+                                store.updateClipFadeIn(clip.id, value: newSeconds)
+                                fadeInDragOffset = 0
+                            } else {
+                                let newSeconds = min(max(clip.fadeOutSeconds + Double(-value.translation.width / pixelsPerSecond), 0), maxFadeSeconds)
+                                store.updateClipFadeOut(clip.id, value: newSeconds)
+                                fadeOutDragOffset = 0
+                            }
+                        }
+                )
+                .onHover { hovering in
+                    if hovering {
+                        // Pop the parent's open-hand cursor before pushing fade cursor
+                        if didPushHoverCursor {
+                            NSCursor.pop()
+                            didPushHoverCursor = false
+                        }
+                        if isFadeIn {
+                            isFadeInHovering = true
+                        } else {
+                            isFadeOutHovering = true
+                        }
+                        // Guard against double-push if both fade handles fire rapidly
+                        if !didPushFadeCursor {
+                            Self.diagonalResizeCursor(northeast: isFadeIn).push()
+                            didPushFadeCursor = true
+                        }
+                    } else {
+                        if isFadeIn {
+                            isFadeInHovering = false
+                        } else {
+                            isFadeOutHovering = false
+                        }
+                        if didPushFadeCursor {
+                            NSCursor.pop()
+                            didPushFadeCursor = false
+                        }
+                        // Restore the parent clip's open-hand cursor since we're
+                        // still inside the clip bounds after leaving the fade zone.
+                        if store.selectedTool != .split {
+                            NSCursor.openHand.push()
+                            didPushHoverCursor = true
+                        }
+                    }
+                }
+        }
+    }
+
+    // MARK: - Fade Curve Rendering
+
+    @ViewBuilder
+    private func fadeCurveOverlay(width: CGFloat, height: CGFloat, isFadeIn: Bool) -> some View {
+        let isHovering = isFadeIn ? isFadeInHovering : isFadeOutHovering
+        ZStack {
+            // Filled area under the S-curve
+            fadeSCurveFillPath(width: width, height: height, isFadeIn: isFadeIn)
+                .fill(.black.opacity(0.22))
+
+            // Bright stroke on the curve line itself
+            fadeSCurveStrokePath(width: width, height: height, isFadeIn: isFadeIn)
+                .stroke(.white.opacity(isHovering ? 0.8 : 0.5), lineWidth: isHovering ? 2 : 1.5)
+        }
+        .frame(width: width, height: height)
+    }
+
+    /// S-curve fill path: area between the curve and the faded edge.
+    /// For fade-in: area from bottom-left, along the curve to top-right, down the right edge.
+    /// For fade-out: area from top-left, along the curve to bottom-right, up the left edge.
+    private func fadeSCurveFillPath(width: CGFloat, height: CGFloat, isFadeIn: Bool) -> Path {
+        Path { path in
+            if isFadeIn {
+                // Fill the area above the curve (the faded region)
+                path.move(to: CGPoint(x: 0, y: 0))
+                path.addLine(to: CGPoint(x: 0, y: height))
+                // S-curve from bottom-left to top-right
+                path.addCurve(
+                    to: CGPoint(x: width, y: 0),
+                    control1: CGPoint(x: width * 0.4, y: height),
+                    control2: CGPoint(x: width * 0.6, y: 0)
+                )
+                path.closeSubpath()
+            } else {
+                // Fill the area above the curve (the faded region)
+                path.move(to: CGPoint(x: width, y: 0))
+                path.addLine(to: CGPoint(x: width, y: height))
+                // S-curve from bottom-right to top-left
+                path.addCurve(
+                    to: CGPoint(x: 0, y: 0),
+                    control1: CGPoint(x: width * 0.6, y: height),
+                    control2: CGPoint(x: width * 0.4, y: 0)
+                )
+                path.closeSubpath()
+            }
+        }
+    }
+
+    /// S-curve stroke path: just the curve line itself.
+    private func fadeSCurveStrokePath(width: CGFloat, height: CGFloat, isFadeIn: Bool) -> Path {
+        Path { path in
+            if isFadeIn {
+                path.move(to: CGPoint(x: 0, y: height))
+                path.addCurve(
+                    to: CGPoint(x: width, y: 0),
+                    control1: CGPoint(x: width * 0.4, y: height),
+                    control2: CGPoint(x: width * 0.6, y: 0)
+                )
+            } else {
+                path.move(to: CGPoint(x: width, y: height))
+                path.addCurve(
+                    to: CGPoint(x: 0, y: 0),
+                    control1: CGPoint(x: width * 0.6, y: height),
+                    control2: CGPoint(x: width * 0.4, y: 0)
+                )
+            }
+        }
+    }
+
     // MARK: - Interaction Gesture
 
     private var clipTapGesture: some Gesture {
@@ -475,6 +679,8 @@ struct MixClipView: View {
         trailingTrimOffset = 0
         dragOffsetX = 0
         dragOffsetY = 0
+        fadeInDragOffset = 0
+        fadeOutDragOffset = 0
         committedStartSeconds = nil
         committedLaneOffsetY = 0
     }

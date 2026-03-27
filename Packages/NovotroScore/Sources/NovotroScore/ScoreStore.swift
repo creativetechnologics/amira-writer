@@ -3318,11 +3318,16 @@ final class ScoreStore {
     }
 
     func updatePreviewMappingForTrackFilter() {
-        guard selectedTrackFilter.count == 1, let soloTrack = selectedTrackFilter.first else {
-            playbackEngine.setPreviewMapping(nil)
-            return
+        // Resolve preview instrument: use the solo'd track if exactly one is
+        // selected, otherwise fall back to track 0 so the user always hears
+        // the assigned instrument instead of the default sine-wave tone.
+        let trackIndex: Int
+        if selectedTrackFilter.count == 1, let soloTrack = selectedTrackFilter.first {
+            trackIndex = soloTrack
+        } else {
+            trackIndex = 0
         }
-        let mapping = resolveInstrumentMapping(forTrackIndex: soloTrack)
+        let mapping = resolveInstrumentMapping(forTrackIndex: trackIndex)
         playbackEngine.setPreviewMapping(mapping)
     }
 

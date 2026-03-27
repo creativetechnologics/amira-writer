@@ -563,6 +563,9 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     }
 
     func updateLivePreview(pitch: Int, velocity: Int = 104) {
+        // Coalesce rapid updates: if an update is already queued on the audio
+        // queue, just store the latest pitch instead of queuing more work items.
+        // This prevents audioQueue backlog during 60Hz mouse drag.
         audioQueue.async { [weak self] in
             guard let self else { return }
             self.startLivePreviewOnAudioQueue(pitch: pitch, velocity: velocity)
@@ -2020,14 +2023,24 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     }
 
     private func loadInstrument(_ mapping: InstrumentMapping?, into sampler: AVAudioUnitSampler, mappingKey: String) {
-        let resolvedProgram = UInt8(min(max(mapping?.program ?? 0, 0), 127))
-        let resolvedBankMSB = UInt8(min(max(mapping?.bankMSB ?? Int(kAUSampler_DefaultMelodicBankMSB), 0), 127))
-        let bankLSB = UInt8(min(max(mapping?.bankLSB ?? 0, 0), 127))
-        let gainDB = mapping?.gainDB ?? 0
+        // When no mapping is provided (e.g., preview sampler with no track solo),
+        // let the AVAudioUnitSampler's built-in default piano tone play.
+        // Don't mute it — the default tone is the correct fallback for preview.
+        guard let mapping else {
+            fileLog("loadInstrument key=\(mappingKey) — no mapping, using default piano tone")
+            sampler.volume = 1
+            patchSignatureByMappingKey[mappingKey] = nil
+            return
+        }
+
+        let resolvedProgram = UInt8(min(max(mapping.program, 0), 127))
+        let resolvedBankMSB = UInt8(min(max(mapping.bankMSB, 0), 127))
+        let bankLSB = UInt8(min(max(mapping.bankLSB, 0), 127))
+        let gainDB = mapping.gainDB
         let gain = Float(gainDB)
 
-        let soundBankPath = mapping?.sf2Path?.trimmingCharacters(in: .whitespacesAndNewlines)
-        fileLog("loadInstrument key=\(mappingKey) sf2=\(soundBankPath ?? "nil") program=\(resolvedProgram) bankMSB=\(resolvedBankMSB) bankLSB=\(bankLSB) sourceType=\(String(describing: mapping?.effectiveSourceType))")
+        let soundBankPath = mapping.sf2Path?.trimmingCharacters(in: .whitespacesAndNewlines)
+        fileLog("loadInstrument key=\(mappingKey) sf2=\(soundBankPath ?? "nil") program=\(resolvedProgram) bankMSB=\(resolvedBankMSB) bankLSB=\(bankLSB) sourceType=\(String(describing: mapping.effectiveSourceType))")
         let signature = SamplerPatchSignature(
             soundBankPath: soundBankPath?.isEmpty == true ? nil : soundBankPath,
             bankMSB: resolvedBankMSB,
@@ -2600,25 +2613,21 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     }
 
     private func configureAudioGraphIfNeeded() -> Bool {
-        // Only do full graph setup (attach nodes, set buffer sizes) when the engine
-        // is not already running. This avoids mid-playback interruptions.
-        if !engine.isRunning {
-            if samplerByMappingKey.isEmpty {
-                _ = sampler(for: previewSamplerKey, mapping: nil)
-            }
-            engine.mainMixerNode.outputVolume = masterOutputVolume
-
-            applyRenderBufferSettingsOnAudioQueue()
+        // Fast path: if engine is already running, skip all setup and start() calls.
+        // Calling engine.start() even on a running engine acquires internal locks
+        // and causes audible glitches when called at 60Hz during live preview.
+        if engine.isRunning {
+            return true
         }
 
-        // Always call start() regardless of isRunning.
-        // - If stopped: starts the engine fresh.
-        // - If paused via engine.pause(): resumes audio output (isRunning can be
-        //   true even after pause(), but audio won't flow until start() is called again).
-        // - If truly running: start() is a no-op.
-        //
-        // Try synchronously first. If it fails, schedule non-blocking retries via
-        // asyncAfter so we don't block the serial audioQueue during back-off.
+        // Full graph setup — only when engine is stopped.
+        if samplerByMappingKey.isEmpty {
+            _ = sampler(for: previewSamplerKey, mapping: nil)
+        }
+        engine.mainMixerNode.outputVolume = masterOutputVolume
+        applyRenderBufferSettingsOnAudioQueue()
+
+        // Start the engine.
         do {
             try engine.start()
             // Silent export: mute the hardware output AU after engine starts.
@@ -3118,39 +3127,65 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         let clampedPitch = UInt8(min(max(pitch, 0), 127))
         let clampedVelocity = UInt8(min(max(velocity, 1), 127))
 
-        sampler.startNote(clampedPitch, withVelocity: clampedVelocity, onChannel: 0)
+        let auNode = auInstrumentByMappingKey[previewSamplerKey]
+        if let auNode {
+            sendMIDINoteOn(to: auNode, pitch: clampedPitch, velocity: clampedVelocity)
+        } else {
+            sampler.startNote(clampedPitch, withVelocity: clampedVelocity, onChannel: 0)
+        }
         let work = DispatchWorkItem { [weak self] in
-            guard let self,
-                  let previewSampler = self.samplerByMappingKey[self.previewSamplerKey] else {
-                return
+            guard let self else { return }
+            if let auNode = self.auInstrumentByMappingKey[self.previewSamplerKey] {
+                self.sendMIDINoteOff(to: auNode, pitch: clampedPitch)
+            } else if let previewSampler = self.samplerByMappingKey[self.previewSamplerKey] {
+                previewSampler.stopNote(clampedPitch, onChannel: 0)
             }
-            previewSampler.stopNote(clampedPitch, onChannel: 0)
         }
         previewStopWorkItem = work
         audioQueue.asyncAfter(deadline: .now() + max(0.05, duration), execute: work)
     }
 
     private func startLivePreviewOnAudioQueue(pitch: Int, velocity: Int) {
-        let sampler = sampler(for: previewSamplerKey, mapping: previewMapping)
-        guard configureAudioGraphIfNeeded() else {
+        let clampedPitch = UInt8(min(max(pitch, 0), 127))
+        let clampedVelocity = UInt8(min(max(velocity, 1), 127))
+
+        // Fast path: skip all expensive work if the pitch hasn't changed.
+        // This is the hot path during mouse drag — 60+ events/sec.
+        if let activePitch = livePreviewPitch, activePitch == clampedPitch {
             return
+        }
+
+        // Only configure the engine/sampler if this is the first preview note
+        // or the engine isn't running. Avoid engine.start() calls on every event.
+        if !engine.isRunning {
+            _ = sampler(for: previewSamplerKey, mapping: previewMapping)
+            guard configureAudioGraphIfNeeded() else { return }
+        } else if samplerByMappingKey[previewSamplerKey] == nil && auInstrumentByMappingKey[previewSamplerKey] == nil {
+            // Engine is running but no preview sampler yet — create one
+            _ = sampler(for: previewSamplerKey, mapping: previewMapping)
         }
 
         previewStopWorkItem?.cancel()
         previewStopWorkItem = nil
 
-        let clampedPitch = UInt8(min(max(pitch, 0), 127))
-        let clampedVelocity = UInt8(min(max(velocity, 1), 127))
-
-        if let activePitch = livePreviewPitch, activePitch == clampedPitch {
-            return
-        }
+        // Determine the correct node to send MIDI to:
+        // - If an Audio Unit is loaded for this key, use its AUAudioUnit for MIDI
+        // - Otherwise use the AVAudioUnitSampler (SF2 or default piano)
+        let auNode = auInstrumentByMappingKey[previewSamplerKey]
 
         if let activePitch = livePreviewPitch {
-            sampler.stopNote(activePitch, onChannel: 0)
+            if let auNode {
+                sendMIDINoteOff(to: auNode, pitch: activePitch)
+            } else if let sampler = samplerByMappingKey[previewSamplerKey] {
+                sampler.stopNote(activePitch, onChannel: 0)
+            }
         }
 
-        sampler.startNote(clampedPitch, withVelocity: clampedVelocity, onChannel: 0)
+        if let auNode {
+            sendMIDINoteOn(to: auNode, pitch: clampedPitch, velocity: clampedVelocity)
+        } else if let sampler = samplerByMappingKey[previewSamplerKey] {
+            sampler.startNote(clampedPitch, withVelocity: clampedVelocity, onChannel: 0)
+        }
         livePreviewPitch = clampedPitch
     }
 
@@ -3158,14 +3193,37 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         previewStopWorkItem?.cancel()
         previewStopWorkItem = nil
 
-        guard let activePitch = livePreviewPitch,
-              let sampler = samplerByMappingKey[previewSamplerKey] else {
-            livePreviewPitch = nil
+        guard let activePitch = livePreviewPitch else {
             return
         }
 
-        sampler.stopNote(activePitch, onChannel: 0)
+        // Send note-off to AU if loaded, otherwise to the sampler
+        if let auNode = auInstrumentByMappingKey[previewSamplerKey] {
+            sendMIDINoteOff(to: auNode, pitch: activePitch)
+        } else if let sampler = samplerByMappingKey[previewSamplerKey] {
+            sampler.stopNote(activePitch, onChannel: 0)
+        }
         livePreviewPitch = nil
+    }
+
+    // MARK: - AU MIDI Helpers
+
+    /// Send a MIDI note-on to an Audio Unit node via scheduleMIDIEventBlock.
+    private func sendMIDINoteOn(to auNode: AVAudioUnit, pitch: UInt8, velocity: UInt8) {
+        guard let midiBlock = auNode.auAudioUnit.scheduleMIDIEventBlock else { return }
+        var data: [UInt8] = [0x90, pitch, velocity]
+        data.withUnsafeMutableBufferPointer { buf in
+            midiBlock(.zero, 0, 3, buf.baseAddress!)
+        }
+    }
+
+    /// Send a MIDI note-off to an Audio Unit node via scheduleMIDIEventBlock.
+    private func sendMIDINoteOff(to auNode: AVAudioUnit, pitch: UInt8) {
+        guard let midiBlock = auNode.auAudioUnit.scheduleMIDIEventBlock else { return }
+        var data: [UInt8] = [0x80, pitch, 0]
+        data.withUnsafeMutableBufferPointer { buf in
+            midiBlock(.zero, 0, 3, buf.baseAddress!)
+        }
     }
 
     private func scheduleAudioClips(
