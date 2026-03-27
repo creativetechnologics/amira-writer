@@ -2458,11 +2458,18 @@ final class ScriptStore {
         case "scene":
             let relativePath = change.entityKey
             guard !suppressDatabaseSyncPaths.contains(relativePath) else { return }
+            // Don't overwrite local unsaved edits with a remote database change.
+            guard !dirtySongPaths.contains(relativePath) else {
+                markAgentUpdated(paths: [relativePath])
+                return
+            }
             Task {
                 do {
                 guard let scene = try await projectDatabase.loadScene(relativePath: relativePath) else { return }
                 let document = ProjectDatabaseBridge.makeDocument(from: scene)
                 await MainActor.run {
+                    // Re-check dirty state after the await — user may have started editing
+                    guard !dirtySongPaths.contains(relativePath) else { return }
                     if let songIdx = songAssets.firstIndex(where: { $0.relativePath == relativePath }) {
                         songAssets[songIdx].document = document
                     } else {
