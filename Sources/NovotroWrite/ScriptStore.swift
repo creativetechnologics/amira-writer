@@ -865,6 +865,7 @@ final class ScriptStore {
             let stubs: [SongStub]
 
             stopDatabaseWatch()
+            stopFileWatching()
             if isStandalone {
                 let phase1 = try await OWPProjectIO.loadPhase1(from: url)
                 meta = phase1.metadata

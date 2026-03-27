@@ -1061,10 +1061,10 @@ final class MixStore {
         return 60.0 / bpm
     }
 
-    func snapToGrid(_ seconds: Double) -> Double {
+    func snapToGrid(_ seconds: Double, excludingClipID: UUID? = nil) -> Double {
         // Magnetic snap to nearby clip edges takes priority over grid snap.
         // This makes end-to-end Suno WAV assembly precise and intuitive.
-        let edgeSnapped = snapToNearestClipEdge(seconds)
+        let edgeSnapped = snapToNearestClipEdge(seconds, excludingClipID: excludingClipID)
         if edgeSnapped != seconds { return edgeSnapped }
 
         guard snapSeconds > 0 else { return seconds }

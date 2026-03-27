@@ -11,8 +11,11 @@ import UniformTypeIdentifiers
 
 // MARK: - Debug Logging
 
+/// Reuse a single formatter to avoid allocating ISO8601DateFormatter on every log call.
+private nonisolated(unsafe) let novotroDebugDateFormatter: ISO8601DateFormatter = ISO8601DateFormatter()
+
 private func novotroDebugLog(_ message: String) {
-    let ts = ISO8601DateFormatter().string(from: Date())
+    let ts = novotroDebugDateFormatter.string(from: Date())
     let line = "[\(ts)] [Score] \(message)\n"
     let url = URL(fileURLWithPath: "/tmp/novotro-debug.log")
     if let fh = try? FileHandle(forWritingTo: url) {
@@ -1458,9 +1461,11 @@ final class ScoreStore {
 
     var autoSaveEnabled: Bool = false {
         didSet {
-            UserDefaults.standard.set(false, forKey: "autoSaveEnabled")
-            autoSaveWorkItem?.cancel()
-            autoSaveWorkItem = nil
+            UserDefaults.standard.set(autoSaveEnabled, forKey: "autoSaveEnabled")
+            if !autoSaveEnabled {
+                autoSaveWorkItem?.cancel()
+                autoSaveWorkItem = nil
+            }
         }
     }
 
@@ -2997,11 +3002,10 @@ final class ScoreStore {
     // MARK: - Note Editing
 
     func setPianoRollNotesFromEditor(_ updated: [PianoRollNote]) {
-        pianoRollNotes = updated.sorted {
-            if $0.trackIndex != $1.trackIndex { return $0.trackIndex < $1.trackIndex }
-            if $0.startTick != $1.startTick { return $0.startTick < $1.startTick }
-            return $0.pitch < $1.pitch
-        }
+        // Assign directly — skip the O(n log n) sort on every call.
+        // During 60 Hz mouse drags with 10,000+ notes the per-frame sort was costly.
+        // Playback methods should sort their own snapshot when ordering matters.
+        pianoRollNotes = updated
         let furthestEndTick = pianoRollNotes.map { $0.startTick + $0.duration }.max() ?? 0
         let minimumLength = max(ticksPerQuarter * 8, furthestEndTick + ticksPerQuarter * 2)
         pianoRollLengthTicks = max(pianoRollLengthTicks, minimumLength)

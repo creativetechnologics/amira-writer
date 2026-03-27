@@ -2556,24 +2556,24 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     }
 
     private func stopAllActiveNotes() {
-        // StandardMIDIFileWriter emits each mapping to its own MIDI track on channel 0.
-        // Send explicit note-offs instead of CC120/123 so transport stop behaves like a
-        // DAW stop, not a global panic/reset that can upset some AUv3 instruments.
-        let transportChannel: UInt8 = 0
-        let sustainOffStatus = UInt8(0xB0) | transportChannel
-        let noteOffStatus = UInt8(0x80) | transportChannel
+        // Send note-offs on ALL 16 MIDI channels (0-15) so notes on any channel
+        // are silenced.  Previously this only targeted channel 0, leaving notes
+        // on channels 1-15 stuck.
 
-        for sampler in samplerByMappingKey.values {
-            sampler.sendController(64, withValue: 0, onChannel: transportChannel)
-            for pitch in 0...127 {
-                sampler.stopNote(UInt8(pitch), onChannel: transportChannel)
+        for ch: UInt8 in 0...15 {
+            for sampler in samplerByMappingKey.values {
+                sampler.sendController(64, withValue: 0, onChannel: ch)
+                for pitch: UInt8 in 0...127 {
+                    sampler.stopNote(pitch, onChannel: ch)
+                }
             }
-        }
 
-        for auUnit in auInstrumentByMappingKey.values {
-            sendImmediateMIDIEvent([sustainOffStatus, 64, 0], to: auUnit)
-            for pitch in 0...127 {
-                sendImmediateMIDIEvent([noteOffStatus, UInt8(pitch), 0], to: auUnit)
+            let sustainOffStatus = UInt8(0xB0) | ch
+            let allNotesOffStatus = UInt8(0xB0) | ch
+            for auUnit in auInstrumentByMappingKey.values {
+                sendImmediateMIDIEvent([sustainOffStatus, 64, 0], to: auUnit)
+                // CC 123 (All Notes Off) silences every sounding note on this channel.
+                sendImmediateMIDIEvent([allNotesOffStatus, 123, 0], to: auUnit)
             }
         }
     }

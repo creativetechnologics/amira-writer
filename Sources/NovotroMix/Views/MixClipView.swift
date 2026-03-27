@@ -633,7 +633,7 @@ struct MixClipView: View {
                 // Dead-zone: only show visual drag offset past 3pt to avoid jitter on tap
                 if abs(value.translation.width) > 3 || abs(value.translation.height) > 3 {
                     let proposedStart = clip.startSeconds + Double(value.translation.width / pixelsPerSecond)
-                    let snappedStart = max(store.snapToGrid(proposedStart), 0)
+                    let snappedStart = max(store.snapToGrid(proposedStart, excludingClipID: clip.id), 0)
                     let laneDelta = Int((value.translation.height / laneHeight).rounded())
                     dragOffsetX = CGFloat(snappedStart - clip.startSeconds) * pixelsPerSecond
                     dragOffsetY = CGFloat(laneDelta) * laneHeight
@@ -652,8 +652,10 @@ struct MixClipView: View {
                     didPushDragCursor = false
                 }
                 if store.selectedTool == .split {
-                    let splitTime = clip.startSeconds + Double(min(max(value.location.x, 0), displayedWidth) / pixelsPerSecond)
-                    store.splitClip(clip.id, at: splitTime)
+                    if abs(value.translation.width) > 4 || abs(value.translation.height) > 4 {
+                        let splitTime = clip.startSeconds + Double(min(max(value.location.x, 0), displayedWidth) / pixelsPerSecond)
+                        store.splitClip(clip.id, at: splitTime)
+                    }
                     return
                 }
                 let deltaSeconds = Double(value.translation.width / pixelsPerSecond)

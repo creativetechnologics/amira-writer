@@ -359,9 +359,20 @@ enum SunoLyricsFormatter {
     }
 
     private static func sectionalCue(from trimmedLine: String) -> String? {
-        guard trimmedLine.first == "{" || trimmedLine.first == "[" || trimmedLine.first == "(" else {
+        guard let openChar = trimmedLine.first,
+              let closeChar = trimmedLine.last else {
             return nil
         }
+
+        let expectedClose: Character
+        switch openChar {
+        case "{": expectedClose = "}"
+        case "[": expectedClose = "]"
+        case "(": expectedClose = ")"
+        default: return nil
+        }
+
+        guard closeChar == expectedClose else { return nil }
 
         let inner = String(trimmedLine.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !inner.isEmpty else { return nil }
@@ -383,9 +394,7 @@ enum SunoLyricsFormatter {
         return nil
     }
 
-    private static func canonicalSectionHeader(from rawHeader: String) -> String? {
-        let lowercased = rawHeader.lowercased()
-
+    private static let sectionRegexes: [(NSRegularExpression, String)] = {
         let patterns: [(String, String)] = [
             (#"\bpre[ -]?chorus\b(?:\s*(\d+))?"#, "Pre-Chorus"),
             (#"\bpost[ -]?chorus\b(?:\s*(\d+))?"#, "Post-Chorus"),
@@ -401,9 +410,16 @@ enum SunoLyricsFormatter {
             (#"\bbreakdown\b(?:\s*(\d+))?"#, "Breakdown"),
             (#"\bcoda\b(?:\s*(\d+))?"#, "Coda")
         ]
+        return patterns.compactMap { pattern, label in
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+            return (regex, label)
+        }
+    }()
 
-        for (pattern, label) in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+    private static func canonicalSectionHeader(from rawHeader: String) -> String? {
+        let lowercased = rawHeader.lowercased()
+
+        for (regex, label) in sectionRegexes {
             let range = NSRange(location: 0, length: (lowercased as NSString).length)
             guard let match = regex.firstMatch(in: lowercased, range: range) else { continue }
 
