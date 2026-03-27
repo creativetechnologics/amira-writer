@@ -364,17 +364,23 @@ struct InspectorView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("\(preview.partName) • \(preview.angle.rawValue)")
                                     .font(.caption.weight(.medium))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
 
                                 if let sourcePath = sourcePathLabel(for: preview.variant) {
                                     Text(sourcePath)
                                         .font(.caption2.monospaced())
                                         .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
                                 }
 
                                 if let placementSummary = placementSummary(for: preview.variant) {
                                     Text(placementSummary)
                                         .font(.caption2)
                                         .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
                                 }
                             }
                         }
@@ -383,6 +389,7 @@ struct InspectorView: View {
                     Text("Legacy synced variants found. Sync the active package again to persist source path and placement metadata.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if character.parts.isEmpty {
@@ -746,44 +753,61 @@ struct InspectorView: View {
                         Text("Resolved Shot: \(store.evaluatedEffectiveCameraShot()?.displayName ?? "None")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
 
                         Text("Live Default Shot: \(store.evaluatedCameraDefaultShot()?.displayName ?? "None")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
 
                         Text("Live Focus: \(liveCameraFocusName())")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
 
                         Text("Live Intent: \(store.evaluatedCameraShotIntent()?.displayName ?? "None")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
 
                         if let suggestedShot = store.recommendedCameraShotFromIntent() {
                             Text("Intent Suggests: \(suggestedShot.displayName)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         }
 
                         if let suggestedMovement = store.recommendedCameraMovementFromIntent() {
                             Text("Intent Move Suggests: \(suggestedMovement.displayName)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         }
 
                         Text("Live Beat: \(store.evaluatedCameraBeatLabel() ?? "None")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
 
                         if let liveBeatNotes = store.evaluatedCameraBeatNotes() {
                             Text(liveBeatNotes)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .truncationMode(.tail)
                         }
 
                         Text("Template settings remain scene-level defaults. Shot presets now place framing cues on the timeline instead of mutating the whole scene.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
 
                         Picker("Default Shot", selection: $sceneTemplateShotDraft) {
                             Text("None").tag(nil as CameraShot?)

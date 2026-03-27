@@ -100,8 +100,13 @@ struct MidiAsset: Identifiable, Hashable {
     let id: UUID
     var relativePath: String
     var data: Data
+    var title: String? = nil
 
     var displayName: String {
+        let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedTitle.isEmpty {
+            return trimmedTitle
+        }
         let url = URL(fileURLWithPath: relativePath)
         let withoutExtension = url.deletingPathExtension().lastPathComponent
         let name = withoutExtension.isEmpty ? url.lastPathComponent : withoutExtension

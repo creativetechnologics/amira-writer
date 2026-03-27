@@ -547,7 +547,7 @@ final class PianoRollMetalRenderer {
             guard count < maxCount - 5 else { break }  // reserve space for border rects
 
             let x = Float(note.startTick) * fPPT
-            let w = max(8, Float(note.duration) * fPPT)
+            let w = max(Float(pianoRollMinimumNoteWidth), Float(note.duration) * fPPT)
 
             // Viewport culling: skip notes entirely outside the visible range
             guard x + w > visMinX && x < visMaxX else { continue }
@@ -583,9 +583,20 @@ final class PianoRollMetalRenderer {
                 )
             }
 
+            if isSelected {
+                let tintMix: Float = note.muted ? 0.20 : 0.28
+                let selectionTint = SIMD3<Float>(0.86, 0.94, 1.0)
+                baseColor = SIMD4<Float>(
+                    baseColor.x * (1 - tintMix) + selectionTint.x * tintMix,
+                    baseColor.y * (1 - tintMix) + selectionTint.y * tintMix,
+                    baseColor.z * (1 - tintMix) + selectionTint.z * tintMix,
+                    baseColor.w
+                )
+            }
+
             // Muted notes render at ~30% opacity
             let muteFactor: Float = note.muted ? 0.30 : 1.0
-            let noteAlpha: Float = (isSelected ? 0.95 : 0.88) * baseColor.w * muteFactor
+            let noteAlpha: Float = (isSelected ? 0.98 : 0.88) * baseColor.w * muteFactor
 
             // B.2: Note border — 1px darker outline behind the note body (premultiplied)
             let borderDarken: Float = 0.35
@@ -616,8 +627,8 @@ final class PianoRollMetalRenderer {
 
             // B.4: Selection highlight — bright accent outline (premultiplied)
             if isSelected {
-                let bAlpha: Float = 0.95
-                let borderColor = SIMD4<Float>(bAlpha, bAlpha, bAlpha, bAlpha)
+                let bAlpha: Float = 0.98
+                let borderColor = SIMD4<Float>(0.72 * bAlpha, 0.88 * bAlpha, 1.0 * bAlpha, bAlpha)
                 let bw: Float = 1.5
                 // Top
                 ptr[count] = RectInstance(

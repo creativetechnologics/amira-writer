@@ -1,5 +1,5 @@
 # LORA Gemini Asset Generation Workflow
-## Novotro Opera - NanoBanana Pro Integration
+## Amira Writer - NanoBanana Pro Integration
 
 **Document Version:** 1.0  
 **Created:** March 22, 2026  
@@ -55,7 +55,7 @@ The batch included variations of:
 
 ---
 
-## UI/UX Specification for Novotro Opera
+## UI/UX Specification for Amira Writer
 
 ### Section Location
 **Navigation:** Characters → [Select Character] → "Generate Assets" tab
@@ -238,11 +238,11 @@ Each pose row contains:
 ## Background Watcher System
 
 ### Architecture
-The watcher runs as a background service within Novotro Opera:
+The watcher runs as a background service within Amira Writer:
 
 ```
 ┌─────────────────────────────────────────┐
-│         Novotro Opera Main App          │
+│         Amira Writer Main App          │
 │                                         │
 │  ┌─────────────────────────────────┐   │
 │  │   Gemini Batch Watcher Service  │   │
@@ -291,7 +291,7 @@ The watcher runs as a background service within Novotro Opera:
 ## Application Exit Protection
 
 ### Warning Dialog
-When user attempts to close Novotro Opera while a batch is running:
+When user attempts to close Amira Writer while a batch is running:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -452,7 +452,7 @@ Amira.owp/
 ### Full Interface Layout
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ Novotro Opera - Characters > Luke > Generate Assets          │
+│ Amira Writer - Characters > Luke > Generate Assets          │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │  ┌─────────────────┐  ┌───────────────────────────────────┐  │
@@ -567,7 +567,7 @@ From the March 20, 2026 test:
 
 **Documentation:**
 - NanoBanana Pro API docs: [Link TBD]
-- Character Package format: `Novotro Opera/Packages/NovotroAnimate/SampleData/CharacterPackages/`
+- Character Package format: `Amira Writer/Packages/NovotroAnimate/SampleData/CharacterPackages/`
 
 **Contacts:**
 - Gary (Product Owner)
@@ -585,4 +585,4 @@ From the March 20, 2026 test:
 
 **END OF DOCUMENT**
 
-*This document serves as the complete specification for implementing the LORA Gemini Asset Generation feature in Novotro Opera. All features described herein should be implemented as specified to maintain consistency with the March 20, 2026 reference workflow.*
+*This document serves as the complete specification for implementing the LORA Gemini Asset Generation feature in Amira Writer. All features described herein should be implemented as specified to maintain consistency with the March 20, 2026 reference workflow.*

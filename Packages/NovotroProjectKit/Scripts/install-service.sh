@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_NAME="novotro-project-service"
-INSTALL_DIR="${NOVOTRO_INSTALL_DIR:-$HOME/Applications}"
+INSTALL_DIR="${NOVOTRO_INSTALL_DIR:-/Volumes/Storage VIII/Programming/!Applications}"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LAUNCH_AGENT_ID="com.novotro.project-service"
 LAUNCH_AGENT_PATH="$LAUNCH_AGENTS_DIR/${LAUNCH_AGENT_ID}.plist"

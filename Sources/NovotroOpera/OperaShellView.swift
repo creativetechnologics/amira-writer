@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import NovotroAnimateUI
+import NovotroMixUI
 import NovotroProjectKit
 import NovotroScoreUI
 import NovotroWriteUI
@@ -10,6 +11,7 @@ import UniformTypeIdentifiers
 enum OperaMode: String, CaseIterable, Identifiable {
     case write
     case score
+    case mix
     case animate
 
     var id: String { rawValue }
@@ -18,6 +20,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         switch self {
         case .write: return "Write"
         case .score: return "Score"
+        case .mix: return "Mix"
         case .animate: return "Animate"
         }
     }
@@ -26,6 +29,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         switch self {
         case .write: return "Libretto and scene drafting"
         case .score: return "Playback, orchestration, and export"
+        case .mix: return "DAW timeline, Suno comping, and polish"
         case .animate: return "Characters, staging, and timeline"
         }
     }
@@ -34,6 +38,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         switch self {
         case .write: return "text.book.closed"
         case .score: return "music.note.list"
+        case .mix: return "slider.horizontal.3"
         case .animate: return "sparkles.tv"
         }
     }
@@ -72,8 +77,8 @@ private enum OperaRecentProjectsStore {
         for path in storedPaths {
             let url = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
             guard seen.insert(url.path).inserted else { continue }
-            guard isSupportedProjectURL(url, fileManager: fileManager) else { continue }
-            urls.append(url)
+            guard let resolvedURL = resolvedProjectURL(url, fileManager: fileManager) else { continue }
+            urls.append(resolvedURL)
         }
 
         let normalizedPaths = urls.map(\.path)
@@ -91,18 +96,48 @@ private enum OperaRecentProjectsStore {
         fileManager: FileManager = .default
     ) -> [URL] {
         let normalized = url.resolvingSymlinksInPath().standardizedFileURL
-        guard isSupportedProjectURL(normalized, fileManager: fileManager) else {
+        guard let resolvedURL = resolvedProjectURL(normalized, fileManager: fileManager) else {
             return recentProjects(userDefaults: userDefaults, fileManager: fileManager)
         }
         var urls = recentProjects(userDefaults: userDefaults)
-        urls.removeAll { $0.path == normalized.path }
-        urls.insert(normalized, at: 0)
+        urls.removeAll { $0.path == resolvedURL.path }
+        urls.insert(resolvedURL, at: 0)
         let trimmed = Array(urls.prefix(maxProjects))
         userDefaults.set(trimmed.map(\.path), forKey: storageKey)
         return trimmed
     }
 
-    private static func isSupportedProjectURL(_ url: URL, fileManager: FileManager) -> Bool {
+    static func resolvedProjectURL(_ url: URL, fileManager: FileManager = .default) -> URL? {
+        let normalized = url.resolvingSymlinksInPath().standardizedFileURL
+        if isDirectlySupportedProjectURL(normalized, fileManager: fileManager) {
+            return normalized
+        }
+
+        let homeURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
+        let parentName = normalized.deletingLastPathComponent().lastPathComponent
+        let candidateSuffixes = [
+            [normalized.lastPathComponent],
+            parentName.isEmpty ? [] : [parentName],
+            parentName.isEmpty ? [] : [parentName, normalized.lastPathComponent]
+        ].filter { !$0.isEmpty }
+
+        for root in [homeURL, documentsURL].compactMap({ $0 }) {
+            for suffix in candidateSuffixes {
+                let candidate = suffix.reduce(root) { partial, component in
+                    partial.appendingPathComponent(component, isDirectory: true)
+                }
+                let standardizedCandidate = candidate.resolvingSymlinksInPath().standardizedFileURL
+                if isDirectlySupportedProjectURL(standardizedCandidate, fileManager: fileManager) {
+                    return standardizedCandidate
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private static func isDirectlySupportedProjectURL(_ url: URL, fileManager: FileManager) -> Bool {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             return false
@@ -141,11 +176,18 @@ private enum OperaModeLoadResult {
 }
 
 @available(macOS 26.0, *)
+private struct PendingSceneSelectionRestore: Equatable {
+    let projectPath: String
+    let selectionPath: String?
+}
+
+@available(macOS 26.0, *)
 struct OperaShellView: View {
     @Binding var selectedMode: OperaMode
     @StateObject private var progressCenter = NovotroProjectOpenProgressCenter.shared
     @StateObject private var writeController = NovotroWriteWorkspaceController()
     @StateObject private var scoreController = NovotroScoreWorkspaceController()
+    @StateObject private var mixController = NovotroMixWorkspaceController()
     @StateObject private var animateController = NovotroAnimateWorkspaceController()
     @State private var activeProjectURL: URL?
     @State private var activeProjectTitle: String?
@@ -157,6 +199,20 @@ struct OperaShellView: View {
     @State private var isOpeningFromPanel = false
     @State private var didInitialize = false
     @State private var modeSwitchTask: Task<Void, Never>?
+    @State private var sceneSelectionByProjectPath: [String: String] = [:]
+    @State private var pendingSceneSelectionRestores: [OperaMode: PendingSceneSelectionRestore] = [:]
+
+    // Sidebar visibility (per-mode, shared with each mode's ContentView via same AppStorage key)
+    @AppStorage("novotro.write.sidebarVisible") private var writeSidebarVisible: Bool = true
+    @AppStorage("novotro.score.sidebarVisible") private var scoreSidebarVisible: Bool = true
+    @AppStorage("novotro.animate.sidebarVisible") private var animateSidebarVisible: Bool = true
+    @AppStorage("novotro.mix.sidebarVisible") private var mixSidebarVisible: Bool = true
+
+    // Inspector visibility (per-mode, shared with each mode's ContentView via same AppStorage key)
+    @AppStorage("novotro.write.showInspector") private var writeInspectorVisible: Bool = true
+    @AppStorage("novotro.score.showInspector") private var scoreInspectorVisible: Bool = true
+    @AppStorage("novotro.animate.showInspector") private var animateInspectorVisible: Bool = true
+    @AppStorage("novotro.mix.inspector.visible") private var mixInspectorVisible: Bool = true
     private static let controlFileCandidates = [
         "Metadata/project.json",
         "project.json"
@@ -201,6 +257,7 @@ struct OperaShellView: View {
                     switch command.lowercased() {
                     case "write":  selectedMode = .write
                     case "score":  selectedMode = .score
+                    case "mix": selectedMode = .mix
                     case "animate": selectedMode = .animate
                     default: break
                     }
@@ -212,6 +269,34 @@ struct OperaShellView: View {
             modeSwitchTask = Task {
                 await handleModeSelectionChange(newMode)
             }
+        }
+        .onChange(of: writeController.selectedScenePath) { _, newPath in
+            captureSceneSelectionChange(
+                newPath,
+                from: .write,
+                projectPath: writeController.activeProjectPath
+            )
+        }
+        .onChange(of: scoreController.selectedScenePath) { _, newPath in
+            captureSceneSelectionChange(
+                newPath,
+                from: .score,
+                projectPath: scoreController.activeProjectPath
+            )
+        }
+        .onChange(of: mixController.selectedScenePath) { _, newPath in
+            captureSceneSelectionChange(
+                newPath,
+                from: .mix,
+                projectPath: mixController.activeProjectPath
+            )
+        }
+        .onChange(of: animateController.selectedScenePath) { _, newPath in
+            captureSceneSelectionChange(
+                newPath,
+                from: .animate,
+                projectPath: animateController.activeProjectPath
+            )
         }
         .onReceive(NotificationCenter.default.publisher(for: OperaShellSignals.openProjectFromDisk)) { _ in
             Task {
@@ -231,6 +316,8 @@ struct OperaShellView: View {
         .onReceive(NotificationCenter.default.publisher(for: OperaShellSignals.saveProject)) { _ in
             saveActiveWorkspace()
         }
+        // Score/Mix ContentViews sync AppStorage ↔ store.showInspector
+        // via their own onChange handlers, so no shell-level sync needed.
         .alert("Couldn't Open Project", isPresented: Binding(
             get: { activeProjectLoadError != nil },
             set: { isPresented in
@@ -257,14 +344,55 @@ struct OperaShellView: View {
         switch renderedMode {
         case .write: return writeController.saveIndicator
         case .score: return scoreController.saveIndicator
+        case .mix: return mixController.saveIndicator
         case .animate: return animateController.saveIndicator
+        }
+    }
+
+    private var currentSidebarVisible: Bool {
+        switch renderedMode {
+        case .write: return writeSidebarVisible
+        case .score: return scoreSidebarVisible
+        case .mix: return mixSidebarVisible
+        case .animate: return animateSidebarVisible
+        }
+    }
+
+    private func toggleSidebar() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            switch renderedMode {
+            case .write: writeSidebarVisible.toggle()
+            case .score: scoreSidebarVisible.toggle()
+            case .mix: mixSidebarVisible.toggle()
+            case .animate: animateSidebarVisible.toggle()
+            }
+        }
+    }
+
+    private var currentInspectorVisible: Bool {
+        switch renderedMode {
+        case .write: return writeInspectorVisible
+        case .score: return scoreInspectorVisible
+        case .mix: return mixInspectorVisible
+        case .animate: return animateInspectorVisible
+        }
+    }
+
+    private func toggleInspector() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            switch renderedMode {
+            case .write: writeInspectorVisible.toggle()
+            case .score: scoreInspectorVisible.toggle()
+            case .mix: mixInspectorVisible.toggle()
+            case .animate: animateInspectorVisible.toggle()
+            }
         }
     }
 
     private var tabBar: some View {
         HStack(spacing: 14) {
             HStack(spacing: 8) {
-                Text("Novotro Opera")
+                Text("Amira Writer")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(OperaChromeTheme.textPrimary)
 
@@ -282,6 +410,22 @@ struct OperaShellView: View {
                     }
                 }
             }
+
+            HStack(spacing: 6) {
+                OperaChromeActionButton(
+                    systemImage: currentSidebarVisible ? "sidebar.left" : "sidebar.right",
+                    isSelected: currentSidebarVisible
+                ) {
+                    toggleSidebar()
+                }
+                OperaChromeActionButton(
+                    systemImage: "info.circle",
+                    isSelected: currentInspectorVisible
+                ) {
+                    toggleInspector()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .frame(height: 36)
         .background(OperaChromeTheme.headerBackground)
@@ -307,6 +451,8 @@ struct OperaShellView: View {
             NovotroWriteWorkspace(controller: writeController)
         case .score:
             NovotroScoreWorkspace(controller: scoreController)
+        case .mix:
+            NovotroMixWorkspace(controller: mixController)
         case .animate:
             NovotroAnimateWorkspace(controller: animateController)
         }
@@ -367,6 +513,16 @@ struct OperaShellView: View {
     private func resolveProjectURL(for url: URL) throws -> URL {
         let normalizedURL = url.resolvingSymlinksInPath().standardizedFileURL
         var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: normalizedURL.path, isDirectory: &isDirectory),
+           isDirectory.boolValue,
+           Self.hasControlFile(at: normalizedURL) {
+            return normalizedURL
+        }
+
+        if let repairedURL = OperaRecentProjectsStore.resolvedProjectURL(normalizedURL) {
+            return repairedURL
+        }
+
         guard FileManager.default.fileExists(atPath: normalizedURL.path, isDirectory: &isDirectory) else {
             throw RuntimeError.projectNotFound
         }
@@ -394,30 +550,63 @@ struct OperaShellView: View {
     @MainActor
     private func openProject(_ url: URL, displayName: String) async -> Bool {
         let normalizedURL = url.standardizedFileURL
-        loadState = .loading(mode: selectedMode, projectName: displayName, projectPath: normalizedURL.path)
+        let requestedMode = selectedMode
+        beginSceneSelectionRestore(for: requestedMode, projectURL: normalizedURL)
+        loadState = .loading(mode: requestedMode, projectName: displayName, projectPath: normalizedURL.path)
         progressCenter.start(
             projectURL: normalizedURL,
             phaseTitle: "Preparing Project Open",
-            detail: "Starting the \(selectedMode.title) workspace for \(displayName)."
+            detail: "Starting the \(requestedMode.title) workspace for \(displayName)."
         )
         activeProjectLoadError = nil
         await Task.yield()
 
-        let error = await load(mode: selectedMode, projectURL: normalizedURL)
-        guard error == nil else {
+        let loadResult = await loadForDisplayTransition(mode: requestedMode, projectURL: normalizedURL) { error in
+            reconcileBackgroundDisplayLoad(
+                error: error,
+                mode: requestedMode,
+                projectURL: normalizedURL
+            )
+        }
+        if case let .failure(error) = loadResult {
+            clearSceneSelectionRestore(for: requestedMode, projectURL: normalizedURL)
             activeProjectLoadError = error
             progressCenter.finish(projectURL: normalizedURL)
             loadState = .idle
             return false
         }
 
+        if case .success = loadResult {
+            finishSceneSelectionRestore(for: requestedMode, projectURL: normalizedURL)
+        }
+
         activeProjectURL = normalizedURL
         activeProjectTitle = displayName
-        renderedMode = selectedMode
+        renderedMode = requestedMode
         activeModal = nil
         recentProjects = OperaRecentProjectsStore.noteProject(normalizedURL)
-        progressCenter.finish(projectURL: normalizedURL)
-        loadState = .idle
+        switch loadResult {
+        case .success:
+            progressCenter.finish(projectURL: normalizedURL)
+            loadState = .idle
+        case .timedOut:
+            progressCenter.update(
+                projectURL: normalizedURL,
+                phaseTitle: "Opening Workspace",
+                detail: "\(requestedMode.title) is still loading local project data. Showing the workspace now and applying updates when loading completes."
+            )
+            progressCenter.finish(projectURL: normalizedURL)
+            loadState = .idle
+        case .failure:
+            break
+        }
+
+        if selectedMode != requestedMode {
+            modeSwitchTask?.cancel()
+            modeSwitchTask = Task {
+                await handleModeSelectionChange(selectedMode)
+            }
+        }
         return true
     }
 
@@ -429,12 +618,14 @@ struct OperaShellView: View {
             return
         }
         guard newMode != renderedMode else { return }
+        beginSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
 
         // Suspend background watchers on the mode we're leaving so they don't
         // contend with the incoming mode's database and file-system access.
         switch renderedMode {
         case .write: writeController.suspendBackgroundWork()
         case .score: scoreController.suspendBackgroundWork()
+        case .mix: mixController.suspendBackgroundWork()
         case .animate: animateController.suspendBackgroundWork()
         }
 
@@ -448,26 +639,41 @@ struct OperaShellView: View {
         activeProjectLoadError = nil
         await Task.yield()
         guard !Task.isCancelled else {
+            clearSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
             progressCenter.finish(projectURL: activeProjectURL)
             loadState = .idle
             return
         }
 
-        switch await loadForModeSwitch(mode: newMode, projectURL: activeProjectURL) {
+        let loadResult = await loadForDisplayTransition(mode: newMode, projectURL: activeProjectURL) { error in
+            reconcileBackgroundDisplayLoad(
+                error: error,
+                mode: newMode,
+                projectURL: activeProjectURL
+            )
+        }
+
+        guard !Task.isCancelled else {
+            clearSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
+            progressCenter.finish(projectURL: activeProjectURL)
+            loadState = .idle
+            return
+        }
+
+        switch loadResult {
         case .success:
-            guard !Task.isCancelled else { break }
+            finishSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
             renderedMode = newMode
         case let .failure(error):
-            guard !Task.isCancelled else { break }
+            clearSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
             activeProjectLoadError = error
             selectedMode = renderedMode
         case .timedOut:
-            guard !Task.isCancelled else { break }
             renderedMode = newMode
             progressCenter.update(
                 projectURL: activeProjectURL,
                 phaseTitle: "Switching Workspace",
-                detail: "Animate is still indexing local files. Showing the workspace now and applying updates when indexing completes."
+                detail: "\(newMode.title) is still loading local project data. Showing the workspace now and applying updates when loading completes."
             )
         }
 
@@ -482,26 +688,32 @@ struct OperaShellView: View {
             return await writeController.ensureProjectLoaded(projectURL)
         case .score:
             return await scoreController.ensureProjectLoaded(projectURL)
+        case .mix:
+            return await mixController.ensureProjectLoaded(projectURL)
         case .animate:
             return await animateController.ensureProjectLoaded(projectURL)
         }
     }
 
     @MainActor
-    private func loadForModeSwitch(mode: OperaMode, projectURL: URL) async -> OperaModeLoadResult {
-        guard mode == .animate else {
+    private func loadForDisplayTransition(
+        mode: OperaMode,
+        projectURL: URL,
+        onBackgroundCompletion: (@MainActor (String?) -> Void)? = nil
+    ) async -> OperaModeLoadResult {
+        guard mode == .animate || mode == .mix else {
             if let error = await load(mode: mode, projectURL: projectURL) {
                 return .failure(error)
             }
             return .success
         }
 
-        let animateLoadTask = Task { await animateController.ensureProjectLoaded(projectURL) }
+        let modeLoadTask = Task { await load(mode: mode, projectURL: projectURL) }
         let timeoutNanoseconds: UInt64 = 8_000_000_000
 
         let result = await withTaskGroup(of: OperaModeLoadResult.self, returning: OperaModeLoadResult.self) { group in
             group.addTask {
-                if let error = await animateLoadTask.value {
+                if let error = await modeLoadTask.value {
                     return .failure(error)
                 }
                 return .success
@@ -519,11 +731,143 @@ struct OperaShellView: View {
 
         if case .timedOut = result {
             Task {
-                _ = await animateLoadTask.value
+                let error = await modeLoadTask.value
+                if let onBackgroundCompletion {
+                    await MainActor.run {
+                        onBackgroundCompletion(error)
+                    }
+                }
             }
         }
 
         return result
+    }
+
+    @MainActor
+    private func reconcileBackgroundDisplayLoad(error: String?, mode: OperaMode, projectURL: URL) {
+        let normalizedProjectPath = projectURL.standardizedFileURL.path
+        if let activeProjectPath = activeProjectURL?.standardizedFileURL.path,
+           activeProjectPath != normalizedProjectPath {
+            clearSceneSelectionRestore(for: mode, projectURL: projectURL)
+            return
+        }
+
+        if let error {
+            clearSceneSelectionRestore(for: mode, projectURL: projectURL)
+            guard renderedMode == mode || selectedMode == mode else { return }
+            activeProjectLoadError = error
+            return
+        }
+
+        finishSceneSelectionRestore(for: mode, projectURL: projectURL)
+    }
+
+    private func beginSceneSelectionRestore(for mode: OperaMode, projectURL: URL) {
+        let normalizedProjectPath = projectURL.standardizedFileURL.path
+        pendingSceneSelectionRestores[mode] = PendingSceneSelectionRestore(
+            projectPath: normalizedProjectPath,
+            selectionPath: sceneSelectionByProjectPath[normalizedProjectPath]
+        )
+        setSelectionRestorePending(true, for: mode)
+    }
+
+    private func clearSceneSelectionRestore(for mode: OperaMode, projectURL: URL) {
+        let normalizedProjectPath = projectURL.standardizedFileURL.path
+        guard pendingSceneSelectionRestores[mode]?.projectPath == normalizedProjectPath else { return }
+        pendingSceneSelectionRestores.removeValue(forKey: mode)
+        setSelectionRestorePending(false, for: mode)
+    }
+
+    private func finishSceneSelectionRestore(for mode: OperaMode, projectURL: URL) {
+        let normalizedProjectPath = projectURL.standardizedFileURL.path
+        guard let pending = pendingSceneSelectionRestores[mode],
+              pending.projectPath == normalizedProjectPath else {
+            return
+        }
+        defer {
+            pendingSceneSelectionRestores.removeValue(forKey: mode)
+            setSelectionRestorePending(false, for: mode)
+        }
+
+        guard controllerProjectPath(for: mode) == normalizedProjectPath else { return }
+        guard sceneSelectionByProjectPath[normalizedProjectPath] == pending.selectionPath else { return }
+
+        let didApplySelection = applySelectionPath(pending.selectionPath, to: mode)
+        let resolvedPath = didApplySelection ? pending.selectionPath : currentSceneSelectionPath(for: mode)
+
+        if let resolvedPath,
+           !resolvedPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sceneSelectionByProjectPath[normalizedProjectPath] = resolvedPath
+        } else {
+            sceneSelectionByProjectPath.removeValue(forKey: normalizedProjectPath)
+        }
+    }
+
+    private func captureSceneSelectionChange(_ path: String?, from mode: OperaMode, projectPath: String?) {
+        guard renderedMode == mode else { return }
+        guard let projectPath,
+              projectPath == activeProjectURL?.standardizedFileURL.path else {
+            return
+        }
+        if let pending = pendingSceneSelectionRestores[mode], pending.projectPath == projectPath {
+            return
+        }
+        guard let path = path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
+            sceneSelectionByProjectPath.removeValue(forKey: projectPath)
+            return
+        }
+        sceneSelectionByProjectPath[projectPath] = path
+    }
+
+    private func controllerProjectPath(for mode: OperaMode) -> String? {
+        switch mode {
+        case .write:
+            return writeController.activeProjectPath
+        case .score:
+            return scoreController.activeProjectPath
+        case .mix:
+            return mixController.activeProjectPath
+        case .animate:
+            return animateController.activeProjectPath
+        }
+    }
+
+    private func currentSceneSelectionPath(for mode: OperaMode) -> String? {
+        switch mode {
+        case .write:
+            return writeController.currentSelectionPath()
+        case .score:
+            return scoreController.currentSelectionPath()
+        case .mix:
+            return mixController.currentSelectionPath()
+        case .animate:
+            return animateController.currentSelectionPath()
+        }
+    }
+
+    @discardableResult
+    private func applySelectionPath(_ relativePath: String?, to mode: OperaMode) -> Bool {
+        switch mode {
+        case .write:
+            return writeController.applySelectionPath(relativePath)
+        case .score:
+            return scoreController.applySelectionPath(relativePath)
+        case .mix:
+            return mixController.applySelectionPath(relativePath)
+        case .animate:
+            return animateController.applySelectionPath(relativePath)
+        }
+    }
+
+    private func setSelectionRestorePending(_ isPending: Bool, for mode: OperaMode) {
+        switch mode {
+        case .write, .score:
+            return
+        case .mix:
+            mixController.setSelectionRestorePending(isPending)
+        case .animate:
+            animateController.setSelectionRestorePending(isPending)
+        }
     }
 
     private func openProjectFromDisk() async {
@@ -559,10 +903,13 @@ struct OperaShellView: View {
 
     private func defaultProjectDirectory() -> URL {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         let candidateProjectRoots: [URL] = [
+            home.appendingPathComponent("Amira - A Modern Opera", isDirectory: true),
             documents?.appendingPathComponent("Amira - A Modern Opera", isDirectory: true).appendingPathComponent("Amira", isDirectory: true),
             documents?.appendingPathComponent("Amira - A Modern Opera", isDirectory: true),
-            documents?.appendingPathComponent("Amira", isDirectory: true)
+            documents?.appendingPathComponent("Amira", isDirectory: true),
+            home.appendingPathComponent("Amira", isDirectory: true)
         ].compactMap { $0 }
 
         if let exactMatch = candidateProjectRoots.first(where: { candidate in
@@ -615,6 +962,8 @@ struct OperaShellView: View {
             return "Opening the libretto workspace from local files."
         case .score:
             return "Loading playback and orchestration data from local files."
+        case .mix:
+            return "Loading mix sessions, Suno file browser, and arrangement lanes from local files."
         case .animate:
             return "Loading scene, character, and timeline data from local files."
         }
@@ -626,6 +975,8 @@ struct OperaShellView: View {
             return writeController.loadStatusMessage
         case .score:
             return scoreController.loadStatusMessage
+        case .mix:
+            return mixController.loadStatusMessage
         case .animate:
             return animateController.loadStatusMessage
         }
@@ -637,6 +988,8 @@ struct OperaShellView: View {
             return OperaChromeTheme.accent
         case .score:
             return Color(red: 0.72, green: 0.78, blue: 0.46)
+        case .mix:
+            return Color(red: 0.77, green: 0.49, blue: 0.26)
         case .animate:
             return Color(red: 0.72, green: 0.58, blue: 0.82)
         }
@@ -650,6 +1003,8 @@ struct OperaShellView: View {
             writeController.save()
         case .score:
             scoreController.save()
+        case .mix:
+            mixController.save()
         case .animate:
             animateController.save()
         }
@@ -1082,7 +1437,7 @@ private struct OperaWindowAccessor: NSViewRepresentable {
 
         private func applyConfiguration() {
             guard let window else { return }
-            window.minSize = NSSize(width: 1220, height: 760)
+            window.minSize = NSSize(width: 760, height: 560)
             window.isOpaque = false
             window.backgroundColor = NSColor(calibratedWhite: 0.14, alpha: 0.96)
             window.titleVisibility = .hidden

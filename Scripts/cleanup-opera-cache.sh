@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Cleans local Novotro Opera project caches for folder-based projects.
+# Cleans local Amira Writer project caches for folder-based projects.
 # This script keeps cache usage small and removes stale artifacts from
 # prior project path/layout changes.
 
@@ -12,7 +12,7 @@ PROJECT_CACHE_ROOT="$SUPPORT_ROOT/Project Databases"
 MIRROR_ROOT="$SUPPORT_ROOT/Project Mirrors"
 KEEP_DAYS="${NOVOTRO_CACHE_KEEP_DAYS:-30}"
 SERVICE_LABEL="com.novotro.project-service"
-SERVICE_BINARY="$HOME/Applications/novotro-project-service"
+SERVICE_BINARY="/Volumes/Storage VIII/Programming/!Applications/novotro-project-service"
 SERVICE_LAUNCH_AGENT="$HOME/Library/LaunchAgents/${SERVICE_LABEL}.plist"
 
 usage() {

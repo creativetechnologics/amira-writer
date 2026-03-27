@@ -1,7 +1,7 @@
 import Foundation
 import NovotroProjectKit
 import Testing
-@testable import NovotroScore
+@testable import NovotroScoreUI
 
 @Suite("Project Database Bridge")
 struct ProjectDatabaseBridgeTests {
@@ -131,6 +131,25 @@ struct ProjectDatabaseBridgeTests {
         #expect(loaded.stubs.map(\.relativePath) == ["Songs/01 Opening.ows", "Songs/02 Finale.ows"])
         #expect(loaded.songAssets.map(\.relativePath) == ["Songs/01 Opening.ows", "Songs/02 Finale.ows"])
         #expect(loaded.librettoFiles.map(\.relativePath) == ["Songs/01 Opening.ows", "Songs/02 Finale.ows"])
+    }
+
+    @Test func loadScoreProjectPrefersCanonicalSceneTitleForDisplayName() async throws {
+        let projectURL = try makeProjectPackage()
+        defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
+
+        let connection = try await NovotroProjectConnection.open(projectURL: projectURL, preferService: false)
+        try await connection.ensureCurrentIndex()
+
+        let existingScene = try await connection.loadScene(relativePath: "Songs/01 Opening.ows")
+        var scene = try #require(existingScene)
+        scene.title = "Opening Reprise"
+        scene.canonicalTitle = "opening reprise"
+        scene.updatedAt = Date(timeIntervalSince1970: 25)
+        try await connection.upsertScene(scene, actorID: "test")
+
+        let loaded = try await ProjectDatabaseBridge.loadScoreProject(url: projectURL)
+
+        #expect(loaded.songAssets.first?.displayName == "Opening Reprise")
     }
 }
 

@@ -11,7 +11,8 @@ import Foundation
 //   {lipsync: "Lucas" | mode=singing | bars=3-4}
 //   {emotion: "Lucas" | expression=immediate_focus | bar=3}
 //   {exit: "Johnny"}
-//   {lighting: afternoon_dim}
+//   {action: "Amira" | picks up journal | bars=37-38}
+//   {INSTRUMENTAL: Ancient Waters motif returns}
 //
 // Single curly braces are used for animate prompts. Triple curly braces
 // {{{...}}} are used for meta markers (SUMMARY, SCENE). Double brackets
@@ -23,12 +24,12 @@ enum AnimatePromptParser {
     // MARK: - Regex Pattern
 
     /// Matches single-brace animate prompts {keyword: ...} but NOT triple-brace
-    /// meta markers {{{...}}}. Requires the content to start with a known keyword
-    /// followed by a colon.
+    /// meta markers {{{...}}}. Supports any keyword-style tag followed by a colon,
+    /// including multiline prompt bodies.
     private static let pattern: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
-            pattern: #"(?<!\{)\{((?:camera|enter|exit|scene|lipsync|emotion|lighting)\s*:.+?)\}(?!\})"#,
+            pattern: #"(?<!\{)\{([A-Za-z_][A-Za-z0-9_\-]*\s*:[\s\S]*?)\}(?!\})"#,
             options: []
         )
     }()

@@ -235,7 +235,7 @@ struct ScriptSectionView: View {
     private func previewOverlay(content: String) -> some View {
         Text(
             ScriptTextEditor.displayText(
-                from: content,
+                from: SynopsisEmbedding.stripForDisplay(content: content),
                 showDirections: store.showDirections,
                 showStoryboarding: store.showStoryboarding,
                 showAnimateDirections: store.showAnimateDirections
@@ -552,6 +552,33 @@ struct ScriptTextEditor: NSViewRepresentable {
     var externalChangeRanges: [NSRange] = []
     var externalChangeOpacity: Double = 0
 
+    struct VisibleChunk: Equatable {
+        let rawRange: NSRange
+        let displayRange: NSRange
+    }
+
+    struct DisplayProjection: Equatable {
+        let rawText: String
+        let displayText: String
+        let hiddenRanges: [NSRange]
+        let visibleChunks: [VisibleChunk]
+    }
+
+    private struct DisplayEdit {
+        let affectedRange: NSRange
+        let replacementString: String
+    }
+
+    private enum BoundaryBias {
+        case previous
+        case next
+    }
+
+    private struct ChunkBoundary {
+        let chunkIndex: Int
+        let offset: Int
+    }
+
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
@@ -591,9 +618,6 @@ struct ScriptTextEditor: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.lineFragmentPadding = 0
         textView.delegate = context.coordinator
-        // Strip syllable annotations completely so they don't take up space
-        textView.string = Self.stripSyllableAnnotations(from: text)
-
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = 5
         textView.defaultParagraphStyle = paragraphStyle
@@ -604,18 +628,23 @@ struct ScriptTextEditor: NSViewRepresentable {
         ]
 
         context.coordinator.hostView = host
+        context.coordinator.currentRawText = text
         context.coordinator.lastShowDirections = showDirections
         context.coordinator.lastShowStoryboarding = showStoryboarding
         context.coordinator.lastShowAnimateDirections = showAnimateDirections
-        Self.applyDirectionStyling(to: textView, showDirections: showDirections, showStoryboarding: showStoryboarding, showAnimateDirections: showAnimateDirections)
-        host.recalcHeight()
+        context.coordinator.lastHighlightRanges = pendingHighlightRanges
+        context.coordinator.lastExternalRanges = externalChangeRanges
+        context.coordinator.lastExternalOpacity = externalChangeOpacity
+        context.coordinator.refreshDisplay(to: textView, rawText: text)
 
         return host
     }
 
     func updateNSView(_ host: ScriptTextHostView, context: Context) {
         let coordinator = context.coordinator
-        let textChanged = host.textView.string != text && !coordinator.isEditing
+        coordinator.parent = self
+
+        let textChanged = coordinator.currentRawText != text && !coordinator.isEditing
         let toggleChanged = coordinator.lastShowDirections != showDirections
             || coordinator.lastShowStoryboarding != showStoryboarding
             || coordinator.lastShowAnimateDirections != showAnimateDirections
@@ -623,169 +652,102 @@ struct ScriptTextEditor: NSViewRepresentable {
         let externalChanged = coordinator.lastExternalRanges != externalChangeRanges
             || coordinator.lastExternalOpacity != externalChangeOpacity
 
-        if textChanged {
-            // Strip syllable annotations completely so they don't take up space
-            host.textView.string = Self.stripSyllableAnnotations(from: text)
-        }
-
-        if textChanged || toggleChanged {
+        if textChanged || toggleChanged || externalChanged {
             coordinator.lastShowDirections = showDirections
             coordinator.lastShowStoryboarding = showStoryboarding
             coordinator.lastShowAnimateDirections = showAnimateDirections
-            Self.applyDirectionStyling(to: host.textView, showDirections: showDirections, showStoryboarding: showStoryboarding, showAnimateDirections: showAnimateDirections)
-            host.recalcHeight()
-        }
-
-        if textChanged || highlightChanged {
             coordinator.lastHighlightRanges = pendingHighlightRanges
-            Self.applyPendingHighlighting(to: host.textView, ranges: pendingHighlightRanges)
-        }
-        
-        if externalChanged {
             coordinator.lastExternalRanges = externalChangeRanges
             coordinator.lastExternalOpacity = externalChangeOpacity
-            Self.applyExternalChangeHighlighting(to: host.textView, ranges: externalChangeRanges, opacity: externalChangeOpacity)
+            coordinator.refreshDisplay(to: host.textView, rawText: text)
+        } else if highlightChanged {
+            coordinator.lastHighlightRanges = pendingHighlightRanges
+            coordinator.lastExternalRanges = externalChangeRanges
+            coordinator.lastExternalOpacity = externalChangeOpacity
+            coordinator.applyProjectedHighlights(to: host.textView)
         }
     }
 
-    /// Apply direction markup styling. Hidden content is removed from glyph
-    /// layout so it does not render or appear when selected.
-    static func applyDirectionStyling(to textView: NSTextView, showDirections show: Bool, showStoryboarding: Bool = true, showAnimateDirections: Bool = true) {
+    /// Apply direction markup styling to the visible display text only.
+    /// Hidden content is fully omitted from the text view string.
+    @discardableResult
+    static func applyDirectionStyling(
+        to textView: NSTextView,
+        rawText: String? = nil,
+        showDirections show: Bool,
+        showStoryboarding: Bool = true,
+        showAnimateDirections: Bool = true
+    ) -> DisplayProjection {
+        let sourceText = rawText ?? textView.string
+        let projection = displayProjection(
+            from: sourceText,
+            showDirections: show,
+            showStoryboarding: showStoryboarding,
+            showAnimateDirections: showAnimateDirections
+        )
+
+        textView.undoManager?.disableUndoRegistration()
+        defer { textView.undoManager?.enableUndoRegistration() }
+
+        if textView.string != projection.displayText {
+            textView.string = projection.displayText
+        }
+
         guard let layoutManager = textView.layoutManager,
-              let textStorage = textView.textStorage else { return }
+              let textStorage = textView.textStorage else { return projection }
+
         let nsString = textView.string as NSString
         let fullRange = NSRange(location: 0, length: nsString.length)
-        guard fullRange.length > 0 else { return }
 
-        // Clear temporary attributes
         layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
         layoutManager.removeTemporaryAttribute(.font, forCharacterRange: fullRange)
         layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
 
-        // Reset all paragraph styles to default
         let defaultStyle = NSMutableParagraphStyle()
         defaultStyle.lineSpacing = 5
 
-        let collapsedStyle = NSMutableParagraphStyle()
-        collapsedStyle.maximumLineHeight = 0.01
-        collapsedStyle.minimumLineHeight = 0.01
-        collapsedStyle.lineSpacing = 0
-        collapsedStyle.paragraphSpacing = 0
-        collapsedStyle.paragraphSpacingBefore = 0
-        let hiddenFont = NSFont.monospacedSystemFont(ofSize: 0.1, weight: .regular)
-        let hiddenColor = NSColor.clear
-
-        textView.undoManager?.disableUndoRegistration()
         textStorage.beginEditing()
-        textStorage.addAttribute(.paragraphStyle, value: defaultStyle, range: fullRange)
-
-        var hiddenRanges: [NSRange] = []
-
-        /// Collapse lines that contain nothing but hidden content so they do
-        /// not leave empty vertical gaps behind.
-        func collapseRanges(_ ranges: [NSRange]) {
-            for range in ranges {
-                let fullLineRange = nsString.lineRange(for: range)
-                var lineStart = fullLineRange.location
-                while lineStart < NSMaxRange(fullLineRange) {
-                    let singleLineRange = nsString.lineRange(
-                        for: NSRange(location: lineStart, length: 0)
-                    )
-                    let lineText = nsString.substring(with: singleLineRange)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    let intersection = NSIntersectionRange(singleLineRange, range)
-                    let overlapText = intersection.length > 0
-                        ? nsString.substring(with: intersection)
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        : ""
-                    if !lineText.isEmpty && lineText == overlapText {
-                        textStorage.addAttribute(
-                            .paragraphStyle, value: collapsedStyle, range: singleLineRange
-                        )
-                    }
-                    lineStart = NSMaxRange(singleLineRange)
-                }
-            }
+        if fullRange.length > 0 {
+            textStorage.addAttribute(.paragraphStyle, value: defaultStyle, range: fullRange)
         }
+        textStorage.endEditing()
 
-        // Style direction markup [[...]]
-        let directionRanges = DirectionParser.directionRanges(in: textView.string)
+        let directionRanges = Self.directionMarkupRanges(in: textView.string)
         if !directionRanges.isEmpty {
-            if show {
-                let tealColor = NSColor(calibratedRed: 0.35, green: 0.78, blue: 0.80, alpha: 0.70)
-                for range in directionRanges {
-                    layoutManager.addTemporaryAttribute(
-                        .foregroundColor, value: tealColor, forCharacterRange: range
-                    )
-                }
-            } else {
-                hiddenRanges.append(contentsOf: directionRanges)
-                collapseRanges(directionRanges)
+            let tealColor = NSColor(calibratedRed: 0.35, green: 0.78, blue: 0.80, alpha: 0.70)
+            for range in directionRanges {
+                layoutManager.addTemporaryAttribute(
+                    .foregroundColor, value: tealColor, forCharacterRange: range
+                )
             }
         }
 
-        // Style storyboarding prompts [single bracket text]
-        let storyboardRanges = StoryboardPromptParser.promptRanges(in: textView.string)
+        let storyboardRanges = Self.mergedRanges(
+            StoryboardPromptParser.promptRanges(in: textView.string)
+                + Self.parentheticalStageDirectionRanges(in: textView.string)
+        )
         if !storyboardRanges.isEmpty {
-            if showStoryboarding {
-                let orangeColor = NSColor(calibratedRed: 0.95, green: 0.65, blue: 0.25, alpha: 0.80)
-                for range in storyboardRanges {
-                    layoutManager.addTemporaryAttribute(
-                        .foregroundColor, value: orangeColor, forCharacterRange: range
-                    )
-                }
-            } else {
-                hiddenRanges.append(contentsOf: storyboardRanges)
-                collapseRanges(storyboardRanges)
+            let orangeColor = NSColor(calibratedRed: 0.95, green: 0.65, blue: 0.25, alpha: 0.80)
+            for range in storyboardRanges {
+                layoutManager.addTemporaryAttribute(
+                    .foregroundColor, value: orangeColor, forCharacterRange: range
+                )
             }
         }
 
-        // Style animate prompts {keyword: ...}
         let animateRanges = AnimatePromptParser.promptRanges(in: textView.string)
         if !animateRanges.isEmpty {
-            if showAnimateDirections {
-                let pinkColor = NSColor(calibratedRed: 0.85, green: 0.45, blue: 0.70, alpha: 0.80)
-                for range in animateRanges {
-                    layoutManager.addTemporaryAttribute(
-                        .foregroundColor, value: pinkColor, forCharacterRange: range
-                    )
-                }
-            } else {
-                hiddenRanges.append(contentsOf: animateRanges)
-                collapseRanges(animateRanges)
+            let pinkColor = NSColor(calibratedRed: 0.85, green: 0.45, blue: 0.70, alpha: 0.80)
+            for range in animateRanges {
+                layoutManager.addTemporaryAttribute(
+                    .foregroundColor, value: pinkColor, forCharacterRange: range
+                )
             }
         }
 
-        // Always collapse summary blocks — displayed in the sidebar
-        if let summaryRange = SummaryParser.summaryRange(in: textView.string) {
-            hiddenRanges.append(summaryRange)
-            collapseRanges([summaryRange])
-        }
-
-        textStorage.endEditing()
-        textView.undoManager?.enableUndoRegistration()
-
-        // Syllable counts are always hidden from the script body.
-        let syllableRanges = syllableAnnotationRanges(in: textView.string)
-        hiddenRanges.append(contentsOf: syllableRanges)
-        let mergedHiddenRanges = mergedRanges(hiddenRanges)
-
-        for range in mergedHiddenRanges {
-            layoutManager.addTemporaryAttribute(
-                .foregroundColor, value: hiddenColor, forCharacterRange: range
-            )
-            layoutManager.addTemporaryAttribute(
-                .font, value: hiddenFont, forCharacterRange: range
-            )
-        }
-
-        applyHiddenGlyphLayout(
-            to: layoutManager,
-            fullCharacterRange: fullRange,
-            hiddenRanges: mergedHiddenRanges
-        )
         layoutManager.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
         layoutManager.invalidateDisplay(forCharacterRange: fullRange)
+        return projection
     }
 
     /// Find NSRanges of syllable count annotations like " (8)" at end of lines.
@@ -817,20 +779,78 @@ struct ScriptTextEditor: NSViewRepresentable {
         showStoryboarding: Bool,
         showAnimateDirections: Bool
     ) -> String {
-        let hidden = hiddenRanges(
+        displayProjection(
+            from: text,
+            showDirections: showDirections,
+            showStoryboarding: showStoryboarding,
+            showAnimateDirections: showAnimateDirections
+        ).displayText
+    }
+
+    static func displayProjection(
+        from text: String,
+        showDirections: Bool,
+        showStoryboarding: Bool,
+        showAnimateDirections: Bool
+    ) -> DisplayProjection {
+        let nsString = text as NSString
+        let elidedRanges = renderHiddenRanges(
             in: text,
             showDirections: showDirections,
             showStoryboarding: showStoryboarding,
             showAnimateDirections: showAnimateDirections
         )
-        guard !hidden.isEmpty else { return text }
 
-        let mutable = NSMutableString(string: text)
-        for range in hidden.reversed() {
-            mutable.replaceCharacters(in: range, with: "")
+        guard !elidedRanges.isEmpty else {
+            let fullRange = NSRange(location: 0, length: nsString.length)
+            let visibleChunks = fullRange.length > 0 ? [VisibleChunk(rawRange: fullRange, displayRange: fullRange)] : []
+            return DisplayProjection(
+                rawText: text,
+                displayText: text,
+                hiddenRanges: [],
+                visibleChunks: visibleChunks
+            )
         }
 
-        return mutable as String
+        var displayPieces: [String] = []
+        var visibleChunks: [VisibleChunk] = []
+        var rawCursor = 0
+        var displayCursor = 0
+
+        for hiddenRange in elidedRanges {
+            if rawCursor < hiddenRange.location {
+                let visibleRange = NSRange(location: rawCursor, length: hiddenRange.location - rawCursor)
+                let visibleText = nsString.substring(with: visibleRange)
+                displayPieces.append(visibleText)
+                visibleChunks.append(
+                    VisibleChunk(
+                        rawRange: visibleRange,
+                        displayRange: NSRange(location: displayCursor, length: visibleRange.length)
+                    )
+                )
+                displayCursor += visibleRange.length
+            }
+            rawCursor = NSMaxRange(hiddenRange)
+        }
+
+        if rawCursor < nsString.length {
+            let visibleRange = NSRange(location: rawCursor, length: nsString.length - rawCursor)
+            let visibleText = nsString.substring(with: visibleRange)
+            displayPieces.append(visibleText)
+            visibleChunks.append(
+                VisibleChunk(
+                    rawRange: visibleRange,
+                    displayRange: NSRange(location: displayCursor, length: visibleRange.length)
+                )
+            )
+        }
+
+        return DisplayProjection(
+            rawText: text,
+            displayText: displayPieces.joined(),
+            hiddenRanges: elidedRanges,
+            visibleChunks: visibleChunks
+        )
     }
 
     static func hiddenRanges(
@@ -842,19 +862,255 @@ struct ScriptTextEditor: NSViewRepresentable {
         var ranges: [NSRange] = syllableAnnotationRanges(in: text)
 
         if !showDirections {
-            ranges.append(contentsOf: DirectionParser.directionRanges(in: text))
+            ranges.append(contentsOf: directionMarkupRanges(in: text))
         }
         if !showStoryboarding {
             ranges.append(contentsOf: StoryboardPromptParser.promptRanges(in: text))
+            ranges.append(contentsOf: parentheticalStageDirectionRanges(in: text))
         }
         if !showAnimateDirections {
             ranges.append(contentsOf: AnimatePromptParser.promptRanges(in: text))
         }
-        if let summaryRange = SummaryParser.summaryRange(in: text) {
-            ranges.append(summaryRange)
+        ranges.append(contentsOf: SummaryParser.summaryRanges(in: text))
+
+        return mergedRanges(ranges)
+    }
+
+    static func renderHiddenRanges(
+        in text: String,
+        showDirections: Bool,
+        showStoryboarding: Bool,
+        showAnimateDirections: Bool
+    ) -> [NSRange] {
+        let baseRanges = hiddenRanges(
+            in: text,
+            showDirections: showDirections,
+            showStoryboarding: showStoryboarding,
+            showAnimateDirections: showAnimateDirections
+        )
+        guard !baseRanges.isEmpty else { return [] }
+
+        let lines = lineDescriptors(in: text, hiddenRanges: baseRanges)
+        let standaloneHiddenIndices = lines.indices.filter { lines[$0].isStandaloneHidden }
+        guard !standaloneHiddenIndices.isEmpty else { return baseRanges }
+
+        var ranges = baseRanges
+        for index in standaloneHiddenIndices {
+            ranges.append(lines[index].range)
+        }
+
+        var index = 0
+        while index < lines.count {
+            guard lines[index].isStandaloneHidden else {
+                index += 1
+                continue
+            }
+
+            let blockStart = index
+            var blockEnd = index
+            while blockEnd + 1 < lines.count, lines[blockEnd + 1].isStandaloneHidden {
+                blockEnd += 1
+            }
+
+            var trailing = blockEnd + 1
+            while trailing < lines.count, lines[trailing].isBlank {
+                ranges.append(lines[trailing].range)
+                trailing += 1
+            }
+
+            var leadingBlankIndices: [Int] = []
+            var cursor = blockStart - 1
+            while cursor >= 0, lines[cursor].isBlank {
+                leadingBlankIndices.append(cursor)
+                cursor -= 1
+            }
+
+            let keepNearestBlank = cursor >= 0 ? 1 : 0
+            for blankIndex in leadingBlankIndices.dropFirst(keepNearestBlank) {
+                ranges.append(lines[blankIndex].range)
+            }
+
+            index = trailing
         }
 
         return mergedRanges(ranges)
+    }
+
+    private static let genericDoubleBracketPattern: NSRegularExpression = {
+        try! NSRegularExpression(pattern: #"\[\[[\s\S]*?\]\]"#, options: [])
+    }()
+
+    private struct LineDescriptor {
+        let range: NSRange
+        let isBlank: Bool
+        let isStandaloneHidden: Bool
+    }
+
+    private static func directionMarkupRanges(in text: String) -> [NSRange] {
+        let nsString = text as NSString
+        let fullRange = NSRange(location: 0, length: nsString.length)
+        var ranges = DirectionParser.directionRanges(in: text)
+        ranges.append(contentsOf: genericDoubleBracketPattern.matches(in: text, range: fullRange).map(\.range))
+        return mergedRanges(ranges)
+    }
+
+    private static func parentheticalStageDirectionRanges(in text: String) -> [NSRange] {
+        let nsString = text as NSString
+        let lineRanges = allLineRanges(in: nsString)
+        var ranges: [NSRange] = []
+        var openBlockLocation: Int?
+
+        for lineRange in lineRanges {
+            let lineText = nsString.substring(with: lineRange)
+            let trimmed = lineText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+
+            let isSyllableCount = trimmed.range(of: #"^\(\d+\)$"#, options: .regularExpression) != nil
+            if openBlockLocation != nil {
+                if trimmed.hasSuffix(")") {
+                    ranges.append(NSRange(location: openBlockLocation!, length: NSMaxRange(lineRange) - openBlockLocation!))
+                    openBlockLocation = nil
+                }
+                continue
+            }
+
+            guard trimmed.hasPrefix("("), !isSyllableCount else { continue }
+            if trimmed.hasSuffix(")") {
+                ranges.append(lineRange)
+            } else {
+                openBlockLocation = lineRange.location
+            }
+        }
+
+        return mergedRanges(ranges)
+    }
+
+    private static func lineDescriptors(in text: String, hiddenRanges: [NSRange]) -> [LineDescriptor] {
+        let nsString = text as NSString
+        let lineRanges = allLineRanges(in: nsString)
+
+        return lineRanges.map { lineRange in
+            let lineText = nsString.substring(with: lineRange)
+            let trimmedLine = lineText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isBlank = trimmedLine.isEmpty
+
+            guard !isBlank else {
+                return LineDescriptor(range: lineRange, isBlank: true, isStandaloneHidden: false)
+            }
+
+            let coveredText = hiddenRanges.compactMap { hiddenRange -> String? in
+                let overlap = NSIntersectionRange(hiddenRange, lineRange)
+                guard overlap.length > 0 else { return nil }
+                return nsString.substring(with: overlap)
+            }.joined()
+
+            let isStandaloneHidden = !coveredText.isEmpty
+                && trimmedLine == coveredText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            return LineDescriptor(range: lineRange, isBlank: false, isStandaloneHidden: isStandaloneHidden)
+        }
+    }
+
+    private static func allLineRanges(in nsString: NSString) -> [NSRange] {
+        guard nsString.length > 0 else { return [] }
+
+        var ranges: [NSRange] = []
+        var location = 0
+        while location < nsString.length {
+            let lineRange = nsString.lineRange(for: NSRange(location: location, length: 0))
+            ranges.append(lineRange)
+            location = NSMaxRange(lineRange)
+        }
+        return ranges
+    }
+
+    static func project(rawRanges: [NSRange], through projection: DisplayProjection) -> [NSRange] {
+        guard !rawRanges.isEmpty, !projection.visibleChunks.isEmpty else { return [] }
+
+        var displayRanges: [NSRange] = []
+        for rawRange in rawRanges where rawRange.length > 0 {
+            for chunk in projection.visibleChunks {
+                let overlap = NSIntersectionRange(rawRange, chunk.rawRange)
+                guard overlap.length > 0 else { continue }
+                let displayLocation = chunk.displayRange.location + (overlap.location - chunk.rawRange.location)
+                displayRanges.append(NSRange(location: displayLocation, length: overlap.length))
+            }
+        }
+
+        return mergedRanges(displayRanges)
+    }
+
+    static func applyDisplayEdit(
+        rawText: String,
+        projection: DisplayProjection,
+        affectedDisplayRange: NSRange,
+        replacementString: String?
+    ) -> String {
+        let replacement = replacementString ?? ""
+        let totalDisplayLength = (projection.displayText as NSString).length
+        let start = max(0, min(affectedDisplayRange.location, totalDisplayLength))
+        let end = max(start, min(NSMaxRange(affectedDisplayRange), totalDisplayLength))
+        let clampedRange = NSRange(location: start, length: end - start)
+
+        guard !projection.visibleChunks.isEmpty else {
+            guard !replacement.isEmpty else { return rawText }
+            let mutable = NSMutableString(string: rawText)
+            mutable.insert(replacement, at: 0)
+            return mutable as String
+        }
+
+        let startBoundary = boundary(for: clampedRange.location, in: projection, bias: .previous)
+        let endBoundary = boundary(for: NSMaxRange(clampedRange), in: projection, bias: .previous)
+        var visibleStrings = projection.visibleChunks.map { (rawText as NSString).substring(with: $0.rawRange) }
+
+        if clampedRange.length == 0 {
+            let mutableChunk = NSMutableString(string: visibleStrings[startBoundary.chunkIndex])
+            mutableChunk.insert(replacement, at: startBoundary.offset)
+            visibleStrings[startBoundary.chunkIndex] = mutableChunk as String
+        } else if startBoundary.chunkIndex == endBoundary.chunkIndex {
+            let mutableChunk = NSMutableString(string: visibleStrings[startBoundary.chunkIndex])
+            mutableChunk.replaceCharacters(
+                in: NSRange(location: startBoundary.offset, length: clampedRange.length),
+                with: replacement
+            )
+            visibleStrings[startBoundary.chunkIndex] = mutableChunk as String
+        } else {
+            let startMutable = NSMutableString(string: visibleStrings[startBoundary.chunkIndex])
+            let startLength = (visibleStrings[startBoundary.chunkIndex] as NSString).length
+            startMutable.replaceCharacters(
+                in: NSRange(location: startBoundary.offset, length: startLength - startBoundary.offset),
+                with: replacement
+            )
+            visibleStrings[startBoundary.chunkIndex] = startMutable as String
+
+            let endMutable = NSMutableString(string: visibleStrings[endBoundary.chunkIndex])
+            endMutable.replaceCharacters(in: NSRange(location: 0, length: endBoundary.offset), with: "")
+            visibleStrings[endBoundary.chunkIndex] = endMutable as String
+
+            if startBoundary.chunkIndex + 1 < endBoundary.chunkIndex {
+                for index in (startBoundary.chunkIndex + 1)..<endBoundary.chunkIndex {
+                    visibleStrings[index] = ""
+                }
+            }
+        }
+
+        let nsRaw = rawText as NSString
+        var rebuilt = ""
+        var cursor = 0
+
+        for (index, chunk) in projection.visibleChunks.enumerated() {
+            if cursor < chunk.rawRange.location {
+                rebuilt += nsRaw.substring(with: NSRange(location: cursor, length: chunk.rawRange.location - cursor))
+            }
+            rebuilt += visibleStrings[index]
+            cursor = NSMaxRange(chunk.rawRange)
+        }
+
+        if cursor < nsRaw.length {
+            rebuilt += nsRaw.substring(with: NSRange(location: cursor, length: nsRaw.length - cursor))
+        }
+
+        return rebuilt
     }
 
     private static func mergedRanges(_ ranges: [NSRange]) -> [NSRange] {
@@ -887,32 +1143,51 @@ struct ScriptTextEditor: NSViewRepresentable {
         return merged
     }
 
-    private static func applyHiddenGlyphLayout(
-        to layoutManager: NSLayoutManager,
-        fullCharacterRange: NSRange,
-        hiddenRanges: [NSRange]
-    ) {
-        let fullGlyphRange = layoutManager.glyphRange(
-            forCharacterRange: fullCharacterRange,
-            actualCharacterRange: nil
-        )
-
-        if fullGlyphRange.length > 0 {
-            for glyphIndex in fullGlyphRange.location..<NSMaxRange(fullGlyphRange) {
-                layoutManager.setNotShownAttribute(false, forGlyphAt: glyphIndex)
-            }
+    private static func boundary(
+        for displayLocation: Int,
+        in projection: DisplayProjection,
+        bias: BoundaryBias
+    ) -> ChunkBoundary {
+        guard !projection.visibleChunks.isEmpty else {
+            return ChunkBoundary(chunkIndex: 0, offset: 0)
         }
 
-        for range in hiddenRanges {
-            let glyphRange = layoutManager.glyphRange(
-                forCharacterRange: range,
-                actualCharacterRange: nil
+        if displayLocation <= 0 {
+            return ChunkBoundary(chunkIndex: 0, offset: 0)
+        }
+
+        let totalDisplayLength = (projection.displayText as NSString).length
+        if displayLocation >= totalDisplayLength {
+            let lastIndex = projection.visibleChunks.count - 1
+            return ChunkBoundary(
+                chunkIndex: lastIndex,
+                offset: projection.visibleChunks[lastIndex].displayRange.length
             )
-            guard glyphRange.length > 0 else { continue }
-            for glyphIndex in glyphRange.location..<NSMaxRange(glyphRange) {
-                layoutManager.setNotShownAttribute(true, forGlyphAt: glyphIndex)
+        }
+
+        for (index, chunk) in projection.visibleChunks.enumerated() {
+            let chunkStart = chunk.displayRange.location
+            let chunkEnd = NSMaxRange(chunk.displayRange)
+
+            if displayLocation < chunkStart {
+                return ChunkBoundary(chunkIndex: index, offset: 0)
+            }
+            if displayLocation < chunkEnd {
+                return ChunkBoundary(chunkIndex: index, offset: displayLocation - chunkStart)
+            }
+            if displayLocation == chunkEnd {
+                if bias == .next, index + 1 < projection.visibleChunks.count {
+                    return ChunkBoundary(chunkIndex: index + 1, offset: 0)
+                }
+                return ChunkBoundary(chunkIndex: index, offset: chunk.displayRange.length)
             }
         }
+
+        let lastIndex = projection.visibleChunks.count - 1
+        return ChunkBoundary(
+            chunkIndex: lastIndex,
+            offset: projection.visibleChunks[lastIndex].displayRange.length
+        )
     }
 
     /// Apply green background highlighting to pending agent edit ranges.
@@ -940,10 +1215,6 @@ struct ScriptTextEditor: NSViewRepresentable {
     static func applyExternalChangeHighlighting(to textView: NSTextView, ranges: [NSRange], opacity: Double) {
         guard let layoutManager = textView.layoutManager else { return }
         let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
-        
-        // Remove existing external change highlights (both foreground color and background)
-        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
-        
         guard !ranges.isEmpty, opacity > 0 else { return }
         
         // Yellow text color with opacity based on the fade animation
@@ -999,13 +1270,15 @@ struct ScriptTextEditor: NSViewRepresentable {
         weak var hostView: ScriptTextHostView?
         var isEditing = false
         var isStyling = false
+        var currentRawText = ""
+        var currentProjection = DisplayProjection(rawText: "", displayText: "", hiddenRanges: [], visibleChunks: [])
         var lastShowDirections = true
         var lastShowStoryboarding = true
         var lastShowAnimateDirections = true
         var lastHighlightRanges: [NSRange] = []
         var lastExternalRanges: [NSRange] = []
         var lastExternalOpacity: Double = 0
-        private var stylingWorkItem: DispatchWorkItem?
+        private var pendingDisplayEdit: DisplayEdit?
 
         init(parent: ScriptTextEditor) {
             self.parent = parent
@@ -1017,58 +1290,74 @@ struct ScriptTextEditor: NSViewRepresentable {
 
         func textDidEndEditing(_ notification: Notification) {
             isEditing = false
-            if let tv = notification.object as? NSTextView {
-                parent.text = tv.string
-            }
+            parent.text = currentRawText
         }
 
         func textDidChange(_ notification: Notification) {
             guard !isStyling else { return }
             guard let tv = notification.object as? NSTextView else { return }
-            parent.text = hostView?.textView.string ?? ""
+            let edit = pendingDisplayEdit ?? DisplayEdit(
+                affectedRange: NSRange(location: 0, length: (currentProjection.displayText as NSString).length),
+                replacementString: tv.string
+            )
+            pendingDisplayEdit = nil
 
-            // Debounce styling to avoid running 5 regex scans on every keystroke
-            stylingWorkItem?.cancel()
-            let item = DispatchWorkItem { [weak self, weak tv] in
-                guard let self, let tv else { return }
-                self.applyStylingGuarded(to: tv)
-            }
-            stylingWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: item)
+            let newRawText = ScriptTextEditor.applyDisplayEdit(
+                rawText: currentRawText,
+                projection: currentProjection,
+                affectedDisplayRange: edit.affectedRange,
+                replacementString: edit.replacementString
+            )
+
+            currentRawText = newRawText
+            parent.text = newRawText
+            refreshDisplay(to: tv, rawText: newRawText)
         }
 
         /// Apply styling with re-entrancy guard.
-        func applyStylingGuarded(to tv: NSTextView) {
+        func refreshDisplay(to tv: NSTextView, rawText: String? = nil) {
             guard !isStyling else { return }
             isStyling = true
-            ScriptTextEditor.applyDirectionStyling(
+            let sourceText = rawText ?? currentRawText
+            let projection = ScriptTextEditor.applyDirectionStyling(
                 to: tv,
+                rawText: sourceText,
                 showDirections: parent.showDirections,
                 showStoryboarding: parent.showStoryboarding,
                 showAnimateDirections: parent.showAnimateDirections
             )
+            currentRawText = sourceText
+            currentProjection = projection
+            applyProjectedHighlights(to: tv)
+
             hostView?.recalcHeight()
             isStyling = false
         }
 
-        /// Block edits that would land inside a collapsed (hidden) range.
-        func textView(_ textView: NSTextView, shouldChangeTextIn affectedRange: NSRange, replacementString: String?) -> Bool {
-            let hiddenRanges = ScriptTextEditor.hiddenRanges(
-                in: textView.string,
-                showDirections: parent.showDirections,
-                showStoryboarding: parent.showStoryboarding,
-                showAnimateDirections: parent.showAnimateDirections
+        func applyProjectedHighlights(to tv: NSTextView) {
+            let pendingRanges = ScriptTextEditor.project(
+                rawRanges: parent.pendingHighlightRanges,
+                through: currentProjection
             )
+            ScriptTextEditor.applyPendingHighlighting(to: tv, ranges: pendingRanges)
 
-            if affectedRange.length == 0 {
-                return !hiddenRanges.contains { hiddenRange in
-                    NSLocationInRange(affectedRange.location, hiddenRange)
-                }
-            }
+            let externalRanges = ScriptTextEditor.project(
+                rawRanges: parent.externalChangeRanges,
+                through: currentProjection
+            )
+            ScriptTextEditor.applyExternalChangeHighlighting(
+                to: tv,
+                ranges: externalRanges,
+                opacity: parent.externalChangeOpacity
+            )
+        }
 
-            return !hiddenRanges.contains { hiddenRange in
-                NSIntersectionRange(hiddenRange, affectedRange).length > 0
-            }
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedRange: NSRange, replacementString: String?) -> Bool {
+            pendingDisplayEdit = DisplayEdit(
+                affectedRange: affectedRange,
+                replacementString: replacementString ?? ""
+            )
+            return true
         }
     }
 }

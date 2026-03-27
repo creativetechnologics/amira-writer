@@ -40,6 +40,7 @@ struct ScriptSidebarView: View {
     @ViewBuilder
     private func row(for asset: OWSSongAsset) -> some View {
         let isSelected = store.activeSongPath == asset.relativePath || store.scrollTarget == asset.relativePath
+        let visibleSummary = summary(for: asset)
 
         if renamingAssetID == asset.id {
             OperaChromeSidebarRow(isSelected: true) {
@@ -70,8 +71,8 @@ struct ScriptSidebarView: View {
                                 .lineLimit(1)
                         }
 
-                        if let summary = summaryByPath[asset.relativePath], !summary.isEmpty {
-                            Text(summary)
+                        if let visibleSummary {
+                            Text(visibleSummary)
                                 .font(.system(size: 9.5))
                                 .foregroundStyle(OperaChromeTheme.textSecondary)
                                 .lineLimit(2)
@@ -80,6 +81,7 @@ struct ScriptSidebarView: View {
                     }
                 }
             }
+            .id(rowLayoutID(for: asset, visibleSummary: visibleSummary))
             .buttonStyle(.plain)
             .contextMenu {
                 Button("Rename") {
@@ -106,6 +108,19 @@ struct ScriptSidebarView: View {
         sortedAssets = store.songAssets.sorted {
             $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
         }
+    }
+
+    private func summary(for asset: OWSSongAsset) -> String? {
+        guard showSummaries,
+              let summary = summaryByPath[asset.relativePath],
+              !summary.isEmpty else {
+            return nil
+        }
+        return summary
+    }
+
+    private func rowLayoutID(for asset: OWSSongAsset, visibleSummary: String?) -> String {
+        "\(asset.id.uuidString)|\(showSummaries)|\(visibleSummary ?? "")"
     }
 
     private func refreshSummaries() {

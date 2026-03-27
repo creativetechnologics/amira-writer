@@ -164,7 +164,7 @@ public enum NovotroScoreBootstrap {
             return fail("Project contains no songs: \(request.projectPath)")
         }
 
-        let targetAsset: MidiAsset
+        var targetAsset: MidiAsset
         if let songPath = request.songRelativePath {
             guard let asset = store.songAssets.first(where: { $0.relativePath == songPath }) else {
                 return fail("Song not found by relative path: \(songPath)")
@@ -181,6 +181,19 @@ public enum NovotroScoreBootstrap {
         } else {
             let asset = store.songAssets[0]
             targetAsset = MidiAsset(id: asset.id, relativePath: asset.relativePath, data: Data())
+        }
+
+        if let preloadedAsset = preloadHeadlessSongAsset(
+            store: store,
+            relativePath: targetAsset.relativePath
+        ),
+           let songIndex = store.songAssets.firstIndex(where: { $0.relativePath == targetAsset.relativePath }) {
+            store.songAssets[songIndex] = preloadedAsset
+            targetAsset = MidiAsset(
+                id: preloadedAsset.id,
+                relativePath: preloadedAsset.relativePath,
+                data: Data()
+            )
         }
 
         print("Selecting song: \(targetAsset.relativePath)")
@@ -250,21 +263,207 @@ public enum NovotroScoreBootstrap {
         targetAsset: MidiAsset,
         expectedSongID: UUID
     ) async -> Bool {
-        if await waitForSelectedSongLoad(store: store, expectedSongID: expectedSongID, timeoutSeconds: 10.0) {
+        if await waitForSelectedSongLoad(store: store, expectedSongID: expectedSongID, timeoutSeconds: 120.0) {
             print("Song playback ready in memory.")
             return true
         }
 
         print("Hydrating deferred playback for \(targetAsset.relativePath)...")
         guard await store.hydrateSongPlaybackIfNeeded(id: targetAsset.id) else {
+            if activateFallbackPlayableVersion(store: store, expectedSongID: expectedSongID) {
+                let recovered = await waitForSelectedSongLoad(
+                    store: store,
+                    expectedSongID: expectedSongID,
+                    timeoutSeconds: 10.0
+                )
+                if recovered {
+                    print("Recovered playback from fallback version.")
+                    return true
+                }
+            }
             return false
         }
 
-        let loaded = await waitForSelectedSongLoad(store: store, expectedSongID: expectedSongID, timeoutSeconds: 10.0)
+        let loaded = await waitForSelectedSongLoad(store: store, expectedSongID: expectedSongID, timeoutSeconds: 120.0)
         if loaded {
             print("Hydrated playback successfully.")
+            return true
         }
-        return loaded
+        if activateFallbackPlayableVersion(store: store, expectedSongID: expectedSongID) {
+            let recovered = await waitForSelectedSongLoad(
+                store: store,
+                expectedSongID: expectedSongID,
+                timeoutSeconds: 10.0
+            )
+            if recovered {
+                print("Recovered playback from fallback version.")
+                return true
+            }
+        }
+        return false
+    }
+
+    @MainActor
+    private static func activateFallbackPlayableVersion(
+        store: ScoreStore,
+        expectedSongID: UUID
+    ) -> Bool {
+        guard let songIndex = store.songAssets.firstIndex(where: { $0.id == expectedSongID }) else {
+            return false
+        }
+
+        let currentPlaybackHasNotes = !(store.songAssets[songIndex].document.activeVersion()?.playback?.notes.isEmpty ?? true)
+        if currentPlaybackHasNotes {
+            return false
+        }
+
+        guard let fallbackVersion = store.songAssets[songIndex].document.versions.first(where: {
+            !($0.playback?.notes.isEmpty ?? true)
+        }) else {
+            return false
+        }
+
+        store.songAssets[songIndex].document.activeVersionID = fallbackVersion.id
+        store.setSelectedMidi(id: expectedSongID, stopPlaybackBeforeSelect: false)
+        return true
+    }
+
+    @MainActor
+    private static func preloadHeadlessSongAsset(
+        store: ScoreStore,
+        relativePath: String
+    ) -> OWSSongAsset? {
+        guard let songIndex = store.songAssets.firstIndex(where: { $0.relativePath == relativePath }) else {
+            return nil
+        }
+
+        let existing = store.songAssets[songIndex]
+        guard let stub = store.songStubs.first(where: { $0.relativePath == relativePath }) else {
+            return !(existing.document.activeVersion()?.playback?.notes.isEmpty ?? true) ? existing : nil
+        }
+
+        do {
+            let asset = try loadActiveVersionOnlySongAsset(stub: stub)
+            if !(asset.document.activeVersion()?.playback?.notes.isEmpty ?? true) {
+                print("Preloaded active playback directly from \(relativePath).")
+                return asset
+            }
+        } catch {
+            print("Lightweight preload failed for \(relativePath): \(error.localizedDescription)")
+        }
+
+        return !(existing.document.activeVersion()?.playback?.notes.isEmpty ?? true) ? existing : nil
+    }
+
+    private static func loadActiveVersionOnlySongAsset(stub: SongStub) throws -> OWSSongAsset {
+        let data = try Data(contentsOf: stub.fileURL, options: .mappedIfSafe)
+        guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawVersions = root["versions"] as? [Any] else {
+            throw NSError(
+                domain: "NovotroScoreBootstrap",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Song file is missing a versions array."]
+            )
+        }
+
+        let versions = rawVersions.compactMap { $0 as? [String: Any] }
+        guard !versions.isEmpty else {
+            throw NSError(
+                domain: "NovotroScoreBootstrap",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Song file has no decodable versions."]
+            )
+        }
+
+        let activeVersionID = (root["activeVersionID"] as? String)?.uppercased()
+        func hasPlaybackNotes(_ version: [String: Any]) -> Bool {
+            guard let playback = version["playback"] as? [String: Any],
+                  let notes = playback["notes"] as? [Any] else {
+                return false
+            }
+            return !notes.isEmpty
+        }
+
+        struct PlaybackSummary {
+            let noteCount: Int
+            let maxEnd: Int
+        }
+
+        func playbackSummary(_ version: [String: Any]) -> PlaybackSummary? {
+            guard let playback = version["playback"] as? [String: Any],
+                  let notes = playback["notes"] as? [[String: Any]],
+                  !notes.isEmpty else {
+                return nil
+            }
+
+            let maxEnd = notes.reduce(0) { partial, note in
+                let start = note["startTick"] as? Int ?? 0
+                let duration = note["duration"] as? Int ?? 0
+                return max(partial, start + duration)
+            }
+            return PlaybackSummary(noteCount: notes.count, maxEnd: maxEnd)
+        }
+
+        let activeVersion = activeVersionID.flatMap { id in
+            versions.first { (($0["id"] as? String) ?? "").uppercased() == id }
+        }
+        let playableVersions = versions.compactMap { version -> ([String: Any], PlaybackSummary)? in
+            guard let summary = playbackSummary(version) else { return nil }
+            return (version, summary)
+        }
+
+        let selectedVersion: [String: Any]? = {
+            if let activeVersion,
+               let activeSummary = playbackSummary(activeVersion) {
+                let fallbackCandidate = playableVersions
+                    .filter { candidate in
+                        let summary = candidate.1
+                        return summary.noteCount >= max(200, activeSummary.noteCount * 2)
+                            && summary.maxEnd > 0
+                            && summary.maxEnd * 2 < activeSummary.maxEnd
+                    }
+                    .sorted { lhs, rhs in
+                        if lhs.1.noteCount != rhs.1.noteCount {
+                            return lhs.1.noteCount > rhs.1.noteCount
+                        }
+                        return lhs.1.maxEnd < rhs.1.maxEnd
+                    }
+                    .first
+
+                if activeSummary.noteCount <= 200,
+                   activeSummary.maxEnd > 1_000_000,
+                   let fallbackCandidate {
+                    if let label = fallbackCandidate.0["label"] as? String {
+                        print("Using sane fallback playback version: \(label)")
+                    }
+                    return fallbackCandidate.0
+                }
+
+                return activeVersion
+            }
+
+            return playableVersions.first?.0 ?? versions.first
+        }()
+
+        guard let selectedVersion else {
+            throw NSError(
+                domain: "NovotroScoreBootstrap",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Could not choose an export version."]
+            )
+        }
+
+        if let selectedID = selectedVersion["id"] as? String {
+            root["activeVersionID"] = selectedID
+        }
+        if root["instrumentMappings"] == nil {
+            root["instrumentMappings"] = [:]
+        }
+        root["versions"] = [selectedVersion]
+
+        let trimmedData = try JSONSerialization.data(withJSONObject: root, options: [])
+        let document = try OWPProjectIO.configuredDecoder().decode(OWSSongDocument.self, from: trimmedData)
+        return OWSSongAsset(relativePath: stub.relativePath, document: document)
     }
 }
 

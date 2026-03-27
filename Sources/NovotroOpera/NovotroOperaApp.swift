@@ -16,11 +16,11 @@ struct NovotroOperaApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Novotro Opera") {
+        WindowGroup("Amira Writer") {
             OperaShellView(selectedMode: $selectedMode)
 
         }
-        .defaultSize(width: 1500, height: 920)
+        .defaultSize(width: 1280, height: 900)
         .windowStyle(.hiddenTitleBar)
         .commands {
             OperaProjectCommands()
@@ -70,6 +70,8 @@ private struct OperaModeCommands: Commands {
 }
 
 private final class OperaAppDelegate: NSObject, NSApplicationDelegate {
+    private var keyMonitor: Any?
+
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
             NotificationCenter.default.post(
@@ -91,7 +93,28 @@ private final class OperaAppDelegate: NSObject, NSApplicationDelegate {
         application.reply(toOpenOrPrint: .success)
     }
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        installSaveMonitor()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let keyMonitor {
+            NSEvent.removeMonitor(keyMonitor)
+            self.keyMonitor = nil
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    private func installSaveMonitor() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.charactersIgnoringModifiers?.lowercased() == "s" else { return event }
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard modifiers == .command else { return event }
+            NotificationCenter.default.post(name: OperaShellSignals.saveProject, object: nil)
+            return nil
+        }
     }
 }

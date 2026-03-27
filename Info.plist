@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Novotro Opera</string>
+    <string>Amira Writer</string>
     <key>CFBundleDisplayName</key>
-    <string>Novotro Opera</string>
+    <string>Amira Writer</string>
     <key>CFBundleIdentifier</key>
-    <string>com.operawriter.novotroopera</string>
+    <string>com.novotro.amirawriter</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>

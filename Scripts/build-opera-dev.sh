@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fast local build workflow for Novotro Opera.
+# Fast local build workflow for Amira Writer.
 # Use this for day-to-day iteration to avoid full release compile time.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,7 +47,7 @@ while [[ "${1:-}" != "" ]]; do
     shift
 done
 
-echo "=== Building Novotro Opera (debug, local-only) ==="
+echo "=== Building Amira Writer (debug, local-only) ==="
 cd "$PROJECT_DIR"
 
 if [[ "$SKIP_UPDATE" == true ]]; then
@@ -69,6 +69,6 @@ echo "Binary: $BINARY"
 
 if [[ "$RUN_BINARY" == true ]]; then
     echo "Launching $BINARY..."
-    nohup "$BINARY" >/tmp/novotro-opera-debug.log 2>&1 &
-    echo "Launched. Log: /tmp/novotro-opera-debug.log"
+    nohup "$BINARY" >/tmp/amira-writer-debug.log 2>&1 &
+    echo "Launched. Log: /tmp/amira-writer-debug.log"
 fi

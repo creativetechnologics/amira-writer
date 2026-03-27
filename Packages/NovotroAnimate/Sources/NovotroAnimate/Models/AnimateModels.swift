@@ -335,6 +335,26 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         self.animatedImagePaths = animatedImagePaths
     }
 
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder)
+        name = try c.decode(String.self, forKey: .name)
+        description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        owpSlug = try c.decodeIfPresent(String.self, forKey: .owpSlug) ?? ""
+        renderMode = try c.decodeIfPresent(CharacterCanvasRenderMode.self, forKey: .renderMode)
+        preferredViewAngle = try c.decodeIfPresent(AngleView.self, forKey: .preferredViewAngle)
+        parts = try c.decodeIfPresent([RigPart].self, forKey: .parts) ?? []
+        profileImagePath = try c.decodeIfPresent(String.self, forKey: .profileImagePath)
+        backstory = try c.decodeIfPresent(String.self, forKey: .backstory) ?? ""
+        personality = try c.decodeIfPresent(String.self, forKey: .personality) ?? ""
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        inspirationImagePaths = try c.decodeIfPresent([String].self, forKey: .inspirationImagePaths) ?? []
+        inspirationReferenceImagePath = try c.decodeIfPresent(String.self, forKey: .inspirationReferenceImagePath)
+        referenceImagePaths = try c.decodeIfPresent([String].self, forKey: .referenceImagePaths) ?? []
+        animatedImagePaths = try c.decodeIfPresent([String].self, forKey: .animatedImagePaths) ?? []
+    }
+
     var resolvedRenderMode: CharacterCanvasRenderMode {
         renderMode ?? .packagePreview
     }

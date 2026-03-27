@@ -1,6 +1,6 @@
 import Foundation
 
-/// Manages the lifecycle of a local sandraschi/suno-mcp Python server process.
+/// Manages the lifecycle of the local patched Suno MCP server.
 /// Allows Novotro Score to start, stop, and monitor the server without leaving the app.
 @available(macOS 26.0, *)
 @MainActor
@@ -47,8 +47,17 @@ final class SunoServerManager: @unchecked Sendable {
 
     // MARK: - Configuration (persisted via UserDefaults)
 
+    private var defaultServerDirectory: String {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport.appendingPathComponent("Novotro Score/suno-mcp").path
+    }
+
     var serverDirectory: String {
-        get { UserDefaults.standard.string(forKey: "sunoServerDirectory") ?? "" }
+        get {
+            let stored = UserDefaults.standard.string(forKey: "sunoServerDirectory") ?? ""
+            let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? defaultServerDirectory : trimmed
+        }
         set { UserDefaults.standard.set(newValue, forKey: "sunoServerDirectory") }
     }
 
@@ -66,11 +75,14 @@ final class SunoServerManager: @unchecked Sendable {
 
     /// The base URL to poll for readiness (read from the API client's setting).
     private var baseURL: String {
-        let stored = UserDefaults.standard.string(forKey: "sunoServerURL") ?? "http://localhost:3000"
+        let stored = UserDefaults.standard.string(forKey: "sunoServerURL") ?? "http://127.0.0.1:3001"
         let trimmed = stored
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return trimmed.isEmpty ? "http://localhost:3000" : trimmed
+        if trimmed.isEmpty || trimmed == "http://localhost:3000" {
+            return "http://127.0.0.1:3001"
+        }
+        return trimmed
     }
 
     /// Human-readable host:port for the currently configured local Suno server.
@@ -90,7 +102,7 @@ final class SunoServerManager: @unchecked Sendable {
               let port = components.port,
               (1...65535).contains(port)
         else {
-            return 3000
+            return 3001
         }
         return port
     }
@@ -99,8 +111,7 @@ final class SunoServerManager: @unchecked Sendable {
 
     /// Persistent Playwright browser data directory — shared between login and suno-mcp server.
     var browserDataDirectory: String {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("Novotro Score/suno-browser-data").path
+        (serverDirectory as NSString).appendingPathComponent("chromium-data")
     }
 
     /// Path to the extracted cookie JSON file used by the suno-mcp server.
@@ -139,13 +150,12 @@ final class SunoServerManager: @unchecked Sendable {
 
     /// Whether the suno-mcp server has been fully bootstrapped (cloned + dependencies installed).
     var isBootstrapped: Bool {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let sunoDir = appSupport.appendingPathComponent("Novotro Score/suno-mcp")
         let dir = serverDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        let checkDir = dir.isEmpty ? sunoDir.path : dir
-        return FileManager.default.fileExists(
-            atPath: (checkDir as NSString).appendingPathComponent("src/suno_mcp")
-        )
+        guard !dir.isEmpty else { return false }
+        let fm = FileManager.default
+        return fm.fileExists(atPath: (dir as NSString).appendingPathComponent("src/suno_mcp"))
+            && fm.fileExists(atPath: (dir as NSString).appendingPathComponent("requirements.txt"))
+            && fm.fileExists(atPath: (dir as NSString).appendingPathComponent("venv/bin/python"))
     }
 
     /// Start the suno-api server process.
@@ -484,230 +494,10 @@ final class SunoServerManager: @unchecked Sendable {
         }
     }
 
-    /// Open a visible Playwright browser to suno.com for OAuth login.
-    /// Detects successful login (URL navigates to /create, /feed, etc.) and auto-closes.
-    /// Browser data persists in `browserDataDirectory` so the suno-mcp server reuses the session.
+    /// Deprecated legacy login path. Canonical workflow uses Chrome session import.
     func loginToSuno() {
-        guard isBootstrapped else {
-            errorMessage = "Set up Suno first (bootstrap required)."
-            appendLog("[Login] Cannot login — not bootstrapped.")
-            return
-        }
-        guard loginState != .loggingIn else {
-            appendLog("[Login] Already logging in...")
-            return
-        }
-
-        let dir = serverDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-        let effectiveDir: String
-        if dir.isEmpty {
-            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            effectiveDir = appSupport.appendingPathComponent("Novotro Score/suno-mcp").path
-        } else {
-            effectiveDir = dir
-        }
-
-        let customPython = pythonExecutablePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let pythonPath = resolvedPythonPath(customPath: customPython, serverDirectory: effectiveDir) else {
-            errorMessage = "python3 not found."
-            appendLog("[Login] Cannot find Python executable.")
-            return
-        }
-
-        let browserData = browserDataDirectory
-        // Ensure browser data directory exists
-        try? FileManager.default.createDirectory(
-            atPath: browserData,
-            withIntermediateDirectories: true
-        )
-
-        let script = #"""
-        import asyncio, sys, signal
-
-        async def main():
-            user_data_dir = sys.argv[1]
-            try:
-                from playwright.async_api import async_playwright
-            except ImportError as e:
-                print(f"ERROR: {e}", flush=True)
-                return
-
-            browser_context = None
-            try:
-                pw = await async_playwright().start()
-                browser_context = await pw.chromium.launch_persistent_context(
-                    user_data_dir=user_data_dir,
-                    headless=False,
-                    viewport={"width": 1200, "height": 800},
-                    args=[
-                        "--no-first-run",
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-infobars",
-                    ],
-                )
-            except Exception as e:
-                print(f"ERROR: Failed to launch browser: {e}", flush=True)
-                return
-
-            page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
-
-            # Navigate to Suno - use try/except so browser stays open on failure
-            try:
-                await page.goto("https://suno.com", wait_until="domcontentloaded", timeout=30000)
-            except Exception as e:
-                print(f"ERROR: Navigation failed: {e}", flush=True)
-                print("BROWSER_OPEN", flush=True)
-                # Don't return — leave browser open so user can navigate manually
-
-            print(f"BROWSER_OPEN", flush=True)
-            print(f"PAGE_URL: {page.url}", flush=True)
-
-            # Monitor for login success or browser close
-            # The browser stays open until login is detected or user closes it
-            logged_in = False
-            try:
-                while True:
-                    # Check if browser/page was closed by user
-                    try:
-                        all_pages = browser_context.pages
-                        if not all_pages:
-                            print("BROWSER_CLOSED", flush=True)
-                            break
-                        current_page = all_pages[-1]  # Use the most recent page
-                        url = current_page.url
-                    except Exception:
-                        print("BROWSER_CLOSED", flush=True)
-                        break
-
-                    # Check for logged-in URLs
-                    logged_in_indicators = ["/create", "/feed", "/library", "/playlist/"]
-                    # Exclude signin/signup pages that might contain these as subpaths
-                    is_auth_page = "/signin" in url or "/signup" in url or "accounts.google" in url or "clerk" in url
-                    if not is_auth_page and any(ind in url for ind in logged_in_indicators):
-                        print("LOGIN_SUCCESS", flush=True)
-                        logged_in = True
-                        await asyncio.sleep(3)  # Brief pause so user sees it worked
-                        break
-
-                    await asyncio.sleep(1)
-
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:
-                print(f"ERROR: Poll loop: {e}", flush=True)
-
-            # Clean up
-            try:
-                if browser_context:
-                    await browser_context.close()
-            except Exception:
-                pass
-            try:
-                await pw.stop()
-            except Exception:
-                pass
-
-            if not logged_in:
-                print("BROWSER_CLOSED", flush=True)
-
-        asyncio.run(main())
-        """#
-
-        // Write script to temp file
-        let scriptURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("novotro-suno-login.py")
-        try? script.write(to: scriptURL, atomically: true, encoding: .utf8)
-
-        loginState = .loggingIn
-        onLoginStateChange?(.loggingIn)
-        appendLog("[Login] Opening browser for Suno login...")
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: pythonPath)
-        proc.arguments = [scriptURL.path, browserData]
-        proc.currentDirectoryURL = URL(fileURLWithPath: effectiveDir)
-
-        // Set PYTHONPATH so Playwright can be found from the venv
-        var env = ProcessInfo.processInfo.environment
-        let srcDir = (effectiveDir as NSString).appendingPathComponent("src")
-        let existingPythonPath = env["PYTHONPATH"] ?? ""
-        env["PYTHONPATH"] = existingPythonPath.isEmpty ? srcDir : "\(srcDir):\(existingPythonPath)"
-        proc.environment = env
-
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        proc.standardOutput = outPipe
-        proc.standardError = errPipe
-
-        outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                for line in text.components(separatedBy: .newlines) where !line.isEmpty {
-                    if line.contains("LOGIN_SUCCESS") {
-                        self.loginState = .loggedIn
-                        self.onLoginStateChange?(.loggedIn)
-                        self.appendLog("[Login] Login successful! Browser closing automatically.")
-                        UserDefaults.standard.set(true, forKey: "sunoLoggedIn")
-                    } else if line.contains("BROWSER_CLOSED") {
-                        if self.loginState != .loggedIn {
-                            self.loginState = .notLoggedIn
-                            self.onLoginStateChange?(.notLoggedIn)
-                            self.appendLog("[Login] Browser closed without completing login.")
-                        }
-                    } else if line.hasPrefix("BROWSER_OPEN") {
-                        self.appendLog("[Login] Browser opened — please sign in to Suno.")
-                    } else if line.hasPrefix("PAGE_URL:") {
-                        self.appendLog("[Login] Navigated to: \(line.dropFirst(10))")
-                    } else if line.hasPrefix("ERROR:") {
-                        self.appendLog("[Login] \(line)")
-                        self.errorMessage = String(line.dropFirst(7))
-                    }
-                }
-            }
-        }
-
-        errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor [weak self] in
-                for line in text.components(separatedBy: .newlines) where !line.isEmpty {
-                    // Filter out noisy Playwright/Chromium stderr
-                    if !line.contains("DevTools") && !line.contains("gpu_") {
-                        self?.appendLog("[Login stderr] \(line)")
-                    }
-                }
-            }
-        }
-
-        proc.terminationHandler = { [weak self] terminated in
-            outPipe.fileHandleForReading.readabilityHandler = nil
-            errPipe.fileHandleForReading.readabilityHandler = nil
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.loginProcess = nil
-                if self.loginState == .loggingIn {
-                    // Process exited without LOGIN_SUCCESS
-                    self.loginState = .notLoggedIn
-                    self.onLoginStateChange?(.notLoggedIn)
-                    if terminated.terminationStatus != 0 {
-                        self.appendLog("[Login] Login process exited with code \(terminated.terminationStatus)")
-                    }
-                }
-                // Clean up temp script
-                try? FileManager.default.removeItem(at: scriptURL)
-            }
-        }
-
-        do {
-            try proc.run()
-            loginProcess = proc
-        } catch {
-            loginState = .notLoggedIn
-            onLoginStateChange?(.notLoggedIn)
-            appendLog("[Login] Failed to launch browser: \(error.localizedDescription)")
-        }
+        errorMessage = "Visible-browser login is deprecated. Log into suno.com in Chrome, then use Import from Chrome."
+        appendLog("[Login] Visible-browser login is deprecated. Use Chrome session import instead.")
     }
 
     /// Check if a previous login session exists (cookie jar or persistent browser data).
@@ -723,40 +513,28 @@ final class SunoServerManager: @unchecked Sendable {
 
     // MARK: - Bootstrap
 
-    /// First-run bootstrap: clone suno-mcp, create venv, install deps, install Playwright, configure, start.
+    /// Prepare the installed local suno-mcp checkout, configure defaults, and start it.
     func bootstrap(progress: @escaping @Sendable (BootstrapStep) -> Void) async throws {
         let fm = FileManager.default
-        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let novotroDir = appSupport.appendingPathComponent("Novotro Score")
-        let sunoDir = novotroDir.appendingPathComponent("suno-mcp")
+        let sunoDir = URL(fileURLWithPath: defaultServerDirectory)
 
-        // Step 1: Check existing
         bootstrapStep = .checking
         onStateChange?(state, bootstrapStep, errorMessage)
         progress(.checking)
-        if fm.fileExists(atPath: sunoDir.appendingPathComponent("src/suno_mcp").path) {
-            appendLog("[Bootstrap] Existing installation found, skipping clone/install")
-        } else {
-            // Step 2: Clone
-            bootstrapStep = .cloning
-            onStateChange?(state, bootstrapStep, errorMessage)
-            progress(.cloning)
-            try fm.createDirectory(at: novotroDir, withIntermediateDirectories: true)
-            if fm.fileExists(atPath: sunoDir.path) {
-                try fm.removeItem(at: sunoDir)
-            }
-            do {
-                try await runProcess(
-                    executable: "/usr/bin/git",
-                    arguments: ["clone", "--depth", "1", "https://github.com/sandraschi/suno-mcp.git", sunoDir.path],
-                    directory: novotroDir.path
-                )
-            } catch {
-                try? fm.removeItem(at: sunoDir)
-                throw error
-            }
+        guard fm.fileExists(atPath: sunoDir.appendingPathComponent("src/suno_mcp").path),
+              fm.fileExists(atPath: sunoDir.appendingPathComponent("requirements.txt").path)
+        else {
+            throw NSError(
+                domain: "SunoBootstrap",
+                code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Current Suno MCP checkout not found at \(sunoDir.path). Install or sync the patched local server first."
+                ]
+            )
+        }
 
-            // Step 3: Create venv
+        let venvPython = sunoDir.appendingPathComponent("venv/bin/python")
+        if !fm.fileExists(atPath: venvPython.path) {
             bootstrapStep = .creatingVenv
             onStateChange?(state, bootstrapStep, errorMessage)
             progress(.creatingVenv)
@@ -769,40 +547,38 @@ final class SunoServerManager: @unchecked Sendable {
                 arguments: ["-m", "venv", "venv"],
                 directory: sunoDir.path
             )
-
-            // Step 4: Install deps
-            bootstrapStep = .installingDeps
-            onStateChange?(state, bootstrapStep, errorMessage)
-            progress(.installingDeps)
-            let pipPath = sunoDir.appendingPathComponent("venv/bin/pip").path
-            try await runProcess(
-                executable: pipPath,
-                arguments: ["install", "-r", "requirements.txt"],
-                directory: sunoDir.path
-            )
-
-            // Step 5: Install Playwright Chromium (large download, no timeout)
-            bootstrapStep = .installingPlaywright
-            onStateChange?(state, bootstrapStep, errorMessage)
-            progress(.installingPlaywright)
-            let venvPython = sunoDir.appendingPathComponent("venv/bin/python").path
-            try await runProcess(
-                executable: venvPython,
-                arguments: ["-m", "playwright", "install", "chromium"],
-                directory: sunoDir.path,
-                timeout: nil
-            )
+        } else {
+            appendLog("[Bootstrap] Reusing existing virtual environment at \(venvPython.path)")
         }
 
-        // Step 6: Configure UserDefaults
+        bootstrapStep = .installingDeps
+        onStateChange?(state, bootstrapStep, errorMessage)
+        progress(.installingDeps)
+        let pipPath = sunoDir.appendingPathComponent("venv/bin/pip").path
+        try await runProcess(
+            executable: pipPath,
+            arguments: ["install", "-r", "requirements.txt"],
+            directory: sunoDir.path,
+            timeout: nil
+        )
+
+        bootstrapStep = .installingPlaywright
+        onStateChange?(state, bootstrapStep, errorMessage)
+        progress(.installingPlaywright)
+        try await runProcess(
+            executable: venvPython.path,
+            arguments: ["-m", "playwright", "install", "chromium"],
+            directory: sunoDir.path,
+            timeout: nil
+        )
+
         bootstrapStep = .configuring
         onStateChange?(state, bootstrapStep, errorMessage)
         progress(.configuring)
         serverDirectory = sunoDir.path
         autoStart = true
-        UserDefaults.standard.set("http://localhost:3000", forKey: "sunoServerURL")
+        UserDefaults.standard.set("http://127.0.0.1:3001", forKey: "sunoServerURL")
 
-        // Step 7: Start server
         bootstrapStep = .starting
         onStateChange?(state, bootstrapStep, errorMessage)
         progress(.starting)
@@ -938,9 +714,10 @@ final class SunoServerManager: @unchecked Sendable {
 
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: pythonPath)
-        // Launch the FastAPI HTTP server (main_api), not the stdio MCP server (main).
-        // Using -c is reliable whether or not the package is pip-installed.
-        proc.arguments = ["-c", "from suno_mcp.server import main_api; main_api()"]
+        proc.arguments = [
+            "-c",
+            "import time, logging, uvicorn; logging.basicConfig(level=logging.INFO); from suno_mcp.server import fastapi_app; fastapi_app.start_time = time.time(); uvicorn.run(fastapi_app, host=\"127.0.0.1\", port=3001)"
+        ]
         proc.currentDirectoryURL = URL(fileURLWithPath: directory)
 
         // Inherit environment + set PYTHONPATH to include src/ directory
@@ -952,9 +729,9 @@ final class SunoServerManager: @unchecked Sendable {
         let srcDir = (directory as NSString).appendingPathComponent("src")
         let existingPythonPath = env["PYTHONPATH"] ?? ""
         env["PYTHONPATH"] = existingPythonPath.isEmpty ? srcDir : "\(srcDir):\(existingPythonPath)"
-        // Pass persistent browser data directory so suno-mcp reuses login session
+        env["SUNO_HOST"] = "127.0.0.1"
+        env["SUNO_PORT"] = "3001"
         env["SUNO_BROWSER_DATA"] = browserDataDirectory
-        env["SUNO_PORT"] = String(configuredServerPort)
         proc.environment = env
 
         // Set up pipes for stdout and stderr

@@ -92,6 +92,7 @@ struct ContentView: View {
                         Text(projectTitle)
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(OperaChromeTheme.textPrimary)
+                            .lineLimit(1)
                         Text(activeDetailTitle)
                             .font(.system(size: 11))
                             .foregroundStyle(OperaChromeTheme.textSecondary)
@@ -119,24 +120,7 @@ struct ContentView: View {
                         }
                     }
 
-                    HStack(spacing: 6) {
-                        OperaChromeActionButton(
-                            systemImage: sidebarVisible ? "sidebar.left" : "sidebar.right",
-                            isSelected: sidebarVisible
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                sidebarVisible.toggle()
-                            }
-                        }
-                        OperaChromeActionButton(
-                            systemImage: "info.circle",
-                            isSelected: showInspector
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showInspector.toggle()
-                            }
-                        }
-                    }
+                    EmptyView()
                 }
             } content: {
                 pageContent

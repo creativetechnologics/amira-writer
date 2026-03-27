@@ -375,6 +375,25 @@ struct OWSSongDocument: Identifiable, Hashable, Sendable {
         let patched = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try patched.write(to: url, options: .atomic)
     }
+
+    static func patchTitle(
+        at url: URL,
+        title: String,
+        canonicalTitle: String,
+        updatedAt: Date
+    ) throws {
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "OWSSongDocument", code: 2, userInfo: [NSLocalizedDescriptionKey: "Cannot parse OWS for patching"])
+        }
+
+        root["title"] = title
+        root["canonicalTitle"] = canonicalTitle
+        root["updatedAt"] = isoFormatter.string(from: updatedAt)
+
+        let patched = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try patched.write(to: url, options: .atomic)
+    }
 }
 
 struct OWSSongAsset: Identifiable, @unchecked Sendable {
@@ -646,8 +665,12 @@ enum OWPProjectIO {
             return nil
         }
 
+        // Truncate to integer seconds so snapshots round-trip through ISO 8601
+        // encoding without false-positive diffs from sub-second precision loss.
+        let truncated = Date(timeIntervalSinceReferenceDate: modificationDate.timeIntervalSinceReferenceDate.rounded(.down))
+
         return ProjectFileSnapshot(
-            modificationDate: modificationDate,
+            modificationDate: truncated,
             fileSize: Int64(values.fileSize ?? 0)
         )
     }
@@ -818,6 +841,9 @@ final class ScriptStore {
             return
         }
 
+        let isSwitchingProjects = projectURL?.standardizedFileURL.path != nil
+            && projectURL?.standardizedFileURL.path != url.standardizedFileURL.path
+
         scratchpadSaveWorkItem?.cancel()
         backgroundIndexRefreshTask?.cancel()
         isLoadingProject = true
@@ -880,6 +906,12 @@ final class ScriptStore {
 
             // Persist last opened path
             UserDefaults.standard.set(url.path, forKey: "lastProjectPath")
+
+            if isSwitchingProjects {
+                selectedSongPath = nil
+                scrollTarget = nil
+                activeSongPath = nil
+            }
 
             if let loaded {
                 for var asset in loaded.assets {
@@ -975,6 +1007,7 @@ final class ScriptStore {
             }
 
             isDirty = false
+            refreshSaveIndicator()
 
             // Migrate legacy synopsis (Synopsis/synopsis.txt with {{{SCENE:...}}} markers)
             // into per-scene embedded {{{SYNOPSIS}}} blocks in each libretto file.
@@ -1001,13 +1034,7 @@ final class ScriptStore {
             isSaving = true
             saveScratchpad()
             isSaving = false
-            saveIndicator = .saved
-            statusMessage = "Saved scratchpad"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                if self?.saveIndicator == .saved {
-                    self?.saveIndicator = .idle
-                }
-            }
+            refreshSaveIndicator()
             return
         }
 
@@ -1062,9 +1089,9 @@ final class ScriptStore {
                 guard let self else { return }
                 self.isSaving = false
                 if let saveError {
-                    self.saveIndicator = .idle
                     // Re-mark songs as dirty since save failed
                     self.dirtySongPaths.formUnion(dirtyPaths)
+                    self.refreshSaveIndicator()
                     if let conflict = saveError as? SaveConflictError {
                         self.handleSaveConflict(conflictPaths: conflict.conflictPaths)
                     } else {
@@ -1074,8 +1101,7 @@ final class ScriptStore {
                     if self.dirtySongPaths.isEmpty {
                         self.isDirty = false
                     }
-                    self.saveIndicator = .saved
-                    self.statusMessage = "Saved"
+                    self.refreshSaveIndicator()
                     let historyPaths = isStandalone
                         ? Array(dirtyPaths)
                         : songsToSave.map(\.relativePath)
@@ -1099,12 +1125,6 @@ final class ScriptStore {
                         )
                     } else {
                         self.persistProjectHistoryState()
-                    }
-
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                        if self?.saveIndicator == .saved {
-                            self?.saveIndicator = .idle
-                        }
                     }
                 }
             }
@@ -1197,10 +1217,23 @@ final class ScriptStore {
         guard let idx = songAssets.firstIndex(where: { $0.relativePath == path }) else { return }
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let wasDirty = dirtySongPaths.contains(path)
         songAssets[idx].document.title = trimmed
         songAssets[idx].document.canonicalTitle = trimmed.lowercased()
         songAssets[idx].document.updatedAt = Date()
         markDirty(path: path)
+        guard persistRenamedSongTitle(path: path, preserveDirtyState: wasDirty) else { return }
+        syncSongTitleToDatabase(path: path)
+    }
+
+    @discardableResult
+    func selectScene(relativePath: String) -> Bool {
+        guard songAssets.contains(where: { $0.relativePath == relativePath }) else { return false }
+        selectedSongPath = relativePath
+        activeSongPath = relativePath
+        scrollTarget = relativePath
+        ensureSceneHydrated(path: relativePath)
+        return true
     }
 
     // MARK: - Add Scene
@@ -1534,7 +1567,7 @@ final class ScriptStore {
 
         rebuildScratchpadDocument()
         isScratchpadDirty = true
-        saveIndicator = .idle
+        refreshSaveIndicator()
         scheduleScratchpadSave()
     }
 
@@ -1672,6 +1705,7 @@ final class ScriptStore {
                 lastKnownFileSnapshots[ProjectDatabaseBridge.scratchpadPath] = snapshot
             }
             isScratchpadDirty = false
+            refreshSaveIndicator()
             if let projectDatabase,
                let data = scratchpadDocumentText.data(using: .utf8) {
                 Task {
@@ -1879,8 +1913,109 @@ final class ScriptStore {
         }
     }
 
+    private func currentSongStubs(for projectURL: URL) -> [SongStub] {
+        guard projectURL.pathExtension.lowercased() != "ows" else {
+            return songStubs
+        }
+        return OWPProjectIO.enumerateSongStubs(in: projectURL.appendingPathComponent(OWPProjectIO.songsDir))
+    }
+
+    private func resetTrackedFileSnapshots() {
+        lastKnownModDates.removeAll()
+        lastKnownFileSnapshots.removeAll()
+        recordModDates()
+    }
+
+    private func reloadSongMembershipFromDisk(stubs: [SongStub], projectURL: URL) {
+        let previousPaths = songStubs.map(\.relativePath)
+        let currentPaths = stubs.map(\.relativePath)
+        guard previousPaths != currentPaths else { return }
+
+        let previousPathSet = Set(previousPaths)
+        let currentPathSet = Set(currentPaths)
+        let removedPaths = previousPaths.filter { !currentPathSet.contains($0) }
+        let addedPaths = currentPaths.filter { !previousPathSet.contains($0) }
+        let changedExistingStubs: [(SongStub, Date)] = stubs.compactMap { stub in
+            guard previousPathSet.contains(stub.relativePath),
+                  let snapshot = fileSnapshot(for: stub.fileURL),
+                  snapshot != lastKnownFileSnapshots[stub.relativePath] else {
+                return nil
+            }
+            return (stub, snapshot.modificationDate)
+        }
+
+        let assetsByPath = Dictionary(uniqueKeysWithValues: songAssets.map { ($0.relativePath, $0) })
+        let librettoByPath = Dictionary(uniqueKeysWithValues: librettoFiles.map { ($0.relativePath, $0) })
+
+        songStubs = stubs
+        songAssets = stubs.map { stub in
+            assetsByPath[stub.relativePath]
+                ?? OWSSongAsset(
+                    relativePath: stub.relativePath,
+                    document: ProjectDatabaseBridge.makePlaceholderDocument(from: stub)
+                )
+        }
+        librettoFiles = stubs.map { stub in
+            librettoByPath[stub.relativePath]
+                ?? ProjectTextFile(id: UUID(), relativePath: stub.relativePath, content: "")
+        }
+
+        hydratedScenePaths.formIntersection(currentPathSet)
+        hydratingScenePaths.formIntersection(currentPathSet)
+        dirtySongPaths.formIntersection(currentPathSet)
+
+        if let selectedSongPath, !currentPathSet.contains(selectedSongPath) {
+            self.selectedSongPath = songAssets.first?.relativePath
+        }
+        if let activeSongPath, !currentPathSet.contains(activeSongPath) {
+            self.activeSongPath = songAssets.first?.relativePath
+        }
+        if let scrollTarget, !currentPathSet.contains(scrollTarget) {
+            self.scrollTarget = nil
+        }
+
+        normalizeScratchpadFiles()
+        resetTrackedFileSnapshots()
+        isDirty = hasUnsavedChanges
+        refreshSaveIndicator()
+
+        if let projectDatabase, projectURL.pathExtension.lowercased() != "ows" {
+            Task {
+                try? await projectDatabase.ensureCurrentIndex(forceRebuild: true)
+            }
+        }
+
+        for (stub, modDate) in changedExistingStubs {
+            reloadExternallyChanged(stub: stub, modDate: modDate)
+        }
+        for path in addedPaths {
+            ensureSceneHydrated(path: path)
+        }
+
+        let changedPaths = Array(Set(addedPaths + removedPaths)).sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+        guard !changedPaths.isEmpty else { return }
+
+        beginAgentSync()
+        appendProjectHistory(
+            kind: .externalReload,
+            title: "Reloaded external project changes",
+            message: summarizeTrackedPaths(changedPaths),
+            relativePaths: changedPaths
+        )
+        refreshGitHistory()
+        markAgentUpdated(paths: changedPaths)
+        statusMessage = "Reloaded external project changes"
+    }
+
     private func checkForExternalChanges() {
         guard let url = fileProjectURL, !isSaving, !isLoadingProject else { return }
+
+        let currentStubs = currentSongStubs(for: url)
+        if currentStubs.map(\.relativePath) != songStubs.map(\.relativePath) {
+            reloadSongMembershipFromDisk(stubs: currentStubs, projectURL: url)
+        }
 
         for stub in songStubs {
             guard let snapshot = fileSnapshot(for: stub.fileURL) else { continue }
@@ -2055,8 +2190,26 @@ final class ScriptStore {
     private func markDirty(path: String, status: String = "Unsaved changes") {
         isDirty = true
         dirtySongPaths.insert(path)
-        saveIndicator = .idle
-        statusMessage = status
+        refreshSaveIndicator()
+        if status != "Unsaved changes" {
+            statusMessage = status
+        }
+    }
+
+    private var hasUnsavedChanges: Bool {
+        !dirtySongPaths.isEmpty || isScratchpadDirty
+    }
+
+    private func refreshSaveIndicator() {
+        if isSaving {
+            saveIndicator = .saving
+            return
+        }
+        guard projectURL != nil else {
+            saveIndicator = .idle
+            return
+        }
+        saveIndicator = hasUnsavedChanges ? .unsavedChanges : .saved
     }
 
     private func beginAgentSync() {
@@ -2159,8 +2312,12 @@ final class ScriptStore {
             return nil
         }
 
+        // Truncate to integer seconds so snapshots round-trip through ISO 8601
+        // encoding without false-positive diffs from sub-second precision loss.
+        let truncated = Date(timeIntervalSinceReferenceDate: modificationDate.timeIntervalSinceReferenceDate.rounded(.down))
+
         return ProjectFileSnapshot(
-            modificationDate: modificationDate,
+            modificationDate: truncated,
             fileSize: Int64(values.fileSize ?? 0)
         )
     }
@@ -2508,6 +2665,60 @@ final class ScriptStore {
         pendingDatabaseSongSyncs[path]?.cancel()
         pendingDatabaseSongSyncs[path] = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: workItem)
+    }
+
+    private func persistRenamedSongTitle(path: String, preserveDirtyState wasDirty: Bool) -> Bool {
+        guard let projectURL = fileProjectURL,
+              let asset = songAssets.first(where: { $0.relativePath == path }) else {
+            return false
+        }
+
+        let fileURL: URL
+        if projectURL.pathExtension.lowercased() == "ows" {
+            fileURL = projectURL
+        } else {
+            fileURL = projectURL.appendingPathComponent(path)
+        }
+
+        do {
+            try OWSSongDocument.patchTitle(
+                at: fileURL,
+                title: asset.document.title,
+                canonicalTitle: asset.document.canonicalTitle,
+                updatedAt: asset.document.updatedAt
+            )
+
+            if let snapshot = fileSnapshot(for: fileURL) {
+                lastKnownModDates[path] = snapshot.modificationDate
+                lastKnownFileSnapshots[path] = snapshot
+            }
+
+            if !wasDirty {
+                dirtySongPaths.remove(path)
+                isDirty = hasUnsavedChanges
+                refreshSaveIndicator()
+            }
+
+            return true
+        } catch {
+            statusMessage = "Rename failed: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func syncSongTitleToDatabase(path: String) {
+        guard let projectDatabase,
+              let asset = songAssets.first(where: { $0.relativePath == path }) else {
+            return
+        }
+
+        Task {
+            try? await ProjectDatabaseBridge.syncSongTitle(
+                asset: asset,
+                database: projectDatabase,
+                actorID: databaseSourceID
+            )
+        }
     }
 
     private func syncSongsToDatabase(paths: Set<String>) {

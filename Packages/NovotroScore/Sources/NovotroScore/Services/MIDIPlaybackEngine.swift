@@ -80,6 +80,8 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     private var patchSignatureByMappingKey: [String: SamplerPatchSignature] = [:]
     private let previewSamplerKey = "__preview__"
     private var previewMapping: InstrumentMapping?
+    private var livePreviewPitch: UInt8?
+    private var previewStopWorkItem: DispatchWorkItem?
     private var useConservativeSequencerConfig = false
     private var preferredBufferFrames: UInt32 = 512
     private var masterOutputVolume: Float = 0.92
@@ -550,6 +552,27 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         audioQueue.async { [weak self] in
             guard let self else { return }
             self.previewOnAudioQueue(pitch: pitch, velocity: velocity, duration: duration)
+        }
+    }
+
+    func startLivePreview(pitch: Int, velocity: Int = 104) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.startLivePreviewOnAudioQueue(pitch: pitch, velocity: velocity)
+        }
+    }
+
+    func updateLivePreview(pitch: Int, velocity: Int = 104) {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.startLivePreviewOnAudioQueue(pitch: pitch, velocity: velocity)
+        }
+    }
+
+    func stopLivePreview() {
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+            self.stopLivePreviewOnAudioQueue()
         }
     }
 
@@ -3088,17 +3111,61 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             return
         }
 
+        previewStopWorkItem?.cancel()
+        previewStopWorkItem = nil
+        stopLivePreviewOnAudioQueue()
+
         let clampedPitch = UInt8(min(max(pitch, 0), 127))
         let clampedVelocity = UInt8(min(max(velocity, 1), 127))
 
         sampler.startNote(clampedPitch, withVelocity: clampedVelocity, onChannel: 0)
-        audioQueue.asyncAfter(deadline: .now() + max(0.05, duration)) { [weak self] in
+        let work = DispatchWorkItem { [weak self] in
             guard let self,
                   let previewSampler = self.samplerByMappingKey[self.previewSamplerKey] else {
                 return
             }
             previewSampler.stopNote(clampedPitch, onChannel: 0)
         }
+        previewStopWorkItem = work
+        audioQueue.asyncAfter(deadline: .now() + max(0.05, duration), execute: work)
+    }
+
+    private func startLivePreviewOnAudioQueue(pitch: Int, velocity: Int) {
+        let sampler = sampler(for: previewSamplerKey, mapping: previewMapping)
+        guard configureAudioGraphIfNeeded() else {
+            return
+        }
+
+        previewStopWorkItem?.cancel()
+        previewStopWorkItem = nil
+
+        let clampedPitch = UInt8(min(max(pitch, 0), 127))
+        let clampedVelocity = UInt8(min(max(velocity, 1), 127))
+
+        if let activePitch = livePreviewPitch, activePitch == clampedPitch {
+            return
+        }
+
+        if let activePitch = livePreviewPitch {
+            sampler.stopNote(activePitch, onChannel: 0)
+        }
+
+        sampler.startNote(clampedPitch, withVelocity: clampedVelocity, onChannel: 0)
+        livePreviewPitch = clampedPitch
+    }
+
+    private func stopLivePreviewOnAudioQueue() {
+        previewStopWorkItem?.cancel()
+        previewStopWorkItem = nil
+
+        guard let activePitch = livePreviewPitch,
+              let sampler = samplerByMappingKey[previewSamplerKey] else {
+            livePreviewPitch = nil
+            return
+        }
+
+        sampler.stopNote(activePitch, onChannel: 0)
+        livePreviewPitch = nil
     }
 
     private func scheduleAudioClips(
@@ -3770,6 +3837,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         stopAutomationTimer()
         stopLoopRecordingTimer()
         tearDownMetronomeOnAudioQueue()
+        stopLivePreviewOnAudioQueue()
         removeMeterTaps()
         stopMeterPublishTimer()
         cancelHostedMIDIDelivery()

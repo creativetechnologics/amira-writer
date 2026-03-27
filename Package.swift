@@ -10,6 +10,10 @@ let package = Package(
         .library(
             name: "NovotroWriteUI",
             targets: ["NovotroWriteUI"]
+        ),
+        .library(
+            name: "NovotroMixUI",
+            targets: ["NovotroMixUI"]
         )
     ],
     dependencies: [
@@ -24,11 +28,17 @@ let package = Package(
             path: "Sources/NovotroWrite",
             exclude: ["NovotroWriteApp.swift"]
         ),
+        .target(
+            name: "NovotroMixUI",
+            dependencies: ["NovotroProjectKit"],
+            path: "Sources/NovotroMix"
+        ),
         .executableTarget(
             name: "NovotroOpera",
             dependencies: [
                 "NovotroProjectKit",
                 "NovotroWriteUI",
+                "NovotroMixUI",
                 .product(name: "NovotroScoreUI", package: "NovotroScore"),
                 .product(name: "NovotroAnimateUI", package: "NovotroAnimate")
             ],
@@ -38,6 +48,11 @@ let package = Package(
             name: "NovotroWriteTests",
             dependencies: ["NovotroWriteUI", "NovotroProjectKit"],
             path: "Tests/NovotroWriteTests"
+        ),
+        .testTarget(
+            name: "NovotroMixTests",
+            dependencies: ["NovotroMixUI", "NovotroProjectKit"],
+            path: "Tests/NovotroMixTests"
         )
     ]
 )

@@ -19,6 +19,8 @@ struct MetalDirtyFlags: OptionSet, Sendable {
     static let all: MetalDirtyFlags = [.grid, .notes, .ghostNotes, .playhead, .velocity, .labels, .highlight]
 }
 
+let pianoRollMinimumNoteWidth: CGFloat = 8
+
 // MARK: - PianoRollEditorView
 
 /// The main AppKit container for the piano roll editor surface.
@@ -298,6 +300,8 @@ final class PianoRollEditorView: NSView {
 
     /// Called when the user clicks on the keyboard strip to preview a pitch.
     var onPreviewPitch: ((Int) -> Void)?
+    /// Called when keyboard preview interaction ends.
+    var onEndPreviewPitch: (() -> Void)?
 
     /// Called when the user clicks or drags on the ruler to seek.
     var onSeek: ((Int) -> Void)?
@@ -476,6 +480,9 @@ final class PianoRollEditorView: NSView {
         keyboardView.rowHeight = rowHeight
         keyboardView.onPreviewPitch = { [weak self] pitch in
             self?.onPreviewPitch?(pitch)
+        }
+        keyboardView.onEndPreviewPitch = { [weak self] in
+            self?.onEndPreviewPitch?()
         }
         addSubview(keyboardView)
     }
@@ -924,6 +931,18 @@ final class PianoRollEditorView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         updateCursorForEvent(event)
+    }
+
+    func refreshCursor() {
+        guard let window, let provider = cursorProvider else { return }
+        let locationInWindow = window.mouseLocationOutsideOfEventStream
+        let locationInScroll = scrollView.convert(locationInWindow, from: nil)
+        guard scrollView.bounds.contains(locationInScroll) else {
+            NSCursor.arrow.set()
+            return
+        }
+        let locationInCanvas = canvasView.convert(locationInWindow, from: nil)
+        provider(locationInCanvas).set()
     }
 
     private func updateCursorForEvent(_ event: NSEvent) {
@@ -1587,6 +1606,8 @@ final class PianoRollKeyboardView: NSView {
 
     /// Callback when the user clicks a key to preview a pitch.
     var onPreviewPitch: ((Int) -> Void)?
+    /// Called when the keyboard preview interaction ends.
+    var onEndPreviewPitch: (() -> Void)?
 
     /// Total grid height — keyboard drawing is clipped to this.
     var gridHeight: CGFloat = 0
@@ -1659,10 +1680,6 @@ final class PianoRollKeyboardView: NSView {
             kCTFontAttributeName: blackCTFont,
             kCTForegroundColorAttributeName: blackLabelColor,
         ]
-        let whiteFontAscent = CTFontGetAscent(whiteCTFont)
-        let whiteFontDescent = CTFontGetDescent(whiteCTFont)
-        let blackFontAscent = CTFontGetAscent(blackCTFont)
-        let blackFontDescent = CTFontGetDescent(blackCTFont)
 
         // --- First pass: draw white key backgrounds ---
         for row in firstVisibleRow...lastVisibleRow {
@@ -1730,11 +1747,13 @@ final class PianoRollKeyboardView: NSView {
                 let label = noteName
                 let cfStr = CFAttributedStringCreate(nil, label as CFString, blackLabelAttrs as CFDictionary)!
                 let line = CTLineCreateWithAttributedString(cfStr)
-                let lineWidth = CTLineGetTypographicBounds(line, nil, nil, nil)
-                let lineHeight = blackFontAscent + blackFontDescent
-                let labelX = blackKeyWidth - CGFloat(lineWidth) - 4
+                var lineAscent: CGFloat = 0
+                var lineDescent: CGFloat = 0
+                let lineWidth = CGFloat(CTLineGetTypographicBounds(line, &lineAscent, &lineDescent, nil))
+                let lineHeight = lineAscent + lineDescent
+                let labelX = max(4, blackKeyWidth - lineWidth - 6)
                 context.saveGState()
-                context.translateBy(x: labelX, y: y + (rowHeight - lineHeight) / 2 + blackFontAscent)
+                context.translateBy(x: labelX, y: y + (rowHeight - lineHeight) / 2 + lineAscent)
                 context.scaleBy(x: 1, y: -1)
                 CTLineDraw(line, context)
                 context.restoreGState()
@@ -1744,11 +1763,13 @@ final class PianoRollKeyboardView: NSView {
                 let label = pitchClass == 0 ? "\(noteName)\(octave)" : noteName
                 let cfStr = CFAttributedStringCreate(nil, label as CFString, whiteLabelAttrs as CFDictionary)!
                 let line = CTLineCreateWithAttributedString(cfStr)
-                let lineWidth = CTLineGetTypographicBounds(line, nil, nil, nil)
-                let lineHeight = whiteFontAscent + whiteFontDescent
-                let labelX = whiteKeyWidth - CGFloat(lineWidth) - 4
+                var lineAscent: CGFloat = 0
+                var lineDescent: CGFloat = 0
+                _ = CTLineGetTypographicBounds(line, &lineAscent, &lineDescent, nil)
+                let lineHeight = lineAscent + lineDescent
+                let labelX: CGFloat = 6
                 context.saveGState()
-                context.translateBy(x: labelX, y: y + (rowHeight - lineHeight) / 2 + whiteFontAscent)
+                context.translateBy(x: labelX, y: y + (rowHeight - lineHeight) / 2 + lineAscent)
                 context.scaleBy(x: 1, y: -1)
                 CTLineDraw(line, context)
                 context.restoreGState()
@@ -1787,13 +1808,21 @@ final class PianoRollKeyboardView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         let pitch = pitchAtLocation(event)
-        if pitch >= minPitch && pitch <= maxPitch && pitch != lastPreviewedPitch {
-            lastPreviewedPitch = pitch
-            onPreviewPitch?(pitch)
+        if pitch >= minPitch && pitch <= maxPitch {
+            if pitch != lastPreviewedPitch {
+                lastPreviewedPitch = pitch
+                onPreviewPitch?(pitch)
+            }
+        } else if lastPreviewedPitch != -1 {
+            lastPreviewedPitch = -1
+            onEndPreviewPitch?()
         }
     }
 
     override func mouseUp(with event: NSEvent) {
+        if lastPreviewedPitch != -1 {
+            onEndPreviewPitch?()
+        }
         lastPreviewedPitch = -1
     }
 

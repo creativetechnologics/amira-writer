@@ -97,6 +97,23 @@ enum ProjectDatabaseBridge {
         try await database.upsertScene(scene, actorID: actorID)
     }
 
+    static func syncSongTitle(
+        asset: OWSSongAsset,
+        database: NovotroProjectConnection,
+        actorID: String
+    ) async throws {
+        guard var scene = try await database.loadScene(relativePath: asset.relativePath) else {
+            try await syncSong(asset: asset, database: database, actorID: actorID)
+            return
+        }
+
+        scene.title = asset.document.title
+        scene.canonicalTitle = asset.document.canonicalTitle
+        scene.updatedAt = asset.document.updatedAt
+        scene.rootJSON = patchTitleJSON(scene.rootJSON, asset: asset)
+        try await database.upsertScene(scene, actorID: actorID)
+    }
+
     static func decodeCharacters(from artifactData: Data?) throws -> [OPWCharacter] {
         guard let artifactData else { return [] }
         let decoded = try OWPProjectIO.configuredDecoder().decode(OPWCharactersFile.self, from: artifactData)
@@ -270,6 +287,14 @@ enum ProjectDatabaseBridge {
         root["updatedAt"] = OWSSongDocument.isoFormatter.string(from: asset.document.updatedAt)
         root["activeVersionID"] = asset.document.activeVersionID?.uuidString as Any
         root.removeValue(forKey: "versions")
+        return try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+    }
+
+    private static func patchTitleJSON(_ existingData: Data?, asset: OWSSongAsset) -> Data? {
+        var root = (existingData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) ?? [:]
+        root["title"] = asset.document.title
+        root["canonicalTitle"] = asset.document.canonicalTitle
+        root["updatedAt"] = OWSSongDocument.isoFormatter.string(from: asset.document.updatedAt)
         return try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
     }
 

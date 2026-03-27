@@ -47,7 +47,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NovotroScoreTests",
-            dependencies: ["NovotroScore", "NovotroProjectKit"],
+            dependencies: ["NovotroScoreUI", "NovotroProjectKit"],
             path: "Tests/NovotroScoreTests"
         ),
     ]

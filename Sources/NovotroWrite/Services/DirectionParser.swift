@@ -419,9 +419,15 @@ enum SummaryParser {
     /// Return the NSRange of the full summary block (for hiding in the editor).
     /// Checks triple-brace first, falls back to legacy double-brace.
     static func summaryRange(in content: String) -> NSRange? {
+        summaryRanges(in: content).first
+    }
+
+    /// Return the NSRanges of all summary blocks (for hiding in the editor).
+    static func summaryRanges(in content: String) -> [NSRange] {
         let nsString = content as NSString
         let range = NSRange(location: 0, length: nsString.length)
-        return pattern.firstMatch(in: content, range: range)?.range
-            ?? legacyPattern.firstMatch(in: content, range: range)?.range
+        var ranges = pattern.matches(in: content, range: range).map(\.range)
+        ranges.append(contentsOf: legacyPattern.matches(in: content, range: range).map(\.range))
+        return ranges.sorted { $0.location < $1.location }
     }
 }

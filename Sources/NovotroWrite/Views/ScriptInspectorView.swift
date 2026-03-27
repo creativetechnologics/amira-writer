@@ -1,6 +1,9 @@
 import SwiftUI
 import NovotroProjectKit
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 // MARK: - Inspector Section ID
 
@@ -8,6 +11,7 @@ enum InspectorSectionID: String, CaseIterable, Identifiable, Sendable {
     case tools
     case notes
     case versionHistory
+    case sunoLyrics
     case synopsis
 
     var id: String { rawValue }
@@ -17,6 +21,7 @@ enum InspectorSectionID: String, CaseIterable, Identifiable, Sendable {
         case .tools: return "Tools"
         case .notes: return "Notes"
         case .versionHistory: return "Version History"
+        case .sunoLyrics: return "Suno Lyrics"
         case .synopsis: return "Synopsis"
         }
     }
@@ -26,6 +31,7 @@ enum InspectorSectionID: String, CaseIterable, Identifiable, Sendable {
         case .tools: return "wrench.and.screwdriver"
         case .notes: return "note.text"
         case .versionHistory: return "clock.arrow.counterclockwise"
+        case .sunoLyrics: return "music.note"
         case .synopsis: return "doc.plaintext"
         }
     }
@@ -39,7 +45,7 @@ struct ScriptInspectorView: View {
     @AppStorage("novotro.write.inspector.activeTab") private var activeTab: String = InspectorSectionID.synopsis.rawValue
     @Environment(\.scenePhase) private var scenePhase
 
-    private let tabOrder: [InspectorSectionID] = [.synopsis, .tools, .notes, .versionHistory]
+    private let tabOrder: [InspectorSectionID] = [.synopsis, .tools, .notes, .versionHistory, .sunoLyrics]
 
     private var selectedTab: Binding<InspectorSectionID> {
         Binding(
@@ -92,6 +98,8 @@ struct ScriptInspectorView: View {
                 .padding(12)
         case .versionHistory:
             VersionHistorySectionContent(store: store)
+        case .sunoLyrics:
+            SunoLyricsSectionContent(store: store)
         case .synopsis:
             SynopsisSectionView(store: store)
         }
@@ -305,6 +313,12 @@ struct VersionHistorySectionContent: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                InspectorTabLead(
+                    title: "Version History",
+                    systemImage: InspectorSectionID.versionHistory.systemImage,
+                    subtitle: "Local scene revisions, project changes, and git commits for the current scene."
+                )
+
                 sceneVersionsSection
 
                 Divider()
@@ -347,6 +361,7 @@ struct VersionHistorySectionContent: View {
                     }
                 }
             }
+            .padding(12)
         }
     }
 
@@ -431,6 +446,144 @@ struct VersionHistorySectionContent: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
             }
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct SunoLyricsSectionContent: View {
+    @Bindable var store: ScriptStore
+
+    private var activeAsset: OWSSongAsset? {
+        guard let path = store.activeSongPath else { return nil }
+        return store.songAssets.first(where: { $0.relativePath == path })
+    }
+
+    private var formattedResult: SunoLyricsFormatter.Result {
+        let librettoText = store.librettoFiles.first(where: { $0.relativePath == store.activeSongPath })?.content
+        return SunoLyricsFormatter.format(
+            librettoText: librettoText,
+            speakerGenderHints: SunoLyricsFormatter.speakerGenderHints(from: store.characters)
+        )
+    }
+
+    private var hasFormattedSunoLyrics: Bool {
+        !formattedResult.formattedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                InspectorTabLead(
+                    title: "Suno Lyrics",
+                    systemImage: InspectorSectionID.sunoLyrics.systemImage,
+                    subtitle: "Current scene only. Deterministic parsing removes staging, preserves explicit tags, and auto-labels sung blocks for Suno."
+                )
+
+                if let asset = activeAsset {
+                    HStack(alignment: .center, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(asset.displayName)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.primary)
+                            Text("Shows only the scene currently in view.")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                        }
+
+                        Spacer(minLength: 12)
+
+                        Button {
+                            copyLyricsToPasteboard(formattedResult.formattedText)
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                        }
+                        .font(.system(size: 11, weight: .medium))
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .disabled(!hasFormattedSunoLyrics)
+                    }
+
+                    if formattedResult.speakerLabels.count > 1 {
+                        Text(
+                            formattedResult.speakerLabels
+                                .sorted { $0.key.localizedCaseInsensitiveCompare($1.key) == .orderedAscending }
+                                .map { "\($0.key) -> \($0.value)" }
+                                .joined(separator: "  |  ")
+                        )
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                    }
+
+                    if hasFormattedSunoLyrics {
+                        TextEditor(text: .constant(formattedResult.formattedText))
+                            .font(.system(size: 11, design: .monospaced))
+                            .frame(minHeight: 320)
+                            .textSelection(.enabled)
+                            .scrollContentBackground(.hidden)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color.white.opacity(0.03))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                            )
+                    } else {
+                        VStack(spacing: 8) {
+                            Image(systemName: "music.note")
+                                .font(.system(size: 20))
+                                .foregroundStyle(.tertiary)
+                            Text("No sung lines were detected\nin this scene yet")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 20)
+                    }
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "music.note")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.tertiary)
+                        Text("Scroll to a scene to see\nSuno-ready lyrics")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
+                }
+            }
+            .padding(12)
+        }
+        .scrollIndicators(.never)
+    }
+
+    private func copyLyricsToPasteboard(_ text: String) {
+        #if canImport(AppKit)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+}
+
+@available(macOS 26.0, *)
+private struct InspectorTabLead: View {
+    let title: String
+    let systemImage: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(subtitle)
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

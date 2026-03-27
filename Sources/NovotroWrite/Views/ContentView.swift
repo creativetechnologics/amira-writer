@@ -105,22 +105,6 @@ struct ContentView: View {
                             )
                         }
                         OperaChromeActionButton(
-                            systemImage: showSidebar ? "sidebar.left" : "sidebar.right",
-                            isSelected: showSidebar
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showSidebar.toggle()
-                            }
-                        }
-                        OperaChromeActionButton(
-                            systemImage: "info.circle",
-                            isSelected: showInspector
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showInspector.toggle()
-                            }
-                        }
-                        OperaChromeActionButton(
                             systemImage: "square.and.pencil",
                             isSelected: showScratchpad
                         ) {
@@ -142,7 +126,7 @@ struct ContentView: View {
                     OperaChromeDivider()
                     OperaChromeStatusBar(
                         statusMessage: store.statusMessage,
-                        isDirty: store.isDirty,
+                        isDirty: appName == "Amira Writer" ? nil : store.isDirty,
                         itemCountText: "\(store.songAssets.count) scenes"
                     )
                 }
@@ -218,4 +202,3 @@ struct WindowConfigurator: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
-

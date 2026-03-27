@@ -294,8 +294,32 @@ enum ChordDetector {
 /// SwiftUI toolbar hosted above the Metal editor view.
 /// Logic Pro-style 2-row layout: Control Bar (transport + LCD + modes) / Tool Bar (tools + snap + actions).
 @available(macOS 26.0, *)
+@Observable @MainActor
+final class PianoRollChromeState {
+    var tool: PianoRollToolChoice = .select
+    var snap: PianoRollSnapChoice = .sixteenth
+    var selectedNoteCount: Int = 0
+    var showGhostNotes = true
+    var scaleRoot: ScaleRoot = .c
+    var scaleType: ScaleType = .none
+    var velocityColorEnabled = false
+    var multiVoiceMode = false
+    var stampChordQuality: ChordQuality = .major
+    var stampChordRoot: ScaleRoot = .c
+    var stampOctave = 4
+    var detectedChordName: String?
+    var followMode: PlayheadFollowMode = .center
+    var playheadStopped = false
+    var canUndo = false
+    var canRedo = false
+    var pixelsPerQuarter: CGFloat = 128
+    var editorRowHeight: CGFloat = 16
+}
+
+@available(macOS 26.0, *)
 struct PianoRollToolbarView: View {
     var store: ScoreStore
+    var chrome: PianoRollChromeState
     unowned let controller: PianoRollViewController
 
     @State private var rewindTimer: Timer?
@@ -421,7 +445,7 @@ struct PianoRollToolbarView: View {
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(TransportButtonStyle())
-                .foregroundStyle(store.isPlaying ? .primary : (controller.playheadStopped ? .secondary : .primary))
+                .foregroundStyle(store.isPlaying ? .primary : (chrome.playheadStopped ? .secondary : .primary))
                 .help(store.isPlaying ? "Stop (keep position)" : "Return to start")
 
                 Button { controller.togglePlayPause() } label: {
@@ -481,12 +505,11 @@ struct PianoRollToolbarView: View {
     private var sectionModes: some View {
         toolbarSection {
             HStack(spacing: 5) {
-                modeToggle(icon: "scope", isActive: controller.followMode != .off,
-                           help: "Playhead follow: \(controller.followMode.rawValue)") {
+                modeToggle(icon: "scope", isActive: chrome.followMode != .off,
+                           help: "Playhead follow: \(chrome.followMode.rawValue)") {
                     let modes = PlayheadFollowMode.allCases
-                    let idx = modes.firstIndex(of: controller.followMode) ?? 0
+                    let idx = modes.firstIndex(of: chrome.followMode) ?? 0
                     controller.followMode = modes[(idx + 1) % modes.count]
-                    // (objectWillChange not needed with @Observable)
                 }
                 modeToggle(icon: "antenna.radiowaves.left.and.right",
                            isActive: store.midiInputMonitorEnabled, help: "MIDI Monitor") {
@@ -544,15 +567,14 @@ struct PianoRollToolbarView: View {
         toolbarSection {
             HStack(spacing: 1) {
                 ForEach(Array(PianoRollToolChoice.allCases), id: \.self) { item in
-                    let isSelected = controller.tool == item
+                    let isSelected = chrome.tool == item
                     Button {
                         controller.tool = item
-                        // (objectWillChange not needed with @Observable)
                     } label: {
                         Image(systemName: item.symbolName)
                             .font(.system(size: 13))
                             .frame(width: 26, height: 24)
-                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                            .foregroundStyle(isSelected ? Color.white : .secondary)
                     }
                     .buttonStyle(ToolSelectorStyle(isSelected: isSelected))
                     .help(item.rawValue)
@@ -567,7 +589,7 @@ struct PianoRollToolbarView: View {
                 Image(systemName: "magnet")
                     .font(.caption).foregroundStyle(.secondary)
                 Picker("", selection: Binding(
-                    get: { controller.snap },
+                    get: { chrome.snap },
                     set: { controller.snap = $0 }
                 )) {
                     ForEach(PianoRollSnapChoice.allCases) { value in
@@ -586,11 +608,11 @@ struct PianoRollToolbarView: View {
                 ToolbarHoverButton(action: { controller.undo() }, help: "Undo (Cmd-Z)") {
                     Image(systemName: "arrow.uturn.backward").frame(width: 22, height: 22)
                 }
-                .disabled(!controller.canUndo)
+                .disabled(!chrome.canUndo)
                 ToolbarHoverButton(action: { controller.redo() }, help: "Redo (Cmd-Shift-Z)") {
                     Image(systemName: "arrow.uturn.forward").frame(width: 22, height: 22)
                 }
-                .disabled(!controller.canRedo)
+                .disabled(!chrome.canRedo)
             }
         }
     }
@@ -604,11 +626,11 @@ struct PianoRollToolbarView: View {
                 miniButton("Dup", icon: "plus.square.on.square", help: "Duplicate (Cmd-D)") {
                     controller.duplicateSelected()
                 }
-                .disabled(controller.selectedNoteIDs.isEmpty)
+                .disabled(chrome.selectedNoteCount == 0)
                 miniButton("Del", icon: "trash", help: "Delete") {
                     controller.deleteSelected()
                 }
-                .disabled(controller.selectedNoteIDs.isEmpty)
+                .disabled(chrome.selectedNoteCount == 0)
                 miniButton("All", icon: "selection.pin.in.out", help: "Select All (Cmd-A)") {
                     controller.selectAllNotes()
                 }
@@ -620,19 +642,16 @@ struct PianoRollToolbarView: View {
         toolbarSection {
             HStack(spacing: 4) {
                 modeToggle(icon: "square.stack.3d.up.fill",
-                           isActive: controller.showGhostNotes, help: "Ghost notes") {
+                           isActive: chrome.showGhostNotes, help: "Ghost notes") {
                     controller.showGhostNotes.toggle()
-                    // (objectWillChange not needed with @Observable)
                 }
                 modeToggle(icon: "person.2.fill",
-                           isActive: controller.multiVoiceMode, activeColor: .cyan, help: "Voice lanes") {
+                           isActive: chrome.multiVoiceMode, activeColor: .cyan, help: "Voice lanes") {
                     controller.multiVoiceMode.toggle()
-                    // (objectWillChange not needed with @Observable)
                 }
                 modeToggle(icon: "paintpalette.fill",
-                           isActive: controller.velocityColorEnabled, activeColor: .orange, help: "Velocity coloring") {
+                           isActive: chrome.velocityColorEnabled, activeColor: .orange, help: "Velocity coloring") {
                     controller.velocityColorEnabled.toggle()
-                    // (objectWillChange not needed with @Observable)
                 }
             }
         }
@@ -642,7 +661,7 @@ struct PianoRollToolbarView: View {
         toolbarSection {
             HStack(spacing: 3) {
                 Picker("", selection: Binding(
-                    get: { controller.scaleType },
+                    get: { chrome.scaleType },
                     set: { controller.scaleType = $0 }
                 )) {
                     ForEach(ScaleType.allCases) { scale in
@@ -651,9 +670,9 @@ struct PianoRollToolbarView: View {
                 }
                 .pickerStyle(.menu)
                 .frame(width: 100)
-                if controller.scaleType != .none {
+                if chrome.scaleType != .none {
                     Picker("", selection: Binding(
-                        get: { controller.scaleRoot },
+                        get: { chrome.scaleRoot },
                         set: { controller.scaleRoot = $0 }
                     )) {
                         ForEach(ScaleRoot.allCases) { root in
@@ -1142,7 +1161,7 @@ struct PianoRollToolbarView: View {
                     leitmotifName = ""
                 }
                 .controlSize(.mini)
-                .disabled(controller.selectedNoteIDs.count < 2)
+                .disabled(chrome.selectedNoteCount < 2)
             }
 
             if !store.leitmotifs.isEmpty {
@@ -1211,13 +1230,13 @@ struct PianoRollToolbarView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.secondary)
                 Slider(value: Binding(
-                    get: { controller.pixelsPerQuarter },
+                    get: { chrome.pixelsPerQuarter },
                     set: { controller.pixelsPerQuarter = $0 }
                 ), in: 24...340)
                     .frame(width: 90)
                 Image(systemName: "arrow.up.and.down").font(.caption).foregroundStyle(.secondary)
                 Slider(value: Binding(
-                    get: { controller.editorRowHeight },
+                    get: { chrome.editorRowHeight },
                     set: { controller.editorRowHeight = $0 }
                 ), in: 11...24)
                     .frame(width: 70)
@@ -1249,10 +1268,10 @@ struct PianoRollToolbarView: View {
             HStack(spacing: 0) {
                 sectionTools; toolbarDivider
                 sectionSnap; toolbarDivider
-                if let chord = controller.detectedChordName {
+                if let chord = chrome.detectedChordName {
                     sectionChord(chord); toolbarDivider
                 }
-                if controller.tool == .stamp {
+                if chrome.tool == .stamp {
                     toolbarSection { stampToolControls }
                 }
             }
@@ -1286,10 +1305,10 @@ struct PianoRollToolbarView: View {
                 sectionTools; toolbarDivider
                 sectionSnap; toolbarDivider
                 sectionScale; toolbarDivider
-                if let chord = controller.detectedChordName {
+                if let chord = chrome.detectedChordName {
                     sectionChord(chord); toolbarDivider
                 }
-                if controller.tool == .stamp {
+                if chrome.tool == .stamp {
                     toolbarSection { stampToolControls }; toolbarDivider
                 }
                 sectionQuickActions; toolbarDivider
@@ -1371,10 +1390,10 @@ struct PianoRollToolbarView: View {
                         .controlSize(.small)
                     Button("Duplicate") { controller.duplicateSelected() }
                         .controlSize(.small)
-                        .disabled(controller.selectedNoteIDs.isEmpty)
+                        .disabled(chrome.selectedNoteCount == 0)
                     Button("Delete") { controller.deleteSelected() }
                         .controlSize(.small)
-                        .disabled(controller.selectedNoteIDs.isEmpty)
+                        .disabled(chrome.selectedNoteCount == 0)
                     Button("Select All") { controller.selectAllNotes() }
                         .controlSize(.small)
                 }
@@ -1388,17 +1407,17 @@ struct PianoRollToolbarView: View {
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
                 Toggle("Ghost Notes", isOn: Binding(
-                    get: { controller.showGhostNotes },
+                    get: { chrome.showGhostNotes },
                     set: { controller.showGhostNotes = $0 }
                 ))
                 .controlSize(.small)
                 Toggle("Voice Lanes", isOn: Binding(
-                    get: { controller.multiVoiceMode },
+                    get: { chrome.multiVoiceMode },
                     set: { controller.multiVoiceMode = $0 }
                 ))
                 .controlSize(.small)
                 Toggle("Velocity Coloring", isOn: Binding(
-                    get: { controller.velocityColorEnabled },
+                    get: { chrome.velocityColorEnabled },
                     set: { controller.velocityColorEnabled = $0 }
                 ))
                 .controlSize(.small)
@@ -1438,19 +1457,109 @@ struct PianoRollToolbarView: View {
                     .controlSize(.small)
                 Button("Part Gen") { showPartGenPopover = true }
                     .controlSize(.small)
+                    .popover(isPresented: $showPartGenPopover, arrowEdge: .bottom) {
+                        partGenerationPopover
+                    }
             }
             HStack(spacing: 4) {
                 Button("Style") { showStylePopover = true }
                     .controlSize(.small)
+                    .popover(isPresented: $showStylePopover, arrowEdge: .bottom) {
+                        styleAnalysisPopover
+                    }
                 Button("Compose") { showComposePopover = true }
                     .controlSize(.small)
+                    .popover(isPresented: $showComposePopover, arrowEdge: .bottom) {
+                        melodyComposePopover
+                    }
                 Button("Leitmotif") { showLeitmotifPopover = true }
                     .controlSize(.small)
+                    .popover(isPresented: $showLeitmotifPopover, arrowEdge: .bottom) {
+                        leitmotifPopover
+                    }
             }
             #if canImport(MLXLLM)
             Button("AI Reasoning") { showLLMPopover = true }
                 .controlSize(.small)
+                .popover(isPresented: $showLLMPopover, arrowEdge: .bottom) {
+                    llmPopover
+                }
             #endif
+            overflowMusicIntelligenceStatus
+        }
+    }
+
+    @ViewBuilder
+    private var overflowMusicIntelligenceStatus: some View {
+        if store.smartAlignmentPreview != nil || store.generatedPart != nil || store.composedMelody != nil ||
+            store.proposedMelodicMutation != nil || store.currentHarmonization != nil ||
+            store.detectedStyle != nil || store.currentStructuralAnalysis != nil ||
+            (store.currentChordProgression?.chords.isEmpty == false) {
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
+                if store.smartAlignmentPreview != nil {
+                    HStack(spacing: 4) {
+                        Button("Accept Align") { store.acceptSmartAlignmentPreview() }
+                            .controlSize(.small)
+                        Button("Reject Align") { store.rejectSmartAlignmentPreview() }
+                            .controlSize(.small)
+                    }
+                }
+                if store.generatedPart != nil {
+                    HStack(spacing: 4) {
+                        Button("Accept Part") { store.acceptGeneratedPart() }
+                            .controlSize(.small)
+                        Button("Reject Part") { store.rejectGeneratedPart() }
+                            .controlSize(.small)
+                    }
+                }
+                if store.composedMelody != nil {
+                    HStack(spacing: 4) {
+                        Button("Accept Melody") { store.acceptComposedMelody() }
+                            .controlSize(.small)
+                        Button("Reject Melody") { store.rejectComposedMelody() }
+                            .controlSize(.small)
+                    }
+                }
+                if store.proposedMelodicMutation != nil {
+                    HStack(spacing: 4) {
+                        Button("Accept Mutation") { store.acceptMelodicMutation() }
+                            .controlSize(.small)
+                        Button("Reject Mutation") { store.rejectMelodicMutation() }
+                            .controlSize(.small)
+                    }
+                }
+                if store.currentHarmonization != nil {
+                    HStack(spacing: 4) {
+                        Button("Accept Harmony") { store.acceptHarmonization() }
+                            .controlSize(.small)
+                        Button("Reject Harmony") { store.rejectHarmonization() }
+                            .controlSize(.small)
+                    }
+                }
+                if let style = store.detectedStyle {
+                    Text("Style: \(style.genreHints.prefix(3).joined(separator: ", "))")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                if let analysis = store.currentStructuralAnalysis {
+                    HStack(spacing: 6) {
+                        if let key = analysis.detectedKey {
+                            Text("Key: \(key.displayName)")
+                                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("\(analysis.phrases.count)P \(analysis.sections.count)S")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let chords = store.currentChordProgression, !chords.chords.isEmpty {
+                    Text("Chords: \(chords.chords.prefix(8).map(\.displayName).joined(separator: " "))\(chords.chords.count > 8 ? "..." : "")")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 
@@ -1582,7 +1691,7 @@ struct PianoRollToolbarView: View {
     private var stampToolControls: some View {
         HStack(spacing: 3) {
             Picker("", selection: Binding(
-                get: { controller.stampChordRoot },
+                get: { chrome.stampChordRoot },
                 set: { controller.stampChordRoot = $0 }
             )) {
                 ForEach(ScaleRoot.allCases) { root in
@@ -1593,7 +1702,7 @@ struct PianoRollToolbarView: View {
             .frame(width: 44)
 
             Picker("", selection: Binding(
-                get: { controller.stampChordQuality },
+                get: { chrome.stampChordQuality },
                 set: { controller.stampChordQuality = $0 }
             )) {
                 ForEach(ChordQuality.allCases) { q in
@@ -1603,8 +1712,8 @@ struct PianoRollToolbarView: View {
             .pickerStyle(.menu)
             .frame(width: 70)
 
-            Stepper("Oct \(controller.stampOctave)", value: Binding(
-                get: { controller.stampOctave },
+            Stepper("Oct \(chrome.stampOctave)", value: Binding(
+                get: { chrome.stampOctave },
                 set: { controller.stampOctave = max(0, min(8, $0)) }
             ), in: 0...8)
             .font(.caption2)
@@ -1684,12 +1793,21 @@ struct ToolSelectorStyle: ButtonStyle {
             .padding(.horizontal, 3)
             .padding(.vertical, 2)
             .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(isSelected
-                        ? Color.accentColor.opacity(configuration.isPressed ? 0.25 : 0.15)
-                        : configuration.isPressed
-                            ? Color.white.opacity(0.14)
-                            : isHovered ? Color.white.opacity(0.07) : .clear)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isSelected
+                            ? Color.accentColor.opacity(configuration.isPressed ? 0.46 : 0.32)
+                            : configuration.isPressed
+                                ? Color.white.opacity(0.14)
+                                : isHovered ? Color.white.opacity(0.07) : .clear)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(
+                            isSelected
+                                ? Color.accentColor.opacity(configuration.isPressed ? 0.95 : 0.78)
+                                : Color.white.opacity(isHovered ? 0.08 : 0),
+                            lineWidth: 1
+                        )
+                }
             )
             .contentShape(Rectangle())
             .animation(.easeOut(duration: 0.06), value: isHovered)
@@ -2044,7 +2162,8 @@ enum StepDuration: String, CaseIterable, Identifiable {
 @available(macOS 26.0, *)
 struct PianoRollStatusBarView: View {
     var store: ScoreStore
-    var controller: PianoRollViewController?
+    var chrome: PianoRollChromeState
+    unowned let controller: PianoRollViewController
 
     var body: some View {
         HStack(spacing: 0) {
@@ -2066,45 +2185,43 @@ struct PianoRollStatusBarView: View {
             Spacer()
 
             // --- Zoom controls (trailing) - compact version ---
-            if let ctl = controller {
-                HStack(spacing: 3) {
-                    // Horizontal zoom
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 8))
-                        .foregroundStyle(.secondary)
-                    statusBarZoomButton(systemName: "minus") {
-                        ctl.pixelsPerQuarter = max(24, ctl.pixelsPerQuarter - 20)
-                    }
-                    Slider(value: Binding(
-                        get: { ctl.pixelsPerQuarter },
-                        set: { ctl.pixelsPerQuarter = $0 }
-                    ), in: 24...340)
-                        .frame(width: 60)
-                        .controlSize(.small)
-                    statusBarZoomButton(systemName: "plus") {
-                        ctl.pixelsPerQuarter = min(340, ctl.pixelsPerQuarter + 20)
-                    }
-
-                    // Vertical zoom
-                    Image(systemName: "arrow.up.and.down")
-                        .font(.system(size: 8))
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 6)
-                    statusBarZoomButton(systemName: "minus") {
-                        ctl.editorRowHeight = max(11, ctl.editorRowHeight - 1)
-                    }
-                    Slider(value: Binding(
-                        get: { ctl.editorRowHeight },
-                        set: { ctl.editorRowHeight = $0 }
-                    ), in: 11...24)
-                        .frame(width: 50)
-                        .controlSize(.small)
-                    statusBarZoomButton(systemName: "plus") {
-                        ctl.editorRowHeight = min(24, ctl.editorRowHeight + 1)
-                    }
+            HStack(spacing: 3) {
+                // Horizontal zoom
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+                statusBarZoomButton(systemName: "minus") {
+                    controller.pixelsPerQuarter = max(24, controller.pixelsPerQuarter - 20)
                 }
-                .padding(.trailing, 8)
+                Slider(value: Binding(
+                    get: { chrome.pixelsPerQuarter },
+                    set: { controller.pixelsPerQuarter = $0 }
+                ), in: 24...340)
+                    .frame(width: 60)
+                    .controlSize(.small)
+                statusBarZoomButton(systemName: "plus") {
+                    controller.pixelsPerQuarter = min(340, controller.pixelsPerQuarter + 20)
+                }
+
+                // Vertical zoom
+                Image(systemName: "arrow.up.and.down")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 6)
+                statusBarZoomButton(systemName: "minus") {
+                    controller.editorRowHeight = max(11, controller.editorRowHeight - 1)
+                }
+                Slider(value: Binding(
+                    get: { chrome.editorRowHeight },
+                    set: { controller.editorRowHeight = $0 }
+                ), in: 11...24)
+                    .frame(width: 50)
+                    .controlSize(.small)
+                statusBarZoomButton(systemName: "plus") {
+                    controller.editorRowHeight = min(24, controller.editorRowHeight + 1)
+                }
             }
+            .padding(.trailing, 8)
         }
         .frame(height: 20)
         .background(.black.opacity(0.2))

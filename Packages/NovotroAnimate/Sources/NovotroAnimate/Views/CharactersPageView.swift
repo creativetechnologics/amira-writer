@@ -44,6 +44,7 @@ struct CharactersPageView: View {
         .overlay {
             if let index = previewImageIndex {
                 ImagePreviewOverlay(
+                    store: store,
                     paths: previewImagePaths,
                     currentIndex: Binding(
                         get: { index },
@@ -194,8 +195,8 @@ struct CharactersPageView: View {
     @ViewBuilder
     private func characterThumbnail(_ character: AnimationCharacter) -> some View {
         let owpChar = store.owpCharacter(for: character)
-        if let profilePath = character.profileImagePath,
-           let image = NSImage(contentsOfFile: profilePath) {
+        if let profileURL = store.resolvedCharacterAssetURL(for: character.profileImagePath),
+           let image = NSImage(contentsOf: profileURL) {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
@@ -310,8 +311,8 @@ struct CharactersPageView: View {
                 Text("Reference Images")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                if let refPath = character.inspirationReferenceImagePath,
-                   let image = NSImage(contentsOfFile: refPath) {
+                if let referenceURL = store.resolvedCharacterAssetURL(for: character.inspirationReferenceImagePath),
+                   let image = NSImage(contentsOf: referenceURL) {
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -351,8 +352,8 @@ struct CharactersPageView: View {
 
     @ViewBuilder
     private func profileImageView(character: AnimationCharacter, owpChar: OPWCharacter?) -> some View {
-        if let profilePath = character.profileImagePath,
-           let image = NSImage(contentsOfFile: profilePath) {
+        if let profileURL = store.resolvedCharacterAssetURL(for: character.profileImagePath),
+           let image = NSImage(contentsOf: profileURL) {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
@@ -474,6 +475,7 @@ struct CharactersPageView: View {
     @ViewBuilder
     private func inspirationImagesSection(_ character: AnimationCharacter) -> some View {
         ImageGallerySection(
+            store: store,
             title: "Inspiration Images",
             icon: "photo.stack",
             paths: character.inspirationImagePaths,
@@ -492,6 +494,7 @@ struct CharactersPageView: View {
     @ViewBuilder
     private func animatedImagesSection(_ character: AnimationCharacter) -> some View {
         ImageGallerySection(
+            store: store,
             title: "Animated Images",
             icon: "figure.walk.motion",
             paths: character.animatedImagePaths,
@@ -731,6 +734,7 @@ struct CharactersPageView: View {
 
 @available(macOS 26.0, *)
 struct ImageGallerySection: View {
+    let store: AnimateStore
     let title: String
     let icon: String
     let paths: [String]
@@ -820,6 +824,7 @@ struct ImageGallerySection: View {
         ) {
             ForEach(Array(paths.enumerated()), id: \.offset) { index, path in
                 ImageGalleryThumbnail(
+                    store: store,
                     path: path,
                     tileWidth: thumbnailBaseSize,
                     onRemove: { onRemove(index) },
@@ -834,6 +839,7 @@ struct ImageGallerySection: View {
 
 @available(macOS 26.0, *)
 struct ImageGalleryThumbnail: View {
+    let store: AnimateStore
     let path: String
     let tileWidth: CGFloat
     let onRemove: () -> Void
@@ -844,7 +850,8 @@ struct ImageGalleryThumbnail: View {
     }
 
     var body: some View {
-        let url = URL(fileURLWithPath: path)
+        let resolvedURL = store.resolvedCharacterAssetURL(for: path)
+        let displayName = resolvedURL?.lastPathComponent ?? URL(fileURLWithPath: path).lastPathComponent
 
         VStack(spacing: 4) {
             thumbnailImage
@@ -854,7 +861,7 @@ struct ImageGalleryThumbnail: View {
                     }
                 }
 
-            Text(url.lastPathComponent)
+            Text(displayName)
                 .font(.caption2)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -873,7 +880,8 @@ struct ImageGalleryThumbnail: View {
                 .fill(.quaternary.opacity(0.22))
                 .frame(width: tileWidth, height: imageBoxHeight)
 
-            if let image = NSImage(contentsOfFile: path) {
+            if let imageURL = store.resolvedCharacterAssetURL(for: path),
+               let image = NSImage(contentsOf: imageURL) {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -894,6 +902,7 @@ struct ImageGalleryThumbnail: View {
 
 @available(macOS 26.0, *)
 struct ImagePreviewOverlay: View {
+    let store: AnimateStore
     let paths: [String]
     @Binding var currentIndex: Int
     let onDismiss: () -> Void
@@ -946,7 +955,9 @@ struct ImagePreviewOverlay: View {
                 .foregroundStyle(.secondary)
 
             if let path = paths[safe: currentIndex] {
-                Text(URL(fileURLWithPath: path).lastPathComponent)
+                let displayName = store.resolvedCharacterAssetURL(for: path)?.lastPathComponent
+                    ?? URL(fileURLWithPath: path).lastPathComponent
+                Text(displayName)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
@@ -1031,7 +1042,7 @@ struct ImagePreviewOverlay: View {
         isLoading = true
 
         DispatchQueue.global(qos: .userInitiated).async {
-            let image = NSImage(contentsOfFile: path)
+            let image = store.resolvedCharacterAssetURL(for: path).flatMap(NSImage.init(contentsOf:))
             DispatchQueue.main.async {
                 self.previewImage = image
                 self.isLoading = false
@@ -1242,6 +1253,7 @@ struct InspirationGallerySheet: View {
         .overlay {
             if let index = previewImageIndex {
                 ImagePreviewOverlay(
+                    store: store,
                     paths: character.inspirationImagePaths,
                     currentIndex: Binding(
                         get: { index },
@@ -1314,7 +1326,7 @@ struct InspirationGallerySheet: View {
                     previewImageIndex = index
                 }
 
-            Text(URL(fileURLWithPath: path).lastPathComponent)
+            Text(store.resolvedCharacterAssetURL(for: path)?.lastPathComponent ?? URL(fileURLWithPath: path).lastPathComponent)
                 .font(.caption2)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -1329,7 +1341,8 @@ struct InspirationGallerySheet: View {
                 .fill(.quaternary.opacity(0.22))
                 .frame(width: thumbnailBaseSize, height: max(96, thumbnailBaseSize * 0.68))
 
-            if let image = NSImage(contentsOfFile: path) {
+            if let imageURL = store.resolvedCharacterAssetURL(for: path),
+               let image = NSImage(contentsOf: imageURL) {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -1376,6 +1389,7 @@ struct ReferenceImagesSheet: View {
         .overlay {
             if let index = previewImageIndex {
                 ImagePreviewOverlay(
+                    store: store,
                     paths: character.referenceImagePaths,
                     currentIndex: Binding(
                         get: { index },
@@ -1413,8 +1427,8 @@ struct ReferenceImagesSheet: View {
                 .fontWeight(.medium)
                 .foregroundStyle(.secondary)
 
-            if let refPath = character.inspirationReferenceImagePath,
-               let image = NSImage(contentsOfFile: refPath) {
+            if let refURL = store.resolvedCharacterAssetURL(for: character.inspirationReferenceImagePath),
+               let image = NSImage(contentsOf: refURL) {
                 VStack(spacing: 12) {
                     Image(nsImage: image)
                         .resizable()
@@ -1428,7 +1442,7 @@ struct ReferenceImagesSheet: View {
                         )
 
                     HStack {
-                        Text(URL(fileURLWithPath: refPath).lastPathComponent)
+                        Text(refURL.lastPathComponent)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -1574,7 +1588,7 @@ struct ReferenceImagesSheet: View {
                     previewImageIndex = index
                 }
 
-            Text(URL(fileURLWithPath: path).lastPathComponent)
+            Text(store.resolvedCharacterAssetURL(for: path)?.lastPathComponent ?? URL(fileURLWithPath: path).lastPathComponent)
                 .font(.caption2)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -1590,7 +1604,8 @@ struct ReferenceImagesSheet: View {
                 .fill(.quaternary.opacity(0.22))
                 .frame(width: thumbnailBaseSize, height: max(88, thumbnailBaseSize * 0.68))
 
-            if let image = NSImage(contentsOfFile: path) {
+            if let imageURL = store.resolvedCharacterAssetURL(for: path),
+               let image = NSImage(contentsOf: imageURL) {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)

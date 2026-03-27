@@ -1,4 +1,4 @@
-# Novotro Opera — Code Review Handoff
+# Amira Writer — Code Review Handoff
 **Date:** 2026-03-22 06:04 UTC
 **Performed by:** Claude Opus 4.6 (review) + Claude Sonnet 4.6 (implementation)
 **Prior session:** Anti-Gravity UI cleanup pass
@@ -134,7 +134,7 @@ The following were flagged during review but confirmed to be intentional design:
 
 Before deploying, run:
 ```bash
-cd "/Volumes/Storage VIII/Programming/Novotro Opera"
+cd "/Volumes/Storage VIII/Programming/Amira Writer"
 swift build -c release 2>&1 | tail -20
 ```
 

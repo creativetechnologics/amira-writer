@@ -28,6 +28,14 @@ final class WavArrangementView: NSView {
     var onHorizontalScroll: ((CGFloat) -> Void)?
 
     func reloadClips() {
+        if let selectedClipID,
+           !store.pianoRollAudioClips.contains(where: { $0.id == selectedClipID }) {
+            self.selectedClipID = nil
+        }
+        if let activeDragPreview,
+           !store.pianoRollAudioClips.contains(where: { $0.id == activeDragPreview.clipID }) {
+            self.activeDragPreview = nil
+        }
         recalculateLayout()
         needsDisplay = true
     }
@@ -59,6 +67,9 @@ final class WavArrangementView: NSView {
     }
     private var dragMode: DragMode = .none
     private var dragStartPoint: CGPoint = .zero
+    private var selectedClipID: UUID?
+    private var activeDragPreview: (clipID: UUID, originTick: Int, previewTick: Int, lane: Int)?
+    private var didMoveClipDuringDrag = false
 
     /// Track where a drag-drop file would land (for drawing indicator).
     private var dropIndicatorTick: Int?
@@ -142,6 +153,24 @@ final class WavArrangementView: NSView {
         return CGRect(x: x, y: rect.minY, width: rect.width, height: rect.height)
     }
 
+    private func contentFrame(for entry: ClipFrame) -> CGRect {
+        guard let preview = activeDragPreview, preview.clipID == entry.clip.id else {
+            return entry.frame
+        }
+
+        let x = CGFloat(Double(preview.previewTick) * Double(pixelsPerTick))
+        return CGRect(
+            x: x,
+            y: CGFloat(preview.lane) * laneHeight + clipInset,
+            width: entry.frame.width,
+            height: entry.frame.height
+        )
+    }
+
+    private func viewRect(for entry: ClipFrame) -> CGRect {
+        contentRectToView(contentFrame(for: entry))
+    }
+
     // MARK: - Gain ↔ Y conversion
 
     private func gainDBToY(_ gainDB: Double, in clipRect: CGRect) -> CGFloat {
@@ -204,24 +233,23 @@ final class WavArrangementView: NSView {
 
         // Draw drop indicator if dragging a file over
         if let dropTick = dropIndicatorTick {
-            let x = CGFloat(Double(dropTick) * Double(pixelsPerTick)) - scrollOffset + keyboardOffset
-            ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.6).cgColor)
-            ctx.setLineWidth(1.5)
-            ctx.setLineDash(phase: 0, lengths: [4, 3])
-            ctx.move(to: CGPoint(x: x, y: 0))
-            ctx.addLine(to: CGPoint(x: x, y: bounds.height))
-            ctx.strokePath()
-            ctx.setLineDash(phase: 0, lengths: [])
+            drawDropPreview(ctx: ctx, tick: dropTick)
         }
 
         // Draw each clip
         for (index, entry) in clipFrames.enumerated() {
-            let viewRect = contentRectToView(entry.frame)
+            let viewRect = viewRect(for: entry)
 
             // Skip if offscreen
             guard viewRect.maxX > 0, viewRect.minX < bounds.width else { continue }
 
-            drawClip(ctx: ctx, entry: entry, viewRect: viewRect, colorIndex: index)
+            drawClip(
+                ctx: ctx,
+                entry: entry,
+                viewRect: viewRect,
+                colorIndex: index,
+                isSelected: entry.clip.id == selectedClipID
+            )
         }
 
         // Empty state hint
@@ -244,10 +272,34 @@ final class WavArrangementView: NSView {
         }
     }
 
-    private func drawClip(ctx: CGContext, entry: ClipFrame, viewRect: CGRect, colorIndex: Int) {
+    private func drawDropPreview(ctx: CGContext, tick: Int) {
+        let previewWidth = max(CGFloat(store.ticksPerQuarter) * pixelsPerTick * 2, 96)
+        let x = CGFloat(Double(tick) * Double(pixelsPerTick)) - scrollOffset + keyboardOffset
+        let previewRect = CGRect(x: x, y: clipInset, width: previewWidth, height: laneHeight - clipInset * 2)
+        let previewPath = CGPath(
+            roundedRect: previewRect,
+            cornerWidth: clipCornerRadius,
+            cornerHeight: clipCornerRadius,
+            transform: nil
+        )
+
+        ctx.saveGState()
+        ctx.addPath(previewPath)
+        ctx.setFillColor(NSColor.white.withAlphaComponent(0.06).cgColor)
+        ctx.fillPath()
+        ctx.addPath(previewPath)
+        ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.45).cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.setLineDash(phase: 0, lengths: [6, 4])
+        ctx.strokePath()
+        ctx.setLineDash(phase: 0, lengths: [])
+        ctx.restoreGState()
+    }
+
+    private func drawClip(ctx: CGContext, entry: ClipFrame, viewRect: CGRect, colorIndex: Int, isSelected: Bool) {
         let clip = entry.clip
         let color = Self.clipColors[colorIndex % Self.clipColors.count]
-        let alpha: CGFloat = clip.muted ? 0.20 : 0.50
+        let baseAlpha: CGFloat = clip.muted ? 0.18 : (isSelected ? 0.88 : 0.64)
 
         // Clip body
         let path = CGPath(roundedRect: viewRect, cornerWidth: clipCornerRadius, cornerHeight: clipCornerRadius, transform: nil)
@@ -255,9 +307,36 @@ final class WavArrangementView: NSView {
         ctx.addPath(path)
         ctx.clip()
 
-        // Fill
-        ctx.setFillColor(color.withAlphaComponent(alpha).cgColor)
-        ctx.fill(viewRect)
+        let topColor = color.blended(withFraction: 0.22, of: .white) ?? color
+        let bottomColor = color.blended(withFraction: 0.30, of: .black) ?? color
+        let gradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: [
+                topColor.withAlphaComponent(baseAlpha).cgColor,
+                bottomColor.withAlphaComponent(baseAlpha).cgColor,
+            ] as CFArray,
+            locations: [0, 1]
+        )
+        if let gradient {
+            ctx.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: viewRect.midX, y: viewRect.minY),
+                end: CGPoint(x: viewRect.midX, y: viewRect.maxY),
+                options: []
+            )
+        } else {
+            ctx.setFillColor(color.withAlphaComponent(baseAlpha).cgColor)
+            ctx.fill(viewRect)
+        }
+
+        let headerRect = CGRect(
+            x: viewRect.minX,
+            y: viewRect.minY,
+            width: viewRect.width,
+            height: min(16, viewRect.height * 0.34)
+        )
+        ctx.setFillColor(NSColor.black.withAlphaComponent(isSelected ? 0.22 : 0.16).cgColor)
+        ctx.fill(headerRect)
 
         // Waveform
         let peaks = getWaveformPeaks(for: clip.filePath)
@@ -294,8 +373,8 @@ final class WavArrangementView: NSView {
         ctx.restoreGState()  // unclip
 
         // Clip border
-        ctx.setStrokeColor(color.withAlphaComponent(clip.muted ? 0.15 : 0.40).cgColor)
-        ctx.setLineWidth(1)
+        ctx.setStrokeColor((isSelected ? NSColor.white : color).withAlphaComponent(clip.muted ? 0.22 : (isSelected ? 0.92 : 0.44)).cgColor)
+        ctx.setLineWidth(isSelected ? 2 : 1)
         ctx.addPath(path)
         ctx.strokePath()
 
@@ -371,22 +450,80 @@ final class WavArrangementView: NSView {
         let visiblePeaks = Array(peaks[startPeakIdx..<endPeakIdx])
         guard !visiblePeaks.isEmpty else { return }
 
-        let midY = viewRect.midY + 4  // shift down slightly to account for name label
-        let halfHeight = (viewRect.height - 16) / 2  // leave room for name + gain line
-        let drawWidth = Int(viewRect.width)
-        guard drawWidth > 0 else { return }
+        let drawSamples = max(24, Int(viewRect.width.rounded(.up)))
+        guard drawSamples > 1 else { return }
 
-        ctx.setStrokeColor(color.withAlphaComponent(0.60).cgColor)
-        ctx.setLineWidth(1)
-
-        let vpCount = visiblePeaks.count
-        for px in 0..<drawWidth {
-            let peakIdx = min(px * vpCount / drawWidth, vpCount - 1)
-            let peak = CGFloat(visiblePeaks[peakIdx])
-            let x = viewRect.minX + CGFloat(px)
-            ctx.move(to: CGPoint(x: x, y: midY - peak * halfHeight))
-            ctx.addLine(to: CGPoint(x: x, y: midY + peak * halfHeight))
+        var smoothedPeaks = [CGFloat](repeating: 0, count: drawSamples)
+        for sampleIndex in 0..<drawSamples {
+            let start = sampleIndex * visiblePeaks.count / drawSamples
+            let end = min(visiblePeaks.count, max(start + 1, (sampleIndex + 1) * visiblePeaks.count / drawSamples))
+            var windowPeak: CGFloat = 0
+            for peakIndex in start..<end {
+                windowPeak = max(windowPeak, CGFloat(visiblePeaks[peakIndex]))
+            }
+            smoothedPeaks[sampleIndex] = min(1, pow(windowPeak, 0.85))
         }
+
+        if drawSamples >= 3 {
+            var filtered = smoothedPeaks
+            for index in 1..<(drawSamples - 1) {
+                filtered[index] = (smoothedPeaks[index - 1] + smoothedPeaks[index] * 2 + smoothedPeaks[index + 1]) / 4
+            }
+            smoothedPeaks = filtered
+        }
+
+        let topInset: CGFloat = 18
+        let bottomInset: CGFloat = 8
+        let centerY = viewRect.minY + topInset + max(6, (viewRect.height - topInset - bottomInset) * 0.5)
+        let halfHeight = max(4, (viewRect.height - topInset - bottomInset) * 0.42)
+        let stepX = viewRect.width / CGFloat(drawSamples - 1)
+
+        let fillPath = CGMutablePath()
+        fillPath.move(to: CGPoint(x: viewRect.minX, y: centerY))
+        for index in 0..<drawSamples {
+            let x = viewRect.minX + CGFloat(index) * stepX
+            let amplitude = smoothedPeaks[index] * halfHeight
+            fillPath.addLine(to: CGPoint(x: x, y: centerY - amplitude))
+        }
+        for index in stride(from: drawSamples - 1, through: 0, by: -1) {
+            let x = viewRect.minX + CGFloat(index) * stepX
+            let amplitude = smoothedPeaks[index] * halfHeight
+            fillPath.addLine(to: CGPoint(x: x, y: centerY + amplitude))
+        }
+        fillPath.closeSubpath()
+
+        ctx.saveGState()
+        ctx.addPath(fillPath)
+        ctx.setFillColor(NSColor.white.withAlphaComponent(0.16).cgColor)
+        ctx.fillPath()
+        ctx.restoreGState()
+
+        let upperStroke = CGMutablePath()
+        let lowerStroke = CGMutablePath()
+        for index in 0..<drawSamples {
+            let x = viewRect.minX + CGFloat(index) * stepX
+            let amplitude = smoothedPeaks[index] * halfHeight
+            let upperPoint = CGPoint(x: x, y: centerY - amplitude)
+            let lowerPoint = CGPoint(x: x, y: centerY + amplitude)
+            if index == 0 {
+                upperStroke.move(to: upperPoint)
+                lowerStroke.move(to: lowerPoint)
+            } else {
+                upperStroke.addLine(to: upperPoint)
+                lowerStroke.addLine(to: lowerPoint)
+            }
+        }
+
+        ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.34).cgColor)
+        ctx.setLineWidth(1)
+        ctx.addPath(upperStroke)
+        ctx.addPath(lowerStroke)
+        ctx.strokePath()
+
+        ctx.setStrokeColor(color.withAlphaComponent(0.22).cgColor)
+        ctx.setLineWidth(1)
+        ctx.move(to: CGPoint(x: viewRect.minX, y: centerY))
+        ctx.addLine(to: CGPoint(x: viewRect.maxX, y: centerY))
         ctx.strokePath()
     }
 
@@ -463,12 +600,12 @@ final class WavArrangementView: NSView {
 
     private func clipEntry(at viewPoint: CGPoint) -> ClipFrame? {
         let contentPt = viewToContent(viewPoint)
-        return clipFrames.first { $0.frame.contains(contentPt) }
+        return clipFrames.reversed().first { contentFrame(for: $0).insetBy(dx: -4, dy: -3).contains(contentPt) }
     }
 
     private func clipEntryInViewCoords(at viewPoint: CGPoint) -> ClipFrame? {
-        clipFrames.first { entry in
-            let vr = contentRectToView(entry.frame)
+        clipFrames.reversed().first { entry in
+            let vr = viewRect(for: entry).insetBy(dx: -4, dy: -3)
             return vr.contains(viewPoint)
         }
     }
@@ -476,7 +613,7 @@ final class WavArrangementView: NSView {
     /// Check if a point is near the gain line of a clip (within ±4pt).
     private func gainLineHit(at viewPoint: CGPoint) -> ClipFrame? {
         for entry in clipFrames {
-            let vr = contentRectToView(entry.frame)
+            let vr = viewRect(for: entry)
             guard vr.contains(viewPoint) else { continue }
             let gainY = gainDBToY(entry.clip.gainDB, in: vr)
             if abs(viewPoint.y - gainY) < 4 {
@@ -491,20 +628,28 @@ final class WavArrangementView: NSView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         dragStartPoint = point
+        didMoveClipDuringDrag = false
 
         // Check gain line first (higher priority for vertical drag)
         if let entry = gainLineHit(at: point) {
+            selectedClipID = entry.clip.id
             dragMode = .gain(id: entry.clip.id)
+            needsDisplay = true
             return
         }
 
         // Check clip body for drag-reposition
         if let entry = clipEntryInViewCoords(at: point) {
+            selectedClipID = entry.clip.id
             dragMode = .clip(id: entry.clip.id, startTickOrigin: entry.clip.startTick)
+            activeDragPreview = nil
+            needsDisplay = true
             return
         }
 
+        selectedClipID = nil
         dragMode = .none
+        needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -529,27 +674,38 @@ final class WavArrangementView: NSView {
 
         case .clip(let id, let originTick):
             let deltaX = point.x - dragStartPoint.x
-            let deltaTicks = Int(Double(deltaX) / Double(pixelsPerTick))
+            guard pixelsPerTick > 0 else { return }
+            let deltaTicks = Int((Double(deltaX) / Double(pixelsPerTick)).rounded())
             let newStart = max(0, originTick + deltaTicks)
-
-            if let storeIdx = store.pianoRollAudioClips.firstIndex(where: { $0.id == id }) {
-                store.pianoRollAudioClips[storeIdx].startTick = newStart
-                recalculateLayout()
-                needsDisplay = true
-            }
+            guard let entry = clipFrames.first(where: { $0.clip.id == id }) else { return }
+            didMoveClipDuringDrag = didMoveClipDuringDrag || abs(deltaX) >= 1
+            activeDragPreview = (clipID: id, originTick: originTick, previewTick: newStart, lane: entry.lane)
+            needsDisplay = true
         }
     }
 
     override func mouseUp(with event: NSEvent) {
         switch dragMode {
-        case .clip:
-            store.isDirty = true
+        case .clip(let id, _):
+            if let preview = activeDragPreview,
+               preview.clipID == id,
+               preview.previewTick != preview.originTick,
+               didMoveClipDuringDrag {
+                var updated = store.pianoRollAudioClips
+                if let clipIndex = updated.firstIndex(where: { $0.id == id }) {
+                    updated[clipIndex].startTick = preview.previewTick
+                    store.setPianoRollAudioClipsFromEditor(updated)
+                }
+            }
         case .gain:
             break  // already set isDirty during drag
         case .none:
             break
         }
+        activeDragPreview = nil
+        didMoveClipDuringDrag = false
         dragMode = .none
+        reloadClips()
     }
 
     // MARK: - Scroll sync
@@ -579,12 +735,11 @@ final class WavArrangementView: NSView {
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
-        dropIndicatorTick = nil
-        needsDisplay = true
+        clearDropIndicator()
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        dropIndicatorTick = nil
+        clearDropIndicator()
 
         guard let urls = sender.draggingPasteboard.readObjects(
             forClasses: [NSURL.self],
@@ -597,13 +752,17 @@ final class WavArrangementView: NSView {
         let dropPoint = convert(sender.draggingLocation, from: nil)
         let dropTick = tickFromViewX(dropPoint.x)
 
+        var importedClips: [AudioClip] = []
         for (i, url) in audioURLs.enumerated() {
             let tick = dropTick + i * (store.ticksPerQuarter * 4)  // space multiple files 1 bar apart
-            store.importAudioClipFromDrop(url: url, atTick: tick)
+            if let clip = store.importAudioClipFromDrop(url: url, atTick: tick) {
+                importedClips.append(clip)
+            }
         }
 
+        selectedClipID = importedClips.last?.id ?? selectedClipID
         reloadClips()
-        return true
+        return !importedClips.isEmpty
     }
 
     private func hasAudioURLs(in sender: NSDraggingInfo) -> Bool {
@@ -616,6 +775,11 @@ final class WavArrangementView: NSView {
     private func updateDropIndicator(_ sender: NSDraggingInfo) {
         let point = convert(sender.draggingLocation, from: nil)
         dropIndicatorTick = tickFromViewX(point.x)
+        needsDisplay = true
+    }
+
+    private func clearDropIndicator() {
+        dropIndicatorTick = nil
         needsDisplay = true
     }
 
@@ -643,6 +807,18 @@ final class WavArrangementView: NSView {
         emptyMenu.addItem(importItem)
         return emptyMenu
     }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        super.concludeDragOperation(sender)
+        clearDropIndicator()
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        super.draggingEnded(sender)
+        clearDropIndicator()
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     private func buildClipMenu(for clip: AudioClip) -> NSMenu {
         let menu = NSMenu()

@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import NovotroProjectKit
 @testable import NovotroWriteUI
 
 @available(macOS 26.0, *)
@@ -100,12 +101,31 @@ final class ScriptStoreTests: XCTestCase {
 
         store.save()
 
-        XCTAssertEqual(store.saveIndicator, .idle)
+        XCTAssertEqual(store.saveIndicator, .saved)
         XCTAssertTrue(store.projectHistoryEntries.isEmpty)
 
         let data = try Data(contentsOf: projectURL.appendingPathComponent("Songs/01 Opening.ows"))
         let reopened = try OWSSongDocument.fromJSON(data: data)
         XCTAssertEqual(reopened.activeVersion()?.lyrics, "Before")
+    }
+
+    func testRenameSongSyncsCanonicalSceneTitleToDatabaseImmediately() async throws {
+        let tempDirectory = try makeTempDirectory()
+        let projectURL = try makeProjectPackage(in: tempDirectory, sceneTitle: "Opening", sceneLyrics: "Before")
+        let store = makeStore(historyStore: ProjectHistoryStore(storageURL: tempDirectory.appendingPathComponent("history.json")))
+
+        await store.loadProject(url: projectURL)
+        defer { store.stopFileWatching() }
+
+        let scenePath = try XCTUnwrap(store.songAssets.first?.relativePath)
+        store.renameSong(atPath: scenePath, newTitle: "Opening Reprise")
+
+        XCTAssertEqual(store.songAssets.first?.displayName, "Opening Reprise")
+        try await waitForDatabaseSceneTitle(
+            in: projectURL,
+            relativePath: scenePath,
+            expectedTitle: "Opening Reprise"
+        )
     }
 
     func testSaveReloadsNewerExternalChangesInsteadOfOverwriting() async throws {
@@ -241,6 +261,44 @@ final class ScriptStoreTests: XCTestCase {
         XCTAssertEqual(store.scratchpadText(forPath: "Songs/02 New Scene.ows"), "")
     }
 
+    func testExternalSongMembershipChangesReloadWithoutRestart() async throws {
+        let tempDirectory = try makeTempDirectory()
+        let projectURL = try makeProjectPackage(in: tempDirectory, sceneTitle: "Opening", sceneLyrics: "Before")
+        let store = makeStore(historyStore: ProjectHistoryStore(storageURL: tempDirectory.appendingPathComponent("history.json")))
+
+        await store.loadProject(url: projectURL)
+        defer { store.stopFileWatching() }
+
+        let songsURL = projectURL.appendingPathComponent("Songs", isDirectory: true)
+        try writeSong(
+            at: songsURL.appendingPathComponent("02 Finale.ows"),
+            title: "Finale",
+            activeLyrics: "Finale lyrics",
+            latestLyrics: "Finale lyrics",
+            activeVersionIsLatest: true,
+            latestUpdatedAt: Date(timeIntervalSinceNow: 120)
+        )
+
+        try await waitUntil {
+            store.songStubs.map(\.relativePath) == [
+                "Songs/01 Opening.ows",
+                "Songs/02 Finale.ows",
+            ] && store.librettoFiles.first(where: { $0.relativePath == "Songs/02 Finale.ows" })?.content == "Finale lyrics"
+        }
+
+        try FileManager.default.removeItem(at: songsURL.appendingPathComponent("01 Opening.ows"))
+
+        try await waitUntil {
+            store.songStubs.map(\.relativePath) == ["Songs/02 Finale.ows"]
+        }
+
+        XCTAssertEqual(store.songAssets.map(\.relativePath), ["Songs/02 Finale.ows"])
+        XCTAssertEqual(store.librettoFiles.map(\.relativePath), ["Songs/02 Finale.ows"])
+        XCTAssertTrue(store.projectHistoryEntries.contains(where: {
+            $0.kind == .externalReload && $0.relativePaths.contains("Songs/02 Finale.ows")
+        }))
+    }
+
     func testHiddenRangesRemoveInlineMarkupAndSyllableAnnotations() {
         let text = """
         [[1.01.0.001 - Lanterns rise]]
@@ -300,35 +358,164 @@ final class ScriptStoreTests: XCTestCase {
         XCTAssertFalse(store.showAnimateDirections)
     }
 
-    func testApplyDirectionStylingAddsHiddenAttributesForSyllableCounts() {
+    func testApplyDirectionStylingRemovesHiddenTextFromRenderedString() {
         let textView = NSTextView()
-        textView.string = "Lyric line (8)\nVisible"
+        textView.string = """
+        Lyric line (8)
+        [[1.01.0.001 - Lanterns rise]]
+        [Storyboard flare]
+        {camera: push_in | to=close}
+        Visible
+        """
 
         ScriptTextEditor.applyDirectionStyling(
             to: textView,
-            showDirections: true,
-            showStoryboarding: true,
-            showAnimateDirections: true
+            showDirections: false,
+            showStoryboarding: false,
+            showAnimateDirections: false
         )
 
-        let nsString = textView.string as NSString
-        let countLocation = nsString.range(of: "(8)").location
-        XCTAssertNotEqual(countLocation, NSNotFound)
+        XCTAssertFalse(textView.string.contains("(8)"))
+        XCTAssertFalse(textView.string.contains("[[1.01.0.001 - Lanterns rise]]"))
+        XCTAssertFalse(textView.string.contains("[Storyboard flare]"))
+        XCTAssertFalse(textView.string.contains("{camera: push_in | to=close}"))
+        XCTAssertTrue(textView.string.contains("Lyric line"))
+        XCTAssertTrue(textView.string.contains("Visible"))
+    }
 
-        let hiddenFont = textView.layoutManager?.temporaryAttribute(
-            .font,
-            atCharacterIndex: countLocation,
-            effectiveRange: nil
-        ) as? NSFont
-        let hiddenColor = textView.layoutManager?.temporaryAttribute(
-            .foregroundColor,
-            atCharacterIndex: countLocation,
-            effectiveRange: nil
-        ) as? NSColor
+    func testApplyDisplayEditPreservesHiddenMarkupAcrossCollapsedGapEdits() {
+        let rawText = """
+        First stanza
 
-        XCTAssertNotNil(hiddenFont)
-        XCTAssertLessThanOrEqual(hiddenFont?.pointSize ?? 1, 0.1)
-        XCTAssertEqual(hiddenColor?.alphaComponent ?? 1, 0, accuracy: 0.001)
+        [[1.01.0.001 - Lanterns rise]]
+        [He looks toward the valley below.]
+        {lipsync: "Johnny" | mode=singing | bars=17-24}
+
+        Second stanza
+        """
+
+        let projection = ScriptTextEditor.displayProjection(
+            from: rawText,
+            showDirections: false,
+            showStoryboarding: false,
+            showAnimateDirections: false
+        )
+        let display = projection.displayText as NSString
+        let gapRange = display.range(of: "\n\nSecond stanza")
+        XCTAssertNotEqual(gapRange.location, NSNotFound)
+
+        let editedRaw = ScriptTextEditor.applyDisplayEdit(
+            rawText: rawText,
+            projection: projection,
+            affectedDisplayRange: NSRange(location: gapRange.location, length: 1),
+            replacementString: ""
+        )
+
+        XCTAssertTrue(editedRaw.contains("[[1.01.0.001 - Lanterns rise]]"))
+        XCTAssertTrue(editedRaw.contains("[He looks toward the valley below.]"))
+        XCTAssertTrue(editedRaw.contains("{lipsync: \"Johnny\" | mode=singing | bars=17-24}"))
+        XCTAssertTrue(editedRaw.contains("First stanza"))
+        XCTAssertTrue(editedRaw.contains("Second stanza"))
+    }
+
+    func testExactSceneSampleDoesNotRenderDirectionOrCameraMarkup() {
+        let rawText = """
+        JOHNNY:
+        Whole is not the job.
+        Breathing is.
+        Keep the notebook.
+        Keep your hands steady.
+        Leave the rest for later.
+
+        [[1.03.0.003 - They lift another crate together. Johnny shoulders the heavier end without making a point of it.]]
+        {camera: hold | from=medium | to=medium | bars=9-16}
+
+        LUKE:
+        You make it sound simple.
+        """
+
+        let rendered = ScriptTextEditor.displayText(
+            from: rawText,
+            showDirections: false,
+            showStoryboarding: false,
+            showAnimateDirections: false
+        )
+
+        XCTAssertTrue(rendered.contains("JOHNNY:"))
+        XCTAssertTrue(rendered.contains("Leave the rest for later."))
+        XCTAssertTrue(rendered.contains("LUKE:"))
+        XCTAssertTrue(rendered.contains("You make it sound simple."))
+        XCTAssertFalse(rendered.contains("[[1.03.0.003 - They lift another crate together."))
+        XCTAssertFalse(rendered.contains("{camera: hold | from=medium | to=medium | bars=9-16}"))
+
+        let textView = NSTextView()
+        textView.string = rawText
+        ScriptTextEditor.applyDirectionStyling(
+            to: textView,
+            showDirections: false,
+            showStoryboarding: false,
+            showAnimateDirections: false
+        )
+
+        XCTAssertEqual(textView.string, rendered)
+    }
+
+    func testDisplayTextHidesParentheticalStageDirectionsAndCollapsesGaps() {
+        let rawText = """
+        1.03.0 - Silver
+        INT. BASE CORRIDOR / OUTSIDE BRIEFING - MIDDAY (DAY 1)
+        (SUNG - Mark + Johnny. Duet about guilt, complicity, institutional erasure.)
+        (The briefing room has emptied. MARK sits at the comms desk, logbook open.
+        JOHNNY leans against the corridor wall, camera hanging from his neck.)
+
+        MARK
+
+        [Mark stares at his logbook. The room is quiet.]
+
+        \tIt's that moment of quiet,
+        \tfinally sitting alone.
+
+        [Mark turns a page. His pen hesitates.]
+
+        \tBut why can't I shake this weight that follows me,
+        \tthese timestamps and hurt?
+        """
+
+        let rendered = ScriptTextEditor.displayText(
+            from: rawText,
+            showDirections: false,
+            showStoryboarding: false,
+            showAnimateDirections: false
+        )
+
+        XCTAssertFalse(rendered.contains("(SUNG - Mark + Johnny."))
+        XCTAssertFalse(rendered.contains("(The briefing room has emptied."))
+        XCTAssertFalse(rendered.contains("[Mark stares at his logbook."))
+        XCTAssertFalse(rendered.contains("[Mark turns a page."))
+        XCTAssertFalse(rendered.contains("\n\n\n"))
+        XCTAssertTrue(rendered.contains("MARK\n\n\tIt's that moment of quiet,"))
+        XCTAssertTrue(rendered.contains("\tfinally sitting alone.\n\n\tBut why can't I shake this weight that follows me,"))
+    }
+
+    func testDisplayTextHidesGenericDoubleBracketAndAnimateKeywords() {
+        let rawText = """
+        [[Wide shot without address]]
+        {action: "Amira" | picks up journal | bars=37-38}
+        {INSTRUMENTAL: Ancient Waters motif returns}
+        Visible line
+        """
+
+        let rendered = ScriptTextEditor.displayText(
+            from: rawText,
+            showDirections: false,
+            showStoryboarding: false,
+            showAnimateDirections: false
+        )
+
+        XCTAssertFalse(rendered.contains("[[Wide shot without address]]"))
+        XCTAssertFalse(rendered.contains("{action: \"Amira\" | picks up journal | bars=37-38}"))
+        XCTAssertFalse(rendered.contains("{INSTRUMENTAL: Ancient Waters motif returns}"))
+        XCTAssertEqual(rendered, "Visible line")
     }
 
     func testSynopsisScenePathResolverHandlesWhitespaceAndFilenameFallback() {
@@ -634,5 +821,27 @@ final class ScriptStoreTests: XCTestCase {
         }
 
         XCTFail("Timed out waiting for condition")
+    }
+
+    private func waitForDatabaseSceneTitle(
+        in projectURL: URL,
+        relativePath: String,
+        expectedTitle: String,
+        timeout: TimeInterval = 2,
+        pollIntervalNanoseconds: UInt64 = 50_000_000
+    ) async throws {
+        let connection = try await NovotroProjectConnection.open(projectURL: projectURL, preferService: false)
+        try await connection.ensureCurrentIndex()
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let scene = try await connection.loadScene(relativePath: relativePath),
+               scene.title == expectedTitle {
+                return
+            }
+            try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
+        }
+
+        XCTFail("Timed out waiting for database scene title \(expectedTitle)")
     }
 }

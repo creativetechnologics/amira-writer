@@ -1,9 +1,10 @@
 # Suno Export Master
 
-Date: 2026-03-23
-Workspace: `/Volumes/Storage VIII/Programming/Novotro Opera`
+Date: 2026-03-25
+Workspace: `/Volumes/Storage VIII/Programming/Amira Writer`
 
-This is the canonical master document for headless WAV export and Suno-prep export behavior in the unified Opera repo.
+This is the canonical export-only reference for headless WAV creation in the unified Opera repo.
+For the full Suno workflow, current status, and batch behavior, follow `HANDOFF.md`.
 
 If any older handoff conflicts with this file, follow this file.
 
@@ -25,7 +26,7 @@ The headless export entrypoint still exists as:
 NovotroScore --headless-export-wav ...
 ```
 
-The difference is that the executable now needs to be invoked from the vendored `Packages/NovotroScore` package inside `Novotro Opera`, not from the retired standalone `Novotro Score.app` workflow.
+The difference is that the executable now needs to be invoked from the vendored `Packages/NovotroScore` package inside `Amira Writer`, not from the retired standalone `Novotro Score.app` workflow.
 
 One more important detail:
 
@@ -42,7 +43,7 @@ What it broke was the surrounding assumptions:
 1. Older notes still pointed at `/Volumes/Storage VIII/Programming/Novotro Score/...`
 2. Older wrapper logic assumed `~/Applications/Novotro Score.app/Contents/MacOS/NovotroScore`
 3. Agents could confuse `NovotroOpera` with `NovotroScore`
-4. The repo-local wrapper script was missing from `Novotro Opera`
+4. The repo-local wrapper script was missing from `Amira Writer`
 
 So the export capability is still present, but the canonical path changed.
 
@@ -50,12 +51,12 @@ So the export capability is still present, but the canonical path changed.
 
 Use this script:
 
-- `/Volumes/Storage VIII/Programming/Novotro Opera/Scripts/export-headless-wav.sh`
+- `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/export-headless-wav.sh`
 
 This script:
 
 1. Works directly from the unified Opera repo
-2. Does not require opening `Novotro Opera.app`
+2. Does not require opening `Amira Writer.app`
 3. Runs the repo-local `NovotroScore` executable in headless mode
 4. Reads the `.owp` directly
 5. Writes a WAV directly
@@ -65,9 +66,9 @@ This script:
 
 ```bash
 /Volumes/Storage\ VIII/Programming/Novotro\ Opera/Scripts/export-headless-wav.sh \
-  --project "/Volumes/Storage VIII/Users/gary/Documents/Novotro Project Server/Projects/Amira.owp" \
+  --project "/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera" \
   --song-path "Songs/1.02.0 - PROLOGUE - ARRIVAL - WITNESS.ows" \
-  --output "/Volumes/Storage VIII/Users/gary/Desktop/Novotro Previews/Prologue version 001.wav"
+  --output "/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/Suno/1.02.0 PROLOGUE - ARRIVAL - WITNESS/1.02.0 PROLOGUE - ARRIVAL - WITNESS v001-Upload.wav"
 ```
 
 This is the preferred no-GUI export path moving forward.
@@ -129,9 +130,7 @@ Instead ask:
 
 Installed on disk is not enough by itself.
 
-See:
-
-- `/Volumes/Storage VIII/Programming/Novotro Opera/Suno/HANDOFF-2026-03-23-BBC-AU-SILENT-WAV.md`
+Historical AU/debugging incident notes are archived under `archive/docs/`.
 
 ## Fast Troubleshooting
 
@@ -147,6 +146,12 @@ If `auval` does not see the BBC AU, the problem is discovery / registration, not
 ## Suno Workflow After Export
 
 ### Canonical cover presets
+
+Authoritative source:
+
+- `/Volumes/Storage VIII/Programming/Amira Writer/Suno/CANONICAL-SUNO-COVER-PROMPTS.md`
+
+Agents should treat that file as the single source of truth for cover prompt wording, negative prompt, and slider defaults.
 
 Use these exact prompt families:
 
@@ -168,6 +173,12 @@ Voice mode rule:
 - Use `classical voice` for vocal covers.
 - Use `instrumental` only for instrumental-only results.
 
+Workspace rule:
+
+- Do not force a specific Suno workspace in this workflow.
+- Let Suno use its normal current/default workspace state unless Gary asks for
+  a workspace-specific run and that path is revalidated first.
+
 Lyrics and gender rule:
 
 - Always pass the real lyrics explicitly for vocal covers.
@@ -177,14 +188,16 @@ Lyrics and gender rule:
   `Amira/Yasmin = female`
 
 1. Export the WAV headlessly with the Opera-local script.
-2. Inspect the WAV in `/Volumes/Storage VIII/Users/gary/Desktop/Novotro Previews`.
-3. Upload one source song only.
+2. Inspect the WAV in `/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/Suno`.
+3. Upload one source song only using Suno's normal create flow.
 4. Reuse that one source song for all related cover attempts.
 5. Follow the canonical Suno prompt / lyric / gender rules.
+6. Name the exported source WAVs as `Base Title v###-Upload.wav` and the
+   generated Suno downloads as `Base Title v###-A.wav` / `Base Title v###-B.wav`.
 
 ## Short Version
 
-The move to `Novotro Opera` did not remove headless export.
+The move to `Amira Writer` did not remove headless export.
 
 It only changed where the authoritative export path lives.
 

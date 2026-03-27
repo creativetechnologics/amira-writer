@@ -54,7 +54,14 @@ struct CharactersSidebarView: View {
         let owpChar = store.owpCharacter(for: character)
         HStack(spacing: OperaChromeSidebarMetrics.rowIconSpacing) {
             // Thumbnail
-            if let owpChar,
+            if let profileURL = store.resolvedCharacterAssetURL(for: character.profileImagePath),
+               let image = NSImage(contentsOf: profileURL) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 24, height: 24)
+                    .clipShape(Circle())
+            } else if let owpChar,
                let imageDir = store.owpCharacterImageDirectory(for: owpChar),
                let firstImage = owpChar.images.first {
                 let imageURL = imageDir.appendingPathComponent(firstImage.filename)

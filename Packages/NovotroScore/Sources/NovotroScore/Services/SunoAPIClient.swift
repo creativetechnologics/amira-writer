@@ -1,15 +1,21 @@
 import Foundation
 
-/// HTTP client for the sandraschi/suno-mcp Playwright-based server.
-/// Communicates with a Python FastAPI server (typically at localhost:3000)
-/// that automates Suno's web UI via Playwright browser automation.
+/// HTTP client for the local Suno MCP FastAPI server.
+/// Communicates with the headless Playwright workflow documented in `Suno/`.
 @available(macOS 26.0, *)
 final class SunoAPIClient: @unchecked Sendable {
 
     // MARK: - Configuration (persisted via UserDefaults)
 
     var baseURL: String {
-        get { UserDefaults.standard.string(forKey: "sunoServerURL") ?? "" }
+        get {
+            let stored = UserDefaults.standard.string(forKey: "sunoServerURL") ?? "http://127.0.0.1:3001"
+            let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed == "http://localhost:3000" {
+                return "http://127.0.0.1:3001"
+            }
+            return trimmed
+        }
         set { UserDefaults.standard.set(newValue, forKey: "sunoServerURL") }
     }
 
@@ -68,7 +74,7 @@ final class SunoAPIClient: @unchecked Sendable {
 
             NSLog("[SunoMCP] Detected stale browser session during generate_track; resetting and retrying once")
             _ = try? await closeBrowser()
-            _ = try? await openBrowser(headless: false)
+            _ = try? await openBrowser(headless: true)
             return try await callTool("suno_generate_track", arguments: args)
         }
     }
@@ -105,7 +111,32 @@ final class SunoAPIClient: @unchecked Sendable {
         ])
     }
 
-    /// Create a cover from an uploaded audio track.
+    /// Create a cover directly from a local WAV using the current canonical API.
+    func createCover(
+        filePath: String,
+        style: String,
+        lyrics: String,
+        excludeStyles: String,
+        weirdness: Int,
+        styleInfluence: Int,
+        audioInfluence: Int,
+        vocalGender: String,
+        title: String
+    ) async throws -> String {
+        try await callTool("suno_create_cover", arguments: [
+            "file_path": filePath,
+            "style": style,
+            "lyrics": lyrics,
+            "exclude_styles": excludeStyles,
+            "weirdness": weirdness,
+            "style_influence": styleInfluence,
+            "audio_influence": audioInfluence,
+            "vocal_gender": vocalGender,
+            "title": title,
+        ])
+    }
+
+    /// Legacy upload-id-based cover creation path.
     func createCover(uploadID: String, style: String) async throws -> String {
         try await callTool("suno_create_cover", arguments: [
             "upload_id": uploadID,
@@ -113,18 +144,40 @@ final class SunoAPIClient: @unchecked Sendable {
         ])
     }
 
-    /// Check cover generation status.
+    /// Check cover generation status using the current song-id-based API.
+    func getCoverStatus(songID: String) async throws -> String {
+        try await callTool("suno_get_cover_status", arguments: [
+            "song_id": songID,
+        ])
+    }
+
+    /// Legacy cover-status path.
     func getCoverStatus(coverID: String) async throws -> String {
         try await callTool("suno_get_cover_status", arguments: [
             "cover_id": coverID,
         ])
     }
 
-    /// Download a completed cover.
+    /// Download a completed cover using the current song-id-based API.
+    func downloadCover(songID: String, downloadPath: String) async throws -> String {
+        try await callTool("suno_download_cover", arguments: [
+            "song_id": songID,
+            "download_path": downloadPath,
+        ])
+    }
+
+    /// Legacy cover-download path.
     func downloadCover(coverID: String, downloadPath: String) async throws -> String {
         try await callTool("suno_download_cover", arguments: [
             "cover_id": coverID,
             "download_path": downloadPath,
+        ])
+    }
+
+    func evaluateJS(script: String, titleText: String) async throws -> String {
+        try await callTool("suno_evaluate_js", arguments: [
+            "script": script,
+            "titleText": titleText,
         ])
     }
 
@@ -238,10 +291,12 @@ final class SunoAPIClient: @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         // Generation and download can take minutes
-        if toolName == "suno_generate_track" {
+        if toolName == "suno_generate_track" || toolName == "suno_create_cover" {
             request.timeoutInterval = 300  // 5 minutes
-        } else if toolName == "suno_download_track" {
+        } else if toolName == "suno_download_track" || toolName == "suno_download_cover" {
             request.timeoutInterval = 120  // 2 minutes
+        } else if toolName == "suno_get_cover_status" || toolName == "suno_evaluate_js" {
+            request.timeoutInterval = 120
         }
 
         // Encode arguments as JSON body

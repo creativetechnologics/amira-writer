@@ -53,6 +53,12 @@ Scripts/export-headless-wav.sh \
 
 Use the orchestral family by default unless Gary explicitly asks for chamber tests or instrumental-only experiments.
 
+Authoritative source:
+
+- `/Volumes/Storage VIII/Programming/Novotro Opera/Suno/CANONICAL-SUNO-COVER-PROMPTS.md`
+
+If there is ever a wording dispute, that file wins.
+
 ### `chamber cover`
 
 Use this family exactly:

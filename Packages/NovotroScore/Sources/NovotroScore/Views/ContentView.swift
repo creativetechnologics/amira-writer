@@ -11,6 +11,7 @@ struct ContentView: View {
     @AppStorage("novotro.score.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
     @AppStorage("novotro.score.sidebarVisible") private var showSidebar: Bool = true
 
+    @AppStorage("novotro.score.showInspector") private var showInspector: Bool = true
     @AppStorage("novotro.score.inspector.width") private var inspectorWidth: Double = 360
 
     @State private var pianoRollController: PianoRollViewController?
@@ -45,7 +46,17 @@ struct ContentView: View {
             pianoRollController?.trackFilterDidChange()
         }
         .onReceive(NotificationCenter.default.publisher(for: ScoreAppSignals.toggleInspectorNotification)) { _ in
-            store.showInspector.toggle()
+            showInspector.toggle()
+        }
+        .onChange(of: showInspector) { _, newValue in
+            if store.showInspector != newValue {
+                store.showInspector = newValue
+            }
+        }
+        .onChange(of: store.showInspector) { _, newValue in
+            if showInspector != newValue {
+                showInspector = newValue
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: ScoreAppSignals.openFileNotification)) { notification in
             guard let url = notification.userInfo?["url"] as? URL else { return }
@@ -94,22 +105,6 @@ struct ContentView: View {
                                 showsProgress: store.isAgentSyncInProgress
                             )
                         }
-                        OperaChromeActionButton(
-                            systemImage: showSidebar ? "sidebar.left" : "sidebar.right",
-                            isSelected: showSidebar
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showSidebar.toggle()
-                            }
-                        }
-                        OperaChromeActionButton(
-                            systemImage: "info.circle",
-                            isSelected: store.showInspector
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                store.showInspector.toggle()
-                            }
-                        }
                     }
                 }
             } content: {
@@ -120,7 +115,7 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if store.showInspector {
+            if showInspector {
                 OperaChromeSplitHandle(
                     onDragChanged: resizeInspector,
                     onDragEnded: { }
@@ -134,7 +129,7 @@ struct ContentView: View {
                     ) {
                         OperaChromeActionButton(systemImage: "xmark") {
                             withAnimation(.easeInOut(duration: 0.2)) {
-                                store.showInspector = false
+                                showInspector = false
                             }
                         }
                     }

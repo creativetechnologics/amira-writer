@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import NovotroScore
+@testable import NovotroScoreUI
 
 @Suite("SoundFontAssignment")
 struct SoundFontAssignmentTests {

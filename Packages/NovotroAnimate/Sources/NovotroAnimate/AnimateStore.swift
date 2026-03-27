@@ -116,6 +116,8 @@ final class AnimateStore {
     private var backgroundIndexRefreshTask: Task<Void, Never>?
     private var externalFileWatchWorkItem: DispatchWorkItem?
     private var lastKnownExternalSnapshots: [String: AnimateExternalFileSnapshot] = [:]
+    @ObservationIgnored private var lastSavedPersistenceFingerprint: String?
+    @ObservationIgnored private var isReconcilingPersistenceState = false
     private static let databaseWatchInterval: TimeInterval = 0.45
     private static let externalWatchInterval: TimeInterval = 0.55
     var externalChangeTimes: [String: Date] = [:]
@@ -141,6 +143,10 @@ final class AnimateStore {
             return "exclamationmark.arrow.triangle.2.circlepath"
         }
         return showsRecentAgentUpdate ? "sparkles" : "arrow.triangle.2.circlepath"
+    }
+
+    init() {
+        observePersistedSaveState()
     }
 
     func startPlayback() {
@@ -1449,6 +1455,139 @@ final class AnimateStore {
         return trimmed
     }
 
+    func resolvedCharacterAssetURL(for path: String?) -> URL? {
+        guard let trimmed = normalizedMediaPath(path) else {
+            return nil
+        }
+
+        let fileManager = FileManager.default
+        if !trimmed.hasPrefix("/"),
+           let projectURL = fileOWPURL {
+            let projectRelativeURL = projectURL.appendingPathComponent(trimmed)
+            if fileManager.fileExists(atPath: projectRelativeURL.path) {
+                return projectRelativeURL
+            }
+        }
+
+        if !trimmed.hasPrefix("/"),
+           let animateURL,
+           (trimmed.hasPrefix("characters/") || trimmed.hasPrefix("backgrounds/")) {
+            let animateRelativeURL = animateURL.appendingPathComponent(trimmed)
+            if fileManager.fileExists(atPath: animateRelativeURL.path) {
+                return animateRelativeURL
+            }
+        }
+
+        if let projectURL = fileOWPURL,
+           let projectRelativePath = projectRelativeCharacterAssetPath(from: trimmed) {
+            let remappedURL = projectURL.appendingPathComponent(projectRelativePath)
+            if fileManager.fileExists(atPath: remappedURL.path) {
+                return remappedURL
+            }
+        }
+
+        let candidateURL = URL(fileURLWithPath: trimmed)
+        if trimmed.hasPrefix("/"), fileManager.fileExists(atPath: candidateURL.path) {
+            return candidateURL
+        }
+
+        return nil
+    }
+
+    private func normalizedCharacterAssetPath(_ path: String?) -> String? {
+        guard let trimmed = normalizedMediaPath(path) else {
+            return nil
+        }
+
+        if let projectRelativePath = projectRelativeCharacterAssetPath(from: trimmed) {
+            return projectRelativePath
+        }
+
+        if let resolvedURL = resolvedCharacterAssetURL(for: trimmed),
+           let projectRelativePath = projectRelativePath(for: resolvedURL, projectURL: fileOWPURL) {
+            return projectRelativePath
+        }
+
+        return trimmed.hasPrefix("/") ? nil : trimmed
+    }
+
+    private func normalizedCharacterAssetPaths(_ paths: [String]) -> [String] {
+        var normalized: [String] = []
+        var seen: Set<String> = []
+
+        for path in paths {
+            guard let repaired = normalizedCharacterAssetPath(path),
+                  seen.insert(repaired).inserted else {
+                continue
+            }
+            normalized.append(repaired)
+        }
+
+        return normalized
+    }
+
+    private func projectRelativeCharacterAssetPath(from path: String) -> String? {
+        let normalizedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedPath.isEmpty else { return nil }
+
+        if !normalizedPath.hasPrefix("/") {
+            if normalizedPath.hasPrefix("Animate/") {
+                return normalizedPath
+            }
+            if normalizedPath.hasPrefix("characters/") || normalizedPath.hasPrefix("backgrounds/") {
+                return "Animate/" + normalizedPath
+            }
+            return normalizedPath
+        }
+
+        let standardizedAbsoluteURL = URL(fileURLWithPath: normalizedPath).standardizedFileURL
+        if let projectRelativePath = projectRelativePath(for: standardizedAbsoluteURL, projectURL: fileOWPURL) {
+            return projectRelativePath
+        }
+
+        let standardizedAbsolutePath = standardizedAbsoluteURL.path
+        if let animateRange = standardizedAbsolutePath.range(of: "/Animate/") {
+            return "Animate/" + standardizedAbsolutePath[animateRange.upperBound...]
+        }
+
+        return nil
+    }
+
+    private func projectRelativePath(for url: URL, projectURL: URL?) -> String? {
+        guard let projectURL else { return nil }
+
+        let absolutePath = url.standardizedFileURL.path
+        let projectPath = projectURL.standardizedFileURL.path
+        guard absolutePath == projectPath || absolutePath.hasPrefix(projectPath + "/") else {
+            return nil
+        }
+
+        let suffix = absolutePath.dropFirst(projectPath.count)
+        let trimmed = suffix.hasPrefix("/") ? String(suffix.dropFirst()) : String(suffix)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func persistedCharacter(_ character: AnimationCharacter) -> AnimationCharacter {
+        AnimationCharacter(
+            id: character.id,
+            sortOrder: character.sortOrder,
+            name: character.name,
+            description: character.description,
+            owpSlug: character.owpSlug,
+            renderMode: character.renderMode,
+            preferredViewAngle: character.preferredViewAngle,
+            parts: character.parts,
+            profileImagePath: normalizedCharacterAssetPath(character.profileImagePath),
+            backstory: character.backstory,
+            personality: character.personality,
+            notes: character.notes,
+            inspirationImagePaths: normalizedCharacterAssetPaths(character.inspirationImagePaths),
+            inspirationReferenceImagePath: normalizedCharacterAssetPath(character.inspirationReferenceImagePath),
+            referenceImagePaths: normalizedCharacterAssetPaths(character.referenceImagePaths),
+            animatedImagePaths: normalizedCharacterAssetPaths(character.animatedImagePaths)
+        )
+    }
+
     private func resolvedMediaURL(for path: String) -> URL? {
         if path.hasPrefix("/") {
             return URL(fileURLWithPath: path)
@@ -2094,7 +2233,95 @@ final class AnimateStore {
 
     func resumeBackgroundWork() {
         startDatabaseWatch()
-        startExternalFileWatch()
+        if !disableExternalFileWatch {
+            startExternalFileWatch()
+        }
+    }
+
+    private func observePersistedSaveState() {
+        withObservationTracking {
+            _ = animateURL
+            _ = animateMetadata
+            _ = scenes
+            _ = characters
+            _ = activePackageIDsByCharacterSlug
+            _ = shotPresets
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.reevaluatePersistedSaveState()
+                self.observePersistedSaveState()
+            }
+        }
+
+        reevaluatePersistedSaveState()
+    }
+
+    private func reevaluatePersistedSaveState() {
+        guard !isReconcilingPersistenceState else { return }
+        guard animateURL != nil else {
+            lastSavedPersistenceFingerprint = nil
+            saveIndicator = .idle
+            return
+        }
+        guard saveIndicator != .saving else { return }
+        guard let fingerprint = persistenceFingerprint() else {
+            saveIndicator = .idle
+            return
+        }
+        if let lastSavedPersistenceFingerprint {
+            saveIndicator = fingerprint == lastSavedPersistenceFingerprint ? .saved : .unsavedChanges
+        } else {
+            saveIndicator = .saved
+        }
+    }
+
+    private func markCurrentStateAsSaved() {
+        lastSavedPersistenceFingerprint = persistenceFingerprint()
+        saveIndicator = animateURL == nil ? .idle : .saved
+    }
+
+    private func persistenceFingerprint() -> String? {
+        guard animateURL != nil else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let sceneData: [AnimateSceneData] = scenes.map { scene in
+            let characterSlugs = scene.characterIDs.compactMap { characterID in
+                characters.first(where: { $0.id == characterID })?.owpSlug
+            }
+            let directionTemplate = normalizedDirectionTemplateForPersistence(scene.directionTemplate)
+            return AnimateSceneData(
+                owsSongPath: scene.owpSongPath,
+                backgroundID: scene.backgroundID,
+                characterIDs: scene.characterIDs,
+                characterSlugs: characterSlugs,
+                keyframes: scene.keyframes,
+                defaultAudioPath: scene.defaultAudioPath,
+                tracks: scene.tracks,
+                directionTemplate: directionTemplate
+            )
+        }
+
+        struct PersistedState: Encodable {
+            var metadata: AnimateMetadata?
+            var scenes: [AnimateSceneData]
+            var characters: [AnimationCharacter]
+            var packageSelections: CharacterPackageSelectionManifest
+            var shotPresets: SceneShotPresetManifest
+        }
+
+        let payload = PersistedState(
+            metadata: animateMetadata,
+            scenes: sceneData,
+            characters: characters,
+            packageSelections: CharacterPackageSelectionManifest(
+                activePackageIDsByCharacterSlug: activePackageIDsByCharacterSlug
+            ),
+            shotPresets: SceneShotPresetManifest(presets: shotPresets)
+        )
+
+        guard let data = try? encoder.encode(payload) else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func pollDatabaseChanges() {
@@ -2679,10 +2906,12 @@ final class AnimateStore {
 
         let previousOWPURL = owpURL
         isLoadingProject = true
+        isReconcilingPersistenceState = true
         loadErrorMessage = nil
         owpURL = url
         workingOWPURL = url
         statusMessage = "Opening project..."
+        saveIndicator = .idle
         backgroundIndexRefreshTask?.cancel()
         stopExternalFileWatch()
         externalChangeTimes.removeAll()
@@ -2702,6 +2931,8 @@ final class AnimateStore {
 
         defer {
             isLoadingProject = false
+            isReconcilingPersistenceState = false
+            reevaluatePersistedSaveState()
         }
 
         do {
@@ -2822,6 +3053,7 @@ final class AnimateStore {
             statusMessage = "Opened: \(projectName) (\(scenes.count) songs, \(characters.count) characters)"
             loadErrorMessage = nil
             UserDefaults.standard.set(url.path, forKey: "lastProjectPath")
+            markCurrentStateAsSaved()
             startDatabaseWatch()
             if !disableExternalFileWatch {
                 recordExternalFileSnapshots()
@@ -2891,7 +3123,7 @@ final class AnimateStore {
                     .appendingPathComponent("characters")
                     .appendingPathComponent(character.owpSlug)
                 try fm.createDirectory(at: charDir, withIntermediateDirectories: true)
-                let rigData = try encoder.encode(character)
+                let rigData = try encoder.encode(persistedCharacter(character))
                 try rigData.write(to: charDir.appendingPathComponent("rig.json"))
             }
 
@@ -2942,16 +3174,10 @@ final class AnimateStore {
                 }
             }
             recordExternalFileSnapshots()
-            statusMessage = "Saved"
-            saveIndicator = .saved
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                if self?.saveIndicator == .saved {
-                    self?.saveIndicator = .idle
-                }
-            }
+            markCurrentStateAsSaved()
         } catch {
             statusMessage = "Save error: \(error.localizedDescription)"
-            saveIndicator = .idle
+            reevaluatePersistedSaveState()
         }
     }
 
@@ -3257,7 +3483,7 @@ final class AnimateStore {
             try FileManager.default.createDirectory(at: charDir, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(character)
+            let data = try encoder.encode(persistedCharacter(character))
             try data.write(to: charDir.appendingPathComponent("rig.json"))
             statusMessage = "Saved rig for \(character.name)"
         } catch {
@@ -3327,7 +3553,7 @@ final class AnimateStore {
             statusMessage = "Character not found"
             return
         }
-        characters[index].profileImagePath = imagePath
+        characters[index].profileImagePath = normalizedCharacterAssetPath(imagePath)
         statusMessage = "Profile image updated"
         save()
     }
@@ -3438,15 +3664,16 @@ final class AnimateStore {
 
     func addInspirationImage(_ imagePath: String, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
-        guard FileManager.default.fileExists(atPath: imagePath) else {
+        guard let normalizedPath = normalizedCharacterAssetPath(imagePath),
+              FileManager.default.fileExists(atPath: normalizedPath) else {
             statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
             return
         }
-        guard !characters[index].inspirationImagePaths.contains(imagePath) else {
+        guard !characters[index].inspirationImagePaths.contains(normalizedPath) else {
             statusMessage = "Image already added"
             return
         }
-        characters[index].inspirationImagePaths.append(imagePath)
+        characters[index].inspirationImagePaths.append(normalizedPath)
         save()
     }
 
@@ -3504,7 +3731,7 @@ final class AnimateStore {
 
     func setInspirationReferenceImage(_ imagePath: String?, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
-        characters[index].inspirationReferenceImagePath = imagePath
+        characters[index].inspirationReferenceImagePath = normalizedCharacterAssetPath(imagePath)
         save()
     }
 
@@ -3541,15 +3768,16 @@ final class AnimateStore {
 
     func addReferenceImage(_ imagePath: String, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
-        guard FileManager.default.fileExists(atPath: imagePath) else {
+        guard let normalizedPath = normalizedCharacterAssetPath(imagePath),
+              FileManager.default.fileExists(atPath: normalizedPath) else {
             statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
             return
         }
-        guard !characters[index].referenceImagePaths.contains(imagePath) else {
+        guard !characters[index].referenceImagePaths.contains(normalizedPath) else {
             statusMessage = "Image already added"
             return
         }
-        characters[index].referenceImagePaths.append(imagePath)
+        characters[index].referenceImagePaths.append(normalizedPath)
         save()
     }
 
@@ -3611,15 +3839,16 @@ final class AnimateStore {
 
     func addAnimatedImage(_ imagePath: String, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
-        guard FileManager.default.fileExists(atPath: imagePath) else {
+        guard let normalizedPath = normalizedCharacterAssetPath(imagePath),
+              FileManager.default.fileExists(atPath: normalizedPath) else {
             statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
             return
         }
-        guard !characters[index].animatedImagePaths.contains(imagePath) else {
+        guard !characters[index].animatedImagePaths.contains(normalizedPath) else {
             statusMessage = "Image already added"
             return
         }
-        characters[index].animatedImagePaths.append(imagePath)
+        characters[index].animatedImagePaths.append(normalizedPath)
         save()
     }
 
@@ -3752,6 +3981,11 @@ final class AnimateStore {
                 existing.name = sourceCharacter.name
                 existing.description = sourceCharacter.description ?? ""
                 existing.owpSlug = slug
+                existing.profileImagePath = normalizedCharacterAssetPath(existing.profileImagePath)
+                existing.inspirationImagePaths = normalizedCharacterAssetPaths(existing.inspirationImagePaths)
+                existing.inspirationReferenceImagePath = normalizedCharacterAssetPath(existing.inspirationReferenceImagePath)
+                existing.referenceImagePaths = normalizedCharacterAssetPaths(existing.referenceImagePaths)
+                existing.animatedImagePaths = normalizedCharacterAssetPaths(existing.animatedImagePaths)
                 updatedCharacters.append(existing)
                 continue
             }
@@ -3767,14 +4001,14 @@ final class AnimateStore {
                     renderMode: persistedCharacter?.renderMode,
                     preferredViewAngle: persistedCharacter?.preferredViewAngle,
                     parts: persistedCharacter?.parts ?? [],
-                    profileImagePath: persistedCharacter?.profileImagePath,
+                    profileImagePath: normalizedCharacterAssetPath(persistedCharacter?.profileImagePath),
                     backstory: persistedCharacter?.backstory ?? "",
                     personality: persistedCharacter?.personality ?? "",
                     notes: persistedCharacter?.notes ?? "",
-                    inspirationImagePaths: persistedCharacter?.inspirationImagePaths ?? [],
-                    inspirationReferenceImagePath: persistedCharacter?.inspirationReferenceImagePath,
-                    referenceImagePaths: persistedCharacter?.referenceImagePaths ?? [],
-                    animatedImagePaths: persistedCharacter?.animatedImagePaths ?? []
+                    inspirationImagePaths: normalizedCharacterAssetPaths(persistedCharacter?.inspirationImagePaths ?? []),
+                    inspirationReferenceImagePath: normalizedCharacterAssetPath(persistedCharacter?.inspirationReferenceImagePath),
+                    referenceImagePaths: normalizedCharacterAssetPaths(persistedCharacter?.referenceImagePaths ?? []),
+                    animatedImagePaths: normalizedCharacterAssetPaths(persistedCharacter?.animatedImagePaths ?? [])
                 )
             )
         }

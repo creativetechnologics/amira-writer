@@ -152,9 +152,11 @@ public struct OperaChromePaneHeader<Actions: View>: View {
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.2)
                     .foregroundStyle(OperaChromeTheme.textTertiary)
+                    .lineLimit(1)
                 Text(title)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(OperaChromeTheme.textPrimary)
+                    .lineLimit(1)
                 Text(subtitle)
                     .font(.system(size: 11))
                     .foregroundStyle(OperaChromeTheme.textSecondary)
@@ -366,6 +368,7 @@ public struct OperaChromeStatusBadge: View {
                 Text(title)
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(tint.opacity(0.95))
+                    .lineLimit(1)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
                     .background(
@@ -524,6 +527,7 @@ public struct OperaChromeInspectorTabs<Selection: Hashable, Content: View>: View
                                     .font(.system(size: 10, weight: .medium))
                                 Text(tab.title)
                                     .font(.system(size: 11, weight: .semibold))
+                                    .lineLimit(1)
                             }
                             .foregroundStyle(selection == tab.id ? OperaChromeTheme.textPrimary : OperaChromeTheme.textSecondary)
                             .padding(.horizontal, 11)
@@ -669,6 +673,7 @@ public struct OperaChromeEmptyState: View {
 
 public enum SaveIndicatorState: Equatable, Sendable {
     case idle
+    case unsavedChanges
     case saving
     case saved
 }
@@ -686,6 +691,16 @@ public struct OperaChromeCompactSaveIndicator: View {
     public var body: some View {
         Group {
             switch state {
+            case .unsavedChanges:
+                HStack(spacing: 4) {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(Color(red: 0.98, green: 0.74, blue: 0.32))
+                    Text("Unsaved Changes")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                }
+                .transition(.opacity)
             case .saving:
                 HStack(spacing: 4) {
                     ProgressView()

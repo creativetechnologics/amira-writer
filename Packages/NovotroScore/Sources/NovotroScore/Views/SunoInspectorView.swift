@@ -8,14 +8,13 @@ struct SunoInspectorView: View {
     @Bindable var store: ScoreStore
 
     enum Tab: String, CaseIterable {
-        case plan = "Plan"
-        case render = "Render"
+        case cover = "Cover"
         case log = "Log"
         case lyrics = "Lyrics"
         case settings = "Settings"
     }
 
-    @State private var activeTab: Tab = .plan
+    @State private var activeTab: Tab = .cover
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,9 +50,7 @@ struct SunoInspectorView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     switch activeTab {
-                    case .plan:
-                        planTabContent
-                    case .render:
+                    case .cover:
                         renderTabContent
                     case .log:
                         logTabContent
@@ -328,173 +325,170 @@ struct SunoInspectorView: View {
 
     @ViewBuilder
     private var renderTabContent: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Request Mode")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
-            Picker("Request Mode", selection: Binding(
-                get: { store.sunoRequestMode },
-                set: { store.sunoRequestMode = $0 }
-            )) {
-                ForEach(SunoRequestMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-        }
+        VStack(alignment: .leading, spacing: 10) {
+            Text("This follows the current canonical Suno workflow: fresh export, `suno_create_cover`, dual song IDs, polling, and both WAV downloads into the project's `Suno/` folder.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
 
-        if store.sunoRequestMode == .cover {
-            if store.activeChunkPlan != nil {
-                HStack(spacing: 8) {
-                    Button {
-                        Task { await store.startSunoRender() }
-                    } label: {
-                        Label("Start Cover Render", systemImage: "play.fill")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Canonical Cover Preset")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Picker("Cover Preset", selection: Binding(
+                    get: { store.sunoCoverPreset },
+                    set: { store.sunoCoverPreset = $0 }
+                )) {
+                    ForEach(SunoCoverPreset.allCases) { preset in
+                        Text(preset.title).tag(preset)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(store.activeRenderSession?.status == .generating)
-
-                    Button {
-                        store.exportForManualSuno()
-                    } label: {
-                        Label("Manual Export", systemImage: "square.and.arrow.up")
-                    }
-                    .controlSize(.small)
                 }
-            } else {
-                Text("Generate a chunk plan first (Plan tab)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                .pickerStyle(.menu)
+                .controlSize(.small)
             }
 
-            if let session = store.activeRenderSession {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Active Session")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(session.status.rawValue)
-                            .font(.system(size: 9, design: .monospaced))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.purple.opacity(0.2))
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
-                    }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Resolved Prompt")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(store.sunoResolvedCoverPrompt)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.03)))
+            }
 
-                    let totalChunks = session.plan.chunks.count
-                    let completedChunks = session.plan.chunks.filter {
-                        $0.status == .downloaded || $0.status == .selected || $0.status == .aligned
-                    }.count
-                    ProgressView(value: Double(completedChunks), total: Double(max(1, totalChunks)))
-                        .controlSize(.small)
-                    Text("\(completedChunks)/\(totalChunks) chunks complete")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Lyrics")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                if store.sunoCoverRequiresLyrics {
+                    if store.hasFormattedSunoLyrics {
+                        Label("Real lyrics will be submitted from the Lyrics tab.", systemImage: "text.quote")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                    } else {
+                        Label("This preset needs real lyrics before Suno can run.", systemImage: "exclamationmark.triangle")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                } else {
+                    Label("This preset submits `[Instrumental]`.", systemImage: "music.note")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                if store.sunoCoverPreset.isVocal {
+                    Text(store.sunoResolvedVocalGenderArgument.isEmpty
+                         ? "Vocal gender argument: automatic/unspecified"
+                         : "Vocal gender argument: \(store.sunoResolvedVocalGenderArgument)")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
-
-                    HStack(spacing: 8) {
-                        Button {
-                            store.importSunoSessionToAudioPane(session.id, selectedOnly: true)
-                        } label: {
-                            Label("Import Selected Takes", systemImage: "waveform.badge.plus")
-                        }
-                        .controlSize(.small)
-
-                        Button {
-                            store.importSunoSessionToAudioPane(session.id, selectedOnly: false)
-                        } label: {
-                            Label("Import All Takes", systemImage: "square.stack.3d.up")
-                        }
-                        .controlSize(.small)
-                    }
-                    .padding(.top, 2)
                 }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Negative Prompt")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                TextField("-drums, -percussion, -cymbals, -snare, -kick", text: Binding(
+                    get: { store.sunoExcludeStyles },
+                    set: { store.sunoExcludeStyles = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Canonical Sliders")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Text("Weirdness")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                    Stepper(value: Binding(
+                        get: { store.sunoCoverWeirdness },
+                        set: { store.sunoCoverWeirdness = min(100, max(0, $0)) }
+                    ), in: 0...100, step: 5) {
+                        Text("\(store.sunoCoverWeirdness)%")
+                            .font(.caption2.monospacedDigit())
+                    }
+                    .controlSize(.mini)
+                }
+
+                HStack {
+                    Text("Style Influence")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                    Stepper(value: Binding(
+                        get: { store.sunoCoverStyleInfluence },
+                        set: { store.sunoCoverStyleInfluence = min(100, max(0, $0)) }
+                    ), in: 0...100, step: 5) {
+                        Text("\(store.sunoCoverStyleInfluence)%")
+                            .font(.caption2.monospacedDigit())
+                    }
+                    .controlSize(.mini)
+                }
+
+                HStack {
+                    Text("Audio Influence")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                    Stepper(value: Binding(
+                        get: { store.sunoCoverAudioInfluence },
+                        set: { store.sunoCoverAudioInfluence = min(100, max(0, $0)) }
+                    ), in: 0...100, step: 5) {
+                        Text("\(store.sunoCoverAudioInfluence)%")
+                            .font(.caption2.monospacedDigit())
+                    }
+                    .controlSize(.mini)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    Task { await store.sunoRunCanonicalCover() }
+                } label: {
+                    Label("Run Canonical Cover", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(store.sunoIsGenerating || (store.sunoCoverRequiresLyrics && !store.hasFormattedSunoLyrics))
+
+                if store.sunoIsGenerating {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            if !store.sunoGenerateStatus.isEmpty {
+                Text(store.sunoGenerateStatus)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
 
             Divider()
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Session History")
+                Text("Generated Covers")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                if store.sunoRenderSessions.isEmpty {
-                    Text("No completed sessions")
+                if store.selectedSunoGenerations.isEmpty {
+                    Text("No Suno cover runs for this song yet")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .padding(.vertical, 4)
                 } else {
-                    ForEach(store.sunoRenderSessions) { session in
-                        sessionRow(session)
-                    }
-                }
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Generate an original Suno song using the style prompt and the formatted lyrics from the Lyrics tab.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Song Prompt")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    TextField("If blank, the style template is used", text: Binding(
-                        get: { store.sunoSongPrompt },
-                        set: { store.sunoSongPrompt = $0 }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                }
-
-                HStack(spacing: 8) {
-                    Button {
-                        Task { await store.sunoGenerateOriginalSong() }
-                    } label: {
-                        Label("Generate Original Song", systemImage: "sparkles")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(store.sunoIsGenerating)
-
-                    if store.hasFormattedSunoLyrics {
-                        Label("Lyrics attached", systemImage: "text.quote")
-                            .font(.caption2)
-                            .foregroundStyle(.green)
-                    } else {
-                        Label("No lyrics attached", systemImage: "text.quote")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if !store.sunoGenerateStatus.isEmpty {
-                    Text(store.sunoGenerateStatus)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Generated Songs")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
-                    if store.selectedSunoGenerations.isEmpty {
-                        Text("No original-song generations for this song yet")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .padding(.vertical, 4)
-                    } else {
-                        ForEach(store.selectedSunoGenerations) { generation in
-                            generationRow(generation)
-                        }
+                    ForEach(store.selectedSunoGenerations) { generation in
+                        generationRow(generation)
                     }
                 }
             }
@@ -547,6 +541,11 @@ struct SunoInspectorView: View {
                     Text(generation.displayTitle)
                         .font(.caption2.weight(.medium))
                         .lineLimit(1)
+                    if let baseTitle = generation.baseTitle, let version = generation.version {
+                        Text(String(format: "%@ v%03d", baseTitle, version))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
                     Text(generation.createdAt, style: .time)
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
@@ -557,28 +556,47 @@ struct SunoInspectorView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 8) {
-                if generation.canDownload {
-                    Button {
-                        Task { await store.sunoDownloadTrack(generation.id) }
-                    } label: {
-                        Label("Download", systemImage: "arrow.down.circle")
-                    }
-                    .controlSize(.mini)
-                }
+            if !generation.resolvedSongIDs.isEmpty {
+                Text("Song IDs: \(generation.resolvedSongIDs.joined(separator: ", "))")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .textSelection(.enabled)
+            }
 
-                if generation.isDownloaded {
+            HStack(spacing: 8) {
+                if generation.resolvedDownloadedFilePaths.isEmpty {
+                    if generation.status == .polling || generation.status == .downloading {
+                        Label("Waiting for both A/B WAVs", systemImage: "hourglass")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    ForEach(Array(generation.resolvedDownloadedFilePaths.enumerated()), id: \.offset) { index, path in
+                        Button {
+                            store.sunoPreviewDownloadedFile(path, generationID: generation.id)
+                        } label: {
+                            Label(index == 0 ? "Preview A" : "Preview B", systemImage: "play.circle")
+                        }
+                        .controlSize(.mini)
+                    }
+
                     Button {
-                        store.sunoPreviewTrack(generation.id)
+                        store.sunoRevealGenerationDownloads(generation.id)
                     } label: {
-                        Label("Preview", systemImage: "play.circle")
+                        Label("Reveal", systemImage: "folder")
                     }
                     .controlSize(.mini)
                 }
             }
 
-            if generation.status == .submitted {
-                Text("Submitted in Suno. Download becomes available once a real Suno track ID is captured.")
+            if generation.status == .submitted || generation.status == .submitting {
+                Text("Cover request submitted to Suno.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+
+            if generation.status == .polling {
+                Text("Waiting for both Suno song IDs to reach `status=complete`.")
                     .font(.system(size: 9))
                     .foregroundStyle(.tertiary)
             }
@@ -614,53 +632,29 @@ struct SunoInspectorView: View {
                 }
             }
 
-            // Summary status
-            if let plan = store.activeChunkPlan {
-                let planned = plan.chunks.filter { $0.status == .planned }.count
-                let exported = plan.chunks.filter { $0.status == .exported }.count
-                let generating = plan.chunks.filter { $0.status == .generating }.count
-                let done = plan.chunks.filter { [.downloaded, .selected, .aligned].contains($0.status) }.count
-                let failed = plan.chunks.filter { $0.status == .failed }.count
+            if store.selectedSunoGenerations.isEmpty {
+                Label("No canonical Suno cover runs for the selected song yet", systemImage: "info.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                let downloaded = store.selectedSunoGenerations.filter { $0.isDownloaded }.count
+                let processing = store.selectedSunoGenerations.filter { $0.isProcessing }.count
+                let failed = store.selectedSunoGenerations.filter { $0.isFailed }.count
 
                 HStack(spacing: 12) {
-                    statusBadge(count: planned, label: "Planned", color: .gray)
-                    statusBadge(count: exported, label: "Exported", color: .blue)
-                    statusBadge(count: generating, label: "Generating", color: .yellow)
-                    statusBadge(count: done, label: "Done", color: .green)
+                    statusBadge(count: downloaded, label: "Downloaded", color: .green)
+                    statusBadge(count: processing, label: "Running", color: .yellow)
                     if failed > 0 {
                         statusBadge(count: failed, label: "Failed", color: .red)
                     }
                 }
                 .padding(.vertical, 4)
-
-                // Next action hint
-                if store.activeRenderSession == nil {
-                    if planned == plan.chunks.count {
-                        Label("Ready to render — go to Render tab to start", systemImage: "arrow.right.circle")
-                            .font(.caption2)
-                            .foregroundStyle(.blue)
-                    }
-                } else if let session = store.activeRenderSession {
-                    Label("Session: \(session.status.rawValue)", systemImage: "circle.dotted")
-                        .font(.caption2)
-                        .foregroundStyle(.purple)
-                }
-
-                if store.isChunkPlanStale {
-                    Label("Plan is stale — score was edited since planning", systemImage: "exclamationmark.triangle")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
-            } else {
-                Label("No chunk plan — go to Plan tab to generate one", systemImage: "info.circle")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
 
             Divider()
 
             if store.sunoStatusLog.isEmpty {
-                Text("No log entries yet. Generate a chunk plan or start a render to see status updates here.")
+                Text("No log entries yet. Run the canonical cover flow to see status updates here.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .padding(.vertical, 8)
@@ -764,12 +758,10 @@ struct SunoInspectorView: View {
     @ViewBuilder
     private var settingsTabContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Server setup section
             serverSetupSection
 
             Divider()
 
-            // Connection status
             HStack(spacing: 6) {
                 Circle()
                     .fill(store.sunoClient.isConfigured ? Color.green : Color.orange)
@@ -786,81 +778,12 @@ struct SunoInspectorView: View {
                 }
             }
 
-            // Chunk config (unchanged — keep existing steppers)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Generation Config")
+                Text("Canonical MCP Defaults")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                HStack {
-                    Text("Max chunk duration")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Spacer()
-                    Stepper(value: Binding(
-                        get: { store.sunoConfig.maxChunkDurationSeconds },
-                        set: { store.sunoConfig.maxChunkDurationSeconds = $0 }
-                    ), in: 15...120, step: 5) {
-                        Text("\(Int(store.sunoConfig.maxChunkDurationSeconds))s")
-                            .font(.caption2.monospacedDigit())
-                    }
-                    .controlSize(.mini)
-                }
-
-                HStack {
-                    Text("Min chunk duration")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Spacer()
-                    Stepper(value: Binding(
-                        get: { store.sunoConfig.minChunkDurationSeconds },
-                        set: { store.sunoConfig.minChunkDurationSeconds = $0 }
-                    ), in: 5...60, step: 5) {
-                        Text("\(Int(store.sunoConfig.minChunkDurationSeconds))s")
-                            .font(.caption2.monospacedDigit())
-                    }
-                    .controlSize(.mini)
-                }
-
-                HStack {
-                    Text("Density threshold (medium)")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Spacer()
-                    Stepper(value: Binding(
-                        get: { store.sunoConfig.densityThresholdMedium },
-                        set: { store.sunoConfig.densityThresholdMedium = $0 }
-                    ), in: 2...10) {
-                        Text("\(store.sunoConfig.densityThresholdMedium)")
-                            .font(.caption2.monospacedDigit())
-                    }
-                    .controlSize(.mini)
-                }
-
-                HStack {
-                    Text("Density threshold (dense)")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Spacer()
-                    Stepper(value: Binding(
-                        get: { store.sunoConfig.densityThresholdDense },
-                        set: { store.sunoConfig.densityThresholdDense = $0 }
-                    ), in: 3...20) {
-                        Text("\(store.sunoConfig.densityThresholdDense)")
-                            .font(.caption2.monospacedDigit())
-                    }
-                    .controlSize(.mini)
-                }
-            }
-
-            Divider()
-
-            // QC mode info
-            VStack(alignment: .leading, spacing: 4) {
-                Text("QC Mode")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text("Curated: Review each take manually before proceeding. Auto: Accept best similarity score. Iterative: Re-roll low-scoring chunks.")
+                Text("- Server URL: `http://127.0.0.1:3001`\n- Browser automation stays headless\n- Covers use `suno_create_cover` and capture both A/B song IDs\n- Uploads and downloads land in the current opera project's `Suno/` folder")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -923,7 +846,7 @@ struct SunoInspectorView: View {
             } else {
                 // State: Not bootstrapped
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Downloads and configures the Suno AI server for audio generation")
+                    Text("Validates the installed local Suno MCP checkout, prepares its environment, and starts the canonical headless server on 127.0.0.1:3001")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -939,7 +862,7 @@ struct SunoInspectorView: View {
                             }
                         }
                     } label: {
-                        Label("Set Up Suno", systemImage: "arrow.down.circle")
+                        Label("Prepare Suno MCP", systemImage: "checkmark.circle")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -985,7 +908,7 @@ struct SunoInspectorView: View {
                 }
             case .notLoggedIn:
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Log into suno.com in Chrome first, then import your session here")
+                    Text("Log into suno.com in Chrome first, then import that session here so the headless MCP flow can reuse it")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)

@@ -64,23 +64,23 @@
 
 ### Machines
 
-- **Build Server**: `Garys-Server.local` — source code at `/Volumes/Storage VIII/Programming/Novotro Opera/`
+- **Build Server**: `Garys-Server.local` — source code at `/Volumes/Storage VIII/Programming/Amira Writer/`
 - **Laptop**: `Garys-Laptop.local` — runs the app, has Spitfire BBC Symphony AU installed
 
 ### Build & Deploy Commands
 
 ```bash
 # Build (on server)
-cd "/Volumes/Storage VIII/Programming/Novotro Opera" && bash Scripts/build-app.sh
+cd "/Volumes/Storage VIII/Programming/Amira Writer" && bash Scripts/build-app.sh
 
 # Deploy to laptop
-scp -r "/Volumes/Storage VIII/Users/gary/Applications/Novotro Opera.app" "gary@Garys-Laptop.local:~/Applications/"
+scp -r "/Volumes/Storage VIII/Users/gary/Applications/Amira Writer.app" "gary@Garys-Laptop.local:~/Applications/"
 
 # Re-sign on laptop (SSH can't access keychain)
 ssh gary@Garys-Laptop.local "codesign --force --sign - --deep ~/Applications/Novotro\ Opera.app"
 
 # Kill and relaunch
-ssh gary@Garys-Laptop.local "pkill -f 'Novotro Opera' 2>/dev/null; sleep 2; open ~/Applications/Novotro\ Opera.app"
+ssh gary@Garys-Laptop.local "pkill -f 'Amira Writer' 2>/dev/null; sleep 2; open ~/Applications/Novotro\ Opera.app"
 ```
 
 ### Remote Mode Switching
@@ -284,7 +284,7 @@ The Spitfire BBC Symphony is a very complex AU. Test if the bug reproduces with 
 Attach to the process and check what `loadSoundBankInstrument` is waiting on:
 
 ```bash
-ssh gary@Garys-Laptop.local "lldb -p \$(pgrep -f 'Novotro Opera')"
+ssh gary@Garys-Laptop.local "lldb -p \$(pgrep -f 'Amira Writer')"
 # Then in lldb:
 # thread list
 # thread backtrace all
@@ -309,7 +309,7 @@ These bugs were fixed earlier in this session and are working:
 - Swift 6.2 / macOS 26 (Tahoe)
 - Build command: `bash Scripts/build-app.sh` (in project root)
 - Build time: ~70-90 seconds
-- Output: `/Volumes/Storage VIII/Users/gary/Applications/Novotro Opera.app`
+- Output: `/Volumes/Storage VIII/Users/gary/Applications/Amira Writer.app`
 - The app requires macOS 26.0 (both build server and laptop run it)
 
 ---
@@ -325,4 +325,4 @@ These bugs were fixed earlier in this session and are working:
 - The audioQueue is a SERIAL dispatch queue — this is likely key to the deadlock
 - Always wait 6+ seconds after launching the app before sending commands
 - Always wait 10-12 seconds after switching to AU mode for plugins to load
-- The project is at `/Volumes/Storage VIII/Programming/Novotro Opera/`
+- The project is at `/Volumes/Storage VIII/Programming/Amira Writer/`

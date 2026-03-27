@@ -1,6 +1,6 @@
-# Novotro Opera
+# Amira Writer
 
-This folder is the consolidated workspace for the unified `Novotro Opera` app.
+This folder is the consolidated workspace for the unified `Amira Writer` app.
 
 ## Layout
 
@@ -39,8 +39,10 @@ rtk /Volumes/Storage\ VIII/Programming/Novotro\ Opera/Scripts/build-app.sh
 ## Deploy
 
 ```bash
-rtk scp -r "$HOME/Applications/Novotro Opera.app" gary@Garys-Laptop.local:~/Applications/
+rtk /Volumes/Storage\ VIII/Programming/Novotro\ Opera/Scripts/build-app.sh
 ```
+
+`Scripts/build-app.sh` now installs locally and deploys to both `gary@Garys-Laptop.local:~/Applications/` and `gary@Garys-MacBook.local:~/Applications/` by default. Use `--local-only` to skip remote deployment.
 
 ### Quick local workflow
 
@@ -73,4 +75,3 @@ This workspace is intended to be self-contained for future agents. The legacy si
 
 ### Recent Maintenance
 - **2026-03-21**: UI Simplification & Cleanup pass. Consolidated duplicate UI components into `NovotroProjectKit` and optimized shell performance. See [history/HANDOFF-2026-03-21-UI-SIMPLIFICATION.md](history/HANDOFF-2026-03-21-UI-SIMPLIFICATION.md) for details.
-

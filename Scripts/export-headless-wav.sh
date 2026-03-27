@@ -28,7 +28,7 @@ Usage:
 
 Notes:
   - This script runs the repo-local NovotroScore package executable in headless mode.
-  - It does NOT require opening Novotro Opera.app.
+  - It does NOT require opening Amira Writer.app.
   - Override the executable with NOVOTRO_SCORE_BIN if you want to use a prebuilt binary.
 EOF
   exit 2

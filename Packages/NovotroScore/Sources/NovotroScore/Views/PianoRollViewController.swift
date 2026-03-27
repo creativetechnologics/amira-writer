@@ -48,9 +48,10 @@ final class PianoRollViewController: NSViewController {
     }()
 
     private let store: ScoreStore
+    private let chromeState = PianoRollChromeState()
     private var editorView: PianoRollEditorView?
     private var renderer: PianoRollMetalRenderer?
-    private weak var toolbarHostView: NSView?
+    private var toolbarHostView: NSHostingView<PianoRollToolbarView>?
     private var statusBarHost: NSHostingView<PianoRollStatusBarView>?
 
     // MARK: - Lane Views
@@ -69,6 +70,9 @@ final class PianoRollViewController: NSViewController {
     private var tempoLabelButton: NSButton?
     private var velocityContainer: NSView?  // holds label + lane
     private var tempoContainer: NSView?     // holds label + lane
+    private var wavArrangementView: WavArrangementView?
+    private var wavContainer: NSView?
+    private var wavLabelButton: NSButton?
     private var lyricsLane: LyricsLaneView?
     private var lyricsLabelButton: NSButton?
     private var lyricsContainer: NSView?     // holds label + lane
@@ -78,15 +82,10 @@ final class PianoRollViewController: NSViewController {
     /// Cached syllabified words from the last auto-align, used when building alignment on accept.
     private var lastAutoAlignSyllabified: [(word: String, syllables: [String])] = []
 
-    // WAV arrangement pane (between piano roll and lane views)
-    private var wavArrangementView: WavArrangementView?
-    private var wavContainer: NSView?        // holds label + WAV pane
-    private var wavLabelButton: NSButton?
-    private var wavHeightConstraint: NSLayoutConstraint?
-
     private var velocityHeightConstraint: NSLayoutConstraint?
     private var tempoHeightConstraint: NSLayoutConstraint?
     private var lyricsHeightConstraint: NSLayoutConstraint?
+    private var wavHeightConstraint: NSLayoutConstraint?
 
     /// Whether the velocity lane is visible. Persisted in UserDefaults.
     private var velocityLaneVisible: Bool {
@@ -142,10 +141,8 @@ final class PianoRollViewController: NSViewController {
         set { UserDefaults.standard.set(Double(newValue), forKey: "operawriter.pianoroll.lyricsLane.height") }
     }
 
-    /// Whether the WAV arrangement pane is visible. Persisted in UserDefaults.
     private var wavPaneVisible: Bool {
         get {
-            // Default to true on first launch
             let key = "operawriter.pianoroll.wavPane.visible"
             if UserDefaults.standard.object(forKey: key) == nil { return true }
             return UserDefaults.standard.bool(forKey: key)
@@ -156,11 +153,10 @@ final class PianoRollViewController: NSViewController {
         }
     }
 
-    /// Persisted WAV arrangement pane height.
     private var wavPaneHeight: CGFloat {
         get {
-            let v = CGFloat(UserDefaults.standard.double(forKey: "operawriter.pianoroll.wavPane.height"))
-            return v > 0 ? v : 120
+            let value = CGFloat(UserDefaults.standard.double(forKey: "operawriter.pianoroll.wavPane.height"))
+            return value > 0 ? value : 104
         }
         set { UserDefaults.standard.set(Double(newValue), forKey: "operawriter.pianoroll.wavPane.height") }
     }
@@ -184,7 +180,12 @@ final class PianoRollViewController: NSViewController {
     /// Snapshot of tempo events to detect when tempo specifically changes during playback.
     private var lastTempoSnapshot: [TempoPoint] = []
     /// Tracks whether playback was stopped in place (Logic Pro-style: second stop returns to start).
-    var playheadStopped = false
+    var playheadStopped = false {
+        didSet {
+            guard playheadStopped != oldValue else { return }
+            syncChromeState()
+        }
+    }
     /// Frame counter for throttling SwiftUI live display updates (~15Hz instead of 60Hz).
     private var liveDisplayFrameCounter: Int = 0
 
@@ -193,8 +194,20 @@ final class PianoRollViewController: NSViewController {
     private static let zoomHorizontalKey = "operawriter.pianoroll.zoom.horizontal"
     private static let zoomVerticalKey = "operawriter.pianoroll.zoom.vertical"
 
-    var tool: PianoRollToolChoice = .select
-    var snap: PianoRollSnapChoice = .sixteenth
+    var tool: PianoRollToolChoice = .select {
+        didSet {
+            guard tool != oldValue else { return }
+            tempoLane?.currentTool = tool
+            syncChromeState()
+            editorView?.refreshCursor()
+        }
+    }
+    var snap: PianoRollSnapChoice = .sixteenth {
+        didSet {
+            guard snap != oldValue else { return }
+            pushDataToEditor()
+        }
+    }
     var pixelsPerQuarter: CGFloat = {
         let saved = UserDefaults.standard.double(forKey: PianoRollViewController.zoomHorizontalKey)
         return saved > 0 ? CGFloat(saved) : 128
@@ -216,17 +229,63 @@ final class PianoRollViewController: NSViewController {
     private var lastSavedPixelsPerQuarter: CGFloat = 0
     private var lastSavedEditorRowHeight: CGFloat = 0
     var selectedNoteIDs: Set<UUID> = [] {
-        didSet { store.selectedNoteIDs = selectedNoteIDs }
+        didSet {
+            guard selectedNoteIDs != oldValue else { return }
+            store.selectedNoteIDs = selectedNoteIDs
+            editorView?.selectedNoteIDs = selectedNoteIDs
+            velocityLane?.selectedNoteIDs = selectedNoteIDs
+            syncChromeState()
+        }
     }
     var showAdvancedControls = false
-    var showGhostNotes = true
-    var scaleRoot: ScaleRoot = .c
-    var scaleType: ScaleType = .none
-    var velocityColorEnabled: Bool = false
-    var multiVoiceMode: Bool = false
-    var stampChordQuality: ChordQuality = .major
-    var stampChordRoot: ScaleRoot = .c
-    var stampOctave: Int = 4
+    var showGhostNotes = true {
+        didSet {
+            guard showGhostNotes != oldValue else { return }
+            pushDataToEditor()
+        }
+    }
+    var scaleRoot: ScaleRoot = .c {
+        didSet {
+            guard scaleRoot != oldValue else { return }
+            pushDataToEditor()
+        }
+    }
+    var scaleType: ScaleType = .none {
+        didSet {
+            guard scaleType != oldValue else { return }
+            pushDataToEditor()
+        }
+    }
+    var velocityColorEnabled: Bool = false {
+        didSet {
+            guard velocityColorEnabled != oldValue else { return }
+            pushDataToEditor()
+        }
+    }
+    var multiVoiceMode: Bool = false {
+        didSet {
+            guard multiVoiceMode != oldValue else { return }
+            pushDataToEditor()
+        }
+    }
+    var stampChordQuality: ChordQuality = .major {
+        didSet {
+            guard stampChordQuality != oldValue else { return }
+            syncChromeState()
+        }
+    }
+    var stampChordRoot: ScaleRoot = .c {
+        didSet {
+            guard stampChordRoot != oldValue else { return }
+            syncChromeState()
+        }
+    }
+    var stampOctave: Int = 4 {
+        didSet {
+            guard stampOctave != oldValue else { return }
+            syncChromeState()
+        }
+    }
 
     /// Detected chord name from currently selected notes.
     var detectedChordName: String? {
@@ -235,6 +294,27 @@ final class PianoRollViewController: NSViewController {
             .filter { selectedNoteIDs.contains($0.id) }
             .map(\.pitch)
         return ChordDetector.detect(pitches: pitches)
+    }
+
+    private func syncChromeState() {
+        chromeState.tool = tool
+        chromeState.snap = snap
+        chromeState.selectedNoteCount = selectedNoteIDs.count
+        chromeState.showGhostNotes = showGhostNotes
+        chromeState.scaleRoot = scaleRoot
+        chromeState.scaleType = scaleType
+        chromeState.velocityColorEnabled = velocityColorEnabled
+        chromeState.multiVoiceMode = multiVoiceMode
+        chromeState.stampChordQuality = stampChordQuality
+        chromeState.stampChordRoot = stampChordRoot
+        chromeState.stampOctave = stampOctave
+        chromeState.detectedChordName = detectedChordName
+        chromeState.followMode = followMode
+        chromeState.playheadStopped = playheadStopped
+        chromeState.canUndo = canUndo
+        chromeState.canRedo = canRedo
+        chromeState.pixelsPerQuarter = pixelsPerQuarter
+        chromeState.editorRowHeight = editorRowHeight
     }
 
     /// Stamps a chord at the given tick using the current stamp settings.
@@ -281,6 +361,7 @@ final class PianoRollViewController: NSViewController {
         set {
             _cachedFollowMode = newValue
             UserDefaults.standard.set(newValue.rawValue, forKey: "operawriter.transport.followMode")
+            syncChromeState()
         }
     }
 
@@ -328,18 +409,21 @@ final class PianoRollViewController: NSViewController {
     /// Saves the current note state to the undo stack. Call before any edit.
     func pushUndo() {
         store.pushUndoState(label: "Edit Notes")
+        syncChromeState()
     }
 
     func undo() {
         store.undo()
         let validIDs = Set(store.pianoRollNotes.map(\.id))
         selectedNoteIDs = selectedNoteIDs.intersection(validIDs)
+        pushDataToEditor()
     }
 
     func redo() {
         store.redo()
         let validIDs = Set(store.pianoRollNotes.map(\.id))
         selectedNoteIDs = selectedNoteIDs.intersection(validIDs)
+        pushDataToEditor()
     }
 
     var canUndo: Bool { store.canUndo }
@@ -474,11 +558,15 @@ final class PianoRollViewController: NSViewController {
 
         // Register defaults so lanes are visible on first launch
         UserDefaults.standard.register(defaults: [
+            "operawriter.pianoroll.wavPane.visible": true,
+            "operawriter.pianoroll.wavPane.height": 104.0,
             "operawriter.pianoroll.velocityLane.visible": true,
             "operawriter.pianoroll.tempoLane.visible": true,
             "operawriter.pianoroll.velocityLane.height": 60.0,
             "operawriter.pianoroll.tempoLane.height": 60.0,
         ])
+
+        syncChromeState()
     }
 
     @available(*, unavailable)
@@ -501,7 +589,7 @@ final class PianoRollViewController: NSViewController {
         self.view = containerView
 
         // --- Header: SwiftUI toolbar hosted in NSHostingView ---
-        let toolbarView = PianoRollToolbarView(store: store, controller: self)
+        let toolbarView = PianoRollToolbarView(store: store, chrome: chromeState, controller: self)
         let toolbarHost = NSHostingView(rootView: toolbarView)
         toolbarHost.translatesAutoresizingMaskIntoConstraints = false
         toolbarHost.sizingOptions = [.intrinsicContentSize]
@@ -536,64 +624,59 @@ final class PianoRollViewController: NSViewController {
         self.renderer = metalRenderer
         editor.renderer = metalRenderer
 
-        // --- Empty State: "No Song Selected" (hidden when song is loaded) ---
-        let emptyHost = NSHostingView(rootView: PianoRollEmptyStateView())
-        emptyHost.translatesAutoresizingMaskIntoConstraints = false
-        emptyHost.identifier = NSUserInterfaceItemIdentifier("emptyState")
-        containerView.addSubview(emptyHost)
-
-        // --- WAV Arrangement Pane ---
-        //
-        // Sits between the Metal editor and the lane views.
-        // Shows audio clip rectangles on a timeline synced with the piano roll.
-        // Has a collapsible resize-handle header like the lane views.
-
-        let wavCont = NSView()
-        wavCont.translatesAutoresizingMaskIntoConstraints = false
-        self.wavContainer = wavCont
-        containerView.addSubview(wavCont)
+        // --- Audio Clip Arrangement Pane ---
+        let wavContainer = NSView()
+        wavContainer.translatesAutoresizingMaskIntoConstraints = false
+        self.wavContainer = wavContainer
+        containerView.addSubview(wavContainer)
 
         let wavHandle = LaneResizeHandleView(frame: .zero)
         wavHandle.translatesAutoresizingMaskIntoConstraints = false
-        wavCont.addSubview(wavHandle)
+        wavContainer.addSubview(wavHandle)
 
-        let wavLabel = NSButton(title: "▾ Audio", target: self, action: #selector(toggleWavPane))
+        let wavLabel = NSButton(title: "▾ Audio Clips", target: self, action: #selector(toggleWavPane))
         wavLabel.translatesAutoresizingMaskIntoConstraints = false
         wavLabel.isBordered = false
         wavLabel.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
         wavLabel.contentTintColor = NSColor.white.withAlphaComponent(0.55)
-        wavLabel.setAccessibilityLabel("Toggle WAV Arrangement Pane")
+        wavLabel.setAccessibilityLabel("Toggle Audio Clip Lane")
         self.wavLabelButton = wavLabel
         wavHandle.addSubview(wavLabel)
 
-        let wavPane = WavArrangementView(store: store)
-        wavPane.translatesAutoresizingMaskIntoConstraints = false
-        self.wavArrangementView = wavPane
-        wavCont.addSubview(wavPane)
+        let wavView = WavArrangementView(store: store)
+        wavView.translatesAutoresizingMaskIntoConstraints = false
+        self.wavArrangementView = wavView
+        wavContainer.addSubview(wavView)
 
-        let wavHeightC = wavPane.heightAnchor.constraint(equalToConstant: wavPaneHeight)
+        let wavHeightC = wavView.heightAnchor.constraint(equalToConstant: wavPaneHeight)
         wavHeightC.priority = .defaultHigh
         self.wavHeightConstraint = wavHeightC
 
         NSLayoutConstraint.activate([
-            wavHandle.topAnchor.constraint(equalTo: wavCont.topAnchor),
-            wavHandle.leadingAnchor.constraint(equalTo: wavCont.leadingAnchor),
-            wavHandle.trailingAnchor.constraint(equalTo: wavCont.trailingAnchor),
+            wavHandle.topAnchor.constraint(equalTo: wavContainer.topAnchor),
+            wavHandle.leadingAnchor.constraint(equalTo: wavContainer.leadingAnchor),
+            wavHandle.trailingAnchor.constraint(equalTo: wavContainer.trailingAnchor),
             wavHandle.heightAnchor.constraint(equalToConstant: 18),
 
             wavLabel.centerYAnchor.constraint(equalTo: wavHandle.centerYAnchor),
             wavLabel.leadingAnchor.constraint(equalTo: wavHandle.leadingAnchor, constant: 6),
 
-            wavPane.topAnchor.constraint(equalTo: wavHandle.bottomAnchor),
-            wavPane.leadingAnchor.constraint(equalTo: wavCont.leadingAnchor),
-            wavPane.trailingAnchor.constraint(equalTo: wavCont.trailingAnchor),
-            wavPane.bottomAnchor.constraint(equalTo: wavCont.bottomAnchor),
+            wavView.topAnchor.constraint(equalTo: wavHandle.bottomAnchor),
+            wavView.leadingAnchor.constraint(equalTo: wavContainer.leadingAnchor),
+            wavView.trailingAnchor.constraint(equalTo: wavContainer.trailingAnchor),
+            wavView.bottomAnchor.constraint(equalTo: wavContainer.bottomAnchor),
             wavHeightC,
         ])
 
         wavHandle.onResize = { [weak self] delta in
             self?.resizeWavPane(by: delta)
         }
+
+        // --- Empty State: "No Song Selected" (hidden when song is loaded) ---
+        let emptyHost = NSHostingView(rootView: PianoRollEmptyStateView())
+        emptyHost.translatesAutoresizingMaskIntoConstraints = false
+        emptyHost.identifier = NSUserInterfaceItemIdentifier("emptyState")
+        containerView.addSubview(emptyHost)
 
         // --- Velocity & Tempo Lanes ---
         //
@@ -790,7 +873,7 @@ final class PianoRollViewController: NSViewController {
         }
 
         // --- Status Bar (bottom of window) ---
-        let statusBar = NSHostingView(rootView: PianoRollStatusBarView(store: store, controller: self))
+        let statusBar = NSHostingView(rootView: PianoRollStatusBarView(store: store, chrome: chromeState, controller: self))
         statusBar.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(statusBar)
         self.statusBarHost = statusBar
@@ -815,11 +898,11 @@ final class PianoRollViewController: NSViewController {
             editor.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
             editor.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
 
-            wavCont.topAnchor.constraint(equalTo: editor.bottomAnchor),
-            wavCont.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
-            wavCont.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+            wavContainer.topAnchor.constraint(equalTo: editor.bottomAnchor),
+            wavContainer.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            wavContainer.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
 
-            lyrContainer.topAnchor.constraint(equalTo: wavCont.bottomAnchor),
+            lyrContainer.topAnchor.constraint(equalTo: wavContainer.bottomAnchor),
             lyrContainer.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
             lyrContainer.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
 
@@ -854,6 +937,7 @@ final class PianoRollViewController: NSViewController {
 
         // Initial data push
         rebuildColorCache()
+        syncChromeState()
         pushDataToEditor()
     }
 
@@ -961,7 +1045,10 @@ final class PianoRollViewController: NSViewController {
 
     private func configureEditorCallbacks(_ editor: PianoRollEditorView) {
         editor.onPreviewPitch = { [weak self] pitch in
-            self?.store.previewPitch(pitch)
+            self?.store.startPreviewPitch(pitch)
+        }
+        editor.onEndPreviewPitch = { [weak self] in
+            self?.store.stopPreviewPitch()
         }
 
         editor.onSeek = { [weak self] tick in
@@ -1303,7 +1390,7 @@ final class PianoRollViewController: NSViewController {
         // Note: timed lyric line move/remove callbacks are not wired in Novotro Score
         // because the libretto is read-only. Timing tags are managed separately.
 
-        // Sync horizontal scroll offset from editor to all lanes + WAV pane
+        // Sync horizontal scroll offset from editor to all visible lanes
         editorView?.onScrollOffsetChanged = { [weak self] offset in
             self?.wavArrangementView?.scrollOffset = offset
             self?.lyricsLane?.scrollOffset = offset
@@ -1311,7 +1398,7 @@ final class PianoRollViewController: NSViewController {
             self?.tempoLane?.scrollOffset = offset
         }
 
-        // Wire horizontal scroll from all lanes + WAV pane → editor scroll view
+        // Wire horizontal scroll from all lanes back to the editor scroll view
         let scrollHandler: (CGFloat) -> Void = { [weak self] deltaX in
             guard let self, let editor = self.editorView else { return }
             let scrollView = editor.scrollView
@@ -1340,10 +1427,6 @@ final class PianoRollViewController: NSViewController {
         lyricsLaneVisible.toggle()
     }
 
-    @objc private func toggleWavPane() {
-        wavPaneVisible.toggle()
-    }
-
     @objc private func lyricsAutoAlignTapped() {
         lyricsLane?.onAutoAlignRequested?()
     }
@@ -1360,16 +1443,19 @@ final class PianoRollViewController: NSViewController {
         lyricsPreviewRejectButton?.isHidden = true
     }
 
+    @objc private func toggleWavPane() {
+        wavPaneVisible.toggle()
+    }
+
     /// Updates the visibility of the lane views based on persisted state.
     /// The label/handle remains visible — only the CoreGraphics lane hides.
     /// We set the height constraint to 0 when collapsed so the container shrinks
     /// to just the handle height.
     private func updateLaneVisibility() {
-        // WAV arrangement pane
         let wavVisible = wavPaneVisible
         wavArrangementView?.isHidden = !wavVisible
         wavHeightConstraint?.constant = wavVisible ? wavPaneHeight : 0
-        wavLabelButton?.title = wavVisible ? "▾ Audio" : "▸ Audio"
+        wavLabelButton?.title = wavVisible ? "▾ Audio Clips" : "▸ Audio Clips"
 
         // Lyrics lane
         let lyricsVisible = lyricsLaneVisible
@@ -1405,6 +1491,13 @@ final class PianoRollViewController: NSViewController {
         velocityLaneHeight = newHeight
     }
 
+    private func resizeWavPane(by delta: CGFloat) {
+        guard let c = wavHeightConstraint else { return }
+        let newHeight = max(60, min(220, c.constant - delta))
+        c.constant = newHeight
+        wavPaneHeight = newHeight
+    }
+
     private func resizeTempoLane(by delta: CGFloat) {
         guard let c = tempoHeightConstraint else { return }
         let newHeight = max(30, min(200, c.constant - delta))
@@ -1417,13 +1510,6 @@ final class PianoRollViewController: NSViewController {
         let newHeight = max(30, min(200, c.constant - delta))
         c.constant = newHeight
         lyricsLaneHeight = newHeight
-    }
-
-    private func resizeWavPane(by delta: CGFloat) {
-        guard let c = wavHeightConstraint else { return }
-        let newHeight = max(40, min(300, c.constant - delta))
-        c.constant = newHeight
-        wavPaneHeight = newHeight
     }
 
     // MARK: - Store Observation
@@ -1542,7 +1628,10 @@ final class PianoRollViewController: NSViewController {
         velocityContainer?.isHidden = !hasSong
         tempoContainer?.isHidden = !hasSong
 
-        guard hasSong else { return }
+        guard hasSong else {
+            syncChromeState()
+            return
+        }
 
         let tpq = max(1, store.ticksPerQuarter)
         let safePixelsPerQuarter = max(24, min(pixelsPerQuarter, 340))
@@ -1584,16 +1673,13 @@ final class PianoRollViewController: NSViewController {
             visibleNotes = store.pianoRollNotes
         }
 
-        // Ghost notes: show notes from non-active tracks as faded background.
-        // When a track filter is active, ALWAYS show ghost notes so the user
-        // has context of the full arrangement. The showGhostNotes toggle only
-        // controls whether ghost notes appear when the user explicitly turns
-        // them off (Alt+G) while a track is selected.
+        // Ghost notes: show notes from non-active tracks as faded background,
+        // but keep the explicit toolbar toggle authoritative.
         let ghostNotes: [PianoRollNote]
         if let filter = activeFilter {
-            // Auto-enable ghost notes when a track is selected
-            if !showGhostNotes { showGhostNotes = true }
-            ghostNotes = store.pianoRollNotes.filter { !filter.contains($0.trackIndex) }
+            ghostNotes = showGhostNotes
+                ? store.pianoRollNotes.filter { !filter.contains($0.trackIndex) }
+                : []
         } else {
             ghostNotes = []
         }
@@ -1625,6 +1711,10 @@ final class PianoRollViewController: NSViewController {
         if selectedNoteIDs != store.selectedNoteIDs {
             selectedNoteIDs = store.selectedNoteIDs
         }
+        let visibleNoteIDs = Set(visibleNotes.map(\.id))
+        if !selectedNoteIDs.isSubset(of: visibleNoteIDs) {
+            selectedNoteIDs.formIntersection(visibleNoteIDs)
+        }
         editor.selectedNoteIDs = selectedNoteIDs
         editor.playheadTick = playheadTick
         editor.noteGroups = store.pianoRollNoteGroups
@@ -1644,6 +1734,13 @@ final class PianoRollViewController: NSViewController {
         // --- Push data to velocity & tempo lanes ---
 
         let kbOffset = editor.keyboardWidth
+
+        if let wavPane = wavArrangementView {
+            wavPane.keyboardOffset = kbOffset
+            wavPane.pixelsPerTick = ppt
+            wavPane.scrollOffset = editor.visibleScrollOffsetX
+            wavPane.reloadClips()
+        }
 
         if let velLane = velocityLane {
             velLane.keyboardOffset = kbOffset
@@ -1719,12 +1816,8 @@ final class PianoRollViewController: NSViewController {
             lLane.trackColors = resolveVocalTrackColors()
         }
 
-        // --- Push data to WAV arrangement pane ---
-        if let wavPane = wavArrangementView {
-            wavPane.pixelsPerTick = ppt
-            wavPane.keyboardOffset = kbOffset
-            wavPane.reloadClips()
-        }
+        syncChromeState()
+
     }
 
     // MARK: - Vocal Track Resolution
@@ -2724,8 +2817,24 @@ final class PianoRollViewController: NSViewController {
 
     private func pitchForY(_ y: CGFloat) -> Int {
         let row = Int(y / editorRowHeight)  // floor: cursor inside a row → that row's pitch
-        let pitch = 108 - row  // maxPitch - row
-        return min(max(pitch, 21), 108)
+        let maxVisiblePitch = editorView?.maxPitch ?? 108
+        let minVisiblePitch = editorView?.minPitch ?? 21
+        let pitch = maxVisiblePitch - row
+        return min(max(pitch, minVisiblePitch), maxVisiblePitch)
+    }
+
+    private func noteRect(
+        for note: PianoRollNote,
+        pixelsPerTick: CGFloat,
+        rowHeight: CGFloat,
+        maxPitch: Int
+    ) -> CGRect {
+        CGRect(
+            x: CGFloat(note.startTick) * pixelsPerTick,
+            y: CGFloat(maxPitch - note.pitch) * rowHeight,
+            width: max(pianoRollMinimumNoteWidth, CGFloat(note.duration) * pixelsPerTick),
+            height: rowHeight
+        )
     }
 
     /// Hit-test: find the note under a canvas point.
@@ -2733,13 +2842,10 @@ final class PianoRollViewController: NSViewController {
         guard let editor = editorView else { return nil }
         let ppt = editor.pixelsPerTick
         let rh = editor.rowHeight
+        let maxPitch = editor.maxPitch
 
         for note in editor.notes {
-            let noteX = CGFloat(note.startTick) * ppt
-            let noteW = max(6, CGFloat(note.duration) * ppt)
-            let noteY = CGFloat(108 - note.pitch) * rh
-            let noteRect = CGRect(x: noteX, y: noteY, width: noteW, height: rh)
-            if noteRect.contains(point) {
+            if noteRect(for: note, pixelsPerTick: ppt, rowHeight: rh, maxPitch: maxPitch).contains(point) {
                 return note
             }
         }
@@ -2752,16 +2858,14 @@ final class PianoRollViewController: NSViewController {
         guard let editor = editorView else { return nil }
         let ppt = editor.pixelsPerTick
         let rh = editor.rowHeight
+        let maxPitch = editor.maxPitch
         let resizeZone: CGFloat = 6  // pixels from right edge
 
         for note in editor.notes {
-            let noteX = CGFloat(note.startTick) * ppt
-            let noteW = max(6, CGFloat(note.duration) * ppt)
-            let noteY = CGFloat(108 - note.pitch) * rh
-            let noteRect = CGRect(x: noteX, y: noteY, width: noteW, height: rh)
+            let noteRect = noteRect(for: note, pixelsPerTick: ppt, rowHeight: rh, maxPitch: maxPitch)
             guard noteRect.contains(point) else { continue }
 
-            let rightEdge = noteX + noteW
+            let rightEdge = noteRect.maxX
             if abs(point.x - rightEdge) <= resizeZone {
                 return note
             }
@@ -2774,16 +2878,14 @@ final class PianoRollViewController: NSViewController {
         guard let editor = editorView else { return nil }
         let ppt = editor.pixelsPerTick
         let rh = editor.rowHeight
+        let maxPitch = editor.maxPitch
         let resizeZone: CGFloat = 6
 
         for note in editor.notes {
-            let noteX = CGFloat(note.startTick) * ppt
-            let noteW = max(6, CGFloat(note.duration) * ppt)
-            let noteY = CGFloat(108 - note.pitch) * rh
-            let noteRect = CGRect(x: noteX, y: noteY, width: noteW, height: rh)
+            let noteRect = noteRect(for: note, pixelsPerTick: ppt, rowHeight: rh, maxPitch: maxPitch)
             guard noteRect.contains(point) else { continue }
 
-            if abs(point.x - noteX) <= resizeZone {
+            if abs(point.x - noteRect.minX) <= resizeZone {
                 return note
             }
         }
@@ -2907,6 +3009,7 @@ final class PianoRollViewController: NSViewController {
             let selected = store.pianoRollNotes.filter { selectedNoteIDs.contains($0.id) }
             dragStartNoteSnapshot = Dictionary(uniqueKeysWithValues: selected.map { ($0.id, $0) })
             pushUndo()
+            beginDragPreview(for: hitNote.pitch)
             return
         }
 
@@ -2965,9 +3068,7 @@ final class PianoRollViewController: NSViewController {
             let selected = store.pianoRollNotes.filter { selectedNoteIDs.contains($0.id) }
             dragStartNoteSnapshot = Dictionary(uniqueKeysWithValues: selected.map { ($0.id, $0) })
             pushUndo()
-            // Preview the clicked note's pitch
-            lastDrawPreviewPitch = hitNote.pitch
-            store.previewPitch(hitNote.pitch)
+            beginDragPreview(for: hitNote.pitch)
             return
         }
 
@@ -2994,9 +3095,7 @@ final class PianoRollViewController: NSViewController {
                      trackIndex: trackIndex, channel: channel)
         pushDraftNotePreview()
         editorView?.highlightedPitchRow = pitch
-        // Preview the note sound
-        lastDrawPreviewPitch = pitch
-        store.previewPitch(pitch)
+        beginDragPreview(for: pitch)
     }
 
     // MARK: Mouse Dragged
@@ -3017,12 +3116,7 @@ final class PianoRollViewController: NSViewController {
                 let dy = point.y - dragStartPoint.y
                 guard sqrt(dx * dx + dy * dy) > 3 else { break }
                 moveSelectedNotes(to: point)
-                // Preview pitch when moving notes
-                let movePitch = pitchForY(point.y)
-                if movePitch != lastDrawPreviewPitch {
-                    lastDrawPreviewPitch = movePitch
-                    store.previewPitch(movePitch)
-                }
+                updateDragPreview(for: pitchForY(point.y))
             case .resizingNotes:
                 let dx = point.x - dragStartPoint.x
                 guard abs(dx) > 2 else { break }
@@ -3060,6 +3154,7 @@ final class PianoRollViewController: NSViewController {
         case .movingNotes:
             guard distance > 3 else { return }
             moveSelectedNotes(to: point)
+            updateDragPreview(for: pitchForY(point.y))
 
         case .resizingNotes:
             guard distance > 2 else { return }
@@ -3083,6 +3178,7 @@ final class PianoRollViewController: NSViewController {
     // MARK: Mouse Up
 
     private func handleCanvasMouseUp(point: NSPoint, event: NSEvent) {
+        endDragPreview()
         defer {
             dragOrigin = nil
             draftNote = nil
@@ -3264,10 +3360,28 @@ final class PianoRollViewController: NSViewController {
         pushDraftNotePreview()
         editorView?.highlightedPitchRow = pitch
         // Preview the note sound when pitch changes
-        if pitch != lastDrawPreviewPitch {
-            lastDrawPreviewPitch = pitch
-            store.previewPitch(pitch)
+        updateDragPreview(for: pitch)
+    }
+
+    private func beginDragPreview(for pitch: Int) {
+        lastDrawPreviewPitch = pitch
+        store.startPreviewPitch(pitch)
+    }
+
+    private func updateDragPreview(for pitch: Int) {
+        guard pitch != lastDrawPreviewPitch else { return }
+        if lastDrawPreviewPitch == -1 {
+            beginDragPreview(for: pitch)
+            return
         }
+        lastDrawPreviewPitch = pitch
+        store.updatePreviewPitch(pitch)
+    }
+
+    private func endDragPreview() {
+        guard lastDrawPreviewPitch != -1 else { return }
+        lastDrawPreviewPitch = -1
+        store.stopPreviewPitch()
     }
 
     /// Pushes the current draftNote to the editor as a visual preview (rendered as a selected note).
@@ -3349,13 +3463,11 @@ final class PianoRollViewController: NSViewController {
         guard let editor = editorView else { return }
         let ppt = editor.pixelsPerTick
         let rh = editor.rowHeight
+        let maxPitch = editor.maxPitch
         var selected = dragShiftHeld ? selectionBeforeDrag : Set<UUID>()
 
         for note in editor.notes {
-            let noteX = CGFloat(note.startTick) * ppt
-            let noteW = max(6, CGFloat(note.duration) * ppt)
-            let noteY = CGFloat(108 - note.pitch) * rh
-            let noteRect = CGRect(x: noteX, y: noteY, width: noteW, height: rh)
+            let noteRect = noteRect(for: note, pixelsPerTick: ppt, rowHeight: rh, maxPitch: maxPitch)
             if rect.intersects(noteRect) {
                 selected.insert(note.id)
             }
@@ -3389,14 +3501,13 @@ final class PianoRollViewController: NSViewController {
         guard let editor = editorView else { return }
         let ppt = editor.pixelsPerTick
         let rh = editor.rowHeight
+        let maxPitch = editor.maxPitch
         var selected = dragShiftHeld ? selectionBeforeDrag : Set<UUID>()
 
         for note in editor.notes {
-            let noteX = CGFloat(note.startTick) * ppt
-            let noteW = max(6, CGFloat(note.duration) * ppt)
-            let noteY = CGFloat(108 - note.pitch) * rh
+            let noteRect = noteRect(for: note, pixelsPerTick: ppt, rowHeight: rh, maxPitch: maxPitch)
             // Test the center of the note against the lasso path
-            let center = CGPoint(x: noteX + noteW * 0.5, y: noteY + rh * 0.5)
+            let center = CGPoint(x: noteRect.midX, y: noteRect.midY)
             if path.contains(center) {
                 selected.insert(note.id)
             }
@@ -3411,15 +3522,12 @@ final class PianoRollViewController: NSViewController {
         guard let editor = editorView else { return false }
         let ppt = editor.pixelsPerTick
         let rh = editor.rowHeight
+        let maxPitch = editor.maxPitch
 
         // Find the note under the cursor
         var hitNote: PianoRollNote?
         for note in editor.notes {
-            let noteX = CGFloat(note.startTick) * ppt
-            let noteW = max(6, CGFloat(note.duration) * ppt)
-            let noteY = CGFloat(108 - note.pitch) * rh
-            let noteRect = CGRect(x: noteX, y: noteY, width: noteW, height: rh)
-            if noteRect.contains(point) {
+            if noteRect(for: note, pixelsPerTick: ppt, rowHeight: rh, maxPitch: maxPitch).contains(point) {
                 hitNote = note
                 break
             }
@@ -3450,13 +3558,10 @@ final class PianoRollViewController: NSViewController {
         guard let editor = editorView else { return }
         let ppt = editor.pixelsPerTick
         let rh = editor.rowHeight
+        let maxPitch = editor.maxPitch
 
         for note in editor.notes {
-            let noteX = CGFloat(note.startTick) * ppt
-            let noteW = max(6, CGFloat(note.duration) * ppt)
-            let noteY = CGFloat(108 - note.pitch) * rh
-            let noteRect = CGRect(x: noteX, y: noteY, width: noteW, height: rh)
-            if noteRect.contains(point) {
+            if noteRect(for: note, pixelsPerTick: ppt, rowHeight: rh, maxPitch: maxPitch).contains(point) {
                 var notes = store.pianoRollNotes
                 notes.removeAll(where: { $0.id == note.id })
                 store.setPianoRollNotesFromEditor(notes)
