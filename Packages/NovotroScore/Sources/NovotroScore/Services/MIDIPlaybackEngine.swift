@@ -1017,7 +1017,10 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 } catch {
                     // Flag the error — stopRecordingOnAudioQueue will report it.
                     // Cannot call reportError here (IOThread — no ObjC messaging).
+                    // Use the recording lock to synchronize with audioQueue reads.
+                    os_unfair_lock_lock(&self.recordingLock)
                     self.recordingHadWriteError = true
+                    os_unfair_lock_unlock(&self.recordingLock)
                 }
             }
         } catch {
@@ -1033,15 +1036,16 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         engine.inputNode.removeTap(onBus: 0)
 
         // Now safe to clear recording state under the lock.
+        // Also read/clear recordingHadWriteError under the same lock to
+        // synchronize with the IOThread tap callback that writes it.
         os_unfair_lock_lock(&recordingLock)
         let fileURL = recordingFile?.url
         recordingFile = nil
         isRecordingAudio = false
-        os_unfair_lock_unlock(&recordingLock)
-        recordingTrackID = nil
-
         let hadError = recordingHadWriteError
         recordingHadWriteError = false
+        os_unfair_lock_unlock(&recordingLock)
+        recordingTrackID = nil
 
         if hadError {
             reportError("Recording may be incomplete — disk write errors occurred during capture.")

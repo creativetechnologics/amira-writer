@@ -544,7 +544,7 @@ final class PianoRollMetalRenderer {
         let visMaxX = Float(scrollOffsetX + viewportWidth) + 20
 
         for note in notes {
-            guard count < maxCount - 5 else { break }  // reserve space for border rects
+            guard count < maxCount - 6 else { break }  // reserve: 1 border + 1 body + 4 selection lines = 6 max per note
 
             let x = Float(note.startTick) * fPPT
             let w = max(Float(pianoRollMinimumNoteWidth), Float(note.duration) * fPPT)

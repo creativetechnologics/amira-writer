@@ -569,6 +569,7 @@ final class MixStore {
     @ObservationIgnored private var transportPlayers: [UUID: AVAudioPlayer] = [:]
     @ObservationIgnored private var transportStopWorkItems: [UUID: DispatchWorkItem] = [:]
     @ObservationIgnored private var transportDisplayLink: CADisplayLink?
+    @ObservationIgnored private var transportFallbackTimer: Timer?
     @ObservationIgnored private let displayLinkTarget = MixDisplayLinkTarget()
     @ObservationIgnored private var transportStartedAt: Date?
     @ObservationIgnored private var transportStartedPlayheadSeconds: Double = 0
@@ -607,11 +608,18 @@ final class MixStore {
             return match
         }
         // The previously-selected scene no longer exists (deleted or renamed).
-        // Update selectedSceneID to the first available scene rather than silently
-        // returning the wrong scene while keeping a stale ID.
-        let fallback = scenes.first
-        self.selectedSceneID = fallback?.id
-        return fallback
+        // Return the fallback without mutating selectedSceneID in the getter —
+        // mutating a stored property inside a computed getter corrupts
+        // @Observable tracking (write during a read phase).
+        return scenes.first
+    }
+
+    /// Call after modifying `scenes` to clean up a stale `selectedSceneID`.
+    private func repairSelectedSceneID() {
+        guard let selectedSceneID else { return }
+        if !scenes.contains(where: { $0.id == selectedSceneID }) {
+            self.selectedSceneID = scenes.first?.id
+        }
     }
 
     var currentSession: MixSceneSession? {
@@ -1578,8 +1586,18 @@ final class MixStore {
 
     func trimClipLeading(_ clipID: UUID, deltaSeconds: Double) {
         pushUndoSnapshot()
-        let snappedDelta = snapSeconds > 0 ? snapToGrid(deltaSeconds) : deltaSeconds
         mutateClip(clipID) { clip in
+            // Snap the proposed absolute start position, then derive the delta
+            // from it. Calling snapToGrid on a relative delta produces wrong
+            // results because snapToGrid snaps to absolute clip edges/grid lines.
+            let snappedDelta: Double
+            if snapSeconds > 0 {
+                let proposedStart = clip.startSeconds + deltaSeconds
+                let snappedStart = snapToGrid(proposedStart)
+                snappedDelta = snappedStart - clip.startSeconds
+            } else {
+                snappedDelta = deltaSeconds
+            }
             let maxDelta = max(clip.durationSeconds - 0.1, 0)
             let clampedDelta = min(max(snappedDelta, -clip.sourceInSeconds), maxDelta)
             clip.startSeconds = max(0, clip.startSeconds + clampedDelta)
@@ -1593,8 +1611,15 @@ final class MixStore {
 
     func trimClipTrailing(_ clipID: UUID, deltaSeconds: Double) {
         pushUndoSnapshot()
-        let snappedDelta = snapSeconds > 0 ? snapToGrid(deltaSeconds) : deltaSeconds
         mutateClip(clipID) { clip in
+            let snappedDelta: Double
+            if snapSeconds > 0 {
+                let proposedEnd = clip.startSeconds + clip.durationSeconds + deltaSeconds
+                let snappedEnd = snapToGrid(proposedEnd)
+                snappedDelta = snappedEnd - (clip.startSeconds + clip.durationSeconds)
+            } else {
+                snappedDelta = deltaSeconds
+            }
             let maxDuration = max(clip.sourceDurationSeconds - clip.sourceInSeconds, 0.1)
             clip.durationSeconds = min(max(clip.durationSeconds + snappedDelta, 0.1), maxDuration)
             clip.fadeInSeconds = min(clip.fadeInSeconds, Self.maximumFadeSeconds(for: clip))
@@ -1820,7 +1845,9 @@ final class MixStore {
                 lhs.timeSeconds < rhs.timeSeconds
             }
         }
-        setSelectionOverride(trackID: trackID, clipID: nil)
+        // Preserve the current clip selection — automation edits shouldn't
+        // deselect the clip the user is working with.
+        setSelectionOverride(trackID: trackID, clipID: currentSelectedClipID)
     }
 
     /// Update an automation point's position.
@@ -2338,7 +2365,7 @@ final class MixStore {
                 }
             }
             RunLoop.main.add(timer, forMode: .common)
-            // Store as nil display link; teardown handles both paths.
+            transportFallbackTimer = timer
             return
         }
         let link = screen.displayLink(
@@ -2368,6 +2395,8 @@ final class MixStore {
         seekRestartWorkItem = nil
         transportDisplayLink?.invalidate()
         transportDisplayLink = nil
+        transportFallbackTimer?.invalidate()
+        transportFallbackTimer = nil
         displayLinkTarget.onFrame = nil
         transportStopWorkItems.values.forEach { $0.cancel() }
         transportStopWorkItems.removeAll()
