@@ -733,12 +733,12 @@ struct TimelineTrack: Codable, Sendable {
     }
 
     /// Find the two keyframes surrounding a given frame for interpolation.
+    /// Keyframes are kept sorted by frame at all mutation sites, so no sort needed here.
     func surroundingKeyframes(at frame: Int) -> (before: TimelineKeyframe?, after: TimelineKeyframe?) {
-        let sorted = keyframes.sorted { $0.frame < $1.frame }
         var before: TimelineKeyframe?
         var after: TimelineKeyframe?
 
-        for kf in sorted {
+        for kf in keyframes {
             if kf.frame <= frame {
                 before = kf
             } else {

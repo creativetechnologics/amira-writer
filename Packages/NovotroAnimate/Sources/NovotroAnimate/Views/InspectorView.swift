@@ -73,7 +73,7 @@ struct InspectorView: View {
             Label("Script", systemImage: "text.viewfinder")
                 .font(.headline)
 
-            LabeledContent("BPM") {
+            LabeledContent("Frame Rate") {
                 Text("\(store.fps) fps")
             }
 
@@ -1127,6 +1127,7 @@ struct InspectorView: View {
                 if let sceneID = store.selectedSceneID,
                    let idx = store.scenes.firstIndex(where: { $0.id == sceneID }) {
                     store.scenes[idx].backgroundID = newValue
+                    store.save()
                 }
             }
         )

@@ -580,10 +580,11 @@ struct CharactersPageView: View {
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
+        guard let animateURL = store.animateURL else { return }
         let success = CharacterPackageLibrary().deletePackage(
             packageID,
             for: character.owpSlug,
-            in: store.animateURL!
+            in: animateURL
         )
 
         if success {
