@@ -1067,20 +1067,43 @@ struct ScriptTextEditor: NSViewRepresentable {
         let displayEnd = max(displayStart, min(NSMaxRange(affectedDisplayRange), totalDisplayLength))
         let displayDeleteLength = displayEnd - displayStart
 
-        // SINGLE STRATEGY for all edit types (insertion, deletion, replacement):
-        // 1. Apply the edit to the display text to get the new visible content.
-        // 2. Rebuild the raw text by interleaving new visible content with the
-        //    original hidden content, copied verbatim from the old raw text.
-        //
-        // This approach never maps coordinates between display and raw space,
-        // eliminating the entire class of boundary/offset bugs that corrupted
-        // hidden content when edits landed near hidden range seams.
-        let nsDisplay = NSMutableString(string: projection.displayText)
-        let clampedDisplayRange = NSRange(location: displayStart, length: displayDeleteLength)
-        nsDisplay.replaceCharacters(in: clampedDisplayRange, with: replacement)
-        let newDisplayText = nsDisplay as String
+        // For ALL edit types: map the display-space edit directly onto the raw
+        // text using the visible chunk mapping. The edit is applied at the raw
+        // position corresponding to the display start, and only the visible
+        // characters within the edit range are affected — hidden content between
+        // the start and end is preserved by computing raw start and end
+        // independently through the chunk mapping.
+        let rawStart = displayToRaw(displayStart, projection: projection)
+        let rawEnd = displayDeleteLength > 0
+            ? displayToRaw(displayEnd, projection: projection)
+            : rawStart
 
-        return rebuildRawText(newDisplayText: newDisplayText, rawText: rawText, hiddenRanges: projection.hiddenRanges)
+        let nsRaw = rawText as NSString
+        let clampedRawStart = max(0, min(rawStart, nsRaw.length))
+        let clampedRawEnd = max(clampedRawStart, min(rawEnd, nsRaw.length))
+
+        // For non-zero-length edits: we must NOT delete hidden content between
+        // rawStart and rawEnd. Extract and preserve it.
+        if clampedRawEnd > clampedRawStart {
+            var preservedHidden = ""
+            for hidden in projection.hiddenRanges {
+                // Hidden range is fully within the edit range — preserve it
+                if hidden.location >= clampedRawStart && NSMaxRange(hidden) <= clampedRawEnd {
+                    preservedHidden += nsRaw.substring(with: hidden)
+                }
+            }
+            let mutable = NSMutableString(string: rawText)
+            mutable.replaceCharacters(
+                in: NSRange(location: clampedRawStart, length: clampedRawEnd - clampedRawStart),
+                with: replacement + preservedHidden
+            )
+            return mutable as String
+        }
+
+        // Pure insertion — simple insert at the mapped raw position
+        let mutable = NSMutableString(string: rawText)
+        mutable.insert(replacement, at: clampedRawStart)
+        return mutable as String
     }
 
     /// Verify that every piece of hidden content from the original raw text
