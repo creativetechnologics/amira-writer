@@ -1040,6 +1040,16 @@ struct ScriptTextEditor: NSViewRepresentable {
         return mergedRanges(displayRanges)
     }
 
+    /// Map an edit from display-space coordinates to raw-space coordinates and
+    /// apply it, preserving all hidden content intact.
+    ///
+    /// Two strategies depending on edit type:
+    /// - **Insertions** (zero-length affected range): use direct offset conversion
+    ///   via `displayToRaw`. Simple, correct, no boundary ambiguity.
+    /// - **Replacements/deletions** (non-zero affected range): rebuild the raw text
+    ///   by computing the new display text, then interleaving it with the preserved
+    ///   hidden ranges from the original raw text. This guarantees hidden content
+    ///   is never corrupted regardless of selection boundaries.
     static func applyDisplayEdit(
         rawText: String,
         projection: DisplayProjection,
@@ -1048,73 +1058,80 @@ struct ScriptTextEditor: NSViewRepresentable {
     ) -> String {
         let replacement = replacementString ?? ""
         let totalDisplayLength = (projection.displayText as NSString).length
-        let start = max(0, min(affectedDisplayRange.location, totalDisplayLength))
-        let end = max(start, min(NSMaxRange(affectedDisplayRange), totalDisplayLength))
-        let clampedRange = NSRange(location: start, length: end - start)
+        let displayStart = max(0, min(affectedDisplayRange.location, totalDisplayLength))
+        let displayEnd = max(displayStart, min(NSMaxRange(affectedDisplayRange), totalDisplayLength))
+        let displayDeleteLength = displayEnd - displayStart
 
-        guard !projection.visibleChunks.isEmpty else {
-            guard !replacement.isEmpty else { return rawText }
+        if displayDeleteLength == 0 {
+            // Pure insertion — use direct offset mapping.
+            let rawInsertPos = displayToRaw(displayStart, hiddenRanges: projection.hiddenRanges)
+            let nsRaw = rawText as NSString
+            let clampedPos = max(0, min(rawInsertPos, nsRaw.length))
             let mutable = NSMutableString(string: rawText)
-            mutable.insert(replacement, at: 0)
+            mutable.insert(replacement, at: clampedPos)
             return mutable as String
         }
 
-        let startBoundary = boundary(for: clampedRange.location, in: projection, bias: .previous)
-        let endBoundary = boundary(for: NSMaxRange(clampedRange), in: projection, bias: .previous)
-        var visibleStrings = projection.visibleChunks.map { (rawText as NSString).substring(with: $0.rawRange) }
+        // Replacement or deletion — rebuild from new display text + hidden ranges.
+        // 1. Compute the new display text by applying the edit to the old display text.
+        let nsDisplay = NSMutableString(string: projection.displayText)
+        let clampedDisplayRange = NSRange(location: displayStart, length: displayDeleteLength)
+        nsDisplay.replaceCharacters(in: clampedDisplayRange, with: replacement)
+        let newDisplayText = nsDisplay as String
 
-        if clampedRange.length == 0 {
-            let mutableChunk = NSMutableString(string: visibleStrings[startBoundary.chunkIndex])
-            mutableChunk.insert(replacement, at: startBoundary.offset)
-            visibleStrings[startBoundary.chunkIndex] = mutableChunk as String
-        } else if startBoundary.chunkIndex == endBoundary.chunkIndex {
-            // Same chunk: the replacement length is endOffset - startOffset within this chunk,
-            // NOT clampedRange.length (which is in display space and can differ if the chunk
-            // doesn't start at display position 0).
-            let replaceLength = endBoundary.offset - startBoundary.offset
-            let mutableChunk = NSMutableString(string: visibleStrings[startBoundary.chunkIndex])
-            mutableChunk.replaceCharacters(
-                in: NSRange(location: startBoundary.offset, length: max(0, replaceLength)),
-                with: replacement
-            )
-            visibleStrings[startBoundary.chunkIndex] = mutableChunk as String
-        } else {
-            let startMutable = NSMutableString(string: visibleStrings[startBoundary.chunkIndex])
-            let startLength = (visibleStrings[startBoundary.chunkIndex] as NSString).length
-            startMutable.replaceCharacters(
-                in: NSRange(location: startBoundary.offset, length: startLength - startBoundary.offset),
-                with: replacement
-            )
-            visibleStrings[startBoundary.chunkIndex] = startMutable as String
+        // 2. Rebuild raw text: interleave new display text with original hidden content.
+        return rebuildRawText(newDisplayText: newDisplayText, rawText: rawText, hiddenRanges: projection.hiddenRanges)
+    }
 
-            let endMutable = NSMutableString(string: visibleStrings[endBoundary.chunkIndex])
-            endMutable.replaceCharacters(in: NSRange(location: 0, length: endBoundary.offset), with: "")
-            visibleStrings[endBoundary.chunkIndex] = endMutable as String
-
-            if startBoundary.chunkIndex + 1 < endBoundary.chunkIndex {
-                for index in (startBoundary.chunkIndex + 1)..<endBoundary.chunkIndex {
-                    visibleStrings[index] = ""
-                }
+    /// Convert a display-space offset to a raw-space offset by adding back
+    /// the cumulative length of all hidden ranges that precede the position.
+    private static func displayToRaw(_ displayOffset: Int, hiddenRanges: [NSRange]) -> Int {
+        var raw = displayOffset
+        for hidden in hiddenRanges {
+            // Hidden ranges are in raw-space, sorted by location.
+            // If this hidden range starts at or before our current raw position,
+            // the display text doesn't include it, so shift our raw position forward.
+            if hidden.location <= raw {
+                raw += hidden.length
+            } else {
+                break
             }
         }
+        return raw
+    }
+
+    /// Rebuild raw text from new display text + preserved hidden ranges.
+    /// Walks through the original raw text's hidden ranges and interleaves
+    /// them with chunks of the new display text at the correct positions.
+    private static func rebuildRawText(newDisplayText: String, rawText: String, hiddenRanges: [NSRange]) -> String {
+        guard !hiddenRanges.isEmpty else { return newDisplayText }
 
         let nsRaw = rawText as NSString
-        var rebuilt = ""
-        var cursor = 0
+        let nsNew = newDisplayText as NSString
+        var result = ""
+        var displayCursor = 0 // position in newDisplayText
+        var rawCursor = 0     // position in original rawText (for extracting hidden content)
 
-        for (index, chunk) in projection.visibleChunks.enumerated() {
-            if cursor < chunk.rawRange.location {
-                rebuilt += nsRaw.substring(with: NSRange(location: cursor, length: chunk.rawRange.location - cursor))
+        for hidden in hiddenRanges {
+            // How many visible characters precede this hidden range in the original?
+            let visibleBeforeHidden = hidden.location - rawCursor
+            // Copy that many characters from the new display text
+            if visibleBeforeHidden > 0, displayCursor < nsNew.length {
+                let takeLength = min(visibleBeforeHidden, nsNew.length - displayCursor)
+                result += nsNew.substring(with: NSRange(location: displayCursor, length: takeLength))
+                displayCursor += takeLength
             }
-            rebuilt += visibleStrings[index]
-            cursor = NSMaxRange(chunk.rawRange)
+            // Copy the hidden content from the original raw text
+            result += nsRaw.substring(with: hidden)
+            rawCursor = NSMaxRange(hidden)
         }
 
-        if cursor < nsRaw.length {
-            rebuilt += nsRaw.substring(with: NSRange(location: cursor, length: nsRaw.length - cursor))
+        // Append remaining new display text after the last hidden range
+        if displayCursor < nsNew.length {
+            result += nsNew.substring(with: NSRange(location: displayCursor, length: nsNew.length - displayCursor))
         }
 
-        return rebuilt
+        return result
     }
 
     private static func mergedRanges(_ ranges: [NSRange]) -> [NSRange] {
