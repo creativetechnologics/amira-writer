@@ -1067,36 +1067,19 @@ struct ScriptTextEditor: NSViewRepresentable {
         let displayEnd = max(displayStart, min(NSMaxRange(affectedDisplayRange), totalDisplayLength))
         let displayDeleteLength = displayEnd - displayStart
 
-        // Compute the new display text for both paths (needed for validation fallback).
+        // SINGLE STRATEGY for all edit types (insertion, deletion, replacement):
+        // 1. Apply the edit to the display text to get the new visible content.
+        // 2. Rebuild the raw text by interleaving new visible content with the
+        //    original hidden content, copied verbatim from the old raw text.
+        //
+        // This approach never maps coordinates between display and raw space,
+        // eliminating the entire class of boundary/offset bugs that corrupted
+        // hidden content when edits landed near hidden range seams.
         let nsDisplay = NSMutableString(string: projection.displayText)
         let clampedDisplayRange = NSRange(location: displayStart, length: displayDeleteLength)
         nsDisplay.replaceCharacters(in: clampedDisplayRange, with: replacement)
         let newDisplayText = nsDisplay as String
 
-        let result: String
-        if displayDeleteLength == 0 {
-            // Pure insertion — use chunk-based offset mapping.
-            let rawInsertPos = displayToRaw(displayStart, projection: projection)
-            let nsRaw = rawText as NSString
-            let clampedPos = max(0, min(rawInsertPos, nsRaw.length))
-            let mutable = NSMutableString(string: rawText)
-            mutable.insert(replacement, at: clampedPos)
-            result = mutable as String
-        } else {
-            // Replacement or deletion — safe rebuild from new display text + hidden ranges.
-            result = rebuildRawText(newDisplayText: newDisplayText, rawText: rawText, hiddenRanges: projection.hiddenRanges)
-        }
-
-        // SAFEGUARD: Validate that all hidden content survived the edit.
-        // If any hidden content was corrupted, fall back to the rebuild path
-        // which physically copies hidden content from the original raw text.
-        if validateHiddenContentPreserved(original: rawText, edited: result, hiddenRanges: projection.hiddenRanges) {
-            return result
-        }
-
-        // Validation failed — the insertion path produced corrupt output.
-        // Fall back to the always-safe rebuild strategy.
-        NSLog("[ScriptTextEditor] Hidden content validation FAILED — falling back to safe rebuild")
         return rebuildRawText(newDisplayText: newDisplayText, rawText: rawText, hiddenRanges: projection.hiddenRanges)
     }
 
@@ -1443,9 +1426,15 @@ struct ScriptTextEditor: NSViewRepresentable {
         }
 
         /// Apply styling with re-entrancy guard.
+        /// Saves and restores the cursor position around the display text swap
+        /// to prevent the insertion point from jumping to the end.
         func refreshDisplay(to tv: NSTextView, rawText: String? = nil) {
             guard !isStyling else { return }
             isStyling = true
+
+            // Save cursor position BEFORE swapping display text.
+            let savedSelection = tv.selectedRange()
+
             let sourceText = rawText ?? currentRawText
             let projection = ScriptTextEditor.applyDirectionStyling(
                 to: tv,
@@ -1457,6 +1446,12 @@ struct ScriptTextEditor: NSViewRepresentable {
             currentRawText = sourceText
             currentProjection = projection
             applyProjectedHighlights(to: tv)
+
+            // Restore cursor position, clamped to the new text length.
+            let newLength = (tv.string as NSString).length
+            let clampedLocation = min(savedSelection.location, newLength)
+            let clampedEnd = min(clampedLocation + savedSelection.length, newLength)
+            tv.setSelectedRange(NSRange(location: clampedLocation, length: clampedEnd - clampedLocation))
 
             hostView?.recalcHeight()
             isStyling = false
