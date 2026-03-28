@@ -1044,12 +1044,17 @@ struct ScriptTextEditor: NSViewRepresentable {
     /// apply it, preserving all hidden content intact.
     ///
     /// Two strategies depending on edit type:
-    /// - **Insertions** (zero-length affected range): use direct offset conversion
-    ///   via `displayToRaw`. Simple, correct, no boundary ambiguity.
+    /// - **Insertions** (zero-length affected range): use chunk-based offset mapping
+    ///   via `displayToRaw`. Maps to the end of the containing chunk's raw range,
+    ///   ensuring the edit lands BEFORE any hidden content that follows.
     /// - **Replacements/deletions** (non-zero affected range): rebuild the raw text
     ///   by computing the new display text, then interleaving it with the preserved
     ///   hidden ranges from the original raw text. This guarantees hidden content
     ///   is never corrupted regardless of selection boundaries.
+    ///
+    /// After the edit, `validateHiddenContentPreserved` checks that every piece of
+    /// hidden content from the original raw text still exists in the result. If
+    /// validation fails, falls back to the safe rebuild path.
     static func applyDisplayEdit(
         rawText: String,
         projection: DisplayProjection,
@@ -1062,6 +1067,13 @@ struct ScriptTextEditor: NSViewRepresentable {
         let displayEnd = max(displayStart, min(NSMaxRange(affectedDisplayRange), totalDisplayLength))
         let displayDeleteLength = displayEnd - displayStart
 
+        // Compute the new display text for both paths (needed for validation fallback).
+        let nsDisplay = NSMutableString(string: projection.displayText)
+        let clampedDisplayRange = NSRange(location: displayStart, length: displayDeleteLength)
+        nsDisplay.replaceCharacters(in: clampedDisplayRange, with: replacement)
+        let newDisplayText = nsDisplay as String
+
+        let result: String
         if displayDeleteLength == 0 {
             // Pure insertion — use chunk-based offset mapping.
             let rawInsertPos = displayToRaw(displayStart, projection: projection)
@@ -1069,18 +1081,44 @@ struct ScriptTextEditor: NSViewRepresentable {
             let clampedPos = max(0, min(rawInsertPos, nsRaw.length))
             let mutable = NSMutableString(string: rawText)
             mutable.insert(replacement, at: clampedPos)
-            return mutable as String
+            result = mutable as String
+        } else {
+            // Replacement or deletion — safe rebuild from new display text + hidden ranges.
+            result = rebuildRawText(newDisplayText: newDisplayText, rawText: rawText, hiddenRanges: projection.hiddenRanges)
         }
 
-        // Replacement or deletion — rebuild from new display text + hidden ranges.
-        // 1. Compute the new display text by applying the edit to the old display text.
-        let nsDisplay = NSMutableString(string: projection.displayText)
-        let clampedDisplayRange = NSRange(location: displayStart, length: displayDeleteLength)
-        nsDisplay.replaceCharacters(in: clampedDisplayRange, with: replacement)
-        let newDisplayText = nsDisplay as String
+        // SAFEGUARD: Validate that all hidden content survived the edit.
+        // If any hidden content was corrupted, fall back to the rebuild path
+        // which physically copies hidden content from the original raw text.
+        if validateHiddenContentPreserved(original: rawText, edited: result, hiddenRanges: projection.hiddenRanges) {
+            return result
+        }
 
-        // 2. Rebuild raw text: interleave new display text with original hidden content.
+        // Validation failed — the insertion path produced corrupt output.
+        // Fall back to the always-safe rebuild strategy.
+        NSLog("[ScriptTextEditor] Hidden content validation FAILED — falling back to safe rebuild")
         return rebuildRawText(newDisplayText: newDisplayText, rawText: rawText, hiddenRanges: projection.hiddenRanges)
+    }
+
+    /// Verify that every piece of hidden content from the original raw text
+    /// exists intact somewhere in the edited text. Returns false if any hidden
+    /// content was corrupted, split, or deleted by the edit.
+    private static func validateHiddenContentPreserved(
+        original: String,
+        edited: String,
+        hiddenRanges: [NSRange]
+    ) -> Bool {
+        let nsOriginal = original as NSString
+        let nsEdited = edited as NSString
+        for hidden in hiddenRanges {
+            guard NSMaxRange(hidden) <= nsOriginal.length else { continue }
+            let hiddenContent = nsOriginal.substring(with: hidden)
+            // The hidden content must exist as a contiguous substring in the result.
+            if nsEdited.range(of: hiddenContent).location == NSNotFound {
+                return false
+            }
+        }
+        return true
     }
 
     /// Convert a display-space offset to a raw-space offset using the visible
@@ -1374,15 +1412,30 @@ struct ScriptTextEditor: NSViewRepresentable {
             )
             pendingDisplayEdit = nil
 
-            // Push undo snapshot BEFORE applying the edit
-            pushUndo(currentRawText)
-
             let newRawText = ScriptTextEditor.applyDisplayEdit(
                 rawText: currentRawText,
                 projection: currentProjection,
                 affectedDisplayRange: edit.affectedRange,
                 replacementString: edit.replacementString
             )
+
+            // SAFEGUARD: Don't apply edits that produce no change or empty results
+            // when the original had content. This catches degenerate edit mappings.
+            if newRawText == currentRawText {
+                // Edit was a no-op in raw space — just refresh display without
+                // pushing undo or updating the store.
+                refreshDisplay(to: tv, rawText: currentRawText)
+                return
+            }
+            if newRawText.isEmpty && !currentRawText.isEmpty {
+                // Something went wrong — the entire text was wiped. Restore.
+                NSLog("[ScriptTextEditor] Edit produced empty text from non-empty source — rejecting")
+                refreshDisplay(to: tv, rawText: currentRawText)
+                return
+            }
+
+            // Push undo snapshot BEFORE committing the edit
+            pushUndo(currentRawText)
 
             currentRawText = newRawText
             parent.text = newRawText
