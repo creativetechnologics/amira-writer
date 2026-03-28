@@ -1068,9 +1068,13 @@ struct ScriptTextEditor: NSViewRepresentable {
             mutableChunk.insert(replacement, at: startBoundary.offset)
             visibleStrings[startBoundary.chunkIndex] = mutableChunk as String
         } else if startBoundary.chunkIndex == endBoundary.chunkIndex {
+            // Same chunk: the replacement length is endOffset - startOffset within this chunk,
+            // NOT clampedRange.length (which is in display space and can differ if the chunk
+            // doesn't start at display position 0).
+            let replaceLength = endBoundary.offset - startBoundary.offset
             let mutableChunk = NSMutableString(string: visibleStrings[startBoundary.chunkIndex])
             mutableChunk.replaceCharacters(
-                in: NSRange(location: startBoundary.offset, length: clampedRange.length),
+                in: NSRange(location: startBoundary.offset, length: max(0, replaceLength)),
                 with: replacement
             )
             visibleStrings[startBoundary.chunkIndex] = mutableChunk as String
@@ -1280,9 +1284,41 @@ struct ScriptTextEditor: NSViewRepresentable {
         var lastExternalOpacity: Double = 0
         private var pendingDisplayEdit: DisplayEdit?
 
+        // MARK: - Undo/Redo Stack (raw text level)
+        private var undoStack: [String] = []
+        private var redoStack: [String] = []
+        private static let maxUndoDepth = 100
+
         init(parent: ScriptTextEditor) {
             self.parent = parent
         }
+
+        func pushUndo(_ rawText: String) {
+            undoStack.append(rawText)
+            if undoStack.count > Self.maxUndoDepth {
+                undoStack.removeFirst()
+            }
+            redoStack.removeAll()
+        }
+
+        func undo(in tv: NSTextView) {
+            guard let previous = undoStack.popLast() else { return }
+            redoStack.append(currentRawText)
+            currentRawText = previous
+            parent.text = previous
+            refreshDisplay(to: tv, rawText: previous)
+        }
+
+        func redo(in tv: NSTextView) {
+            guard let next = redoStack.popLast() else { return }
+            undoStack.append(currentRawText)
+            currentRawText = next
+            parent.text = next
+            refreshDisplay(to: tv, rawText: next)
+        }
+
+        var canUndo: Bool { !undoStack.isEmpty }
+        var canRedo: Bool { !redoStack.isEmpty }
 
         func textDidBeginEditing(_ notification: Notification) {
             isEditing = true
@@ -1301,6 +1337,9 @@ struct ScriptTextEditor: NSViewRepresentable {
                 replacementString: tv.string
             )
             pendingDisplayEdit = nil
+
+            // Push undo snapshot BEFORE applying the edit
+            pushUndo(currentRawText)
 
             let newRawText = ScriptTextEditor.applyDisplayEdit(
                 rawText: currentRawText,
@@ -1358,6 +1397,20 @@ struct ScriptTextEditor: NSViewRepresentable {
                 replacementString: replacementString ?? ""
             )
             return true
+        }
+
+        /// Intercept undo/redo commands to use our raw-text-level undo stack
+        /// instead of NSTextView's built-in undo (which is disabled during styling).
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == NSSelectorFromString("undo:") {
+                undo(in: textView)
+                return true
+            }
+            if commandSelector == NSSelectorFromString("redo:") {
+                redo(in: textView)
+                return true
+            }
+            return false
         }
     }
 }
