@@ -1063,8 +1063,8 @@ struct ScriptTextEditor: NSViewRepresentable {
         let displayDeleteLength = displayEnd - displayStart
 
         if displayDeleteLength == 0 {
-            // Pure insertion — use direct offset mapping.
-            let rawInsertPos = displayToRaw(displayStart, hiddenRanges: projection.hiddenRanges)
+            // Pure insertion — use chunk-based offset mapping.
+            let rawInsertPos = displayToRaw(displayStart, projection: projection)
             let nsRaw = rawText as NSString
             let clampedPos = max(0, min(rawInsertPos, nsRaw.length))
             let mutable = NSMutableString(string: rawText)
@@ -1083,21 +1083,40 @@ struct ScriptTextEditor: NSViewRepresentable {
         return rebuildRawText(newDisplayText: newDisplayText, rawText: rawText, hiddenRanges: projection.hiddenRanges)
     }
 
-    /// Convert a display-space offset to a raw-space offset by adding back
-    /// the cumulative length of all hidden ranges that precede the position.
-    private static func displayToRaw(_ displayOffset: Int, hiddenRanges: [NSRange]) -> Int {
-        var raw = displayOffset
-        for hidden in hiddenRanges {
-            // Hidden ranges are in raw-space, sorted by location.
-            // If this hidden range starts at or before our current raw position,
-            // the display text doesn't include it, so shift our raw position forward.
-            if hidden.location <= raw {
-                raw += hidden.length
-            } else {
-                break
+    /// Convert a display-space offset to a raw-space offset using the visible
+    /// chunk mapping. This avoids the ambiguity of the cumulative-offset approach
+    /// where a display position at a chunk boundary could map to either side of
+    /// a hidden range.
+    ///
+    /// For insertions (the primary use case): the position maps to the END of
+    /// the containing chunk's raw range, which places the edit BEFORE any hidden
+    /// content that follows — matching the user's visual intent.
+    private static func displayToRaw(_ displayOffset: Int, projection: DisplayProjection) -> Int {
+        let chunks = projection.visibleChunks
+        guard !chunks.isEmpty else { return displayOffset }
+
+        // Before the first chunk
+        if displayOffset <= 0 {
+            return chunks[0].rawRange.location
+        }
+
+        for chunk in chunks {
+            let displayStart = chunk.displayRange.location
+            let displayEnd = NSMaxRange(chunk.displayRange)
+
+            if displayOffset <= displayEnd {
+                // Position is within or at the end of this chunk.
+                // Map directly: raw = chunk.rawRange.location + (display - chunk.displayRange.location)
+                let offsetInChunk = min(displayOffset - displayStart, chunk.rawRange.length)
+                return chunk.rawRange.location + offsetInChunk
             }
         }
-        return raw
+
+        // Past the last chunk — map to end of raw text
+        if let lastChunk = chunks.last {
+            return NSMaxRange(lastChunk.rawRange)
+        }
+        return displayOffset
     }
 
     /// Rebuild raw text from new display text + preserved hidden ranges.
