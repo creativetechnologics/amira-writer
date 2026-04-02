@@ -234,6 +234,32 @@ enum Animate3DGenerationQueueActionSupport {
         }
     }
 
+    // MARK: - Provider Route Helpers
+
+    /// Maps a queue item to its resolved `Animate3DGenerationProviderRoute`,
+    /// respecting any provider-hint override before falling back to defaults.
+    static func resolvedRoute(for item: Animate3DGenerationQueueItem) -> Animate3DGenerationProviderRoute {
+        let hint = item.providerHint.lowercased()
+        if hint.contains("meshy") { return .meshy }
+        if hint.contains("external") || hint.contains("import") { return .externalImport }
+        if hint.contains("manual") { return .manual }
+        // Fall back to default route based on kind.
+        // defaultRoute(for:) expects camelCase; Kind.rawValue is snake_case.
+        return Animate3DGenerationProviderRoute.defaultRoute(for: item.kind.camelCaseRawValue)
+    }
+
+    /// Whether the item's resolved route can be automatically processed
+    /// without human intervention.
+    static func isAutomatable(_ item: Animate3DGenerationQueueItem) -> Bool {
+        resolvedRoute(for: item).isAutomatable
+    }
+
+    /// Display-friendly name and SF Symbol for the item's resolved route.
+    static func routeDisplayInfo(for item: Animate3DGenerationQueueItem) -> (name: String, icon: String) {
+        let route = resolvedRoute(for: item)
+        return (route.displayName, route.systemImage)
+    }
+
     static func reveal(item: Animate3DGenerationQueueItem, projectURL: URL) {
         let trimmed = item.targetRelativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard !trimmed.isEmpty else { return }

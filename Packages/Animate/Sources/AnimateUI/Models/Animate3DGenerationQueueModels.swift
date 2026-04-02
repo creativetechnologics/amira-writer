@@ -24,6 +24,14 @@ struct Animate3DGenerationQueueItem: Identifiable, Hashable, Sendable {
         case styleProfile = "style_profile"
         case cameraPresetLibrary = "camera_preset_library"
 
+        /// Returns the raw value converted from `snake_case` to `camelCase`
+        /// so it matches the format expected by `Animate3DGenerationProviderRoute.defaultRoute(for:)`.
+        var camelCaseRawValue: String {
+            let parts = rawValue.split(separator: "_")
+            guard let first = parts.first else { return rawValue }
+            return String(first) + parts.dropFirst().map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
+        }
+
         var title: String {
             switch self {
             case .bodyModel: "Body Model"
