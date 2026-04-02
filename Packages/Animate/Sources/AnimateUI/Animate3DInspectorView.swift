@@ -322,6 +322,15 @@ struct Animate3DInspectorView: View {
                                         if itemIsQueued(item) {
                                             statusPill(text: "QUEUED", tint: .green)
                                         }
+                                        if isPinned(item) {
+                                            statusPill(text: "PINNED", tint: .pink)
+                                        }
+                                        if isSkipped(item) {
+                                            statusPill(text: "SKIPPED", tint: .red)
+                                        }
+                                        if generationDraftOverride(for: item).isLocked {
+                                            statusPill(text: "LOCKED", tint: .purple)
+                                        }
                                         statusPill(text: item.kind.title.uppercased(), tint: .orange)
                                     }
                                     Text(item.summary)
@@ -334,7 +343,27 @@ struct Animate3DInspectorView: View {
                                             .foregroundStyle(.orange)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
+                                    Text("Provider: \(effectiveProviderHint(for: item))")
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    if let promptAppendix = promptAppendix(for: item) {
+                                        Text("Override: \(promptAppendix)")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
                                     HStack(spacing: 8) {
+                                        Button(isPinned(item) ? "Unpin" : "Pin") {
+                                            harnessState.togglePinnedGenerationQueueItem(item.stableKey)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        Button(isSkipped(item) ? "Restore" : "Skip") {
+                                            harnessState.toggleSkippedGenerationQueueItem(item.stableKey)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
                                         if item.isBatchDraftable {
                                             Button("Preflight") {
                                                 openGenerationPreflight(item, status: productionStatus)
@@ -870,6 +899,32 @@ struct Animate3DInspectorView: View {
         }
     }
 
+    private func isPinned(_ item: Animate3DGenerationQueueItem) -> Bool {
+        harnessState.pinnedGenerationQueueItemKeys.contains(item.stableKey)
+    }
+
+    private func isSkipped(_ item: Animate3DGenerationQueueItem) -> Bool {
+        harnessState.skippedGenerationQueueItemKeys.contains(item.stableKey)
+    }
+
+    private func generationDraftOverride(for item: Animate3DGenerationQueueItem) -> Animate3DGenerationDraftOverride {
+        harnessState.generationDraftOverride(for: item.stableKey)
+    }
+
+    private func effectiveProviderHint(for item: Animate3DGenerationQueueItem) -> String {
+        Animate3DGenerationQueueActionSupport.effectiveProviderHint(
+            for: item,
+            overridesByStableKey: harnessState.generationDraftOverridesByStableKey
+        )
+    }
+
+    private func promptAppendix(for item: Animate3DGenerationQueueItem) -> String? {
+        Animate3DGenerationQueueActionSupport.effectivePromptAppendix(
+            for: item,
+            overridesByStableKey: harnessState.generationDraftOverridesByStableKey
+        )
+    }
+
     private func itemIsQueued(_ item: Animate3DGenerationQueueItem) -> Bool {
         Animate3DGenerationQueueActionSupport.isQueued(item: item, store: store)
     }
@@ -882,7 +937,8 @@ struct Animate3DInspectorView: View {
             item: item,
             scene: selectedScene,
             status: status,
-            store: store
+            store: store,
+            overridesByStableKey: harnessState.generationDraftOverridesByStableKey
         )
         store.statusMessage = queued > 0
             ? "Queued \(item.title)"
@@ -897,7 +953,8 @@ struct Animate3DInspectorView: View {
             for: item,
             scene: selectedScene,
             status: status,
-            store: store
+            store: store,
+            overridesByStableKey: harnessState.generationDraftOverridesByStableKey
         ) else {
             store.statusMessage = "No draftable Gemini request exists for \(item.title)."
             return
