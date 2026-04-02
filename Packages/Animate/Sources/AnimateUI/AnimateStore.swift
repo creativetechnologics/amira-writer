@@ -229,6 +229,7 @@ final class AnimateStore {
     private let geminiCredentialStore = GeminiCredentialStore()
     private let meshyCredentialStore = MeshyCredentialStore()
     private let sceneAutomationPlanner = SceneAutomationPlanner()
+    let audioPlayer = AnimationAudioPlayer()
     private var backgroundIndexRefreshTask: Task<Void, Never>?
     private var externalFileWatchWorkItem: DispatchWorkItem?
     private var lastKnownExternalSnapshots: [String: AnimateExternalFileSnapshot] = [:]
@@ -7528,7 +7529,7 @@ final class AnimateStore {
         statusMessage = "Generated \(visemeKeyframes.count) lip sync keyframes for \(characterName)"
     }
 
-    /// Generate lip sync keyframes from a dialogue or vocal audio file using Rhubarb.
+    /// Generate lip sync keyframes from audio using Rhubarb (if available) or syllable heuristic fallback.
     func generateLipSyncFromAudio(
         for characterName: String,
         audioURL: URL,
@@ -7537,16 +7538,60 @@ final class AnimateStore {
         statusMessage = "Generating lip sync from audio for \(characterName)..."
 
         do {
-            let visemeKeyframes = try await RhubarbLipSync().analyzeToVisemes(
+            let result = try await AutoLipSyncService.generateFromAudio(
                 audioURL: audioURL,
-                fps: fps,
-                dialogueText: dialogueText
+                dialogueText: dialogueText,
+                fps: fps
             )
-            applyLipSyncVisemes(visemeKeyframes, for: characterName)
-            statusMessage = "Generated \(visemeKeyframes.count) audio lip sync keyframes for \(characterName)"
+            applyLipSyncVisemes(result.visemeKeyframes, for: characterName)
+            statusMessage = "Generated \(result.visemeKeyframes.count) lip sync keyframes via \(result.source.rawValue) for \(characterName)"
         } catch {
             statusMessage = "Lip sync generation failed for \(characterName): \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - Audio Playback
+
+    /// Load the scene's default audio file into the audio player.
+    func loadSceneAudio() {
+        guard let audioURL = suggestedExportAudioURL() else {
+            audioPlayer.unload()
+            return
+        }
+        audioPlayer.load(url: audioURL)
+    }
+
+    /// Sync audio player to the current animation frame (call from display link).
+    func syncAudioToCurrentFrame() {
+        audioPlayer.syncToFrame(currentFrame)
+    }
+
+    // MARK: - Camera Choreography
+
+    /// Generate camera choreography from blocking plans and apply as camera shot cues.
+    func generateCameraChoreography(from blockingPlans: [CharacterBlockingPlan]) {
+        guard !scenes.isEmpty else {
+            statusMessage = "Open a project before generating camera choreography"
+            return
+        }
+
+        let instructions = DirectionTemplateCompiler.compileCameraChoreography(
+            blockingPlans: blockingPlans,
+            sceneDurationFrames: totalFrames,
+            fps: fps
+        )
+
+        guard !instructions.isEmpty else {
+            statusMessage = "No camera instructions generated from blocking data"
+            return
+        }
+
+        // Apply each instruction as a camera shot cue on the timeline
+        for instruction in instructions {
+            setCameraShotCue(instruction.shotType, at: instruction.frame)
+        }
+
+        statusMessage = "Generated \(instructions.count) camera cues — \(DirectionTemplateCompiler.summary(for: instructions))"
     }
 
     // MARK: - Track Resolution Cache Types & Helpers
