@@ -310,6 +310,10 @@ final class Animate3DGenerationQueueActionSupportTests: XCTestCase {
         XCTAssertTrue(updated.prompt.contains("Keep the silhouette extremely readable."))
         XCTAssertTrue(updated.contextNote?.contains("provider: World Labs Marble") == true)
         XCTAssertTrue(updated.contextNote?.contains("locked override") == true)
+        XCTAssertEqual(updated.overrideTelemetry?.effectiveProviderHint, "World Labs Marble")
+        XCTAssertEqual(updated.overrideTelemetry?.promptAppendix, "Keep the silhouette extremely readable.")
+        XCTAssertEqual(updated.overrideTelemetry?.isLocked, true)
+        XCTAssertEqual(updated.overrideTelemetry?.badgeLabels, ["Provider", "Appendix", "Locked"])
     }
 
     private func makeProjectURL() throws -> URL {

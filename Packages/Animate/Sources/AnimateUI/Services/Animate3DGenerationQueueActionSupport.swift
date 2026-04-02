@@ -95,14 +95,15 @@ enum Animate3DGenerationQueueActionSupport {
     ) -> GeminiGenerationDraft {
         let override = overridesByStableKey[item.stableKey] ?? Animate3DGenerationDraftOverride()
         var updated = draft
-        if let promptAppendix = effectivePromptAppendix(for: item, overridesByStableKey: overridesByStableKey) {
+        let provider = effectiveProviderHint(for: item, overridesByStableKey: overridesByStableKey)
+        let promptAppendix = effectivePromptAppendix(for: item, overridesByStableKey: overridesByStableKey)
+        if let promptAppendix {
             updated.prompt += "\n\nOverride Notes:\n" + promptAppendix
         }
         var contextLines: [String] = []
         if let existing = updated.contextNote?.trimmingCharacters(in: .whitespacesAndNewlines), !existing.isEmpty {
             contextLines.append(existing)
         }
-        let provider = effectiveProviderHint(for: item, overridesByStableKey: overridesByStableKey)
         if provider.caseInsensitiveCompare(item.providerHint) != .orderedSame || !provider.isEmpty {
             contextLines.append("provider: \(provider)")
         }
@@ -110,6 +111,13 @@ enum Animate3DGenerationQueueActionSupport {
             contextLines.append("locked override")
         }
         updated.contextNote = contextLines.isEmpty ? nil : contextLines.joined(separator: "\n")
+        let providerOverride = provider.caseInsensitiveCompare(item.providerHint) == .orderedSame ? nil : provider
+        let overrideTelemetry = GeminiGenerationDraftOverrideTelemetry(
+            effectiveProviderHint: providerOverride,
+            promptAppendix: promptAppendix,
+            isLocked: override.isLocked
+        )
+        updated.overrideTelemetry = overrideTelemetry.hasVisibleChanges ? overrideTelemetry : nil
         return updated
     }
 

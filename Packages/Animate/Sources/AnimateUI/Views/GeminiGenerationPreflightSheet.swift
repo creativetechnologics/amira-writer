@@ -10,6 +10,33 @@ struct GeminiGenerationReferenceDraft: Identifiable, Hashable, Sendable {
 }
 
 @available(macOS 26.0, *)
+struct GeminiGenerationDraftOverrideTelemetry: Hashable, Sendable {
+    var effectiveProviderHint: String? = nil
+    var promptAppendix: String? = nil
+    var isLocked = false
+
+    var hasVisibleChanges: Bool {
+        let provider = effectiveProviderHint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let appendix = promptAppendix?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !provider.isEmpty || !appendix.isEmpty || isLocked
+    }
+
+    var badgeLabels: [String] {
+        var labels: [String] = []
+        if let provider = effectiveProviderHint?.trimmingCharacters(in: .whitespacesAndNewlines), !provider.isEmpty {
+            labels.append("Provider")
+        }
+        if let appendix = promptAppendix?.trimmingCharacters(in: .whitespacesAndNewlines), !appendix.isEmpty {
+            labels.append("Appendix")
+        }
+        if isLocked {
+            labels.append("Locked")
+        }
+        return labels
+    }
+}
+
+@available(macOS 26.0, *)
 struct GeminiGenerationDraft: Identifiable, Hashable, Sendable {
     enum PricingMode: Hashable, Sendable {
         case standard
@@ -27,6 +54,7 @@ struct GeminiGenerationDraft: Identifiable, Hashable, Sendable {
     var referenceItems: [GeminiGenerationReferenceDraft]
     var pricingMode: PricingMode = .standard
     var isSelected: Bool = true
+    var overrideTelemetry: GeminiGenerationDraftOverrideTelemetry? = nil
 
     var estimatedCost: Double {
         switch pricingMode {
@@ -66,6 +94,10 @@ struct GeminiGenerationPreflightSheet: View {
 
     private var totalCost: Double {
         selectedDrafts.reduce(0) { $0 + $1.estimatedCost }
+    }
+
+    private var selectedOverrideCount: Int {
+        selectedDrafts.filter { $0.overrideTelemetry?.hasVisibleChanges == true }.count
     }
 
     var body: some View {
@@ -142,6 +174,7 @@ struct GeminiGenerationPreflightSheet: View {
             preflightMetric(title: "Selected Cost", value: "$\(String(format: "%.3f", totalCost))", icon: "creditcard.fill", tint: .orange)
             preflightMetric(title: "Models", value: selectedDrafts.map(\.model.displayName).joined(separator: ", "), icon: "cpu", tint: .purple)
             preflightMetric(title: "Sizes", value: Set(selectedDrafts.map(\.imageSize)).sorted().joined(separator: ", "), icon: "arrow.up.left.and.arrow.down.right", tint: .blue)
+            preflightMetric(title: "Overrides", value: selectedOverrideCount == 0 ? "None" : "\(selectedOverrideCount) selected", icon: "slider.horizontal.3", tint: .pink)
         }
         .padding(14)
         .background(.quaternary.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -242,6 +275,51 @@ struct GeminiGenerationPreflightSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func overrideTelemetryView(_ telemetry: GeminiGenerationDraftOverrideTelemetry) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Label("Overrides Applied", systemImage: "slider.horizontal.3")
+                    .font(.caption)
+                    .foregroundStyle(.pink)
+                ForEach(telemetry.badgeLabels, id: \.self) { badge in
+                    Text(badge)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.pink.opacity(0.16)))
+                        .foregroundStyle(.pink)
+                }
+            }
+
+            if let provider = telemetry.effectiveProviderHint?.trimmingCharacters(in: .whitespacesAndNewlines), !provider.isEmpty {
+                Text("Provider override → \(provider)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.pink.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let appendix = telemetry.promptAppendix?.trimmingCharacters(in: .whitespacesAndNewlines), !appendix.isEmpty {
+                Text("Prompt appendix → \(appendix)")
+                    .font(.caption2)
+                    .foregroundStyle(.pink.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if telemetry.isLocked {
+                Text("Locked override will preserve this draft’s authored override context.")
+                    .font(.caption2)
+                    .foregroundStyle(.pink.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .background(Color.pink.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.pink.opacity(0.18))
+        }
+    }
+
     private func requestCard(_ draft: Binding<GeminiGenerationDraft>) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
@@ -261,6 +339,9 @@ struct GeminiGenerationPreflightSheet: View {
                             .font(.caption2.monospaced())
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let overrideTelemetry = draft.wrappedValue.overrideTelemetry, overrideTelemetry.hasVisibleChanges {
+                        overrideTelemetryView(overrideTelemetry)
                     }
                 }
 
@@ -386,6 +467,9 @@ struct GeminiGenerationPreflightSheet: View {
                             .font(.caption2.monospaced())
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let overrideTelemetry = draft.wrappedValue.overrideTelemetry, overrideTelemetry.hasVisibleChanges {
+                        overrideTelemetryView(overrideTelemetry)
                     }
                 }
 
