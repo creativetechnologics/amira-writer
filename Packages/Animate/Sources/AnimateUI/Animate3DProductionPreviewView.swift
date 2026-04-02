@@ -57,6 +57,18 @@ struct Animate3DProductionPreviewView: View {
         visibleDraftableQueueItems.filter { !itemIsQueued($0) }
     }
 
+    private var hiddenQueueItemCount: Int {
+        max(prioritizedQueueItems.count - visiblePriorityQueueItems.count, 0)
+    }
+
+    private var visibleQueuedCount: Int {
+        visiblePriorityQueueItems.filter { itemIsQueued($0) }.count
+    }
+
+    private var visibleManualCount: Int {
+        visiblePriorityQueueItems.filter { !$0.isBatchDraftable }.count
+    }
+
     private var prioritizedQueueItems: [Animate3DGenerationQueueItem] {
         status.generationQueueItems
             .sorted { lhs, rhs in
@@ -334,10 +346,28 @@ struct Animate3DProductionPreviewView: View {
 
             if !prioritizedQueueItems.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Priority 3D Gaps")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .tracking(1.0)
-                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Priority 3D Gaps")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .tracking(1.0)
+                            .foregroundStyle(OperaChromeTheme.textTertiary)
+
+                        HStack(spacing: 8) {
+                            badge("Shown \(visiblePriorityQueueItems.count)/\(prioritizedQueueItems.count)", tint: .white.opacity(0.22))
+                            if !visibleDraftableQueueItems.isEmpty {
+                                badge("Draft \(visibleDraftableQueueItems.count)", tint: .blue)
+                            }
+                            if visibleQueuedCount > 0 {
+                                badge("Queued \(visibleQueuedCount)", tint: .green)
+                            }
+                            if visibleManualCount > 0 {
+                                badge("Manual \(visibleManualCount)", tint: .gray)
+                            }
+                            if hiddenQueueItemCount > 0 {
+                                badge("+\(hiddenQueueItemCount) more", tint: .orange)
+                            }
+                        }
+                    }
 
                     ForEach(visiblePriorityQueueItems, id: \.id) { item in
                         VStack(alignment: .leading, spacing: 8) {
@@ -565,15 +595,12 @@ struct Animate3DProductionPreviewView: View {
     }
 
     private func queueVisibleDrafts() {
-        var queued = 0
-        for item in visibleQueueableItems {
-            queued += Animate3DGenerationQueueActionSupport.queue(
-                item: item,
-                scene: selectedScene,
-                status: status,
-                store: store
-            )
-        }
+        let queued = Animate3DGenerationQueueActionSupport.queue(
+            items: visibleQueueableItems,
+            scene: selectedScene,
+            status: status,
+            store: store
+        )
         store.statusMessage = queued > 0
             ? "Queued \(queued) visible 3D draft\(queued == 1 ? "" : "s")"
             : "Visible 3D gaps are already queued or require manual authoring"

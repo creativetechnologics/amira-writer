@@ -51,6 +51,17 @@ enum Animate3DGenerationQueueActionSupport {
         )
     }
 
+    static func queue(
+        items: [Animate3DGenerationQueueItem],
+        scene: AnimationScene?,
+        status: Animate3DProductionStatus,
+        store: AnimateStore
+    ) -> Int {
+        items.reduce(into: 0) { queued, item in
+            queued += queue(item: item, scene: scene, status: status, store: store)
+        }
+    }
+
     static func draft(
         for item: Animate3DGenerationQueueItem,
         scene: AnimationScene?,

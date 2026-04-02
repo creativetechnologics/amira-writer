@@ -167,6 +167,64 @@ final class Animate3DGenerationQueueActionSupportTests: XCTestCase {
         XCTAssertEqual(store.batchQueue.last?.outputRootRelativePath, "3d/world-catalog/batch-queue-batches")
     }
 
+    func testQueueItemsQueuesVisibleDraftablesThroughSharedHelper() {
+        let store = AnimateStore()
+        let character = AnimationCharacter(
+            id: UUID(uuidString: "CCCCCCCC-DDDD-EEEE-FFFF-111111111111")!,
+            name: "Mark",
+            description: "Soldier",
+            owpSlug: "mark",
+            parts: []
+        )
+        store.characters = [character]
+
+        let scene = AnimationScene(
+            id: UUID(uuidString: "99999999-8888-7777-6666-555555555555")!,
+            name: "Mark Scene",
+            backgroundID: nil,
+            characterIDs: [character.id],
+            keyframes: [],
+            owpSongPath: "Songs/mark-scene.ows"
+        )
+
+        let bodyItem = Animate3DGenerationQueueItem(
+            kind: .bodyModel,
+            title: "Mark body model",
+            detail: "Generate Mark body model.",
+            destinationPath: "Animate/characters/mark/models/",
+            providerHint: "Meshy",
+            prompt: "Generate Mark body model.",
+            characterSlug: "mark",
+            characterName: "Mark"
+        )
+        let worldItem = Animate3DGenerationQueueItem(
+            kind: .worldPreviewImage,
+            title: "Barracks preview",
+            detail: "Generate barracks preview.",
+            destinationPath: "Animate/3d/world-catalog/barracks.png",
+            providerHint: "Nano Banana 2",
+            prompt: "Generate barracks preview.",
+            characterSlug: nil,
+            characterName: "Environment"
+        )
+
+        var status = Animate3DProductionStatus.empty
+        status.sceneName = "Mark Scene"
+        status.generationQueueItems = [bodyItem, worldItem]
+
+        let queued = Animate3DGenerationQueueActionSupport.queue(
+            items: [bodyItem, worldItem],
+            scene: scene,
+            status: status,
+            store: store
+        )
+
+        XCTAssertEqual(queued, 2)
+        XCTAssertEqual(store.batchQueue.count, 2)
+        XCTAssertTrue(Animate3DGenerationQueueActionSupport.isQueued(item: bodyItem, store: store))
+        XCTAssertTrue(Animate3DGenerationQueueActionSupport.isQueued(item: worldItem, store: store))
+    }
+
     private func makeProjectURL() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Animate3DQueueActionSupportTests-\(UUID().uuidString)")
