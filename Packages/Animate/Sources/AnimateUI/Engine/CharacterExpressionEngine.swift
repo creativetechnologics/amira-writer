@@ -22,6 +22,12 @@ struct CharacterExpressionState: Sendable, Hashable {
         headPitch: 0
     )
 
+    func withCue(_ cue: String) -> CharacterExpressionState {
+        var copy = self
+        copy.cue = cue
+        return copy
+    }
+
     func applying(_ preset: CharacterPerformanceExpressionPreset) -> CharacterExpressionState {
         CharacterExpressionState(
             cue: cue,
@@ -42,16 +48,22 @@ struct CharacterExpressionEngine: Sendable {
         for characterName: String,
         blocking: CharacterBlockingPlan,
         frame: Int,
-        liveCue: String?
+        liveCue: String?,
+        profile: Character3DPerformanceProfile? = nil
     ) -> CharacterExpressionState {
         let cue = normalizedCue(liveCue)
             ?? activeEmotion(in: blocking, frame: frame)
             ?? activeActionHint(in: blocking, frame: frame)
             ?? "neutral"
         let intensity = activeIntensity(in: blocking, frame: frame)
-        var state = stateForCue(cue, intensity: intensity)
-        state.blink = blinkValue(for: characterName, frame: frame, cue: cue)
-        if cue == "surprised" || cue == "shocked" {
+        let canonicalCue = profile?.canonicalExpressionCue(for: cue)
+        let behaviorCue = canonicalCue.flatMap { isSemanticExpressionCue($0) ? $0 : nil } ?? cue
+        var state = stateForCue(behaviorCue, intensity: intensity)
+        if let canonicalCue, canonicalCue.caseInsensitiveCompare(state.cue) != .orderedSame {
+            state = state.withCue(canonicalCue)
+        }
+        state.blink = blinkValue(for: characterName, frame: frame, cue: behaviorCue)
+        if behaviorCue == "surprised" || behaviorCue == "shocked" {
             state.blink = 0
         }
         return state
@@ -115,6 +127,17 @@ private extension CharacterExpressionEngine {
             return cue == "joy" ? 0.4 : 0.9
         }
         return 0
+    }
+
+    func isSemanticExpressionCue(_ cue: String) -> Bool {
+        [
+            "joy", "happy", "hope", "warm", "smile",
+            "sad", "grief", "worry", "tired",
+            "angry", "fury", "intense", "determined",
+            "surprised", "surprise", "shocked", "alarm",
+            "attentive", "listen", "curious", "concern",
+            "neutral", "rest", "default"
+        ].contains { cue.contains($0) }
     }
 }
 

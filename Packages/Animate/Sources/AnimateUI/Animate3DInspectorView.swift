@@ -172,6 +172,12 @@ struct Animate3DInspectorView: View {
                                     }
                                     inspectorRow(label: "Expression", value: status.activeExpressionCue)
                                     inspectorRow(label: "Viseme", value: status.activeVisemeCue)
+                                    if status.sourceExpressionCue.caseInsensitiveCompare(status.activeExpressionCue) != .orderedSame {
+                                        inspectorRow(label: "Source Expr", value: status.sourceExpressionCue)
+                                    }
+                                    if status.sourceVisemeCue.caseInsensitiveCompare(status.activeVisemeCue) != .orderedSame {
+                                        inspectorRow(label: "Source Viseme", value: status.sourceVisemeCue)
+                                    }
                                     if let modelFileName = status.modelFileName {
                                         inspectorRow(label: "Model", value: modelFileName)
                                     }

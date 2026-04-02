@@ -246,6 +246,8 @@ extension ScenePreviewRenderer {
                 usingVisemePreset: false,
                 resolvedExpressionPresetCue: nil,
                 resolvedVisemePresetCue: nil,
+                sourceExpressionCue: performanceProfile == nil ? "fallback:neutral" : "neutral",
+                sourceVisemeCue: performanceProfile == nil ? "fallback:rest" : "rest",
                 activeExpressionCue: performanceProfile == nil ? "fallback:neutral" : "neutral",
                 activeVisemeCue: performanceProfile == nil ? "fallback:rest" : "rest",
                 isVisible: false
@@ -503,6 +505,7 @@ extension ScenePreviewRenderer {
     }
 
     private func applyPerformance(blocking: CharacterBlockingPlan, frame: Int) {
+        let profile = characterPerformanceProfilesByName[blocking.characterName]
         let liveExpression = store?.evaluatedExpression(
             for: blocking.characterName,
             at: frame
@@ -511,26 +514,43 @@ extension ScenePreviewRenderer {
             for: blocking.characterName,
             at: frame
         )
-        let expressionState = expressionEngine.state(
+        let rawExpressionState = expressionEngine.state(
             for: blocking.characterName,
             blocking: blocking,
             frame: frame,
             liveCue: liveExpression
         )
-        let mouthState = mouthEngine.state(
+        let expressionState = expressionEngine.state(
+            for: blocking.characterName,
+            blocking: blocking,
+            frame: frame,
+            liveCue: liveExpression,
+            profile: profile
+        )
+        let rawMouthState = mouthEngine.state(
             for: blocking.characterName,
             blocking: blocking,
             frame: frame,
             liveCue: liveMouthCue,
             baseFPS: currentPlan?.baseFPS ?? 24
         )
+        let mouthState = mouthEngine.state(
+            for: blocking.characterName,
+            blocking: blocking,
+            frame: frame,
+            liveCue: liveMouthCue,
+            baseFPS: currentPlan?.baseFPS ?? 24,
+            profile: profile
+        )
         let applicationResult = characterPerformanceDrivers[blocking.characterName]?.apply(
             expression: expressionState,
             mouth: mouthState
         )
         if var status = characterPerformanceStatusesByName[blocking.characterName] {
+            status.sourceExpressionCue = rawExpressionState.cue
+            status.sourceVisemeCue = rawMouthState.cue
             status.activeExpressionCue = expressionState.cue
-            status.activeVisemeCue = mouthState.viseme.token
+            status.activeVisemeCue = mouthState.cue
             status.usingExpressionPreset = applicationResult?.usedExpressionPreset ?? false
             status.usingVisemePreset = applicationResult?.usedVisemePreset ?? false
             status.resolvedExpressionPresetCue = applicationResult?.resolvedExpressionPresetCue

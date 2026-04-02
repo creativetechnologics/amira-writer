@@ -79,6 +79,10 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
         return nil
     }
 
+    func canonicalExpressionCue(for cue: String) -> String? {
+        resolvedExpressionPreset(for: cue)?.key
+    }
+
     func resolvedVisemePreset(
         for mouthState: CharacterMouthState
     ) -> (key: String, preset: CharacterPerformanceMouthPreset)? {
@@ -95,6 +99,10 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
         }
 
         return nil
+    }
+
+    func resolvedVisemeCue(for mouthState: CharacterMouthState) -> String? {
+        resolvedVisemePreset(for: mouthState)?.key
     }
 
     private static let expressionCueFamilies: [[String]] = [

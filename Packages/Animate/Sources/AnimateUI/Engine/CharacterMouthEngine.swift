@@ -28,6 +28,15 @@ struct CharacterMouthState: Sendable, Hashable {
         smileBlend: 0
     )
 
+    func withCue(_ cue: String, viseme: PrestonBlairViseme? = nil) -> CharacterMouthState {
+        var copy = self
+        copy.cue = cue
+        if let viseme {
+            copy.viseme = viseme
+        }
+        return copy
+    }
+
     func applying(_ preset: CharacterPerformanceMouthPreset) -> CharacterMouthState {
         CharacterMouthState(
             cue: cue,
@@ -48,24 +57,28 @@ struct CharacterMouthEngine: Sendable {
         blocking: CharacterBlockingPlan,
         frame: Int,
         liveCue: String?,
-        baseFPS: Int
+        baseFPS: Int,
+        profile: Character3DPerformanceProfile? = nil
     ) -> CharacterMouthState {
         if let viseme = resolveLiveViseme(liveCue) {
-            return state(for: viseme)
+            return canonicalized(state: state(for: viseme), profile: profile)
         }
 
         if let beat = blocking.lipsyncBeats.first(where: { $0.startFrame <= frame && frame <= $0.endFrame }) {
-            return state(for: syntheticViseme(in: beat, frame: frame, baseFPS: baseFPS, characterName: characterName))
+            return canonicalized(
+                state: state(for: syntheticViseme(in: beat, frame: frame, baseFPS: baseFPS, characterName: characterName)),
+                profile: profile
+            )
         }
 
         if blocking.actingBeats.contains(where: { $0.startFrame <= frame && frame <= $0.endFrame && talksOrSings($0.action) }) {
             let cycle = [PrestonBlairViseme.consonant, .ai, .e, .o, .rest]
             let step = max(1, baseFPS / 12)
             let index = (frame / step) % cycle.count
-            return state(for: cycle[index])
+            return canonicalized(state: state(for: cycle[index]), profile: profile)
         }
 
-        return .rest
+        return canonicalized(state: .rest, profile: profile)
     }
 }
 
@@ -135,5 +148,20 @@ private extension CharacterMouthEngine {
     func talksOrSings(_ action: String) -> Bool {
         let value = action.lowercased()
         return value.contains("speak") || value.contains("sing") || value.contains("shout") || value.contains("call")
+    }
+
+    func canonicalized(
+        state: CharacterMouthState,
+        profile: Character3DPerformanceProfile?
+    ) -> CharacterMouthState {
+        guard let profile,
+              let canonicalCue = profile.resolvedVisemeCue(for: state),
+              canonicalCue.caseInsensitiveCompare(state.cue) != .orderedSame else {
+            return state
+        }
+        let canonicalViseme = PrestonBlairViseme.allCases.first {
+            $0.token.caseInsensitiveCompare(canonicalCue) == .orderedSame
+        }
+        return state.withCue(canonicalCue, viseme: canonicalViseme)
     }
 }
