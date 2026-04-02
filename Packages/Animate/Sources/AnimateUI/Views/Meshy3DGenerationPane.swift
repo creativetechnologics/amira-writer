@@ -15,8 +15,35 @@ struct Meshy3DGenerationPane: View {
     @State private var symmetryMode: String = "auto"
     @State private var selectedFormats: Set<String> = ["glb", "usdz"]
 
+    // Costume picker — index 0 = head turnaround (default), 1+ = costume sets
+    @State private var selectedCostumeIndex: Int = 0
+
+    // Batch generation state
+    @State private var batchQueue: [BatchItem] = []
+    @State private var currentBatchIndex: Int = 0
+    @State private var isBatchGenerating: Bool = false
+
     private let allFormats = ["glb", "usdz", "fbx", "obj", "stl"]
     private let poseOrder: [CharacterReferencePose] = [.frontNeutral, .leftProfile, .rightProfile, .back]
+
+    // MARK: - Computed
+
+    /// All available image source options: "Default (Head)" + each costume.
+    private var costumePickerOptions: [(index: Int, label: String)] {
+        var opts: [(Int, String)] = [(0, "Default (Head Turnaround)")]
+        for (i, costume) in character.costumeReferenceSets.enumerated() {
+            opts.append((i + 1, costume.name))
+        }
+        return opts
+    }
+
+    /// The currently selected costume name, or nil when using head turnaround.
+    private var selectedCostumeName: String? {
+        guard selectedCostumeIndex > 0,
+              selectedCostumeIndex - 1 < character.costumeReferenceSets.count
+        else { return nil }
+        return character.costumeReferenceSets[selectedCostumeIndex - 1].name
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -28,6 +55,10 @@ struct Meshy3DGenerationPane: View {
                 configurationSection
                 Divider()
                 actionSection
+                if !character.costumeReferenceSets.isEmpty {
+                    Divider()
+                    batchSection
+                }
             }
         }
     }
@@ -53,6 +84,21 @@ struct Meshy3DGenerationPane: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Reference Images")
                 .font(.subheadline.weight(.semibold))
+
+            // Costume picker — only shown when there are costume sets available
+            if !character.costumeReferenceSets.isEmpty {
+                HStack(spacing: 8) {
+                    Text("Source")
+                        .font(.callout)
+                    Picker("", selection: $selectedCostumeIndex) {
+                        ForEach(costumePickerOptions, id: \.index) { option in
+                            Text(option.label).tag(option.index)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 220)
+                }
+            }
 
             let selectedImages = availablePoseImages()
 
@@ -263,6 +309,73 @@ struct Meshy3DGenerationPane: View {
         }
     }
 
+    // MARK: - Batch Generation
+
+    private var batchSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Batch Generation")
+                .font(.subheadline.weight(.semibold))
+
+            Text("Generate 3D models for all costume sets sequentially using the current settings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            // Queue display
+            if isBatchGenerating {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(batchQueue.enumerated()), id: \.offset) { index, item in
+                        HStack(spacing: 8) {
+                            if index < currentBatchIndex {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.caption)
+                            } else if index == currentBatchIndex {
+                                ProgressView()
+                                    .controlSize(.mini)
+                            } else {
+                                Image(systemName: "circle")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                            Text(item.costumeName)
+                                .font(.callout)
+                                .foregroundStyle(index < currentBatchIndex ? .secondary : .primary)
+                        }
+                    }
+
+                    if currentBatchIndex < batchQueue.count {
+                        Text("Generating \(currentBatchIndex + 1) of \(batchQueue.count)…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            } else if !batchQueue.isEmpty {
+                // Show completed queue summary
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Batch complete — \(batchQueue.count) costume\(batchQueue.count == 1 ? "" : "s") generated.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(10)
+                .background(.green.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            }
+
+            // Generate All button
+            Button {
+                Task { await runBatchGeneration() }
+            } label: {
+                Label("Generate All Costumes (\(character.costumeReferenceSets.count))", systemImage: "square.stack.3d.up.fill")
+            }
+            .buttonStyle(.bordered)
+            .disabled(isBatchGenerating || store.isGeneratingMeshy3D || character.costumeReferenceSets.isEmpty)
+        }
+    }
+
     // MARK: - Helpers
 
     private struct PoseImage {
@@ -270,10 +383,38 @@ struct Meshy3DGenerationPane: View {
         let imagePath: String
     }
 
+    private struct BatchItem {
+        let costumeName: String
+        let images: [PoseImage]
+    }
+
+    /// Returns approved pose images for the currently selected source.
+    /// - Index 0: head turnaround slots (original behavior)
+    /// - Index 1+: the corresponding costume's fullBodySlots
     private func availablePoseImages() -> [PoseImage] {
+        if selectedCostumeIndex == 0 {
+            return headTurnaroundImages()
+        }
+        let costumeIndex = selectedCostumeIndex - 1
+        guard costumeIndex < character.costumeReferenceSets.count else { return [] }
+        return poseImages(from: character.costumeReferenceSets[costumeIndex].fullBodySlots)
+    }
+
+    private func headTurnaroundImages() -> [PoseImage] {
         var results: [PoseImage] = []
         for pose in poseOrder {
             if let slot = character.headTurnaroundSlots.first(where: { $0.pose == pose }),
+               let variant = slot.approvedVariant {
+                results.append(PoseImage(pose: pose, imagePath: variant.imagePath))
+            }
+        }
+        return results
+    }
+
+    private func poseImages(from slots: [CharacterPoseSlot]) -> [PoseImage] {
+        var results: [PoseImage] = []
+        for pose in poseOrder {
+            if let slot = slots.first(where: { $0.pose == pose }),
                let variant = slot.approvedVariant {
                 results.append(PoseImage(pose: pose, imagePath: variant.imagePath))
             }
@@ -304,6 +445,40 @@ struct Meshy3DGenerationPane: View {
             let mime = ext == "png" ? "image/png" : "image/jpeg"
             return "data:\(mime);base64,\(data.base64EncodedString())"
         }
+    }
+
+    @MainActor
+    private func runBatchGeneration() async {
+        let costumes = character.costumeReferenceSets
+        guard !costumes.isEmpty else { return }
+
+        // Build queue from all costume sets that have at least one approved image
+        let items: [BatchItem] = costumes.compactMap { costume in
+            let images = poseImages(from: costume.fullBodySlots)
+            guard !images.isEmpty else { return nil }
+            return BatchItem(costumeName: costume.name, images: images)
+        }
+        guard !items.isEmpty else { return }
+
+        batchQueue = items
+        currentBatchIndex = 0
+        isBatchGenerating = true
+
+        for (index, item) in items.enumerated() {
+            currentBatchIndex = index
+            let request = buildRequest()
+            let imageDataURLs = encodeImages(item.images)
+            let textureURL = imageDataURLs.first
+            await store.generateMeshy3DModel(
+                for: character.id,
+                imageURLs: imageDataURLs,
+                textureImageURL: shouldTexture ? textureURL : nil,
+                config: request
+            )
+        }
+
+        currentBatchIndex = items.count
+        isBatchGenerating = false
     }
 
     private var statusLabel: String {
