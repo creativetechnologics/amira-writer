@@ -199,14 +199,19 @@ struct Animate3DGenerationQueuePlanner {
             }
 
             if !hasCharacterAsset(.materials, character: character, inventory: inventory, registryBundleService: registryBundleService) {
+                let materialSummary = summarizeMaterialNeeds(runtimeStatuses)
                 items.append(
                     queueItem(
                         kind: .materialProfile,
                         title: "\(character.name) material profile",
-                        detail: "Tune cel shading/material response so the model matches the Amira look.",
+                        detail: materialSummary.map {
+                            "Tune cel shading/material response so the model matches the Amira look. Prioritize \($0)."
+                        } ?? "Tune cel shading/material response so the model matches the Amira look.",
                         destinationPath: "Animate/characters/\(character.assetFolderSlug)/materials/",
                         providerHint: "Lookdev JSON",
-                        prompt: "Create a cel-shaded material profile for \(character.name) with anime-safe skin, fabric, hair, and outline response.",
+                        prompt: materialSummary.map {
+                            "Create a cel-shaded material profile for \(character.name) with anime-safe skin, fabric, hair, and outline response. Prioritize the currently observed rendering needs: \($0)."
+                        } ?? "Create a cel-shaded material profile for \(character.name) with anime-safe skin, fabric, hair, and outline response.",
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -404,6 +409,23 @@ struct Animate3DGenerationQueuePlanner {
         }
         if let visemeSummary = summarizeVisemeCues(statuses) {
             parts.append("mouth cues: \(visemeSummary)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
+    }
+
+    private func summarizeMaterialNeeds(_ statuses: [Animate3DCharacterPerformanceStatus]) -> String? {
+        var parts: [String] = []
+        if let expressionSummary = summarizeExpressionCues(statuses) {
+            parts.append("expression readability: \(expressionSummary)")
+        }
+        if let motionSummary = summarizeMotionCues(statuses) {
+            parts.append("pose/silhouette cues: \(motionSummary)")
+        }
+        let hintSummary = Array(Set(statuses.compactMap(\.motionHintSummary).filter { !$0.isEmpty })).sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+        if !hintSummary.isEmpty {
+            parts.append("motion hints: \(hintSummary.joined(separator: ", "))")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }

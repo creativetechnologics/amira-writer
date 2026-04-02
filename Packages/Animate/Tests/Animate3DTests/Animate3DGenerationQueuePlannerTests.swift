@@ -281,6 +281,106 @@ final class Animate3DGenerationQueuePlannerTests: XCTestCase {
         XCTAssertTrue(expressionItem.prompt.contains("determined"))
     }
 
+    func testPlannerUsesRuntimeExpressionMotionAndHintContextInMissingMaterialPrompt() throws {
+        let projectURL = try makeProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
+
+        let store = AnimateStore()
+        store.owpURL = projectURL
+        store.characters = [
+            AnimationCharacter(
+                id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+                name: "Luke",
+                description: "Pilot",
+                owpSlug: "luke",
+                parts: []
+            )
+        ]
+
+        let scene = AnimationScene(
+            id: UUID(uuidString: "99999999-8888-7777-6666-555555555555")!,
+            name: "Luke Scene",
+            backgroundID: nil,
+            characterIDs: [store.characters[0].id],
+            keyframes: [],
+            owpSongPath: "Songs/luke.ows"
+        )
+
+        let runtimeStatus = Animate3DCharacterPerformanceStatus(
+            characterName: "Luke",
+            characterSlug: "luke",
+            preferredCostumeName: nil,
+            resolvedBundleCostumeName: nil,
+            resolvedBundleSourcePath: nil,
+            resolvedBundleAssetPaths: [],
+            modelFileName: nil,
+            modelSourcePath: nil,
+            driverMode: .generatedOverlay,
+            profileSourceFileName: nil,
+            profileSourcePath: nil,
+            profileSourceCount: 0,
+            profileSourcePaths: [],
+            mouthProfileID: "lipsync-default",
+            expressionPresetCount: 0,
+            visemePresetCount: 0,
+            usingExpressionPreset: false,
+            usingVisemePreset: false,
+            resolvedExpressionPresetCue: "hero_angry",
+            resolvedVisemePresetCue: "rest",
+            sourceExpressionCue: "angry",
+            sourceVisemeCue: "ah",
+            expressionBehaviorCue: "determined",
+            expressionCueProvenance: "baseCue:angry",
+            visemeCueProvenance: "baseViseme:ah",
+            sourceActionCue: "determined",
+            sourcePoseCue: "listen",
+            resolvedMotionID: "motion-determined-listen",
+            resolvedMotionTitle: "Determined Listening",
+            motionProvenance: "semantic:determined+listen",
+            resolvedHoldMultiplier: 1,
+            holdProvenance: "descriptor:hold:x1",
+            motionHintSummary: "hold x1 • pitch -0.12 • roll 0.08",
+            activeExpressionCue: "hero_angry",
+            activeVisemeCue: "rest",
+            isVisible: true
+        )
+
+        let items = Animate3DGenerationQueuePlanner(store: store)
+            .buildPlan(
+                scene: scene,
+                backgroundName: "Moon Valley",
+                worldChunk: nil,
+                styleProfile: nil,
+                lightRig: nil,
+                atmospherePreset: nil,
+                bundleReadiness: [
+                    Animate3DCharacterBundleReadinessStatus(
+                        characterName: "Luke",
+                        characterSlug: "luke",
+                        preferredCostumeName: nil,
+                        resolvedBundleCostumeName: nil,
+                        resolvedBundleSourcePath: nil,
+                        resolvedBundleAssetPaths: [],
+                        readyCategories: [],
+                        registryBackedCategories: [],
+                        missingCategories: [.materials],
+                        totalFileCount: 0
+                    )
+                ],
+                runtimeCharacters: [runtimeStatus]
+            )
+
+        let materialItem = try XCTUnwrap(items.first(where: { $0.kind == .materialProfile }))
+        XCTAssertTrue(materialItem.detail.contains("expression readability"))
+        XCTAssertTrue(materialItem.detail.contains("pose/silhouette"))
+        XCTAssertTrue(materialItem.detail.contains("motion hints"))
+        XCTAssertTrue(materialItem.prompt.contains("hero_angry"))
+        XCTAssertTrue(materialItem.prompt.contains("Determined Listening"))
+        XCTAssertTrue(materialItem.prompt.contains("hold x1"))
+    }
+
     private func sampleProductionPlan(scene: AnimationScene) -> SceneProductionPlan {
         SceneProductionPlan(
             sceneID: scene.id,
