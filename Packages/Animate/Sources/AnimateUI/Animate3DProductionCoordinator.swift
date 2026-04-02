@@ -8,7 +8,10 @@ struct Animate3DCharacterPerformanceStatus: Identifiable, Hashable, Sendable {
     var characterSlug: String
     var preferredCostumeName: String?
     var resolvedBundleCostumeName: String?
+    var resolvedBundleSourcePath: String?
+    var resolvedBundleAssetPaths: [String]
     var modelFileName: String?
+    var modelSourcePath: String?
     var driverMode: CharacterPerformanceDriverMode
     var profileSourceFileName: String?
     var profileSourcePath: String?
@@ -35,6 +38,8 @@ struct Animate3DCharacterBundleReadinessStatus: Identifiable, Hashable, Sendable
     var characterSlug: String
     var preferredCostumeName: String?
     var resolvedBundleCostumeName: String?
+    var resolvedBundleSourcePath: String?
+    var resolvedBundleAssetPaths: [String]
     var readyCategories: [Animate3DCharacterAssetCategory]
     var registryBackedCategories: [Animate3DCharacterAssetCategory]
     var missingCategories: [Animate3DCharacterAssetCategory]
@@ -278,6 +283,10 @@ private extension Animate3DProductionCoordinator {
         let bundleReadiness: [Animate3DCharacterBundleReadinessStatus] = sceneCharacters.map { character in
             let inventory = assetService.inventory(for: character.assetFolderSlug, in: store.animateURL)
             let preferredCostume = preferredCostumeBySlug[character.assetFolderSlug] ?? nil
+            let resolvedBundleInfo = registryBundleService.resolvedBundleInfo(
+                for: character.assetFolderSlug,
+                costumeName: preferredCostume
+            )
             let categories = Animate3DCharacterAssetCategory.allCases
             let readyCategories = categories.filter { category in
                 !inventory.files(for: category).isEmpty
@@ -298,10 +307,9 @@ private extension Animate3DProductionCoordinator {
                 characterName: character.name,
                 characterSlug: character.assetFolderSlug,
                 preferredCostumeName: preferredCostume,
-                resolvedBundleCostumeName: registryBundleService.bundleDescriptor(
-                    for: character.assetFolderSlug,
-                    costumeName: preferredCostume
-                )?.costumeName,
+                resolvedBundleCostumeName: resolvedBundleInfo?.descriptor.costumeName,
+                resolvedBundleSourcePath: resolvedBundleInfo?.sourceManifestPath,
+                resolvedBundleAssetPaths: resolvedBundleInfo?.resolvedAssetPaths ?? [],
                 readyCategories: readyCategories,
                 registryBackedCategories: registryBackedCategories,
                 missingCategories: missingCategories,

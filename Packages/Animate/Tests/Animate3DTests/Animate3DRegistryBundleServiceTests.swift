@@ -77,6 +77,38 @@ final class Animate3DRegistryBundleServiceTests: XCTestCase {
         XCTAssertTrue(signature.contains("luke:default"))
     }
 
+    func testResolvedBundleInfoIncludesSourceManifestPathAndResolvedAssets() throws {
+        let projectURL = try makeProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
+        let facePath = "Animate/characters/luke/face-rigs/face.json"
+        let bodyPath = "Animate/characters/luke/models/luke.glb"
+        try createDataFile(Data(), at: projectURL.appendingPathComponent(facePath))
+        try createDataFile(Data(), at: projectURL.appendingPathComponent(bodyPath))
+
+        let service = Animate3DRegistryBundleService(
+            projectURL: projectURL,
+            animateURL: projectURL.appendingPathComponent("Animate"),
+            assetRegistry: Animate3DAssetRegistry(),
+            characterRegistry: Animate3DCharacterRegistry(
+                bundles: [
+                    Animate3DCharacterBundleDescriptor(
+                        characterSlug: "luke",
+                        costumeName: "default",
+                        bodyModelPath: bodyPath,
+                        faceRigPath: facePath
+                    )
+                ]
+            )
+        )
+
+        let bundleInfo = try XCTUnwrap(service.resolvedBundleInfo(for: "luke"))
+        XCTAssertEqual(bundleInfo.sourceManifestPath, "Animate/3d/character-registry/character-registry.json")
+        XCTAssertTrue(bundleInfo.resolvedAssetPaths.contains(bodyPath))
+        XCTAssertTrue(bundleInfo.resolvedAssetPaths.contains(facePath))
+    }
+
     private func makeProjectURL() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Animate3DRegistryBundleServiceTests-\(UUID().uuidString)")

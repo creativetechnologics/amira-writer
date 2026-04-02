@@ -185,6 +185,8 @@ extension ScenePreviewRenderer {
             .systemMint, .systemPurple, .systemYellow
         ]
         for (index, blocking) in plan.characterBlocking.enumerated() {
+            let bundleInfo = store.map { Animate3DRegistryBundleService(store: $0) }?
+                .resolvedBundleInfo(for: blocking.characterSlug, costumeName: blocking.preferredCostumeName)
             let node = assetPipeline.characterNode(
                 slug: blocking.characterSlug,
                 costumeName: blocking.preferredCostumeName,
@@ -206,11 +208,14 @@ extension ScenePreviewRenderer {
                 characterName: blocking.characterName,
                 characterSlug: blocking.characterSlug,
                 preferredCostumeName: blocking.preferredCostumeName,
-                resolvedBundleCostumeName: assetPipeline.resolvedBundleDescriptor(
+                resolvedBundleCostumeName: bundleInfo?.descriptor.costumeName,
+                resolvedBundleSourcePath: bundleInfo?.sourceManifestPath,
+                resolvedBundleAssetPaths: bundleInfo?.resolvedAssetPaths ?? [],
+                modelFileName: assetPipeline.characterModelFileName(
                     slug: blocking.characterSlug,
                     costumeName: blocking.preferredCostumeName
-                )?.costumeName,
-                modelFileName: assetPipeline.characterModelFileName(
+                ),
+                modelSourcePath: assetPipeline.characterModelSourceRelativePath(
                     slug: blocking.characterSlug,
                     costumeName: blocking.preferredCostumeName
                 ),

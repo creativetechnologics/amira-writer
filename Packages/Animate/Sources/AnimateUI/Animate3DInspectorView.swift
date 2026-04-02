@@ -175,6 +175,12 @@ struct Animate3DInspectorView: View {
                                     if let modelFileName = status.modelFileName {
                                         inspectorRow(label: "Model", value: modelFileName)
                                     }
+                                    if let modelSourcePath = status.modelSourcePath {
+                                        Text(modelSourcePath)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
                                     if let profileSourceFileName = status.profileSourceFileName {
                                         inspectorRow(label: "Profile", value: profileSourceFileName)
                                     } else {
@@ -182,6 +188,15 @@ struct Animate3DInspectorView: View {
                                     }
                                     if let profileSourcePath = status.profileSourcePath {
                                         Text(profileSourcePath)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    if let resolvedBundleSourcePath = status.resolvedBundleSourcePath {
+                                        inspectorRow(label: "Registry File", value: resolvedBundleSourcePath)
+                                    }
+                                    if !status.resolvedBundleAssetPaths.isEmpty {
+                                        Text("Bundle Paths:\n\(status.resolvedBundleAssetPaths.joined(separator: "\n"))")
                                             .font(.system(size: 10, design: .monospaced))
                                             .foregroundStyle(.secondary)
                                             .fixedSize(horizontal: false, vertical: true)
@@ -221,6 +236,10 @@ struct Animate3DInspectorView: View {
                                        !resolvedBundleCostumeName.isEmpty {
                                         inspectorRow(label: "Bundle", value: resolvedBundleCostumeName)
                                     }
+                                    if let resolvedBundleSourcePath = readiness.resolvedBundleSourcePath,
+                                       !resolvedBundleSourcePath.isEmpty {
+                                        inspectorRow(label: "Registry File", value: resolvedBundleSourcePath)
+                                    }
                                     inspectorRow(label: "Files", value: "\(readiness.totalFileCount)")
                                     if !readiness.readyCategories.isEmpty {
                                         Text("Ready: \(readiness.readyCategories.map(\.displayName).joined(separator: ", "))")
@@ -231,6 +250,12 @@ struct Animate3DInspectorView: View {
                                     if !readiness.registryBackedCategories.isEmpty {
                                         Text("Registry: \(readiness.registryBackedCategories.map(\.displayName).joined(separator: ", "))")
                                             .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    if !readiness.resolvedBundleAssetPaths.isEmpty {
+                                        Text("Resolved Paths:\n\(readiness.resolvedBundleAssetPaths.joined(separator: "\n"))")
+                                            .font(.system(size: 10, design: .monospaced))
                                             .foregroundStyle(.secondary)
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
@@ -303,6 +328,12 @@ struct Animate3DInspectorView: View {
                                         Text("Registry: \(manifestKind.rawValue)")
                                             .font(.system(size: 10, design: .monospaced))
                                             .foregroundStyle(.secondary)
+                                    }
+                                    if let queueContext = queueBundleContext(for: item) {
+                                        Text(queueContext)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
                                     }
                                     if let placeName = item.placeName ?? item.sceneName {
                                         Text("Context: \(placeName)")
@@ -899,6 +930,53 @@ struct Animate3DInspectorView: View {
             return index.lightRigsPath
         case .atmospherePresets:
             return index.atmospherePresetsPath
+        }
+    }
+
+    private func queueBundleContext(for item: Animate3DGenerationQueueItem) -> String? {
+        guard let productionStatus,
+              let characterSlug = item.characterSlug,
+              let readiness = productionStatus.bundleReadiness.first(where: { $0.characterSlug == characterSlug }) else {
+            if let manifestKind = item.manifestKind,
+               let relativePath = manifestRelativePath(for: manifestKind) {
+                return "Registry File: \(relativePath)"
+            }
+            return nil
+        }
+
+        var lines: [String] = []
+        if let sourcePath = readiness.resolvedBundleSourcePath {
+            lines.append("Registry File: \(sourcePath)")
+        }
+        if let resolvedPath = resolvedBundlePath(for: item.kind, readiness: readiness) {
+            lines.append("Resolved Path: \(resolvedPath)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    private func resolvedBundlePath(
+        for kind: Animate3DGenerationQueueItem.Kind,
+        readiness: Animate3DCharacterBundleReadinessStatus
+    ) -> String? {
+        let paths = readiness.resolvedBundleAssetPaths
+        func first(containing fragment: String) -> String? {
+            paths.first { $0.localizedCaseInsensitiveContains(fragment) }
+        }
+        switch kind {
+        case .bodyModel:
+            return first(containing: "/models/") ?? first(containing: ".glb") ?? first(containing: ".usdz") ?? first(containing: ".obj")
+        case .faceRig:
+            return first(containing: "/face-rigs/")
+        case .mouthProfile:
+            return first(containing: "/mouth-profiles/")
+        case .expressionLibrary:
+            return first(containing: "/expressions/")
+        case .motionSet:
+            return first(containing: "/motions/")
+        case .materialProfile:
+            return first(containing: "/materials/")
+        case .worldChunk, .worldPreviewImage, .worldMesh, .lightRig, .atmospherePreset, .styleProfile, .cameraPresetLibrary:
+            return nil
         }
     }
 

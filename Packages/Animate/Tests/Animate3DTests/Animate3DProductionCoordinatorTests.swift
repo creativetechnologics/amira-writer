@@ -63,6 +63,11 @@ final class Animate3DProductionCoordinatorTests: XCTestCase {
             forceReload: false
         )
         XCTAssertEqual(coordinator.status.modelBackedCharacterCount, 1)
+        let readiness = try XCTUnwrap(coordinator.status.bundleReadiness.first)
+        XCTAssertEqual(readiness.resolvedBundleSourcePath, "Animate/3d/character-registry/character-registry.json")
+        XCTAssertTrue(readiness.resolvedBundleAssetPaths.contains(bodyPath))
+        let runtimeStatus = try XCTUnwrap(coordinator.status.runtimeCharacters.first)
+        XCTAssertEqual(runtimeStatus.modelSourcePath, bodyPath)
     }
 
     private func makeProjectURL() throws -> URL {

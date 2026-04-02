@@ -265,6 +265,21 @@ extension SceneAssetPipeline {
         return bundleDescriptor(for: slug, costumeName: costumeName)
     }
 
+    func characterModelSourceRelativePath(
+        slug: String,
+        costumeName: String? = nil
+    ) -> String? {
+        ensureRegistriesLoaded()
+        guard let store,
+              let character = store.characters.first(where: {
+                  $0.assetFolderSlug == slug || $0.owpSlug == slug
+              }),
+              let sourceURL = resolveModelURL(for: character, slug: slug, costumeName: costumeName) else {
+            return nil
+        }
+        return relativePath(for: sourceURL)
+    }
+
     // MARK: Private — Model File Resolution
 
     /// Resolves the on-disk URL for a character's 3D model file.
@@ -460,6 +475,22 @@ extension SceneAssetPipeline {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func relativePath(for sourceURL: URL) -> String? {
+        if let animateURL = store?.animateURL {
+            let basePath = animateURL.path.hasSuffix("/") ? animateURL.path : animateURL.path + "/"
+            if sourceURL.path.hasPrefix(basePath) {
+                return "Animate/" + String(sourceURL.path.dropFirst(basePath.count))
+            }
+        }
+        if let projectURL = store?.workingOWPURL ?? store?.owpURL {
+            let basePath = projectURL.path.hasSuffix("/") ? projectURL.path : projectURL.path + "/"
+            if sourceURL.path.hasPrefix(basePath) {
+                return String(sourceURL.path.dropFirst(basePath.count))
+            }
+        }
+        return sourceURL.lastPathComponent
     }
 
     // MARK: Private — Material & Scale

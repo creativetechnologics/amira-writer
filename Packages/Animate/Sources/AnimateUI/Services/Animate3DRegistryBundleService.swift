@@ -1,6 +1,13 @@
 import Foundation
 
 @available(macOS 26.0, *)
+struct Animate3DResolvedBundleInfo: Hashable, Sendable {
+    var descriptor: Animate3DCharacterBundleDescriptor
+    var sourceManifestPath: String
+    var resolvedAssetPaths: [String]
+}
+
+@available(macOS 26.0, *)
 struct Animate3DRegistryBundleService {
     let projectURL: URL?
     let animateURL: URL?
@@ -61,6 +68,24 @@ struct Animate3DRegistryBundleService {
             }
         }
         return nil
+    }
+
+    func resolvedBundleInfo(
+        for slug: String,
+        costumeName: String? = nil
+    ) -> Animate3DResolvedBundleInfo? {
+        guard let (descriptor, sourceManifestPath) = resolveBundleDescriptorAndSource(
+            for: slug,
+            costumeName: costumeName
+        ) else {
+            return nil
+        }
+
+        return Animate3DResolvedBundleInfo(
+            descriptor: descriptor,
+            sourceManifestPath: sourceManifestPath,
+            resolvedAssetPaths: resolvedAssetPaths(for: descriptor)
+        )
     }
 
     func provides(
@@ -140,6 +165,60 @@ struct Animate3DRegistryBundleService {
         guard let path else { return nil }
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func resolveBundleDescriptorAndSource(
+        for slug: String,
+        costumeName: String?
+    ) -> (Animate3DCharacterBundleDescriptor, String)? {
+        let index = (projectURL.flatMap(ProjectDatabaseBridge.loadAnimate3DRegistryIndexFromDisk(projectURL:))) ?? Animate3DRegistryIndex()
+        let registries: [([Animate3DCharacterBundleDescriptor], String)] = [
+            (characterRegistry.bundles, index.characterRegistryPath),
+            (assetRegistry.bundles, index.assetRegistryPath)
+        ]
+
+        for (bundles, sourceManifestPath) in registries {
+            if let costumeName,
+               let exact = bundles.first(where: {
+                   $0.characterSlug.caseInsensitiveCompare(slug) == .orderedSame &&
+                   $0.costumeName.caseInsensitiveCompare(costumeName) == .orderedSame
+               }) {
+                return (exact, sourceManifestPath)
+            }
+            if let `default` = bundles.first(where: {
+                $0.characterSlug.caseInsensitiveCompare(slug) == .orderedSame &&
+                $0.costumeName.caseInsensitiveCompare("default") == .orderedSame
+            }) {
+                return (`default`, sourceManifestPath)
+            }
+            if let first = bundles.first(where: {
+                $0.characterSlug.caseInsensitiveCompare(slug) == .orderedSame
+            }) {
+                return (first, sourceManifestPath)
+            }
+        }
+        return nil
+    }
+
+    private func resolvedAssetPaths(for descriptor: Animate3DCharacterBundleDescriptor) -> [String] {
+        var paths: [String] = []
+        if let path = normalized(descriptor.bodyModelPath) {
+            paths.append(path)
+        }
+        if let path = normalized(descriptor.faceRigPath) {
+            paths.append(path)
+        }
+        if let path = normalized(descriptor.mouthProfilePath) {
+            paths.append(path)
+        }
+        if let path = normalized(descriptor.expressionLibraryPath) {
+            paths.append(path)
+        }
+        paths.append(contentsOf: descriptor.motionSetPaths.compactMap(normalized))
+        if let path = normalized(descriptor.materialProfilePath) {
+            paths.append(path)
+        }
+        return paths
     }
 
     private func signaturePart(label: String, relativePath: String?) -> String {
