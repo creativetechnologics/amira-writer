@@ -136,6 +136,12 @@ final class ScenePreviewRendererTests: XCTestCase {
         XCTAssertTrue(status.profileSourcePaths.contains { $0.contains("face-rigs/face-performance.json") })
         XCTAssertTrue(status.profileSourcePaths.contains { $0.contains("mouth-profiles/performance-profile.json") })
         XCTAssertTrue(status.profileSourcePaths.contains { $0.contains("expressions/face-performance.json") })
+
+        let characterNode = try XCTUnwrap(
+            renderer.sceneKitScene.rootNode.childNode(withName: "stage", recursively: false)?
+                .childNode(withName: "character_\(character.assetFolderSlug)", recursively: true)
+        )
+        XCTAssertLessThan(characterNode.eulerAngles.x, 0)
     }
 
     private func makeProjectURL() throws -> URL {

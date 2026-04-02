@@ -458,6 +458,21 @@ extension ScenePreviewRenderer {
 
     private func updateCharacter(blocking: CharacterBlockingPlan, frame: Int) {
         guard let node = characterNodes[blocking.characterName] else { return }
+        let actionCue = blocking.actingBeats
+            .first(where: { $0.startFrame <= frame && frame <= $0.endFrame })?
+            .action
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let poseCue = blocking.keyPositions
+            .sorted { $0.frame < $1.frame }
+            .last(where: { $0.frame <= frame })?
+            .pose
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let resolvedMotion = assetPipeline.resolveMotionSet(
+            actionCue: actionCue,
+            poseCue: poseCue
+        )
 
         // Visibility: respect entrance/exit frames
         let visible = frame >= blocking.entranceFrame
@@ -474,12 +489,26 @@ extension ScenePreviewRenderer {
         if frame <= first.frame {
             node.position = scnPosition(first.position)
             applyFacing(node: node, facing: first.facing)
+            applyResolvedMotion(
+                node: node,
+                frame: frame,
+                basePosition: first.position,
+                movementDelta: SIMD3<Double>(0, 0, 0),
+                motion: resolvedMotion
+            )
             applyPerformance(blocking: blocking, frame: frame)
             return
         }
         if frame >= last.frame {
             node.position = scnPosition(last.position)
             applyFacing(node: node, facing: last.facing)
+            applyResolvedMotion(
+                node: node,
+                frame: frame,
+                basePosition: last.position,
+                movementDelta: SIMD3<Double>(0, 0, 0),
+                motion: resolvedMotion
+            )
             applyPerformance(blocking: blocking, frame: frame)
             return
         }
@@ -508,6 +537,13 @@ extension ScenePreviewRenderer {
         } else {
             applyFacing(node: node, facing: before.facing)
         }
+        applyResolvedMotion(
+            node: node,
+            frame: frame,
+            basePosition: pos,
+            movementDelta: delta,
+            motion: resolvedMotion
+        )
 
         applyPerformance(blocking: blocking, frame: frame)
     }
@@ -598,6 +634,58 @@ extension ScenePreviewRenderer {
         case .camera: node.eulerAngles.y = 0
         case .away:   node.eulerAngles.y = CGFloat.pi
         }
+    }
+
+    private func applyResolvedMotion(
+        node: SCNNode,
+        frame: Int,
+        basePosition: SIMD3<Double>,
+        movementDelta: SIMD3<Double>,
+        motion: (descriptor: Animate3DMotionSetDescriptor, provenance: String)?
+    ) {
+        guard let motion else { return }
+
+        let tags = ([motion.descriptor.motionID, motion.descriptor.title] + motion.descriptor.tags)
+            .map { $0.lowercased() }
+        let cycle = Double(frame) / Double(max(currentPlan?.baseFPS ?? 24, 1))
+
+        var verticalOffset = 0.0
+        var pitch = 0.0
+        var roll = 0.0
+
+        if tags.contains(where: { ["walk", "stride", "cross", "move", "run"].contains($0) }) {
+            let strideSpeed = max(0.4, simd_length(movementDelta) * 4)
+            verticalOffset += sin(cycle * .pi * strideSpeed) * 0.06
+            roll += sin(cycle * .pi * strideSpeed) * 0.035
+        }
+
+        if tags.contains(where: { ["listen", "wait", "think"].contains($0) }) {
+            pitch += 0.03
+            roll += sin(cycle * 1.6) * 0.02
+        }
+
+        if tags.contains(where: { ["present", "offer", "gesture", "point"].contains($0) }) {
+            pitch -= 0.05
+            roll += 0.04
+        }
+
+        if tags.contains(where: { ["determined", "resolve", "heroic", "focus"].contains($0) }) {
+            pitch -= 0.07
+        }
+
+        if tags.contains(where: { ["sing", "belt", "vocal"].contains($0) }) {
+            verticalOffset += sin(cycle * 2.4) * 0.04
+            pitch -= 0.03
+        }
+
+        if tags.contains(where: { ["celebrate", "triumph", "jump"].contains($0) }) {
+            verticalOffset += abs(sin(cycle * 3.2)) * 0.12
+            roll += sin(cycle * 2.1) * 0.06
+        }
+
+        node.position = scnPosition(basePosition + SIMD3<Double>(0, verticalOffset, 0))
+        node.eulerAngles.x = CGFloat(pitch)
+        node.eulerAngles.z = CGFloat(roll)
     }
 
     // MARK: Props / Objects
