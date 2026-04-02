@@ -32,7 +32,11 @@ final class ProjectDatabaseBridge3DRegistryTests: XCTestCase {
                     title: "Walk Cycle",
                     relativePath: "Animate/characters/luke/motions/walk.json",
                     tags: ["walk", "locomotion"],
-                    notes: "Looped placeholder walk."
+                    notes: "Looped placeholder walk.",
+                    preferredHoldMultiplier: 1,
+                    bodyPitchOffset: -0.04,
+                    bodyRollOffset: 0.02,
+                    bodyVerticalOffset: 0.08
                 )
             ]
         )

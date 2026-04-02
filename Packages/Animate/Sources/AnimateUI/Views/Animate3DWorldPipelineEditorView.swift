@@ -102,6 +102,16 @@ private extension Animate3DWorldPipelineEditorView {
                             set: { motion.tags = commaSeparated($0) }
                         ))
                         inlineField("Notes", text: $motion.notes)
+                        HStack(spacing: 10) {
+                            inlineField("Hold Override", text: optionalIntBinding($motion.preferredHoldMultiplier))
+                            inlineField("Pitch Offset", text: optionalDoubleBinding($motion.bodyPitchOffset))
+                            inlineField("Roll Offset", text: optionalDoubleBinding($motion.bodyRollOffset))
+                            inlineField("Vertical Offset", text: optionalDoubleBinding($motion.bodyVerticalOffset))
+                        }
+                        Text("Leave numeric fields blank to keep runtime tag heuristics. Hold Override sets stepped cadence directly; pitch/roll/vertical offsets add authored staging bias before full motion sidecars exist.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(12)
                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(OperaChromeTheme.raisedBackground.opacity(0.35)))
@@ -431,6 +441,29 @@ private extension Animate3DWorldPipelineEditorView {
         Binding<String>(
             get: { binding.wrappedValue ?? "" },
             set: { binding.wrappedValue = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        )
+    }
+
+    func optionalIntBinding(_ binding: Binding<Int?>) -> Binding<String> {
+        Binding<String>(
+            get: { binding.wrappedValue.map(String.init) ?? "" },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                binding.wrappedValue = trimmed.isEmpty ? nil : Int(trimmed)
+            }
+        )
+    }
+
+    func optionalDoubleBinding(_ binding: Binding<Double?>) -> Binding<String> {
+        Binding<String>(
+            get: {
+                guard let value = binding.wrappedValue else { return "" }
+                return String(format: "%.3f", value)
+            },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                binding.wrappedValue = trimmed.isEmpty ? nil : Double(trimmed)
+            }
         )
     }
 
