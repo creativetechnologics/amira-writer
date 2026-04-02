@@ -152,4 +152,47 @@ final class MeshyServiceTests: XCTestCase {
         store.saveAPIKey("")
         XCTAssertEqual(store.loadAPIKey(), "")
     }
+
+    func testServiceBuildsCorrectMultiImageURLRequest() throws {
+        let service = MeshyService(apiKey: "msy_test_key")
+        let request = MeshyMultiImageRequest(
+            imageURLs: ["data:image/png;base64,abc"],
+            targetPolycount: 50_000,
+            targetFormats: ["glb"]
+        )
+
+        let urlRequest = try service.buildCreateTaskRequest(
+            endpoint: "multi-image-to-3d",
+            body: request
+        )
+
+        XCTAssertEqual(urlRequest.url?.absoluteString, "https://api.meshy.ai/openapi/v1/multi-image-to-3d")
+        XCTAssertEqual(urlRequest.httpMethod, "POST")
+        XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "Authorization"), "Bearer msy_test_key")
+        XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "Content-Type"), "application/json")
+
+        let body = try JSONSerialization.jsonObject(with: urlRequest.httpBody!) as! [String: Any]
+        XCTAssertEqual(body["target_polycount"] as? Int, 50_000)
+    }
+
+    func testServiceBuildsCorrectGetTaskRequest() throws {
+        let service = MeshyService(apiKey: "msy_test_key")
+        let urlRequest = service.buildGetTaskRequest(
+            endpoint: "multi-image-to-3d",
+            taskID: "task-abc-123"
+        )
+
+        XCTAssertEqual(urlRequest.url?.absoluteString, "https://api.meshy.ai/openapi/v1/multi-image-to-3d/task-abc-123")
+        XCTAssertEqual(urlRequest.httpMethod, "GET")
+        XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "Authorization"), "Bearer msy_test_key")
+    }
+
+    func testServiceBuildsBalanceRequest() throws {
+        let service = MeshyService(apiKey: "msy_test_key")
+        let urlRequest = service.buildBalanceRequest()
+
+        XCTAssertEqual(urlRequest.url?.absoluteString, "https://api.meshy.ai/openapi/v1/balance")
+        XCTAssertEqual(urlRequest.httpMethod, "GET")
+        XCTAssertEqual(urlRequest.value(forHTTPHeaderField: "Authorization"), "Bearer msy_test_key")
+    }
 }
