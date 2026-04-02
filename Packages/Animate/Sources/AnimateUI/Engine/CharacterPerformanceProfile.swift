@@ -141,8 +141,11 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
 
     func availableVisemes() -> [PrestonBlairViseme] {
         var ordered: [PrestonBlairViseme] = []
-        for key in visemePresets.keys {
-            guard let viseme = Self.canonicalViseme(for: key),
+        for entry in visemePresets {
+            let viseme = Self.normalizedToken(entry.value.baseVisemeToken)
+                .flatMap(Self.canonicalViseme(for:))
+                ?? visemeSearchTerms(for: entry).compactMap(Self.canonicalViseme(for:)).first
+            guard let viseme,
                   !ordered.contains(viseme) else {
                 continue
             }
