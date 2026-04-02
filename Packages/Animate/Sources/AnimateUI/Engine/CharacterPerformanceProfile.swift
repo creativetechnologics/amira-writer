@@ -3,6 +3,8 @@ import SceneKit
 
 @available(macOS 26.0, *)
 struct CharacterPerformanceExpressionPreset: Codable, Sendable, Hashable {
+    var aliases: [String] = []
+    var baseCue: String?
     var browLift: Double = 0
     var browTilt: Double = 0
     var eyeOpen: Double = 1
@@ -13,6 +15,8 @@ struct CharacterPerformanceExpressionPreset: Codable, Sendable, Hashable {
 
 @available(macOS 26.0, *)
 struct CharacterPerformanceMouthPreset: Codable, Sendable, Hashable {
+    var aliases: [String] = []
+    var baseVisemeToken: String?
     var jawOpen: Double = 0
     var mouthWidth: Double = 0.46
     var mouthHeight: Double = 0.16
@@ -59,8 +63,10 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
         let normalizedCue = cue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedCue.isEmpty else { return nil }
 
-        if let exact = expressionPresets.first(where: {
-            $0.key.caseInsensitiveCompare(normalizedCue) == .orderedSame
+        if let exact = expressionPresets.first(where: { entry in
+            expressionSearchTerms(for: entry).contains { term in
+                term.caseInsensitiveCompare(normalizedCue) == .orderedSame
+            }
         }) {
             return (key: exact.key, preset: exact.value)
         }
@@ -68,8 +74,10 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
         for family in Self.expressionCueFamilies {
             guard family.contains(where: { normalizedCue.contains($0) }) else { continue }
             if let matched = expressionPresets.first(where: { entry in
-                family.contains { alias in
-                    entry.key.lowercased().contains(alias)
+                expressionSearchTerms(for: entry).contains { term in
+                    family.contains { alias in
+                        term.contains(alias)
+                    }
                 }
             }) {
                 return (key: matched.key, preset: matched.value)
@@ -83,6 +91,14 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
         resolvedExpressionPreset(for: cue)?.key
     }
 
+    func expressionBehaviorCue(for cue: String) -> String? {
+        guard let resolved = resolvedExpressionPreset(for: cue) else { return nil }
+        if let baseCue = Self.normalizedToken(resolved.preset.baseCue) {
+            return baseCue
+        }
+        return expressionSearchTerms(for: (key: resolved.key, value: resolved.preset)).first(where: { Self.isSemanticExpressionCue($0) })
+    }
+
     func resolvedVisemePreset(
         for mouthState: CharacterMouthState
     ) -> (key: String, preset: CharacterPerformanceMouthPreset)? {
@@ -91,10 +107,17 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
         let orderedCandidates = Array(NSOrderedSet(array: candidates + extraCandidates)) as? [String] ?? (candidates + extraCandidates)
 
         for candidate in orderedCandidates {
-            if let exact = visemePresets.first(where: {
-                $0.key.caseInsensitiveCompare(candidate) == .orderedSame
+            if let exact = visemePresets.first(where: { entry in
+                visemeSearchTerms(for: entry).contains { term in
+                    term.caseInsensitiveCompare(candidate) == .orderedSame
+                }
             }) {
                 return (key: exact.key, preset: exact.value)
+            }
+            if let tokenMatch = visemePresets.first(where: { entry in
+                visemeSearchTerms(for: entry).contains(where: { Self.visemeKey($0, matches: candidate) })
+            }) {
+                return (key: tokenMatch.key, preset: tokenMatch.value)
             }
         }
 
@@ -103,6 +126,29 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
 
     func resolvedVisemeCue(for mouthState: CharacterMouthState) -> String? {
         resolvedVisemePreset(for: mouthState)?.key
+    }
+
+    func canonicalVisemeToken(for mouthState: CharacterMouthState) -> PrestonBlairViseme? {
+        guard let resolved = resolvedVisemePreset(for: mouthState) else { return nil }
+        let searchTerms = visemeSearchTerms(for: (key: resolved.key, value: resolved.preset))
+        let token = Self.normalizedToken(resolved.preset.baseVisemeToken)
+            ?? searchTerms.first(where: { Self.visemeTokenSet.contains($0) })
+        guard let token else { return nil }
+        return PrestonBlairViseme.allCases.first {
+            $0.token.caseInsensitiveCompare(token) == .orderedSame
+        }
+    }
+
+    func availableVisemes() -> [PrestonBlairViseme] {
+        var ordered: [PrestonBlairViseme] = []
+        for key in visemePresets.keys {
+            guard let viseme = Self.canonicalViseme(for: key),
+                  !ordered.contains(viseme) else {
+                continue
+            }
+            ordered.append(viseme)
+        }
+        return ordered
     }
 
     private static let expressionCueFamilies: [[String]] = [
@@ -126,6 +172,93 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
         "wq": ["wq", "u", "o", "rest"],
         "rest": ["rest", "mbp", "consonant"]
     ]
+
+    private static let visemeTokenSet = Set(PrestonBlairViseme.allCases.map(\.token))
+
+    static func canonicalViseme(for key: String) -> PrestonBlairViseme? {
+        let normalized = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return nil }
+
+        if let exact = PrestonBlairViseme.allCases.first(where: {
+            $0.token.caseInsensitiveCompare(normalized) == .orderedSame
+        }) {
+            return exact
+        }
+
+        let segments = normalized
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        if let segmentMatch = PrestonBlairViseme.allCases.first(where: { viseme in
+            segments.contains { $0.caseInsensitiveCompare(viseme.token) == .orderedSame }
+        }) {
+            return segmentMatch
+        }
+
+        switch normalized {
+        case _ where normalized.contains("closed") || normalized.contains("rest") || normalized.contains("neutral"):
+            return .rest
+        case _ where normalized.contains("speak") || normalized.contains("talk"):
+            return .consonant
+        case _ where normalized.contains("sing") || normalized.contains("belt"):
+            return .ai
+        default:
+            return nil
+        }
+    }
+
+    private static func visemeKey(_ key: String, matches candidate: String) -> Bool {
+        if key.caseInsensitiveCompare(candidate) == .orderedSame {
+            return true
+        }
+
+        let segments = key
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        if segments.contains(where: { $0.caseInsensitiveCompare(candidate) == .orderedSame }) {
+            return true
+        }
+
+        guard let canonicalViseme = canonicalViseme(for: key) else {
+            return false
+        }
+        let canonicalCandidates = visemeFallbacks[canonicalViseme.token, default: [canonicalViseme.token]]
+        return canonicalCandidates.contains(where: {
+            $0.caseInsensitiveCompare(candidate) == .orderedSame
+        })
+    }
+
+    private func expressionSearchTerms(
+        for entry: (key: String, value: CharacterPerformanceExpressionPreset)
+    ) -> [String] {
+        let tokens = [entry.key] + entry.value.aliases + [entry.value.baseCue].compactMap { $0 }
+        return Self.normalizedTokens(tokens)
+    }
+
+    private func visemeSearchTerms(
+        for entry: (key: String, value: CharacterPerformanceMouthPreset)
+    ) -> [String] {
+        let tokens = [entry.key] + entry.value.aliases + [entry.value.baseVisemeToken].compactMap { $0 }
+        return Self.normalizedTokens(tokens)
+    }
+
+    private static func normalizedTokens(_ values: [String]) -> [String] {
+        Array(NSOrderedSet(array: values.compactMap(normalizedToken))) as? [String]
+            ?? values.compactMap(normalizedToken)
+    }
+
+    private static func normalizedToken(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func isSemanticExpressionCue(_ cue: String) -> Bool {
+        expressionCueFamilies.contains { family in
+            family.contains { cue.contains($0) }
+        }
+    }
 }
 
 @available(macOS 26.0, *)
