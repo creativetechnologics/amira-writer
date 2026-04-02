@@ -113,6 +113,7 @@ final class ScenePreviewRendererTests: XCTestCase {
         XCTAssertTrue(status.usingExpressionPreset)
         XCTAssertEqual(status.activeVisemeCue, "rest")
         XCTAssertEqual(status.resolvedVisemePresetCue, "rest")
+        XCTAssertEqual(status.visemeCueProvenance, "baseViseme:rest")
         XCTAssertTrue(status.usingVisemePreset)
         XCTAssertTrue(status.profileSourcePaths.contains { $0.contains("face-rigs/face-performance.json") })
         XCTAssertTrue(status.profileSourcePaths.contains { $0.contains("mouth-profiles/performance-profile.json") })
