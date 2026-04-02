@@ -24,6 +24,7 @@ struct CharactersPageView: View {
     @AppStorage("charactersPage.showMeshy3DGenerationPane") private var showMeshy3DGenerationPane: Bool = false
     @AppStorage("charactersPage.show3DSidecarsPane") private var show3DSidecarsPane: Bool = true
     @AppStorage("charactersPage.show3DModelsPane") private var show3DModelsPane: Bool = false
+    @AppStorage("charactersPage.showMotionGenerationPane") private var showMotionGenerationPane: Bool = false
     @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
     @State private var inspirationPendingPlan: PendingInspirationGenerationPlan?
     @State private var inspirationDrafts: [GeminiGenerationDraft] = []
@@ -477,6 +478,16 @@ struct CharactersPageView: View {
                     ) {
                         if showExpressionLibraryPane {
                             ExpressionLibraryView()
+                        }
+                    }
+
+                    collapsiblePane(
+                        title: "Motion Generation",
+                        icon: "figure.walk.motion",
+                        isExpanded: $showMotionGenerationPane
+                    ) {
+                        if showMotionGenerationPane {
+                            MotionGenerationPane(store: store, character: character)
                         }
                     }
 
