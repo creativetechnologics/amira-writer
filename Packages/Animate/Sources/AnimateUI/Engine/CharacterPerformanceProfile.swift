@@ -36,6 +36,88 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
     var visemePresets: [String: CharacterPerformanceMouthPreset] = [:]
 
     static let `default` = Character3DPerformanceProfile()
+
+    func merging(_ overlay: Character3DPerformanceProfile) -> Character3DPerformanceProfile {
+        var merged = self
+        merged.headNodeName = overlay.headNodeName ?? merged.headNodeName
+        merged.faceNodeName = overlay.faceNodeName ?? merged.faceNodeName
+        merged.jawNodeName = overlay.jawNodeName ?? merged.jawNodeName
+        merged.mouthNodeName = overlay.mouthNodeName ?? merged.mouthNodeName
+        merged.leftEyeNodeName = overlay.leftEyeNodeName ?? merged.leftEyeNodeName
+        merged.rightEyeNodeName = overlay.rightEyeNodeName ?? merged.rightEyeNodeName
+        merged.leftBrowNodeName = overlay.leftBrowNodeName ?? merged.leftBrowNodeName
+        merged.rightBrowNodeName = overlay.rightBrowNodeName ?? merged.rightBrowNodeName
+        merged.mouthProfileID = overlay.mouthProfileID ?? merged.mouthProfileID
+        merged.expressionPresets.merge(overlay.expressionPresets) { _, new in new }
+        merged.visemePresets.merge(overlay.visemePresets) { _, new in new }
+        return merged
+    }
+
+    func resolvedExpressionPreset(
+        for cue: String
+    ) -> (key: String, preset: CharacterPerformanceExpressionPreset)? {
+        let normalizedCue = cue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedCue.isEmpty else { return nil }
+
+        if let exact = expressionPresets.first(where: {
+            $0.key.caseInsensitiveCompare(normalizedCue) == .orderedSame
+        }) {
+            return (key: exact.key, preset: exact.value)
+        }
+
+        for family in Self.expressionCueFamilies {
+            guard family.contains(where: { normalizedCue.contains($0) }) else { continue }
+            if let matched = expressionPresets.first(where: { entry in
+                family.contains { alias in
+                    entry.key.lowercased().contains(alias)
+                }
+            }) {
+                return (key: matched.key, preset: matched.value)
+            }
+        }
+
+        return nil
+    }
+
+    func resolvedVisemePreset(
+        for mouthState: CharacterMouthState
+    ) -> (key: String, preset: CharacterPerformanceMouthPreset)? {
+        let candidates = Self.visemeFallbacks[mouthState.viseme.token, default: [mouthState.viseme.token]]
+        let extraCandidates = [mouthState.cue.lowercased(), mouthState.viseme.token.lowercased()]
+        let orderedCandidates = Array(NSOrderedSet(array: candidates + extraCandidates)) as? [String] ?? (candidates + extraCandidates)
+
+        for candidate in orderedCandidates {
+            if let exact = visemePresets.first(where: {
+                $0.key.caseInsensitiveCompare(candidate) == .orderedSame
+            }) {
+                return (key: exact.key, preset: exact.value)
+            }
+        }
+
+        return nil
+    }
+
+    private static let expressionCueFamilies: [[String]] = [
+        ["joy", "happy", "hope", "warm", "smile"],
+        ["sad", "grief", "worry", "tired"],
+        ["angry", "fury", "intense", "determined"],
+        ["surprised", "surprise", "shocked", "alarm"],
+        ["attentive", "listen", "curious", "concern"],
+        ["neutral", "rest", "default"]
+    ]
+
+    private static let visemeFallbacks: [String: [String]] = [
+        "ai": ["ai", "e", "o", "rest"],
+        "e": ["e", "ai", "consonant", "rest"],
+        "o": ["o", "u", "wq", "rest"],
+        "u": ["u", "o", "wq", "rest"],
+        "consonant": ["consonant", "fv", "l", "mbp", "rest"],
+        "fv": ["fv", "consonant", "rest"],
+        "l": ["l", "consonant", "rest"],
+        "mbp": ["mbp", "consonant", "rest"],
+        "wq": ["wq", "u", "o", "rest"],
+        "rest": ["rest", "mbp", "consonant"]
+    ]
 }
 
 @available(macOS 26.0, *)
@@ -51,6 +133,14 @@ enum CharacterPerformanceDriverMode: String, Sendable, Hashable {
         case .generatedOverlay: "Fallback"
         }
     }
+}
+
+@available(macOS 26.0, *)
+struct CharacterPerformanceApplicationResult: Sendable, Hashable {
+    var resolvedExpressionPresetCue: String?
+    var resolvedVisemePresetCue: String?
+    var usedExpressionPreset: Bool
+    var usedVisemePreset: Bool
 }
 
 @available(macOS 26.0, *)
@@ -158,10 +248,11 @@ final class CharacterPerformanceDriver {
     func apply(
         expression rawExpression: CharacterExpressionState,
         mouth rawMouth: CharacterMouthState
-    ) {
-        let expressionPreset = profile?.expressionPresets[rawExpression.cue]
-        let mouthPreset = profile?.visemePresets[rawMouth.viseme.token]
-            ?? profile?.visemePresets[rawMouth.cue]
+    ) -> CharacterPerformanceApplicationResult {
+        let expressionResolution = profile?.resolvedExpressionPreset(for: rawExpression.cue)
+        let mouthResolution = profile?.resolvedVisemePreset(for: rawMouth)
+        let expressionPreset = expressionResolution?.preset
+        let mouthPreset = mouthResolution?.preset
 
         let expression = expressionPreset.map { rawExpression.applying($0) } ?? rawExpression
         let mouth = mouthPreset.map { rawMouth.applying($0) } ?? rawMouth
@@ -228,6 +319,13 @@ final class CharacterPerformanceDriver {
         if !morphWeights.isEmpty {
             applyMorphWeights(morphWeights)
         }
+
+        return CharacterPerformanceApplicationResult(
+            resolvedExpressionPresetCue: expressionResolution?.key,
+            resolvedVisemePresetCue: mouthResolution?.key,
+            usedExpressionPreset: expressionResolution != nil,
+            usedVisemePreset: mouthResolution != nil
+        )
     }
 
     var driverMode: CharacterPerformanceDriverMode {

@@ -81,6 +81,12 @@ struct Animate3DProductionPreviewView: View {
                                             .foregroundStyle(.white.opacity(0.82))
                                             .lineLimit(1)
                                     }
+                                    if let authoredLine = authoredResolutionLine(for: performanceStatus) {
+                                        Text(authoredLine)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundStyle(.white.opacity(0.66))
+                                            .lineLimit(1)
+                                    }
                                     Text(overlayTelemetry(for: performanceStatus))
                                         .font(.system(size: 10, design: .monospaced))
                                         .foregroundStyle(.white.opacity(0.62))
@@ -263,6 +269,19 @@ struct Animate3DProductionPreviewView: View {
             parts.append("mouth \(mouthProfileID)")
         }
         return parts.joined(separator: " • ")
+    }
+
+    private func authoredResolutionLine(for status: Animate3DCharacterPerformanceStatus) -> String? {
+        var parts: [String] = []
+        if let resolvedExpressionPresetCue = status.resolvedExpressionPresetCue,
+           resolvedExpressionPresetCue.caseInsensitiveCompare(status.activeExpressionCue) != .orderedSame {
+            parts.append("expr→\(resolvedExpressionPresetCue)")
+        }
+        if let resolvedVisemePresetCue = status.resolvedVisemePresetCue,
+           resolvedVisemePresetCue.caseInsensitiveCompare(status.activeVisemeCue) != .orderedSame {
+            parts.append("vis→\(resolvedVisemePresetCue)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 }
 

@@ -244,6 +244,8 @@ extension ScenePreviewRenderer {
                 visemePresetCount: performanceProfile?.visemePresets.count ?? 0,
                 usingExpressionPreset: false,
                 usingVisemePreset: false,
+                resolvedExpressionPresetCue: nil,
+                resolvedVisemePresetCue: nil,
                 activeExpressionCue: performanceProfile == nil ? "fallback:neutral" : "neutral",
                 activeVisemeCue: performanceProfile == nil ? "fallback:rest" : "rest",
                 isVisible: false
@@ -522,17 +524,17 @@ extension ScenePreviewRenderer {
             liveCue: liveMouthCue,
             baseFPS: currentPlan?.baseFPS ?? 24
         )
-        characterPerformanceDrivers[blocking.characterName]?.apply(
+        let applicationResult = characterPerformanceDrivers[blocking.characterName]?.apply(
             expression: expressionState,
             mouth: mouthState
         )
         if var status = characterPerformanceStatusesByName[blocking.characterName] {
-            let performanceProfile = characterPerformanceProfilesByName[blocking.characterName]
             status.activeExpressionCue = expressionState.cue
             status.activeVisemeCue = mouthState.viseme.token
-            status.usingExpressionPreset = performanceProfile?.expressionPresets[expressionState.cue] != nil
-            status.usingVisemePreset = performanceProfile?.visemePresets[mouthState.viseme.token] != nil
-                || performanceProfile?.visemePresets[mouthState.cue] != nil
+            status.usingExpressionPreset = applicationResult?.usedExpressionPreset ?? false
+            status.usingVisemePreset = applicationResult?.usedVisemePreset ?? false
+            status.resolvedExpressionPresetCue = applicationResult?.resolvedExpressionPresetCue
+            status.resolvedVisemePresetCue = applicationResult?.resolvedVisemePresetCue
             status.driverMode = characterPerformanceDrivers[blocking.characterName]?.driverMode ?? status.driverMode
             characterPerformanceStatusesByName[blocking.characterName] = status
         }

@@ -193,6 +193,14 @@ struct Animate3DInspectorView: View {
                                         label: "Overlay Use",
                                         value: overlayUsageSummary(for: status)
                                     )
+                                    if let resolvedExpressionPresetCue = status.resolvedExpressionPresetCue,
+                                       resolvedExpressionPresetCue.caseInsensitiveCompare(status.activeExpressionCue) != .orderedSame {
+                                        inspectorRow(label: "Authored Expr", value: resolvedExpressionPresetCue)
+                                    }
+                                    if let resolvedVisemePresetCue = status.resolvedVisemePresetCue,
+                                       resolvedVisemePresetCue.caseInsensitiveCompare(status.activeVisemeCue) != .orderedSame {
+                                        inspectorRow(label: "Authored Viseme", value: resolvedVisemePresetCue)
+                                    }
                                     if let mouthProfileID = status.mouthProfileID, !mouthProfileID.isEmpty {
                                         inspectorRow(label: "Mouth Profile", value: mouthProfileID)
                                     }
