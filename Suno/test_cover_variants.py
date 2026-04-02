@@ -27,7 +27,7 @@ from pathlib import Path
 PROJECT = Path("/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera")
 PREVIEWS = Path("/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/Suno")
 EXPORT_SCRIPT = Path("/Volumes/Storage VIII/Programming/Amira Writer/Scripts/export-headless-wav.sh")
-SCORE_BIN = Path("/Volumes/Storage VIII/Programming/Amira Writer/Packages/NovotroScore/.build/arm64-apple-macosx/release/NovotroScore")
+SCORE_BIN = Path("/Volumes/Storage VIII/Programming/Amira Writer/Packages/Score/.build/arm64-apple-macosx/release/Score")
 LOG = Path("/Volumes/Storage VIII/Programming/Amira Writer/Suno/test-cover-variants-log.jsonl")
 UUID_RE = re.compile(r"[0-9a-fA-F-]{36}")
 VERSION_RE = re.compile(r" v(\d{3})(?:-([A-Za-z]+))?\.wav$", re.I)

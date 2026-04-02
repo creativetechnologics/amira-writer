@@ -3,15 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PACKAGE_ROOT="$REPO_ROOT/Packages/NovotroScore"
+PACKAGE_ROOT="$REPO_ROOT/Packages/Score"
 COOLDOWN_SECONDS="${NOVOTRO_HEADLESS_EXPORT_COOLDOWN_SECONDS:-5}"
-COOLDOWN_STAMP="${TMPDIR:-/tmp}/novotro-headless-export.last-exit"
+COOLDOWN_STAMP="${TMPDIR:-/tmp}/score-headless-export.last-exit"
 ALLOW_BLUETOOTH_OUTPUT="${NOVOTRO_ALLOW_BLUETOOTH_OUTPUT:-0}"
-SCORE_BIN_OVERRIDE="${NOVOTRO_SCORE_BIN:-}"
+SCORE_BIN_OVERRIDE="${AMIRA_SCORE_BIN:-${NOVOTRO_SCORE_BIN:-}}"
 OUTPUT_PATH=""
 
 if [[ ! -f "$PACKAGE_ROOT/Package.swift" ]]; then
-  echo "NovotroScore package not found at: $PACKAGE_ROOT" >&2
+  echo "Score package not found at: $PACKAGE_ROOT" >&2
   exit 1
 fi
 
@@ -27,9 +27,9 @@ Usage:
     [--override-sf2 /path/to/file.sf2]
 
 Notes:
-  - This script runs the repo-local NovotroScore package executable in headless mode.
+  - This script runs the repo-local Score package executable in headless mode.
   - It does NOT require opening Amira Writer.app.
-  - Override the executable with NOVOTRO_SCORE_BIN if you want to use a prebuilt binary.
+  - Override the executable with AMIRA_SCORE_BIN if you want to use a prebuilt binary.
 EOF
   exit 2
 fi
@@ -101,12 +101,17 @@ fi
 
 if [[ -n "$SCORE_BIN_OVERRIDE" ]]; then
   if [[ ! -x "$SCORE_BIN_OVERRIDE" ]]; then
-    echo "NOVOTRO_SCORE_BIN is not executable: $SCORE_BIN_OVERRIDE" >&2
+    echo "AMIRA_SCORE_BIN is not executable: $SCORE_BIN_OVERRIDE" >&2
     exit 5
   fi
   RUNNER=("$SCORE_BIN_OVERRIDE")
 else
-  RUNNER=(swift run --package-path "$PACKAGE_ROOT" -c release NovotroScore)
+  preferred_binary="$PACKAGE_ROOT/.build/arm64-apple-macosx/release/Score"
+  if [[ -x "$preferred_binary" ]]; then
+    RUNNER=("$preferred_binary")
+  else
+    RUNNER=(swift run --package-path "$PACKAGE_ROOT" -c release Score)
+  fi
 fi
 
 "${RUNNER[@]}" --headless-export-wav "$@" &

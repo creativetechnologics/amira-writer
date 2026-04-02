@@ -16,22 +16,22 @@ That does **not** mean the headless export capability is gone.
 
 The code now lives inside the Opera repo here:
 
-- `Packages/NovotroScore/Sources/NovotroScore/NovotroScoreBootstrap.swift`
-- `Packages/NovotroScore/Sources/NovotroScore/ScoreStore.swift`
-- `Packages/NovotroScore/Package.swift`
+- `Packages/Score/Sources/ScoreUI/ScoreBootstrap.swift`
+- `Packages/Score/Sources/ScoreUI/ScoreStore.swift`
+- `Packages/Score/Package.swift`
 
 The headless export entrypoint still exists as:
 
 ```text
-NovotroScore --headless-export-wav ...
+Score --headless-export-wav ...
 ```
 
-The difference is that the executable now needs to be invoked from the vendored `Packages/NovotroScore` package inside `Amira Writer`, not from the retired standalone `Novotro Score.app` workflow.
+The difference is that the executable now needs to be invoked from the vendored `Packages/Score` package inside `Amira Writer`, not from the retired standalone `Novotro Score.app` workflow.
 
 One more important detail:
 
-- The root Opera package builds the `NovotroOpera` shell.
-- The headless export CLI lives in the vendored `Packages/NovotroScore` package.
+- The root Opera package builds the `Opera` shell.
+- The headless export CLI lives in the vendored `Packages/Score` package.
 - So an agent can miss the export path if it only inspects the root `Package.swift`.
 
 ## What The Migration Broke
@@ -57,7 +57,7 @@ This script:
 
 1. Works directly from the unified Opera repo
 2. Does not require opening `Amira Writer.app`
-3. Runs the repo-local `NovotroScore` executable in headless mode
+3. Runs the repo-local `Score` executable in headless mode
 4. Reads the `.owp` directly
 5. Writes a WAV directly
 6. Preserves the Bluetooth/AirPods guard and cooldown guard
@@ -65,7 +65,7 @@ This script:
 ## Canonical Command
 
 ```bash
-/Volumes/Storage\ VIII/Programming/Novotro\ Opera/Scripts/export-headless-wav.sh \
+/Volumes/Storage\ VIII/Programming/Amira\ Writer/Scripts/export-headless-wav.sh \
   --project "/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera" \
   --song-path "Songs/1.02.0 - PROLOGUE - ARRIVAL - WITNESS.ows" \
   --output "/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/Suno/1.02.0 PROLOGUE - ARRIVAL - WITNESS/1.02.0 PROLOGUE - ARRIVAL - WITNESS v001-Upload.wav"
@@ -76,17 +76,17 @@ This is the preferred no-GUI export path moving forward.
 ## What Not To Do
 
 - Do not assume the old standalone `Novotro Score` repo is canonical.
-- Do not assume `NovotroOpera.app` is the headless export binary.
+- Do not assume `Opera.app` is the headless export binary.
 - Do not point agents at `/Volumes/Storage VIII/Programming/Novotro Score/Scripts/export-headless-wav.sh` as the primary path anymore.
 - Do not open the UI just to export a WAV if the goal is a background Suno source render.
 
 ## Why This Still Works Without Opening Opera
 
-The render path is in the vendored `NovotroScore` package, not in the windowed shell.
+The render path is in the vendored `Score` package, not in the windowed shell.
 
 The executable target still exists in:
 
-- `Packages/NovotroScore/Package.swift`
+- `Packages/Score/Package.swift`
 
 The CLI bootstrap still parses:
 
@@ -110,7 +110,7 @@ For BBC / Audio Unit material, `renderChunkToWav(...)` still switches to the liv
 
 That behavior lives in:
 
-- `Packages/NovotroScore/Sources/NovotroScore/ScoreStore.swift`
+- `Packages/Score/Sources/ScoreUI/ScoreStore.swift`
 
 Important consequence:
 
@@ -201,4 +201,4 @@ The move to `Amira Writer` did not remove headless export.
 
 It only changed where the authoritative export path lives.
 
-Use the Opera-local wrapper script, target the vendored `Packages/NovotroScore` executable, and treat older `Novotro Score` script paths as historical rather than canonical.
+Use the Opera-local wrapper script, target the vendored `Packages/Score` executable, and treat older `Novotro Score` script paths as historical rather than canonical.

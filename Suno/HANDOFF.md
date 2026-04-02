@@ -25,7 +25,7 @@ The show is **Amira — A Modern Opera**. Songs are numbered like `1.20.0 GRACE`
 | **Test scripts** | `/Volumes/Storage VIII/Programming/Amira Writer/Suno/` |
 | **Archived historical notes/scripts** | `/Volumes/Storage VIII/Programming/Amira Writer/Suno/archive/` |
 | **Export shell script** | `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/export-headless-wav.sh` |
-| **NovotroScore CLI binary** | `/Volumes/Storage VIII/Programming/Amira Writer/Packages/NovotroScore/.build/arm64-apple-macosx/release/NovotroScore` |
+| **Score CLI binary** | `/Volumes/Storage VIII/Programming/Amira Writer/Packages/Score/.build/arm64-apple-macosx/release/Score` |
 | **MCP server log** | `/private/tmp/suno-mcp-server.log` |
 | **Chromium persistent profile** | `…/suno-mcp/chromium-data/` |
 
@@ -130,7 +130,7 @@ If a large WAV (90+ MB) times out on upload, increase the 120-iteration poll loo
 
 ## 6. The WAV Export Process
 
-Before covers can be created, we export fresh WAVs from Gary's Novotro Score project.
+Before covers can be created, we export fresh WAVs from Gary's Score project.
 
 ### How It Works
 ```bash
@@ -143,7 +143,7 @@ Before covers can be created, we export fresh WAVs from Gary's Novotro Score pro
 Required env vars:
 ```bash
 export NOVOTRO_ALLOW_BLUETOOTH_OUTPUT=1
-export NOVOTRO_SCORE_BIN="/Volumes/Storage VIII/Programming/Amira Writer/Packages/NovotroScore/.build/arm64-apple-macosx/release/NovotroScore"
+export AMIRA_SCORE_BIN="/Volumes/Storage VIII/Programming/Amira Writer/Packages/Score/.build/arm64-apple-macosx/release/Score"
 ```
 
 ### Silent Exports (Critical)

@@ -7,7 +7,7 @@
     <key>CFBundleDisplayName</key>
     <string>Amira Writer</string>
     <key>CFBundleIdentifier</key>
-    <string>com.novotro.amirawriter</string>
+    <string>com.amira.writer</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>
@@ -15,12 +15,12 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>NovotroOpera</string>
+    <string>Opera</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
     <string>26.0</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright 2026 Novotro. All rights reserved.</string>
+    <string>Copyright 2026 Amira Writer. All rights reserved.</string>
 </dict>
 </plist>

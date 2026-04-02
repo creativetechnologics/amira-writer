@@ -7,13 +7,27 @@ set -euo pipefail
 
 PROJECT_ROOT_PREFERRED="$HOME/Documents/Amira - A Modern Opera/Amira"
 PROJECT_ROOT_DEFAULT="$HOME/Documents/Amira - A Modern Opera"
-SUPPORT_ROOT="$HOME/Library/Application Support/Novotro"
+SUPPORT_ROOT_PREFERRED="$HOME/Library/Application Support/Opera"
+SUPPORT_ROOT_LEGACY="$HOME/Library/Application Support/Novotro"
+if [[ -d "$SUPPORT_ROOT_PREFERRED" ]]; then
+  SUPPORT_ROOT="$SUPPORT_ROOT_PREFERRED"
+elif [[ -d "$SUPPORT_ROOT_LEGACY" ]]; then
+  SUPPORT_ROOT="$SUPPORT_ROOT_LEGACY"
+else
+  SUPPORT_ROOT="$SUPPORT_ROOT_PREFERRED"
+fi
 PROJECT_CACHE_ROOT="$SUPPORT_ROOT/Project Databases"
 MIRROR_ROOT="$SUPPORT_ROOT/Project Mirrors"
-KEEP_DAYS="${NOVOTRO_CACHE_KEEP_DAYS:-30}"
-SERVICE_LABEL="com.novotro.project-service"
-SERVICE_BINARY="/Volumes/Storage VIII/Programming/!Applications/novotro-project-service"
-SERVICE_LAUNCH_AGENT="$HOME/Library/LaunchAgents/${SERVICE_LABEL}.plist"
+KEEP_DAYS="${OPERA_CACHE_KEEP_DAYS:-${NOVOTRO_CACHE_KEEP_DAYS:-30}}"
+SERVICE_LABELS=("com.opera.project-service" "com.novotro.project-service")
+SERVICE_BINARIES=(
+  "/Volumes/Storage VIII/Programming/!Applications/project-service"
+  "/Volumes/Storage VIII/Programming/!Applications/novotro-project-service"
+)
+SERVICE_LAUNCH_AGENTS=(
+  "$HOME/Library/LaunchAgents/com.opera.project-service.plist"
+  "$HOME/Library/LaunchAgents/com.novotro.project-service.plist"
+)
 
 usage() {
   cat <<'USAGE'
@@ -28,13 +42,14 @@ Options:
                      otherwise "$HOME/Documents/Amira - A Modern Opera".
   --all-caches       Remove every entry in Project Databases and Project Mirrors.
   --disable-server-launchagent
-                     Stop and remove the Novotro project service launch agent
+                     Stop and remove the project-service launch agent
                      used by old client/server workflows.
   --force            Skip confirmation prompts.
   --help              Show this help text.
 
 Environment:
-  NOVOTRO_CACHE_KEEP_DAYS  Optional integer for stale-cache cleanup (default 30).
+  OPERA_CACHE_KEEP_DAYS    Optional integer for stale-cache cleanup (default 30).
+  NOVOTRO_CACHE_KEEP_DAYS  Legacy alias for OPERA_CACHE_KEEP_DAYS.
 USAGE
 }
 
@@ -94,13 +109,15 @@ clean_project_cache() {
   local cache_key
   cache_key="$(resolve_cache_root "$project_path")"
 
-  local project_db_dir="$PROJECT_CACHE_ROOT/$cache_key"
-  local project_mirror_dir="$MIRROR_ROOT/$cache_key"
+  for support_root in "$SUPPORT_ROOT_PREFERRED" "$SUPPORT_ROOT_LEGACY"; do
+    local project_db_dir="$support_root/Project Databases/$cache_key"
+    local project_mirror_dir="$support_root/Project Mirrors/$cache_key"
 
-  rm -rf "$project_db_dir" "$project_mirror_dir"
-  echo "Removed:"
-  echo "  $project_db_dir"
-  echo "  $project_mirror_dir"
+    rm -rf "$project_db_dir" "$project_mirror_dir"
+    echo "Removed:"
+    echo "  $project_db_dir"
+    echo "  $project_mirror_dir"
+  done
 }
 
 confirm() {
@@ -134,24 +151,48 @@ cleanup_stale_cachedir() {
   done < <(find "$cache_dir" -mindepth 1 -maxdepth 1 -type d -print0)
 }
 
+cleanup_support_root() {
+  local support_root="$1"
+  cleanup_stale_cachedir "$support_root/Project Databases"
+  cleanup_stale_cachedir "$support_root/Project Mirrors"
+}
+
 disable_server_launchagent() {
   local uid
   uid="$(id -u)"
+  local service_label
+  local service_binary
+  local service_launch_agent
 
-  launchctl bootout "gui/${uid}/${SERVICE_LABEL}" >/dev/null 2>&1 || true
-  launchctl bootout "gui/${uid}" "$SERVICE_LAUNCH_AGENT" >/dev/null 2>&1 || true
-  pgrep -f "$SERVICE_BINARY" >/dev/null 2>&1 && pkill -f "$SERVICE_BINARY" || true
+  for service_label in "${SERVICE_LABELS[@]}"; do
+    launchctl bootout "gui/${uid}/${service_label}" >/dev/null 2>&1 || true
+  done
 
-  if [[ -f "$SERVICE_LAUNCH_AGENT" ]]; then
-    rm -f "$SERVICE_LAUNCH_AGENT"
-    echo "Removed launch agent file: $SERVICE_LAUNCH_AGENT"
-  else
-    echo "No launch agent file found at $SERVICE_LAUNCH_AGENT"
-  fi
+  for service_launch_agent in "${SERVICE_LAUNCH_AGENTS[@]}"; do
+    launchctl bootout "gui/${uid}" "$service_launch_agent" >/dev/null 2>&1 || true
+    if [[ -f "$service_launch_agent" ]]; then
+      rm -f "$service_launch_agent"
+      echo "Removed launch agent file: $service_launch_agent"
+    else
+      echo "No launch agent file found at $service_launch_agent"
+    fi
+  done
+
+  for service_binary in "${SERVICE_BINARIES[@]}"; do
+    pgrep -f "$service_binary" >/dev/null 2>&1 && pkill -f "$service_binary" || true
+  done
 }
 
 delete_all_cache_roots() {
-  if [[ ! -d "$PROJECT_CACHE_ROOT" && ! -d "$MIRROR_ROOT" ]]; then
+  local has_any_root=false
+  for support_root in "$SUPPORT_ROOT_PREFERRED" "$SUPPORT_ROOT_LEGACY"; do
+    if [[ -d "$support_root/Project Databases" || -d "$support_root/Project Mirrors" ]]; then
+      has_any_root=true
+      break
+    fi
+  done
+
+  if [[ "$has_any_root" != true ]]; then
     echo "No cache roots found. Nothing to remove."
     return 0
   fi
@@ -161,11 +202,11 @@ delete_all_cache_roots() {
     return 0
   fi
 
-  rm -rf "$PROJECT_CACHE_ROOT" "$MIRROR_ROOT"
-  echo "Removed complete cache roots:"
-  echo "  $PROJECT_CACHE_ROOT"
-  echo "  $MIRROR_ROOT"
-  mkdir -p "$PROJECT_CACHE_ROOT" "$MIRROR_ROOT"
+  for support_root in "$SUPPORT_ROOT_PREFERRED" "$SUPPORT_ROOT_LEGACY"; do
+    rm -rf "$support_root/Project Databases" "$support_root/Project Mirrors"
+    echo "Removed complete cache roots under: $support_root"
+    mkdir -p "$support_root/Project Databases" "$support_root/Project Mirrors"
+  done
 }
 
 main() {
@@ -213,7 +254,11 @@ main() {
     esac
   done
 
-  mkdir -p "$PROJECT_CACHE_ROOT" "$MIRROR_ROOT"
+  mkdir -p \
+    "$SUPPORT_ROOT_PREFERRED/Project Databases" \
+    "$SUPPORT_ROOT_PREFERRED/Project Mirrors" \
+    "$SUPPORT_ROOT_LEGACY/Project Databases" \
+    "$SUPPORT_ROOT_LEGACY/Project Mirrors"
 
   if [[ "$all" == true ]]; then
     delete_all_cache_roots
@@ -231,8 +276,8 @@ main() {
     fi
 
     clean_project_cache "$target_project"
-    cleanup_stale_cachedir "$PROJECT_CACHE_ROOT"
-    cleanup_stale_cachedir "$MIRROR_ROOT"
+  cleanup_support_root "$SUPPORT_ROOT_PREFERRED"
+  cleanup_support_root "$SUPPORT_ROOT_LEGACY"
   fi
 
   if [[ "$disable_service" == true ]]; then

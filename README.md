@@ -2,17 +2,21 @@
 
 This folder is the consolidated workspace for the unified `Amira Writer` app.
 
+Canonical product/module names are `Opera`, `WriteUI`, `MixUI`, `Score`, `ScoreUI`, `Animate`, `AnimateUI`, `ProjectKit`, and `ProjectService`. The package container directories and live source folders now use canonical names.
+
 ## Layout
 
-- `Sources/NovotroOpera`
+- `Sources/Opera`
   - unified app shell and top-level mode switching
-- `Sources/NovotroWrite`
+- `Sources/WriteUI`
   - Write workspace used inside Opera
-- `Packages/NovotroProjectKit`
+- `Sources/MixUI`
+  - Mix workspace used inside Opera
+- `Packages/ProjectKit/Sources/ProjectKit`
   - shared persistence, project persistence APIs, progress tracking, and Opera chrome
-- `Packages/NovotroScore`
+- `Packages/Score/Sources/ScoreUI`
   - Score workspace used inside Opera
-- `Packages/NovotroAnimate`
+- `Packages/Animate/Sources/AnimateUI`
   - Animate workspace used inside Opera
 - `history`
   - migration notes, handoff docs, known status
@@ -21,25 +25,25 @@ This folder is the consolidated workspace for the unified `Amira Writer` app.
 
 ```bash
 # Fast local loop (recommended during development)
-rtk /Volumes/Storage\ VIII/Programming/Novotro\ Opera/Scripts/build-opera-dev.sh
-rtk /Volumes/Storage\ VIII/Programming/Novotro\ Opera/Scripts/build-opera-dev.sh --run
+rtk /Volumes/Storage\ VIII/Programming/Amira\ Writer/Scripts/build-opera-dev.sh
+rtk /Volumes/Storage\ VIII/Programming/Amira\ Writer/Scripts/build-opera-dev.sh --run
 
 # Release-style build path
-rtk /Volumes/Storage\ VIII/Programming/Novotro\ Opera/Scripts/build-app.sh --debug
+rtk /Volumes/Storage\ VIII/Programming/Amira\ Writer/Scripts/build-app.sh --debug
 ```
 
 For release-quality validation before shipping:
 
 ```bash
-rtk swift build -c release
+rtk swift build -c release --product Opera
 rtk swift test -c release
-rtk /Volumes/Storage\ VIII/Programming/Novotro\ Opera/Scripts/build-app.sh
+rtk /Volumes/Storage\ VIII/Programming/Amira\ Writer/Scripts/build-app.sh
 ```
 
 ## Deploy
 
 ```bash
-rtk /Volumes/Storage\ VIII/Programming/Novotro\ Opera/Scripts/build-app.sh
+rtk /Volumes/Storage\ VIII/Programming/Amira\ Writer/Scripts/build-app.sh
 ```
 
 `Scripts/build-app.sh` now installs locally and deploys to both `gary@Garys-Laptop.local:~/Applications/` and `gary@Garys-MacBook.local:~/Applications/` by default. Use `--local-only` to skip remote deployment.
@@ -49,6 +53,7 @@ rtk /Volumes/Storage\ VIII/Programming/Novotro\ Opera/Scripts/build-app.sh
 - Open projects from local project folders (with `Metadata/project.json` or `project.json`) for full write/score/animate loading.
 - The app is folder-first: choose the project directory directly from disk and it loads entirely local data.
 - **The Novotro Project Server is abandoned and disabled.** Do not attempt to use it.
+- Headless score export should use `Score` or `Scripts/export-headless-wav.sh`. Project service work should use `ProjectService` / `project-service`.
 - Default project location is currently `~/Documents/Amira - A Modern Opera/Amira` (preferred) and
   `~/Documents/Amira - A Modern Opera` (fallback).
 
@@ -74,4 +79,4 @@ rtk Scripts/cleanup-opera-cache.sh --project "$HOME/Documents/Amira - A Modern O
 This workspace is intended to be self-contained for future agents. The legacy sibling repos remain on disk as historical source locations, but new Opera work should happen here.
 
 ### Recent Maintenance
-- **2026-03-21**: UI Simplification & Cleanup pass. Consolidated duplicate UI components into `NovotroProjectKit` and optimized shell performance. See [history/HANDOFF-2026-03-21-UI-SIMPLIFICATION.md](history/HANDOFF-2026-03-21-UI-SIMPLIFICATION.md) for details.
+- **2026-03-21**: UI Simplification & Cleanup pass. Consolidated duplicate UI components into `ProjectKit` and optimized shell performance. See [history/HANDOFF-2026-03-21-UI-SIMPLIFICATION.md](history/HANDOFF-2026-03-21-UI-SIMPLIFICATION.md) for details.

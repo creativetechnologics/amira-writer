@@ -31,7 +31,7 @@ If anything conflicts, `HANDOFF.md` wins.
 The three components are:
 
 ```text
-NovotroScore headless export -> Suno MCP server -> Suno.com generation/download
+Score headless export -> Suno MCP server -> Suno.com generation/download
 ```
 
 ---
@@ -84,7 +84,7 @@ The main tools used by the scripts are:
 ## Export Behavior To Remember
 
 - Use `Scripts/export-headless-wav.sh`
-- Export path uses the vendored `Packages/NovotroScore` binary inside the Opera repo
+- Export path uses the vendored `Packages/Score` binary inside the Opera repo
 - SF2 and Audio Unit export paths are both silent as of 2026-03-25
 - `133`, `134`, `139`, and other `128+` signal exits are retryable
 - `10` means the WAV may be silent but the export completed; log it and decide whether to proceed

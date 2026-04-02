@@ -23,7 +23,7 @@ from typing import Any
 PROJECT = Path("/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera")
 PREVIEWS = Path("/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/Suno")
 SCRIPT = Path("/Volumes/Storage VIII/Programming/Amira Writer/Scripts/export-headless-wav.sh")
-SCORE_BIN = Path("/Volumes/Storage VIII/Programming/Amira Writer/Packages/NovotroScore/.build/arm64-apple-macosx/release/NovotroScore")
+SCORE_BIN = Path("/Volumes/Storage VIII/Programming/Amira Writer/Packages/Score/.build/arm64-apple-macosx/release/Score")
 LEDGER = Path("/Volumes/Storage VIII/Users/gary/Library/Application Support/Novotro Score/suno-mcp/suno-song-ledger.sqlite3")
 LOG = Path("/Volumes/Storage VIII/Programming/Amira Writer/Suno/amira-midi-batch-progress-2026-03-24.jsonl")
 MCP_DIR = Path("/Volumes/Storage VIII/Users/gary/Library/Application Support/Novotro Score/suno-mcp")

@@ -2,57 +2,71 @@
 import PackageDescription
 
 let package = Package(
-    name: "NovotroOpera",
+    name: "Opera",
     platforms: [
         .macOS(.v26)
     ],
     products: [
         .library(
-            name: "NovotroWriteUI",
-            targets: ["NovotroWriteUI"]
+            name: "WriteUI",
+            targets: ["WriteUI"]
         ),
         .library(
-            name: "NovotroMixUI",
-            targets: ["NovotroMixUI"]
+            name: "MixUI",
+            targets: ["MixUI"]
+        ),
+        .executable(
+            name: "Opera",
+            targets: ["Opera"]
         )
     ],
     dependencies: [
-        .package(path: "./Packages/NovotroProjectKit"),
-        .package(path: "./Packages/NovotroScore"),
-        .package(path: "./Packages/NovotroAnimate")
+        .package(path: "./Packages/ProjectKit"),
+        .package(path: "./Packages/Score"),
+        .package(path: "./Packages/Animate")
     ],
     targets: [
         .target(
-            name: "NovotroWriteUI",
-            dependencies: ["NovotroProjectKit"],
-            path: "Sources/NovotroWrite",
-            exclude: ["NovotroWriteApp.swift"]
+            name: "WriteUI",
+            dependencies: [
+                .product(name: "ProjectKit", package: "ProjectKit")
+            ],
+            path: "Sources/WriteUI",
+            exclude: ["WriteApp.swift"]
         ),
         .target(
-            name: "NovotroMixUI",
-            dependencies: ["NovotroProjectKit"],
-            path: "Sources/NovotroMix"
+            name: "MixUI",
+            dependencies: [
+                .product(name: "ProjectKit", package: "ProjectKit")
+            ],
+            path: "Sources/MixUI"
         ),
         .executableTarget(
-            name: "NovotroOpera",
+            name: "Opera",
             dependencies: [
-                "NovotroProjectKit",
-                "NovotroWriteUI",
-                "NovotroMixUI",
-                .product(name: "NovotroScoreUI", package: "NovotroScore"),
-                .product(name: "NovotroAnimateUI", package: "NovotroAnimate")
+                .product(name: "ProjectKit", package: "ProjectKit"),
+                "WriteUI",
+                "MixUI",
+                .product(name: "ScoreUI", package: "Score"),
+                .product(name: "AnimateUI", package: "Animate")
             ],
-            path: "Sources/NovotroOpera"
+            path: "Sources/Opera"
         ),
         .testTarget(
-            name: "NovotroWriteTests",
-            dependencies: ["NovotroWriteUI", "NovotroProjectKit"],
-            path: "Tests/NovotroWriteTests"
+            name: "WriteTests",
+            dependencies: [
+                "WriteUI",
+                .product(name: "ProjectKit", package: "ProjectKit")
+            ],
+            path: "Tests/WriteTests"
         ),
         .testTarget(
-            name: "NovotroMixTests",
-            dependencies: ["NovotroMixUI", "NovotroProjectKit"],
-            path: "Tests/NovotroMixTests"
+            name: "MixTests",
+            dependencies: [
+                "MixUI",
+                .product(name: "ProjectKit", package: "ProjectKit")
+            ],
+            path: "Tests/MixTests"
         )
     ]
 )

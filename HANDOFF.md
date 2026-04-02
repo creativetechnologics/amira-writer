@@ -8,11 +8,11 @@
 ## What Was Done
 
 A full code audit was performed across all four packages:
-- `Sources/NovotroWrite`
-- `Sources/NovotroOpera`
-- `Packages/NovotroScore`
-- `Packages/NovotroAnimate`
-- `Packages/NovotroProjectKit`
+- `Sources/WriteUI`
+- `Sources/Opera`
+- `Packages/Score`
+- `Packages/Animate`
+- `Packages/ProjectKit`
 
 The following bugs were found and fixed.
 
@@ -23,9 +23,9 @@ The following bugs were found and fixed.
 ### Fix 1 — Database sync polling silently dies on error
 **Severity:** Critical
 **Files changed:**
-- `Sources/NovotroWrite/ScriptStore.swift` — `pollDatabaseChanges()` and `applyDatabaseChange(_:)` (5 Task blocks)
-- `Packages/NovotroScore/Sources/NovotroScore/ScoreStore.swift` — `pollDatabaseChanges()` and `applyDatabaseChange(_:)` (2 Task blocks)
-- `Packages/NovotroAnimate/Sources/NovotroAnimate/AnimateStore.swift` — `pollDatabaseChanges()` and `applyDatabaseChange(_:)` (7 Task blocks)
+- `Sources/WriteUI/ScriptStore.swift` — `pollDatabaseChanges()` and `applyDatabaseChange(_:)` (5 Task blocks)
+- `Packages/Score/Sources/ScoreUI/ScoreStore.swift` — `pollDatabaseChanges()` and `applyDatabaseChange(_:)` (2 Task blocks)
+- `Packages/Animate/Sources/AnimateUI/AnimateStore.swift` — `pollDatabaseChanges()` and `applyDatabaseChange(_:)` (7 Task blocks)
 
 **Problem:** Every `Task { try await ... }` block in the database polling and change-application code had bare `try` with no error handling. Any thrown error (DB locked, file missing, connection dropped) would silently kill the task — permanently stopping sync for that session with no log entry and no recovery.
 
@@ -35,7 +35,7 @@ The following bugs were found and fixed.
 
 ### Fix 2 — `.novtro` directory typo
 **Severity:** Critical
-**File:** `Packages/NovotroProjectKit/Sources/NovotroProjectKit/NovotroProjectDatabase.swift` line 14
+**File:** `Packages/ProjectKit/Sources/ProjectKit/NovotroProjectDatabase.swift` line 14
 
 **Problem:** The default database directory was `.novtro` (missing the second `o`). If callers relied on the default `databaseDirectoryURL`, the SQLite index would be created in the wrong folder.
 
@@ -45,7 +45,7 @@ The following bugs were found and fixed.
 
 ### Fix 3 — AgentProcessManager: readability handler nulling races with main thread
 **Severity:** High
-**File:** `Sources/NovotroWrite/Services/AgentProcessManager.swift`
+**File:** `Sources/WriteUI/Services/AgentProcessManager.swift`
 
 **Problem:** `process.terminationHandler` fired on a background thread and set `stdoutHandle.readabilityHandler = nil` and `stderrHandle.readabilityHandler = nil` before dispatching to the main queue. This raced with the GCD readability dispatch on the main thread.
 
@@ -55,7 +55,7 @@ The following bugs were found and fixed.
 
 ### Fix 4 — ConsoleProjectSync: redundant FD tracking array
 **Severity:** Low (dead code / clarity)
-**File:** `Sources/NovotroWrite/Services/ConsoleProjectSync.swift`
+**File:** `Sources/WriteUI/Services/ConsoleProjectSync.swift`
 
 **Problem:** `watcherFileDescriptors: [Int32]` was populated in `startWatching()` and then immediately cleared in `stopWatching()` — before the DispatchSource cancel handlers had a chance to fire and close the FDs. The array was redundant because each cancel handler already captures and closes its own `fd` by value. The array served no purpose.
 
@@ -65,7 +65,7 @@ The following bugs were found and fixed.
 
 ### Fix 5 — Gemini API key exposed in URL query parameter
 **Severity:** High (security)
-**File:** `Packages/NovotroAnimate/Sources/NovotroAnimate/Services/GeminiImageService.swift`
+**File:** `Packages/Animate/Sources/AnimateUI/Services/GeminiImageService.swift`
 
 **Problem:** The Gemini API key was appended to the URL as `?key=<apiKey>`. This exposes the key in URLSession debug logs, crash reports, and proxy traffic. The URL construction also used a force-unwrap `URL(...)!`.
 
@@ -78,7 +78,7 @@ The following bugs were found and fixed.
 
 ### Fix 6 — MFCCSimilarity crashes on zero-length audio
 **Severity:** High
-**File:** `Packages/NovotroScore/Sources/NovotroScore/Services/MFCCSimilarity.swift`
+**File:** `Packages/Score/Sources/ScoreUI/Services/MFCCSimilarity.swift`
 
 **Problem:** `fftMagnitude(_:)` used `baseAddress!` on `UnsafeMutableBufferPointer` initialized from arrays of length `n/2`. If `n == 0`, those arrays are empty and `baseAddress` is `nil`, causing a crash.
 
@@ -88,7 +88,7 @@ The following bugs were found and fixed.
 
 ### Fix 7 — NovotroProjectAsyncTimeout: zero-second timeout fires immediately
 **Severity:** High
-**File:** `Packages/NovotroProjectKit/Sources/NovotroProjectKit/NovotroProjectAsyncTimeout.swift`
+**File:** `Packages/ProjectKit/Sources/ProjectKit/NovotroProjectAsyncTimeout.swift`
 
 **Problem:** When `seconds == 0`, `timeoutNanoseconds` was `0`, so `Task.sleep` was skipped and the timeout task threw `operationTimedOut` before the operation task could even execute. Any call with `seconds: 0` would always fail.
 
@@ -98,7 +98,7 @@ The following bugs were found and fixed.
 
 ### Fix 8 — OperaChromeDivider `opacity` parameter never applied
 **Severity:** Medium
-**File:** `Packages/NovotroProjectKit/Sources/NovotroProjectKit/OperaChrome.swift`
+**File:** `Packages/ProjectKit/Sources/ProjectKit/OperaChrome.swift`
 
 **Problem:** `OperaChromeDivider` accepted an `opacity: Double` parameter and stored it, but the `body` property never applied `.opacity(opacity)` to either divider variant. Passing any opacity value had no effect.
 
@@ -108,7 +108,7 @@ The following bugs were found and fixed.
 
 ### Fix 9 — `toTitleCase()` mangles Roman numerals and acronyms
 **Severity:** Medium
-**File:** `Sources/NovotroWrite/ScriptStore.swift`
+**File:** `Sources/WriteUI/ScriptStore.swift`
 
 **Problem:** The `toTitleCase()` extension always lowercased everything after the first character. `"Act II"` → `"Act Ii"`, `"Part III"` → `"Part Iii"`.
 

@@ -11,20 +11,35 @@
 ## Canonical Workspace
 
 - Treat `/Volumes/Storage VIII/Programming/Amira Writer` as the canonical home for the unified Opera app.
-- Do not edit Opera features out of the legacy `Novotro Write`, `Novotro Score`, `Novotro Animate`, or `NovotroProjectKit` folders unless a migration task explicitly requires it.
-- The unified app shell lives at `Sources/NovotroOpera`.
-- The Write workspace lives at `Sources/NovotroWrite`.
+- Do not edit Opera features out of the legacy `Novotro Write`, `Novotro Score`, or `Novotro Animate` folders unless a migration task explicitly requires it.
+- The unified app shell lives at `Sources/Opera`.
+- The Write workspace lives at `Sources/WriteUI`.
 - Vendored local packages live at:
-  - `Packages/NovotroProjectKit`
-  - `Packages/NovotroScore`
-  - `Packages/NovotroAnimate`
+  - `Packages/ProjectKit`
+  - `Packages/Score`
+  - `Packages/Animate`
+
+## Canonical Names
+
+- Use these names in builds, scripts, imports, and LLM instructions:
+  - `Opera`
+  - `WriteUI`
+  - `MixUI`
+  - `Score`
+  - `ScoreUI`
+  - `Animate`
+  - `AnimateUI`
+- `ProjectKit`
+- `ProjectService` / `project-service`
+- Do not direct agents toward `NovotroOpera`, `NovotroScore`, `NovotroAnimate`, `NovotroWriteUI`, `NovotroMixUI`, `NovotroScoreUI`, `NovotroAnimateUI`, or `novotro-project-service` unless you are deliberately working on compatibility internals.
+- The package container directories now use canonical names such as `Packages/ProjectKit`, `Packages/Score`, and `Packages/Animate`, and the live source folders use canonical names such as `Sources/Opera`, `Sources/WriteUI`, `Packages/Score/Sources/ScoreUI`, `Packages/Animate/Sources/AnimateUI`, and `Packages/ProjectKit/Sources/ProjectKit`.
 
 ## Build And Deploy
 
 - Fast local loop (preferred for day-to-day iteration):
   - `rtk /Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-opera-dev.sh`
 - Local build:
-  - `rtk swift build -c release`
+  - `rtk swift build -c release --product Opera`
 - Local tests:
   - `rtk swift test -c release`
 - Bundle build:
