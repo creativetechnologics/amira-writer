@@ -269,6 +269,7 @@ extension ScenePreviewRenderer {
                 motionProvenance: nil,
                 resolvedHoldMultiplier: blocking.holdStyle.holdFrames,
                 holdProvenance: "blocking:x\(blocking.holdStyle.holdFrames)",
+                motionHintSummary: nil,
                 activeExpressionCue: performanceProfile == nil ? "fallback:neutral" : "neutral",
                 activeVisemeCue: performanceProfile == nil ? "fallback:rest" : "rest",
                 isVisible: false
@@ -637,6 +638,7 @@ extension ScenePreviewRenderer {
             status.motionProvenance = resolvedMotion?.provenance
             status.resolvedHoldMultiplier = holdResolution.multiplier
             status.holdProvenance = holdResolution.provenance
+            status.motionHintSummary = motionHintSummary(for: resolvedMotion?.descriptor)
             status.activeExpressionCue = expressionState.cue
             status.activeVisemeCue = mouthState.cue
             status.usingExpressionPreset = applicationResult?.usedExpressionPreset ?? false
@@ -790,6 +792,24 @@ extension ScenePreviewRenderer {
             multiplier: max(1, adjustedMultiplier),
             provenance: "motion:\(resolvedMotion.provenance):x\(max(1, adjustedMultiplier))"
         )
+    }
+
+    private func motionHintSummary(for descriptor: Animate3DMotionSetDescriptor?) -> String? {
+        guard let descriptor else { return nil }
+        var parts: [String] = []
+        if let preferredHoldMultiplier = descriptor.preferredHoldMultiplier {
+            parts.append("hold x\(max(1, preferredHoldMultiplier))")
+        }
+        if let bodyPitchOffset = descriptor.bodyPitchOffset {
+            parts.append(String(format: "pitch %.2f", bodyPitchOffset))
+        }
+        if let bodyRollOffset = descriptor.bodyRollOffset {
+            parts.append(String(format: "roll %.2f", bodyRollOffset))
+        }
+        if let bodyVerticalOffset = descriptor.bodyVerticalOffset {
+            parts.append(String(format: "y %.2f", bodyVerticalOffset))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 
     // MARK: Props / Objects

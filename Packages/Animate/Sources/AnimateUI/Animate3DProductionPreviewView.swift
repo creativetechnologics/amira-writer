@@ -313,6 +313,9 @@ struct Animate3DProductionPreviewView: View {
             holdLabel += " {\(provenance)}"
         }
         parts.append(holdLabel)
+        if let motionHintSummary = status.motionHintSummary, !motionHintSummary.isEmpty {
+            parts.append("hints \(motionHintSummary)")
+        }
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 }

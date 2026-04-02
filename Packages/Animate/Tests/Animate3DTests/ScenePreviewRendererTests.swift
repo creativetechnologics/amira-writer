@@ -390,6 +390,7 @@ final class ScenePreviewRendererTests: XCTestCase {
         XCTAssertEqual(status.resolvedMotionID, "motion-custom-hold")
         XCTAssertEqual(status.resolvedHoldMultiplier, 1)
         XCTAssertEqual(status.holdProvenance, "descriptor:hold:x1")
+        XCTAssertEqual(status.motionHintSummary, "hold x1 • pitch -0.12 • roll 0.08 • y 0.20")
 
         let characterNode = try XCTUnwrap(
             renderer.sceneKitScene.rootNode.childNode(withName: "stage", recursively: false)?

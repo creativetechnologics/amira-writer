@@ -254,6 +254,7 @@ final class Animate3DProductionCoordinatorTests: XCTestCase {
         XCTAssertEqual(runtimeStatus.resolvedMotionID, "motion-focus-close")
         XCTAssertEqual(runtimeStatus.resolvedHoldMultiplier, 1)
         XCTAssertEqual(runtimeStatus.holdProvenance, "descriptor:hold:x1")
+        XCTAssertEqual(runtimeStatus.motionHintSummary, "hold x1")
     }
 
     private func makeProjectURL() throws -> URL {

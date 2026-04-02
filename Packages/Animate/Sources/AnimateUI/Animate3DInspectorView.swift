@@ -204,6 +204,9 @@ struct Animate3DInspectorView: View {
                                     if let provenance = status.holdProvenance, !provenance.isEmpty {
                                         inspectorRow(label: "Hold Match", value: provenance)
                                     }
+                                    if let motionHintSummary = status.motionHintSummary, !motionHintSummary.isEmpty {
+                                        inspectorRow(label: "Motion Hints", value: motionHintSummary)
+                                    }
                                     if let modelFileName = status.modelFileName {
                                         inspectorRow(label: "Model", value: modelFileName)
                                     }
