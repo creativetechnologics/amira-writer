@@ -93,6 +93,20 @@ enum Animate3DGenerationQueueActionSupport {
         return drafts.count
     }
 
+    static func isQueued(item: Animate3DGenerationQueueItem, store: AnimateStore) -> Bool {
+        let owner = PreflightOwner(item: item, store: store)
+        return store.batchQueue.contains { queuedItem in
+            guard queuedItem.draftTitle == item.title else { return false }
+            if let characterID = owner.characterID {
+                return queuedItem.characterID == characterID
+            }
+            if let outputRootRelativePath = owner.outputRootRelativePath {
+                return queuedItem.outputRootRelativePath == outputRootRelativePath
+            }
+            return queuedItem.characterName == owner.displayName
+        }
+    }
+
     static func reveal(item: Animate3DGenerationQueueItem, projectURL: URL) {
         let trimmed = item.targetRelativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard !trimmed.isEmpty else { return }

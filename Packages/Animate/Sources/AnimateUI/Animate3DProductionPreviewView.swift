@@ -324,6 +324,9 @@ struct Animate3DProductionPreviewView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 8) {
                                 badge(item.kind.title, tint: item.isBatchDraftable ? .blue : .gray)
+                                if itemIsQueued(item) {
+                                    badge("Queued", tint: .green)
+                                }
                                 Text(item.title)
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundStyle(OperaChromeTheme.textPrimary)
@@ -352,6 +355,7 @@ struct Animate3DProductionPreviewView: View {
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .controlSize(.small)
+                                    .disabled(itemIsQueued(item))
                                 }
 
                                 if let manifestContext = manifestEditorContext(for: item) {
@@ -450,6 +454,10 @@ struct Animate3DProductionPreviewView: View {
 
     private var projectURL: URL? {
         store.workingOWPURL ?? store.owpURL
+    }
+
+    private func itemIsQueued(_ item: Animate3DGenerationQueueItem) -> Bool {
+        Animate3DGenerationQueueActionSupport.isQueued(item: item, store: store)
     }
 
     private func queueGenerationItem(_ item: Animate3DGenerationQueueItem) {

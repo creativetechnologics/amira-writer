@@ -319,6 +319,9 @@ struct Animate3DInspectorView: View {
                                             text: item.isBatchDraftable ? "DRAFT" : "MANUAL",
                                             tint: item.isBatchDraftable ? .blue : .gray
                                         )
+                                        if itemIsQueued(item) {
+                                            statusPill(text: "QUEUED", tint: .green)
+                                        }
                                         statusPill(text: item.kind.title.uppercased(), tint: .orange)
                                     }
                                     Text(item.summary)
@@ -343,6 +346,7 @@ struct Animate3DInspectorView: View {
                                             }
                                             .buttonStyle(.borderedProminent)
                                             .controlSize(.small)
+                                            .disabled(itemIsQueued(item))
                                         }
                                         if let manifestContext = manifestEditorContext(for: item) {
                                             Button("Edit Registry") {
@@ -864,6 +868,10 @@ struct Animate3DInspectorView: View {
         case .error:
             return .red
         }
+    }
+
+    private func itemIsQueued(_ item: Animate3DGenerationQueueItem) -> Bool {
+        Animate3DGenerationQueueActionSupport.isQueued(item: item, store: store)
     }
 
     private func queueGenerationItem(

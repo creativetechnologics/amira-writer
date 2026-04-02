@@ -52,19 +52,17 @@ final class Animate3DGenerationQueueActionSupportTests: XCTestCase {
         ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
 
         let store = AnimateStore()
-        let owner = Animate3DGenerationQueueActionSupport.PreflightOwner(
-            item: Animate3DGenerationQueueItem(
-                kind: .worldPreviewImage,
-                title: "Moon Valley preview",
-                detail: "Generate a world preview.",
-                destinationPath: "Animate/3d/world-catalog/moon-valley.png",
-                providerHint: "Nano Banana 2",
-                prompt: "Generate Moon Valley.",
-                characterSlug: nil,
-                characterName: "Environment"
-            ),
-            store: store
+        let worldItem = Animate3DGenerationQueueItem(
+            kind: .worldPreviewImage,
+            title: "Moon Valley preview",
+            detail: "Generate a world preview.",
+            destinationPath: "Animate/3d/world-catalog/moon-valley.png",
+            providerHint: "Nano Banana 2",
+            prompt: "Generate Moon Valley.",
+            characterSlug: nil,
+            characterName: "Environment"
         )
+        let owner = Animate3DGenerationQueueActionSupport.PreflightOwner(item: worldItem, store: store)
         let draft = GeminiGenerationDraft(
             title: "Moon Valley preview",
             destinationDescription: "Animate/3d/world-catalog/",
@@ -80,6 +78,7 @@ final class Animate3DGenerationQueueActionSupportTests: XCTestCase {
         XCTAssertEqual(queued, 1)
         XCTAssertEqual(store.batchQueue.count, 1)
         XCTAssertEqual(store.batchQueue.first?.outputRootRelativePath, "3d/world-catalog/batch-queue-batches")
+        XCTAssertTrue(Animate3DGenerationQueueActionSupport.isQueued(item: worldItem, store: store))
 
         let manifestItem = Animate3DGenerationQueueItem(
             kind: .worldChunk,
