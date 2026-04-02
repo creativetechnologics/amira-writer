@@ -184,6 +184,16 @@ final class Animate3DTestHarnessState {
         storeGenerationDraftOverride(override, for: key)
     }
 
+    func clearGenerationDraftOverride(for key: String) {
+        generationDraftOverridesByStableKey.removeValue(forKey: key)
+    }
+
+    func clearGenerationDraftOverrides(for keys: some Sequence<String>) {
+        for key in keys {
+            generationDraftOverridesByStableKey.removeValue(forKey: key)
+        }
+    }
+
     private func storeGenerationDraftOverride(_ override: Animate3DGenerationDraftOverride, for key: String) {
         if override.hasVisibleChanges {
             generationDraftOverridesByStableKey[key] = override

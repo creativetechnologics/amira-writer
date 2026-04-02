@@ -356,6 +356,13 @@ struct Animate3DProductionPreviewView: View {
                     }
                     .buttonStyle(.bordered)
                 }
+
+                if overriddenVisibleCount > 0 {
+                    Button("Clear Visible Overrides") {
+                        harnessState.clearGenerationDraftOverrides(for: visiblePriorityQueueItems.map(\.stableKey))
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
 
             if !status.warnings.isEmpty {
@@ -483,6 +490,13 @@ struct Animate3DProductionPreviewView: View {
                                         .lineLimit(2...4)
                                     Toggle("Lock override", isOn: lockedOverrideBinding(for: item))
                                         .toggleStyle(.checkbox)
+                                    if generationDraftOverride(for: item).hasVisibleChanges {
+                                        Button("Clear Override") {
+                                            harnessState.clearGenerationDraftOverride(for: item.stableKey)
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                    }
                                 }
                             }
                         }

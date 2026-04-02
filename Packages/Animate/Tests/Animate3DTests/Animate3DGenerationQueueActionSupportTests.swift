@@ -316,6 +316,25 @@ final class Animate3DGenerationQueueActionSupportTests: XCTestCase {
         XCTAssertEqual(updated.overrideTelemetry?.badgeLabels, ["Provider", "Appendix", "Locked"])
     }
 
+    func testHarnessStateCanClearGenerationDraftOverrides() {
+        let state = Animate3DTestHarnessState()
+        let firstKey = "body_model|luke"
+        let secondKey = "face_rig|luke"
+
+        state.setProviderHintOverride("Rodin", for: firstKey)
+        state.setPromptAppendix("Sharper silhouette.", for: secondKey)
+
+        XCTAssertTrue(state.generationDraftOverride(for: firstKey).hasVisibleChanges)
+        XCTAssertTrue(state.generationDraftOverride(for: secondKey).hasVisibleChanges)
+
+        state.clearGenerationDraftOverride(for: firstKey)
+        XCTAssertFalse(state.generationDraftOverride(for: firstKey).hasVisibleChanges)
+        XCTAssertTrue(state.generationDraftOverride(for: secondKey).hasVisibleChanges)
+
+        state.clearGenerationDraftOverrides(for: [secondKey])
+        XCTAssertFalse(state.generationDraftOverride(for: secondKey).hasVisibleChanges)
+    }
+
     private func makeProjectURL() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Animate3DQueueActionSupportTests-\(UUID().uuidString)")

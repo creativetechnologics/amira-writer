@@ -364,6 +364,13 @@ struct Animate3DInspectorView: View {
                                         }
                                         .buttonStyle(.bordered)
                                         .controlSize(.small)
+                                        if generationDraftOverride(for: item).hasVisibleChanges {
+                                            Button("Clear Override") {
+                                                harnessState.clearGenerationDraftOverride(for: item.stableKey)
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.small)
+                                        }
                                         if item.isBatchDraftable {
                                             Button("Preflight") {
                                                 openGenerationPreflight(item, status: productionStatus)
