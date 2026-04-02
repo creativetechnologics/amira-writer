@@ -20,6 +20,20 @@ final class ScenePreviewRendererTests: XCTestCase {
         )
 
         try writeProfileFragments(at: animateURL, slug: character.assetFolderSlug)
+        try ProjectDatabaseBridge.saveAnimate3DMotionRegistryToDisk(
+            Animate3DMotionRegistry(
+                motions: [
+                    Animate3DMotionSetDescriptor(
+                        motionID: "motion-determined",
+                        title: "Determined Acting",
+                        relativePath: "Animate/characters/shared/motions/determined.json",
+                        tags: ["determined", "resolve"],
+                        notes: ""
+                    )
+                ]
+            ),
+            projectURL: projectURL
+        )
 
         let store = AnimateStore()
         store.owpURL = projectURL
@@ -115,6 +129,9 @@ final class ScenePreviewRendererTests: XCTestCase {
         XCTAssertEqual(status.activeVisemeCue, "rest")
         XCTAssertEqual(status.resolvedVisemePresetCue, "rest")
         XCTAssertEqual(status.visemeCueProvenance, "baseViseme:rest")
+        XCTAssertEqual(status.sourceActionCue, "determined")
+        XCTAssertEqual(status.resolvedMotionTitle, "Determined Acting")
+        XCTAssertEqual(status.motionProvenance, "tag:determined")
         XCTAssertTrue(status.usingVisemePreset)
         XCTAssertTrue(status.profileSourcePaths.contains { $0.contains("face-rigs/face-performance.json") })
         XCTAssertTrue(status.profileSourcePaths.contains { $0.contains("mouth-profiles/performance-profile.json") })

@@ -251,6 +251,11 @@ extension ScenePreviewRenderer {
                 expressionBehaviorCue: nil,
                 expressionCueProvenance: nil,
                 visemeCueProvenance: nil,
+                sourceActionCue: nil,
+                sourcePoseCue: nil,
+                resolvedMotionID: nil,
+                resolvedMotionTitle: nil,
+                motionProvenance: nil,
                 activeExpressionCue: performanceProfile == nil ? "fallback:neutral" : "neutral",
                 activeVisemeCue: performanceProfile == nil ? "fallback:rest" : "rest",
                 isVisible: false
@@ -549,12 +554,32 @@ extension ScenePreviewRenderer {
             expression: expressionState,
             mouth: mouthState
         )
+        let activeActionCue = blocking.actingBeats
+            .first(where: { $0.startFrame <= frame && frame <= $0.endFrame })?
+            .action
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let activePoseCue = blocking.keyPositions
+            .sorted { $0.frame < $1.frame }
+            .last(where: { $0.frame <= frame })?
+            .pose
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let resolvedMotion = assetPipeline.resolveMotionSet(
+            actionCue: activeActionCue,
+            poseCue: activePoseCue
+        )
         if var status = characterPerformanceStatusesByName[blocking.characterName] {
             status.sourceExpressionCue = rawExpressionState.cue
             status.sourceVisemeCue = rawMouthState.cue
             status.expressionBehaviorCue = profile?.expressionBehaviorCue(for: rawExpressionState.cue)
             status.expressionCueProvenance = profile?.expressionCueProvenance(for: rawExpressionState.cue)
             status.visemeCueProvenance = profile?.visemeCueProvenance(for: rawMouthState)
+            status.sourceActionCue = activeActionCue
+            status.sourcePoseCue = activePoseCue
+            status.resolvedMotionID = resolvedMotion?.descriptor.motionID
+            status.resolvedMotionTitle = resolvedMotion?.descriptor.title
+            status.motionProvenance = resolvedMotion?.provenance
             status.activeExpressionCue = expressionState.cue
             status.activeVisemeCue = mouthState.cue
             status.usingExpressionPreset = applicationResult?.usedExpressionPreset ?? false

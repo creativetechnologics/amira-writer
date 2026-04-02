@@ -253,6 +253,43 @@ extension SceneAssetPipeline {
         ).count
     }
 
+    func resolveMotionSet(
+        actionCue: String?,
+        poseCue: String?
+    ) -> (descriptor: Animate3DMotionSetDescriptor, provenance: String)? {
+        ensureRegistriesLoaded()
+
+        let candidates = [actionCue, poseCue]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .flatMap { value in
+                let parts = value
+                    .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                    .map(String.init)
+                return [value] + parts
+            }
+
+        let orderedCandidates = Array(NSOrderedSet(array: candidates)) as? [String] ?? candidates
+        for candidate in orderedCandidates where !candidate.isEmpty {
+            if let tagMatch = motionRegistry.motions.first(where: { descriptor in
+                descriptor.tags.contains { $0.caseInsensitiveCompare(candidate) == .orderedSame }
+            }) {
+                return (descriptor: tagMatch, provenance: "tag:\(candidate)")
+            }
+            if let idMatch = motionRegistry.motions.first(where: { descriptor in
+                descriptor.motionID.caseInsensitiveCompare(candidate) == .orderedSame
+            }) {
+                return (descriptor: idMatch, provenance: "id:\(candidate)")
+            }
+            if let titleMatch = motionRegistry.motions.first(where: { descriptor in
+                descriptor.title.lowercased().contains(candidate)
+            }) {
+                return (descriptor: titleMatch, provenance: "title:\(candidate)")
+            }
+        }
+
+        return nil
+    }
+
     func characterModelFileName(
         slug: String,
         costumeName: String? = nil

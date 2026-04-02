@@ -301,6 +301,13 @@ struct Animate3DProductionPreviewView: View {
         } else if let provenance = status.visemeCueProvenance, !provenance.isEmpty {
             parts.append("vis {\(provenance)}")
         }
+        if let motionTitle = status.resolvedMotionTitle, !motionTitle.isEmpty {
+            var label = "motion \(motionTitle)"
+            if let provenance = status.motionProvenance, !provenance.isEmpty {
+                label += " {\(provenance)}"
+            }
+            parts.append(label)
+        }
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 }

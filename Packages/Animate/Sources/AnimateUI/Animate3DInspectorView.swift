@@ -188,6 +188,18 @@ struct Animate3DInspectorView: View {
                                     if let provenance = status.visemeCueProvenance, !provenance.isEmpty {
                                         inspectorRow(label: "Vis Provenance", value: provenance)
                                     }
+                                    if let actionCue = status.sourceActionCue, !actionCue.isEmpty {
+                                        inspectorRow(label: "Action Cue", value: actionCue)
+                                    }
+                                    if let poseCue = status.sourcePoseCue, !poseCue.isEmpty {
+                                        inspectorRow(label: "Pose Cue", value: poseCue)
+                                    }
+                                    if let motionTitle = status.resolvedMotionTitle, !motionTitle.isEmpty {
+                                        inspectorRow(label: "Motion", value: motionTitle)
+                                    }
+                                    if let provenance = status.motionProvenance, !provenance.isEmpty {
+                                        inspectorRow(label: "Motion Match", value: provenance)
+                                    }
                                     if let modelFileName = status.modelFileName {
                                         inspectorRow(label: "Model", value: modelFileName)
                                     }
