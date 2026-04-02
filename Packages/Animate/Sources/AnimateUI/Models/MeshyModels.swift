@@ -29,7 +29,6 @@ struct MeshyImageRequest: Encodable, Sendable {
     var removeLighting: Bool = true
     var textureImageURL: String?
     var targetFormats: [String] = ["glb", "usdz"]
-    var symmetryMode: String = "auto"
 }
 
 // MARK: - Response Types
@@ -62,6 +61,7 @@ struct MeshyTaskResponse: Decodable, Sendable {
     }
 }
 
+@available(macOS 26.0, *)
 enum MeshyTaskStatus: String, Decodable, Sendable {
     case pending = "PENDING"
     case inProgress = "IN_PROGRESS"
