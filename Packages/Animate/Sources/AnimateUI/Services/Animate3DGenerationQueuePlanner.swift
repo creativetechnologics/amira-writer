@@ -107,14 +107,19 @@ struct Animate3DGenerationQueuePlanner {
             }
 
             if !hasCharacterAsset(.faceRigs, character: character, inventory: inventory, registryBundleService: registryBundleService) {
+                let facialSummary = summarizeFaceRigNeeds(runtimeStatuses)
                 items.append(
                     queueItem(
                         kind: .faceRig,
                         title: "\(character.name) face rig",
-                        detail: "Map brows, eyes, mouth, and jaw so the expression engine can drive the model.",
+                        detail: facialSummary.map {
+                            "Map brows, eyes, mouth, and jaw so the expression engine can drive the model. Prioritize \($0)."
+                        } ?? "Map brows, eyes, mouth, and jaw so the expression engine can drive the model.",
                         destinationPath: "Animate/characters/\(character.assetFolderSlug)/face-rigs/",
                         providerHint: "Author / export JSON sidecar",
-                        prompt: "Author a face-rig sidecar for \(character.name) with brows, eyes, mouth, jaw, and blendshape mappings for cel-shaded performance.",
+                        prompt: facialSummary.map {
+                            "Author a face-rig sidecar for \(character.name) with brows, eyes, mouth, jaw, and blendshape mappings for cel-shaded performance. Prioritize the currently observed facial coverage: \($0)."
+                        } ?? "Author a face-rig sidecar for \(character.name) with brows, eyes, mouth, jaw, and blendshape mappings for cel-shaded performance.",
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -386,6 +391,17 @@ struct Animate3DGenerationQueuePlanner {
         }
         guard !cues.isEmpty else { return nil }
         return cues.joined(separator: ", ")
+    }
+
+    private func summarizeFaceRigNeeds(_ statuses: [Animate3DCharacterPerformanceStatus]) -> String? {
+        var parts: [String] = []
+        if let expressionSummary = summarizeExpressionCues(statuses) {
+            parts.append("expression cues: \(expressionSummary)")
+        }
+        if let visemeSummary = summarizeVisemeCues(statuses) {
+            parts.append("mouth cues: \(visemeSummary)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 
     private func summarizeVisemeCues(_ statuses: [Animate3DCharacterPerformanceStatus]) -> String? {

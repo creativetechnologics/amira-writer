@@ -169,7 +169,7 @@ final class Animate3DGenerationQueuePlannerTests: XCTestCase {
         XCTAssertTrue(motionItem.prompt.contains("Determined Listening"))
     }
 
-    func testPlannerUsesRuntimeFacialCuesInMissingExpressionAndMouthPrompts() throws {
+    func testPlannerUsesRuntimeFacialCuesInMissingFaceRigExpressionAndMouthPrompts() throws {
         let projectURL = try makeProjectURL()
         defer { try? FileManager.default.removeItem(at: projectURL) }
 
@@ -253,12 +253,18 @@ final class Animate3DGenerationQueuePlannerTests: XCTestCase {
                         resolvedBundleAssetPaths: [],
                         readyCategories: [],
                         registryBackedCategories: [],
-                        missingCategories: [.mouthProfiles, .expressions],
+                        missingCategories: [.faceRigs, .mouthProfiles, .expressions],
                         totalFileCount: 0
                     )
                 ],
                 runtimeCharacters: [runtimeStatus]
             )
+
+        let faceRigItem = try XCTUnwrap(items.first(where: { $0.kind == .faceRig }))
+        XCTAssertTrue(faceRigItem.detail.contains("expression cues:"))
+        XCTAssertTrue(faceRigItem.detail.contains("mouth cues:"))
+        XCTAssertTrue(faceRigItem.prompt.contains("hero_angry"))
+        XCTAssertTrue(faceRigItem.prompt.contains("lipsync-default"))
 
         let mouthItem = try XCTUnwrap(items.first(where: { $0.kind == .mouthProfile }))
         XCTAssertTrue(mouthItem.detail.contains("ah"))
