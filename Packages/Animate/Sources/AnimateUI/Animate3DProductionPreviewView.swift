@@ -1,3 +1,4 @@
+import AppKit
 import SceneKit
 import SwiftUI
 import ProjectKit
@@ -45,6 +46,7 @@ struct Animate3DProductionPreviewView: View {
     @State private var preflightDrafts: [GeminiGenerationDraft] = []
     @State private var preflightOwner: PreflightOwner?
     @State private var showPreflight = false
+    @State private var registryEditorContext: Animate3DRegistryEditorContext?
 
     private var displayFrame: Int {
         scenario.sourceKind == .selectedTimeline ? store.currentFrame : harnessState.previewFrame
@@ -188,6 +190,15 @@ struct Animate3DProductionPreviewView: View {
                     showPreflight = false
                 }
             )
+        }
+        .sheet(item: $registryEditorContext) { context in
+            if let projectURL {
+                Animate3DRegistryEditorSheet(
+                    projectURL: projectURL,
+                    context: context,
+                    onClose: { registryEditorContext = nil }
+                )
+            }
         }
     }
 
@@ -334,7 +345,7 @@ struct Animate3DProductionPreviewView: View {
                         .foregroundStyle(OperaChromeTheme.textTertiary)
 
                     ForEach(prioritizedQueueItems.prefix(3), id: \.id) { item in
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 8) {
                             HStack(spacing: 8) {
                                 badge(item.kind.title, tint: item.isBatchDraftable ? .blue : .gray)
                                 Text(item.title)
@@ -351,6 +362,35 @@ struct Animate3DProductionPreviewView: View {
                                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                                     .foregroundStyle(.orange)
                                     .fixedSize(horizontal: false, vertical: true)
+                            }
+                            HStack(spacing: 8) {
+                                if item.isBatchDraftable {
+                                    Button("Preflight") {
+                                        openGenerationPreflight(item)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+
+                                    Button("Queue") {
+                                        queueGenerationItem(item)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                }
+
+                                if let manifestContext = manifestEditorContext(for: item) {
+                                    Button("Edit Registry") {
+                                        registryEditorContext = manifestContext
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                } else {
+                                    Button("Reveal") {
+                                        revealGenerationItem(item)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
                             }
                         }
                         .padding(10)
@@ -430,6 +470,81 @@ struct Animate3DProductionPreviewView: View {
             parts.append("hints \(motionHintSummary)")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
+    }
+
+    private var projectURL: URL? {
+        store.workingOWPURL ?? store.owpURL
+    }
+
+    private func queueGenerationItem(_ item: Animate3DGenerationQueueItem) {
+        let queued = Animate3DAssetGapQueueService(store: store).queue(
+            item: item,
+            scene: store.selectedScene,
+            status: status
+        )
+        store.statusMessage = queued > 0
+            ? "Queued \(item.title)"
+            : "\(item.title) is already queued or still requires manual authoring"
+    }
+
+    private func openGenerationPreflight(_ item: Animate3DGenerationQueueItem) {
+        guard let draft = Animate3DAssetGapQueueService(store: store).draft(
+            for: item,
+            scene: store.selectedScene,
+            status: status
+        ) else {
+            store.statusMessage = "No draftable Gemini request exists for \(item.title)."
+            return
+        }
+        preflightDrafts = [draft]
+        preflightOwner = PreflightOwner(item: item, store: store)
+        showPreflight = true
+    }
+
+    private func revealGenerationItem(_ item: Animate3DGenerationQueueItem) {
+        guard let projectURL else { return }
+        let trimmed = item.targetRelativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([
+            projectURL.appendingPathComponent(trimmed)
+        ])
+    }
+
+    private func manifestEditorContext(
+        for item: Animate3DGenerationQueueItem
+    ) -> Animate3DRegistryEditorContext? {
+        guard let manifestKind = item.manifestKind,
+              let relativePath = manifestRelativePath(for: manifestKind) else {
+            return nil
+        }
+        return Animate3DRegistryEditorContext(
+            kind: manifestKind,
+            title: item.kind.title,
+            relativePath: relativePath
+        )
+    }
+
+    private func manifestRelativePath(for kind: Animate3DRegistryManifestKind) -> String? {
+        guard let projectURL else { return nil }
+        let index = ProjectDatabaseBridge.loadAnimate3DRegistryIndexFromDisk(projectURL: projectURL) ?? Animate3DRegistryIndex()
+        switch kind {
+        case .assetRegistry:
+            return index.assetRegistryPath
+        case .characterRegistry:
+            return index.characterRegistryPath
+        case .motionRegistry:
+            return index.motionRegistryPath
+        case .worldCatalog:
+            return index.worldCatalogPath
+        case .styleProfiles:
+            return index.styleProfilesPath
+        case .cameraPresets:
+            return index.cameraPresetsPath
+        case .lightRigs:
+            return index.lightRigsPath
+        case .atmospherePresets:
+            return index.atmospherePresetsPath
+        }
     }
 
     private func openGenerationPreflight() {
