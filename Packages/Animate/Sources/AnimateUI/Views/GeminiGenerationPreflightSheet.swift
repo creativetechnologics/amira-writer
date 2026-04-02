@@ -15,18 +15,24 @@ struct GeminiGenerationDraftOverrideTelemetry: Hashable, Sendable {
     var promptAppendix: String? = nil
     var isLocked = false
 
+    var hasProviderOverride: Bool {
+        !(effectiveProviderHint?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    var hasPromptAppendix: Bool {
+        !(promptAppendix?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
     var hasVisibleChanges: Bool {
-        let provider = effectiveProviderHint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let appendix = promptAppendix?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !provider.isEmpty || !appendix.isEmpty || isLocked
+        hasProviderOverride || hasPromptAppendix || isLocked
     }
 
     var badgeLabels: [String] {
         var labels: [String] = []
-        if let provider = effectiveProviderHint?.trimmingCharacters(in: .whitespacesAndNewlines), !provider.isEmpty {
+        if hasProviderOverride {
             labels.append("Provider")
         }
-        if let appendix = promptAppendix?.trimmingCharacters(in: .whitespacesAndNewlines), !appendix.isEmpty {
+        if hasPromptAppendix {
             labels.append("Appendix")
         }
         if isLocked {
@@ -112,8 +118,24 @@ struct GeminiGenerationPreflightSheet: View {
         selectedDrafts.filter { $0.overrideTelemetry?.isLocked == true }.count
     }
 
+    private var selectedProviderOverrideCount: Int {
+        selectedDrafts.filter { $0.overrideTelemetry?.hasProviderOverride == true }.count
+    }
+
+    private var selectedAppendixOverrideCount: Int {
+        selectedDrafts.filter { $0.overrideTelemetry?.hasPromptAppendix == true }.count
+    }
+
     private var lockedOverrideDrafts: [GeminiGenerationDraft] {
         drafts.filter { $0.overrideTelemetry?.isLocked == true }
+    }
+
+    private var providerOverrideDrafts: [GeminiGenerationDraft] {
+        drafts.filter { $0.overrideTelemetry?.hasProviderOverride == true }
+    }
+
+    private var appendixOverrideDrafts: [GeminiGenerationDraft] {
+        drafts.filter { $0.overrideTelemetry?.hasPromptAppendix == true }
     }
 
     var body: some View {
@@ -221,6 +243,20 @@ struct GeminiGenerationPreflightSheet: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(lockedOverrideDrafts.isEmpty)
+
+                    Button("Only Provider") {
+                        selectOnlyProviderOverrides()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(providerOverrideDrafts.isEmpty)
+
+                    Button("Only Appendix") {
+                        selectOnlyAppendixOverrides()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(appendixOverrideDrafts.isEmpty)
                 }
             }
 
@@ -248,6 +284,10 @@ struct GeminiGenerationPreflightSheet: View {
                             }
                         }
                     }
+
+                    Text("Breakdown • Provider \(selectedProviderOverrideCount) • Appendix \(selectedAppendixOverrideCount) • Locked \(selectedLockedOverrideCount)")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -411,6 +451,18 @@ struct GeminiGenerationPreflightSheet: View {
     private func selectOnlyLockedOverrides() {
         for index in drafts.indices {
             drafts[index].isSelected = drafts[index].overrideTelemetry?.isLocked == true
+        }
+    }
+
+    private func selectOnlyProviderOverrides() {
+        for index in drafts.indices {
+            drafts[index].isSelected = drafts[index].overrideTelemetry?.hasProviderOverride == true
+        }
+    }
+
+    private func selectOnlyAppendixOverrides() {
+        for index in drafts.indices {
+            drafts[index].isSelected = drafts[index].overrideTelemetry?.hasPromptAppendix == true
         }
     }
 
