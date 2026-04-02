@@ -259,35 +259,96 @@ extension SceneAssetPipeline {
     ) -> (descriptor: Animate3DMotionSetDescriptor, provenance: String)? {
         ensureRegistriesLoaded()
 
-        let candidates = [actionCue, poseCue]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-            .flatMap { value in
-                let parts = value
-                    .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-                    .map(String.init)
-                return [value] + parts
-            }
+        let exactCandidates = [actionCue, poseCue]
+            .compactMap { normalizedMotionToken($0) }
+        let candidateTokens = Set(
+            exactCandidates.flatMap { [ $0 ] + motionTokens(from: $0) }
+        )
+        guard !candidateTokens.isEmpty else { return nil }
 
-        let orderedCandidates = Array(NSOrderedSet(array: candidates)) as? [String] ?? candidates
-        for candidate in orderedCandidates where !candidate.isEmpty {
-            if let tagMatch = motionRegistry.motions.first(where: { descriptor in
-                descriptor.tags.contains { $0.caseInsensitiveCompare(candidate) == .orderedSame }
-            }) {
-                return (descriptor: tagMatch, provenance: "tag:\(candidate)")
-            }
-            if let idMatch = motionRegistry.motions.first(where: { descriptor in
-                descriptor.motionID.caseInsensitiveCompare(candidate) == .orderedSame
-            }) {
-                return (descriptor: idMatch, provenance: "id:\(candidate)")
-            }
-            if let titleMatch = motionRegistry.motions.first(where: { descriptor in
-                descriptor.title.lowercased().contains(candidate)
-            }) {
-                return (descriptor: titleMatch, provenance: "title:\(candidate)")
-            }
+        struct MotionMatchScore {
+            var descriptor: Animate3DMotionSetDescriptor
+            var score: Int
+            var matchedTokens: [String]
         }
 
-        return nil
+        let ranked = motionRegistry.motions.compactMap { descriptor -> MotionMatchScore? in
+            let tagTokens = Set(descriptor.tags.flatMap(motionTokens(from:)))
+            let idTokens = Set(motionTokens(from: descriptor.motionID))
+            let titleTokens = Set(motionTokens(from: descriptor.title))
+            let noteTokens = Set(motionTokens(from: descriptor.notes))
+            let pathTokens = Set(motionTokens(from: descriptor.relativePath))
+
+            let matchedTagTokens = candidateTokens.intersection(tagTokens)
+            let matchedIDTokens = candidateTokens.intersection(idTokens)
+            let matchedTitleTokens = candidateTokens.intersection(titleTokens)
+            let matchedNoteTokens = candidateTokens.intersection(noteTokens)
+            let matchedPathTokens = candidateTokens.intersection(pathTokens)
+
+            let score =
+                matchedTagTokens.count * 6 +
+                matchedIDTokens.count * 5 +
+                matchedTitleTokens.count * 4 +
+                matchedNoteTokens.count * 2 +
+                matchedPathTokens.count
+            guard score > 0 else { return nil }
+
+            let matchedTokens = Array(
+                matchedTagTokens
+                    .union(matchedIDTokens)
+                    .union(matchedTitleTokens)
+                    .union(matchedNoteTokens)
+                    .union(matchedPathTokens)
+            ).sorted()
+            return MotionMatchScore(
+                descriptor: descriptor,
+                score: score,
+                matchedTokens: matchedTokens
+            )
+        }
+        .sorted {
+            if $0.score != $1.score { return $0.score > $1.score }
+            return $0.descriptor.title.localizedCaseInsensitiveCompare($1.descriptor.title) == .orderedAscending
+        }
+
+        guard let bestMatch = ranked.first else { return nil }
+
+        if let candidate = exactCandidates.first(where: { candidate in
+            bestMatch.descriptor.tags.contains { normalizedMotionToken($0) == candidate }
+        }) {
+            return (descriptor: bestMatch.descriptor, provenance: "tag:\(candidate)")
+        }
+        if let candidate = exactCandidates.first(where: { candidate in
+            normalizedMotionToken(bestMatch.descriptor.motionID) == candidate
+        }) {
+            return (descriptor: bestMatch.descriptor, provenance: "id:\(candidate)")
+        }
+        if let candidate = exactCandidates.first(where: { candidate in
+            motionTokens(from: bestMatch.descriptor.title).contains(candidate)
+        }) {
+            return (descriptor: bestMatch.descriptor, provenance: "title:\(candidate)")
+        }
+
+        return (
+            descriptor: bestMatch.descriptor,
+            provenance: "semantic:\(bestMatch.matchedTokens.joined(separator: "+"))"
+        )
+    }
+
+    private func normalizedMotionToken(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private func motionTokens(from value: String) -> [String] {
+        guard let normalized = normalizedMotionToken(value) else { return [] }
+        return normalized
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+            .filter { !$0.isEmpty }
     }
 
     func characterModelFileName(
