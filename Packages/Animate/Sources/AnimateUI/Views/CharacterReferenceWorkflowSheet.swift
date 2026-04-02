@@ -1,0 +1,2180 @@
+import AppKit
+import SwiftUI
+
+@available(macOS 26.0, *)
+struct CharacterReferenceWorkflowSheet: View {
+    @Bindable var store: AnimateStore
+    let characterID: UUID
+    let onDismiss: () -> Void
+    var isInline: Bool = false
+
+    @State private var preflightDrafts: [GeminiGenerationDraft] = []
+    @State private var pendingPlan: PendingGenerationPlan?
+    @State private var promptPreview: VariantPromptPreview?
+    @State private var isGenerating = false
+    @State private var generatingActions: Set<WorkflowAction> = []
+    @State private var generationStatus: String?
+    @State private var generationError: String?
+
+    private enum WorkflowAction: Hashable {
+        case masterSheet
+        case headSheet
+        case headPose(UUID)
+        case costumeSheet(UUID)
+        case costumePose(costumeID: UUID, slotID: UUID)
+        case accessory(costumeID: UUID, accessoryID: UUID)
+    }
+
+    private struct PendingGenerationPlan: Identifiable, Hashable {
+        var id: UUID = UUID()
+        var title: String
+        var confirmTitle: String
+        var actions: [WorkflowAction]
+        var persistPromptEditsToWorkflowDefaults: Bool = true
+    }
+
+    fileprivate struct VariantPromptPreview: Identifiable, Hashable {
+        var id: UUID = UUID()
+        var title: String
+        var prompt: String
+        var model: String
+        var aspectRatio: String
+        var imageSize: String
+    }
+
+    private var character: AnimationCharacter? {
+        store.characters.first(where: { $0.id == characterID })
+    }
+
+    var body: some View {
+        if isInline {
+            inlineBody
+        } else {
+            sheetBody
+        }
+    }
+
+    private var sheetBody: some View {
+        VStack(spacing: 0) {
+            header
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if let character {
+                        overviewSection(character)
+                        masterReferenceSheetSection(character)
+                        headTurnaroundSection(character)
+                        costumesSection(character)
+                    }
+                }
+                .padding()
+            }
+        }
+        .frame(minWidth: 1300, idealWidth: 1600, minHeight: 860)
+        .task {
+            store.seedCharacterReferenceWorkflowIfNeeded(for: characterID)
+        }
+        .sheet(item: $pendingPlan) { plan in
+            GeminiGenerationPreflightSheet(
+                store: store,
+                drafts: $preflightDrafts,
+                title: plan.title,
+                confirmTitle: plan.confirmTitle,
+                onConfirm: { drafts, mode in
+                    pendingPlan = nil
+                    switch mode {
+                    case .standard:
+                        run(plan: plan, drafts: drafts)
+                    case .batch:
+                        if let character {
+                            for draft in drafts {
+                                store.addToBatchQueue(
+                                    characterID: character.id,
+                                    characterName: character.name,
+                                    draftTitle: draft.title,
+                                    draft: draft
+                                )
+                            }
+                        }
+                    }
+                },
+                onCancel: {
+                    pendingPlan = nil
+                }
+            )
+        }
+        .sheet(item: $promptPreview) { preview in
+            VariantPromptPreviewSheet(preview: preview)
+        }
+        .alert("Character Reference Workflow", isPresented: Binding(
+            get: { generationError != nil },
+            set: { newValue in
+                if !newValue {
+                    generationError = nil
+                }
+            }
+        )) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(generationError ?? "Unknown error")
+        }
+    }
+
+    private var inlineBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            inlineHeader
+
+            if let character {
+                overviewSection(character)
+                masterReferenceSheetSection(character)
+                headTurnaroundSection(character)
+                costumesSection(character)
+            }
+        }
+        .task {
+            store.seedCharacterReferenceWorkflowIfNeeded(for: characterID)
+        }
+        .sheet(item: $pendingPlan) { plan in
+            GeminiGenerationPreflightSheet(
+                store: store,
+                drafts: $preflightDrafts,
+                title: plan.title,
+                confirmTitle: plan.confirmTitle,
+                onConfirm: { drafts, mode in
+                    pendingPlan = nil
+                    switch mode {
+                    case .standard:
+                        run(plan: plan, drafts: drafts)
+                    case .batch:
+                        if let character {
+                            for draft in drafts {
+                                store.addToBatchQueue(
+                                    characterID: character.id,
+                                    characterName: character.name,
+                                    draftTitle: draft.title,
+                                    draft: draft
+                                )
+                            }
+                        }
+                    }
+                },
+                onCancel: {
+                    pendingPlan = nil
+                }
+            )
+        }
+        .sheet(item: $promptPreview) { preview in
+            VariantPromptPreviewSheet(preview: preview)
+        }
+        .alert("Character Reference Workflow", isPresented: Binding(
+            get: { generationError != nil },
+            set: { newValue in
+                if !newValue {
+                    generationError = nil
+                }
+            }
+        )) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(generationError ?? "Unknown error")
+        }
+    }
+
+    private var inlineHeader: some View {
+        HStack(alignment: .center) {
+            if let character {
+                Text(character.name + " • inspiration → master sheet → head grid → full-body costumes → accessories")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 6) {
+                if isGenerating {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(generationStatus ?? "Generating…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let generationStatus,
+                          !generationStatus.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Label(generationStatus, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Button("Reset Workflow") {
+                store.resetCharacterReferenceWorkflow(for: characterID)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Character Reference Workflow")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                if let character {
+                    Text(character.name + " • inspiration → master sheet → head grid → full-body costumes → accessories")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 6) {
+                if isGenerating {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(generationStatus ?? "Generating…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let generationStatus,
+                          !generationStatus.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Label(generationStatus, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Button("Reset Workflow") {
+                store.resetCharacterReferenceWorkflow(for: characterID)
+            }
+            .buttonStyle(.bordered)
+
+            Button("Done") {
+                onDismiss()
+            }
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding()
+    }
+
+    private func overviewSection(_ character: AnimationCharacter) -> some View {
+        let approvedHeadCount = character.headTurnaroundSlots.filter { $0.approvedVariant != nil }.count
+        let approvedFullBodyCount = character.costumeReferenceSets.flatMap(\.fullBodySlots).filter { $0.approvedVariant != nil }.count
+        let approvedAccessoryCount = character.costumeReferenceSets.flatMap(\.accessorySlots).filter { $0.approvedVariant != nil }.count
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Use the realistic inspiration images to generate several beautiful master sheets first. Approve the best master sheet, then use it as the ingredient for specific head poses, full-body costume poses, and accessories.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                workflowPill(title: "Inspiration Images", value: "\(character.inspirationImagePaths.count)", systemImage: "photo.stack")
+                workflowPill(title: "Master Sheets", value: "\(character.masterReferenceSheetVariants.count)", systemImage: "rectangle.3.group")
+                workflowPill(title: "Head Poses", value: "\(approvedHeadCount)/6", systemImage: "person.crop.square")
+                workflowPill(title: "Costume Poses", value: "\(approvedFullBodyCount)", systemImage: "figure.stand")
+                workflowPill(title: "Accessories", value: "\(approvedAccessoryCount)", systemImage: "briefcase")
+            }
+        }
+        .padding(16)
+        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func workflowPill(title: String, value: String, systemImage: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.subheadline)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.background.opacity(0.72), in: Capsule())
+    }
+
+    private func masterReferenceSheetSection(_ character: AnimationCharacter) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Master Reference Sheet", systemImage: "rectangle.3.group")
+                        .font(.headline)
+                    Text("Generate several master sheets from the original inspiration images, approve the best one, then use that sheet as the main reference for every later NB2 request.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    prepareMasterSheetPlan(count: 1)
+                } label: {
+                    Label("Generate 1", systemImage: "sparkles")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    importExistingMasterSheet()
+                } label: {
+                    Label("Attach Existing Sheet", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    prepareMasterSheetPlan(count: 3)
+                } label: {
+                    Label("Generate 3", systemImage: "square.stack.3d.up")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(store.geminiAPIKey.isEmpty)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Master Sheet Prompt")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: Binding(
+                    get: { character.masterReferenceSheetPrompt },
+                    set: { store.updateMasterReferenceSheetPrompt($0, for: characterID) }
+                ))
+                .font(.callout)
+                .frame(minHeight: 120)
+                .padding(8)
+                .background(.background.opacity(0.85), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(.quaternary.opacity(0.4))
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Master Sheet Source Images")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        store.importInspirationImages(for: characterID)
+                    } label: {
+                        Label("Add Inspiration Images", systemImage: "plus")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    Text("These are the default images sent for master-sheet generation. The preflight pane can still add or remove more.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                if character.inspirationImagePaths.isEmpty && character.inspirationReferenceImagePath == nil {
+                    Text("No inspiration images available yet.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            ForEach(masterSheetSourceCandidates(for: character), id: \.self) { path in
+                                masterSheetSourceCard(character: character, path: path)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
+            if character.masterReferenceSheetVariants.isEmpty {
+                if generatingActions.contains(.masterSheet) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            loadingReferenceVariantCard(title: "Generating Master Sheet", subtitle: generationStatus ?? "Waiting for Nano Banana 2…")
+                        }
+                        .padding(.vertical, 4)
+                    }
+                } else {
+                    workflowEmptyState(icon: "rectangle.3.group", message: "No master sheets yet. Generate a few variants, pick the best face/costume look, then use it to drive the grids below.")
+                }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(character.masterReferenceSheetVariants.enumerated()), id: \.element.id) { index, variant in
+                            ReferenceVariantCard(
+                                store: store,
+                                variant: variant,
+                                title: "Master Sheet \(index + 1)",
+                                isApproved: character.approvedMasterReferenceSheetVariantID == variant.id || (character.approvedMasterReferenceSheetVariantID == nil && character.masterReferenceSheetVariants.last?.id == variant.id),
+                                onQuickLook: {
+                                    openQuickLook(
+                                        for: character.masterReferenceSheetVariants.map(\.imagePath),
+                                        startingAt: index
+                                    )
+                                },
+                                onCopy: {
+                                    copyImage(at: variant.imagePath)
+                                },
+                                onEdit: {
+                                    prepareMasterSheetEditPlan(variant)
+                                },
+                                onShowPrompt: {
+                                    showPromptPreview(title: "Master Sheet \(index + 1)", variant: variant)
+                                },
+                                onApprove: {
+                                    store.setApprovedMasterReferenceSheetVariant(variant.id, for: characterID)
+                                },
+                                onDelete: {
+                                    store.removeMasterReferenceSheetVariant(variant.id, for: characterID)
+                                },
+                                approveLabel: "Choose",
+                                approvedLabel: "Chosen"
+                            )
+                        }
+                        if generatingActions.contains(.masterSheet) {
+                            loadingReferenceVariantCard(title: "Generating Master Sheet", subtitle: generationStatus ?? "Waiting for Nano Banana 2…")
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .padding(18)
+        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func headTurnaroundSection(_ character: AnimationCharacter) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Head Turnaround Grid", systemImage: "person.crop.square")
+                        .font(.headline)
+                    Text("Generate or attach one square 2x3 head turnaround sheet first. The system crops the six head poses from the chosen sheet automatically, and you can still regenerate any individual missing pose afterward.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    importHeadTurnaroundSheet()
+                } label: {
+                    Label("Attach Sheet", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    prepareHeadSheetPlan()
+                } label: {
+                    Label("Generate Sheet", systemImage: "square.grid.2x2")
+                }
+                .buttonStyle(.bordered)
+                .disabled(store.geminiAPIKey.isEmpty)
+
+                Button {
+                    prepareHeadBatchPlan()
+                } label: {
+                    Label("Generate Missing", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(store.geminiAPIKey.isEmpty)
+
+                if character.approvedHeadTurnaroundSheetVariant != nil {
+                    Button {
+                        try? store.cropApprovedHeadTurnaroundSheet(for: characterID)
+                    } label: {
+                        Label("Re-crop from Sheet", systemImage: "crop")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Head Sheet Prompt")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: Binding(
+                    get: { character.headTurnaroundSheetPrompt },
+                    set: { store.updateHeadTurnaroundSheetPrompt($0, for: characterID) }
+                ))
+                .font(.callout)
+                .frame(minHeight: 88)
+                .padding(8)
+                .background(.background.opacity(0.85), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(.quaternary.opacity(0.4))
+                }
+            }
+
+            if character.headTurnaroundSheetVariants.isEmpty {
+                workflowEmptyState(icon: "square.grid.2x2", message: "No head turnaround sheets yet. Generate or attach one, then choose the best sheet and the six cropped head poses will populate below.")
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(character.headTurnaroundSheetVariants.enumerated()), id: \.element.id) { index, variant in
+                            ReferenceVariantCard(
+                                store: store,
+                                variant: variant,
+                                title: "Head Sheet \(index + 1)",
+                                isApproved: character.approvedHeadTurnaroundSheetVariantID == variant.id || (character.approvedHeadTurnaroundSheetVariantID == nil && character.headTurnaroundSheetVariants.last?.id == variant.id),
+                                onQuickLook: {
+                                    openQuickLook(for: character.headTurnaroundSheetVariants.map(\.imagePath), startingAt: index)
+                                },
+                                onCopy: {
+                                    copyImage(at: variant.imagePath)
+                                },
+                                onEdit: {
+                                    prepareHeadSheetEditPlan(variant)
+                                },
+                                onShowPrompt: {
+                                    showPromptPreview(title: "Head Sheet \(index + 1)", variant: variant)
+                                },
+                                onApprove: {
+                                    store.setApprovedHeadTurnaroundSheetVariant(variant.id, for: characterID)
+                                },
+                                onDelete: {
+                                    store.removeHeadTurnaroundSheetVariant(variant.id, for: characterID)
+                                },
+                                approveLabel: "Choose",
+                                approvedLabel: "Chosen"
+                            )
+                        }
+                        if generatingActions.contains(.headSheet) {
+                            loadingReferenceVariantCard(title: "Generating Head Sheet", subtitle: generationStatus ?? "Waiting for Nano Banana 2…")
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 14)], spacing: 14) {
+                ForEach(character.headTurnaroundSlots) { slot in
+                    poseSlotCard(
+                        title: slot.title,
+                        badge: slot.pose.gridLabel,
+                        notes: slot.notes,
+                        approvedVariant: slot.approvedVariant,
+                        variants: slot.variants,
+                        isGenerating: generatingActions.contains(.headPose(slot.id)),
+                        onGenerate: { prepareHeadSlotPlan(slot) },
+                        onImport: { importHeadTurnaroundVariant(slot) },
+                        onEditApproved: {
+                            guard let approvedVariant = slot.approvedVariant else { return }
+                            prepareHeadSlotEditPlan(slot, variant: approvedVariant)
+                        },
+                        onShowPromptApproved: {
+                            guard let approvedVariant = slot.approvedVariant else { return }
+                            showPromptPreview(title: slot.title, variant: approvedVariant)
+                        },
+                        onQuickLookApproved: {
+                            openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: slot.approvedVariant?.id))
+                        },
+                        onEditVariant: { variantID in
+                            guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                            prepareHeadSlotEditPlan(slot, variant: variant)
+                        },
+                        onShowPromptVariant: { variantID in
+                            guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                            showPromptPreview(title: "\(slot.title) Variant", variant: variant)
+                        },
+                        onQuickLookVariant: { variantID in
+                            openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: variantID))
+                        },
+                        onApprove: { variantID in
+                            store.setApprovedHeadTurnaroundVariant(variantID, slotID: slot.id, for: characterID)
+                        },
+                        onDelete: { variantID in
+                            store.removeHeadTurnaroundVariant(variantID, slotID: slot.id, for: characterID)
+                        }
+                    )
+                }
+            }
+        }
+        .padding(18)
+        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func costumesSection(_ character: AnimationCharacter) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Label("Costume Pose Sets", systemImage: "figure.stand")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    store.addCostumeReferenceSet(for: characterID)
+                } label: {
+                    Label("Add Costume", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            ForEach(character.costumeReferenceSets) { costume in
+                costumeSection(character: character, costume: costume)
+            }
+        }
+    }
+
+    private func costumeSection(character: AnimationCharacter, costume: CharacterCostumeReferenceSet) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField(
+                        "Costume Name",
+                        text: Binding(
+                            get: { costume.name },
+                            set: { store.updateCostumeReferenceSetName($0, costumeID: costume.id, for: characterID) }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .font(.headline)
+
+                    TextEditor(text: Binding(
+                        get: { costume.notes },
+                        set: { store.updateCostumeReferenceSetNotes($0, costumeID: costume.id, for: characterID) }
+                    ))
+                    .font(.callout)
+                    .frame(minHeight: 86)
+                    .padding(8)
+                    .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(.quaternary.opacity(0.4))
+                    }
+                }
+
+                Spacer()
+
+                VStack(spacing: 8) {
+                    Button {
+                        importCostumeSheet(costumeID: costume.id, costumeName: costume.name)
+                    } label: {
+                        Label("Attach Sheet", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        prepareCostumeSheetPlan(costume)
+                    } label: {
+                        Label("Generate Sheet", systemImage: "square.grid.2x2")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(store.geminiAPIKey.isEmpty)
+
+                    Button {
+                        prepareCostumeBatchPlan(costume)
+                    } label: {
+                        Label("Generate Missing", systemImage: "sparkles")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.geminiAPIKey.isEmpty)
+
+                    if costume.approvedSheetVariant != nil {
+                        Button {
+                            try? store.cropApprovedCostumeSheet(for: characterID, costumeID: costume.id)
+                        } label: {
+                            Label("Re-crop from Sheet", systemImage: "crop")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    Button(role: .destructive) {
+                        store.removeCostumeReferenceSet(costume.id, for: characterID)
+                    } label: {
+                        Label("Delete Costume", systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(character.costumeReferenceSets.count <= 1)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("\(costume.name) Sheet Prompt")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: Binding(
+                    get: { costume.sheetPrompt },
+                    set: { store.updateCostumeSheetPrompt($0, costumeID: costume.id, for: characterID) }
+                ))
+                .font(.callout)
+                .frame(minHeight: 88)
+                .padding(8)
+                .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(.quaternary.opacity(0.4))
+                }
+            }
+
+            if costume.sheetVariants.isEmpty {
+                workflowEmptyState(icon: "square.grid.2x2", message: "No \(costume.name) sheets yet. Generate or attach one to auto-crop the six full-body poses below.")
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(costume.sheetVariants.enumerated()), id: \.element.id) { index, variant in
+                            ReferenceVariantCard(
+                                store: store,
+                                variant: variant,
+                                title: "\(costume.name) Sheet \(index + 1)",
+                                isApproved: costume.approvedSheetVariantID == variant.id || (costume.approvedSheetVariantID == nil && costume.sheetVariants.last?.id == variant.id),
+                                onQuickLook: {
+                                    openQuickLook(for: costume.sheetVariants.map(\.imagePath), startingAt: index)
+                                },
+                                onCopy: {
+                                    copyImage(at: variant.imagePath)
+                                },
+                                onEdit: {
+                                    prepareCostumeSheetEditPlan(costume, variant: variant)
+                                },
+                                onShowPrompt: {
+                                    showPromptPreview(title: "\(costume.name) Sheet \(index + 1)", variant: variant)
+                                },
+                                onApprove: {
+                                    store.setApprovedCostumeSheetVariant(variant.id, costumeID: costume.id, for: characterID)
+                                },
+                                onDelete: {
+                                    store.removeCostumeSheetVariant(variant.id, costumeID: costume.id, for: characterID)
+                                },
+                                approveLabel: "Choose",
+                                approvedLabel: "Chosen"
+                            )
+                        }
+                        if generatingActions.contains(.costumeSheet(costume.id)) {
+                            loadingReferenceVariantCard(title: "Generating \(costume.name) Sheet", subtitle: generationStatus ?? "Waiting for Nano Banana 2…")
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 14)], spacing: 14) {
+                ForEach(costume.fullBodySlots) { slot in
+                    poseSlotCard(
+                        title: slot.title,
+                        badge: slot.pose.gridLabel,
+                        notes: slot.notes,
+                        approvedVariant: slot.approvedVariant,
+                        variants: slot.variants,
+                        isGenerating: generatingActions.contains(.costumePose(costumeID: costume.id, slotID: slot.id)),
+                        onGenerate: { prepareCostumeSlotPlan(costumeID: costume.id, slot: slot) },
+                        onImport: { importCostumePoseVariant(costumeID: costume.id, slot: slot) },
+                        onEditApproved: {
+                            guard let approvedVariant = slot.approvedVariant else { return }
+                            prepareCostumeSlotEditPlan(costumeID: costume.id, slot: slot, variant: approvedVariant)
+                        },
+                        onShowPromptApproved: {
+                            guard let approvedVariant = slot.approvedVariant else { return }
+                            showPromptPreview(title: "\(costume.name) • \(slot.title)", variant: approvedVariant)
+                        },
+                        onQuickLookApproved: {
+                            openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: slot.approvedVariant?.id))
+                        },
+                        onEditVariant: { variantID in
+                            guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                            prepareCostumeSlotEditPlan(costumeID: costume.id, slot: slot, variant: variant)
+                        },
+                        onShowPromptVariant: { variantID in
+                            guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                            showPromptPreview(title: "\(costume.name) • \(slot.title) Variant", variant: variant)
+                        },
+                        onQuickLookVariant: { variantID in
+                            openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: variantID))
+                        },
+                        onApprove: { variantID in
+                            store.setApprovedCostumePoseVariant(variantID, costumeID: costume.id, slotID: slot.id, for: characterID)
+                        },
+                        onDelete: { variantID in
+                            store.removeCostumePoseVariant(variantID, costumeID: costume.id, slotID: slot.id, for: characterID)
+                        }
+                    )
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Accessories", systemImage: "briefcase")
+                        .font(.subheadline)
+                    Spacer()
+                    Button {
+                        prepareAccessoryBatchPlan(costume)
+                    } label: {
+                        Label("Generate All Accessories", systemImage: "shippingbox")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(store.geminiAPIKey.isEmpty)
+                }
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 14)], spacing: 14) {
+                    ForEach(costume.accessorySlots) { slot in
+                        poseSlotCard(
+                            title: slot.title,
+                            badge: "Accessory",
+                            notes: slot.notes,
+                            approvedVariant: slot.approvedVariant,
+                            variants: slot.variants,
+                            isGenerating: generatingActions.contains(.accessory(costumeID: costume.id, accessoryID: slot.id)),
+                            onGenerate: { prepareAccessoryPlan(costumeID: costume.id, slot: slot) },
+                            onImport: { importAccessoryVariant(costumeID: costume.id, slot: slot) },
+                            onEditApproved: {
+                                guard let approvedVariant = slot.approvedVariant else { return }
+                                prepareAccessoryEditPlan(costumeID: costume.id, slot: slot, variant: approvedVariant)
+                            },
+                            onShowPromptApproved: {
+                                guard let approvedVariant = slot.approvedVariant else { return }
+                                showPromptPreview(title: "\(slot.title)", variant: approvedVariant)
+                            },
+                            onQuickLookApproved: {
+                                openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: slot.approvedVariant?.id))
+                            },
+                            onEditVariant: { variantID in
+                                guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                                prepareAccessoryEditPlan(costumeID: costume.id, slot: slot, variant: variant)
+                            },
+                            onShowPromptVariant: { variantID in
+                                guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                                showPromptPreview(title: "\(slot.title) Variant", variant: variant)
+                            },
+                            onQuickLookVariant: { variantID in
+                                openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: variantID))
+                            },
+                            onApprove: { variantID in
+                                store.setApprovedAccessoryVariant(variantID, costumeID: costume.id, accessoryID: slot.id, for: characterID)
+                            },
+                            onDelete: { variantID in
+                                store.removeAccessoryVariant(variantID, costumeID: costume.id, accessoryID: slot.id, for: characterID)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func poseSlotCard(
+        title: String,
+        badge: String,
+        notes: String,
+        approvedVariant: CharacterLookDevelopmentVariant?,
+        variants: [CharacterLookDevelopmentVariant],
+        isGenerating: Bool,
+        onGenerate: @escaping () -> Void,
+        onImport: @escaping () -> Void,
+        onEditApproved: @escaping () -> Void,
+        onShowPromptApproved: @escaping () -> Void,
+        onQuickLookApproved: @escaping () -> Void,
+        onEditVariant: @escaping (UUID) -> Void,
+        onShowPromptVariant: @escaping (UUID) -> Void,
+        onQuickLookVariant: @escaping (UUID) -> Void,
+        onApprove: @escaping (UUID) -> Void,
+        onDelete: @escaping (UUID) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    Text(notes)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                Spacer()
+                Text(badge)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.background.opacity(0.8), in: Capsule())
+            }
+
+            approvedVariantThumbnail(
+                approvedVariant,
+                isGenerating: isGenerating,
+                statusText: generationStatus ?? "Generating…",
+                onEdit: onEditApproved,
+                onShowPrompt: onShowPromptApproved,
+                onAdjustCrop: {
+                    if let variant = approvedVariant,
+                       let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
+                        store.pendingCropImagePath = url.path
+                        store.pendingCropCharacterID = characterID
+                        store.showImageCropper = true
+                    }
+                }
+            )
+            .onTapGesture(count: 2, perform: onQuickLookApproved)
+
+            HStack {
+                Text("\(variants.count) variant\(variants.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if approvedVariant != nil {
+                    Button {
+                        onShowPromptApproved()
+                    } label: {
+                        Image(systemName: "eye.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("View Prompt")
+                    Button {
+                        onEditApproved()
+                    } label: {
+                        Label("Edit", systemImage: "slider.horizontal.3")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                Button {
+                    onImport()
+                } label: {
+                    Label("Upload", systemImage: "arrow.down.doc")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button {
+                    onGenerate()
+                } label: {
+                    Label("Generate", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+
+            if variants.isEmpty {
+                Text("No approved image yet.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(variants) { variant in
+                            MiniVariantChip(
+                                store: store,
+                                variant: variant,
+                                isApproved: approvedVariant?.id == variant.id,
+                                onQuickLook: { onQuickLookVariant(variant.id) },
+                                onCopy: { copyImage(at: variant.imagePath) },
+                                onEdit: { onEditVariant(variant.id) },
+                                onShowPrompt: { onShowPromptVariant(variant.id) },
+                                onApprove: { onApprove(variant.id) },
+                                onDelete: { onDelete(variant.id) },
+                                onAdjustCrop: {
+                                    if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
+                                        store.pendingCropImagePath = url.path
+                                        store.pendingCropCharacterID = characterID
+                                        store.showImageCropper = true
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+        .padding(14)
+        .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.quaternary.opacity(0.35))
+        }
+    }
+
+    @ViewBuilder
+    private func approvedVariantThumbnail(
+        _ variant: CharacterLookDevelopmentVariant?,
+        isGenerating: Bool,
+        statusText: String,
+        onEdit: @escaping () -> Void,
+        onShowPrompt: @escaping () -> Void,
+        onAdjustCrop: @escaping () -> Void
+    ) -> some View {
+        if let variant,
+           let image = store.thumbnailImage(for: variant.imagePath, maxSize: 360) {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(height: 180)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contextMenu {
+                    Button("View Prompt", systemImage: "eye.circle") {
+                        onShowPrompt()
+                    }
+                    Button("Edit", systemImage: "slider.horizontal.3") {
+                        onEdit()
+                    }
+                    Button("Show in Finder", systemImage: "folder") {
+                        showInFinder(at: variant.imagePath)
+                    }
+                    Button("Copy Image", systemImage: "doc.on.doc") {
+                        copyImage(at: variant.imagePath)
+                    }
+                    Divider()
+                    Button("Adjust Crop", systemImage: "crop") {
+                        onAdjustCrop()
+                    }
+                    Button("Quick Look", systemImage: "eye") {
+                        openQuickLook(for: [variant.imagePath], startingAt: 0)
+                    }
+                }
+                .overlay {
+                    if isGenerating {
+                        generationOverlay(statusText: statusText)
+                    }
+                }
+        } else {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.quaternary.opacity(0.22))
+                .frame(height: 180)
+                .overlay {
+                    if isGenerating {
+                        generationOverlay(statusText: statusText)
+                    } else {
+                        Image(systemName: "photo")
+                            .font(.title2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+        }
+    }
+
+    private func generationOverlay(statusText: String) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.black.opacity(0.32))
+            VStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+                Text(statusText)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+            }
+        }
+    }
+
+    private func workflowEmptyState(icon: String, message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundStyle(.tertiary)
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 12)
+    }
+
+    private func loadingReferenceVariantCard(title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.quaternary.opacity(0.18))
+                .frame(width: 196, height: 196)
+                .overlay {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text(subtitle)
+                            .font(.caption2)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 12)
+                    }
+                }
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("Pending")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(width: 220)
+        .padding(12)
+        .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.35), lineWidth: 1)
+        }
+    }
+
+    private func approvedVariantIndex(in variants: [CharacterLookDevelopmentVariant], selected selectedID: UUID?) -> Int {
+        guard !variants.isEmpty else { return 0 }
+        if let selectedID, let index = variants.firstIndex(where: { $0.id == selectedID }) {
+            return index
+        }
+        return max(0, variants.count - 1)
+    }
+
+    private func prepareMasterSheetPlan(count: Int) {
+        guard let character else { return }
+        let references = referenceDrafts(from: store.masterReferenceSheetReferencePaths(for: character.id, limit: 8))
+        preflightDrafts = (0..<count).map { index in
+            GeminiGenerationDraft(
+                title: count == 1 ? "Master Reference Sheet" : "Master Reference Sheet \(index + 1)",
+                destinationDescription: "Saved to Characters/\(character.assetFolderSlug)/reference-workflow/master-sheet",
+                prompt: character.masterReferenceSheetPrompt,
+                model: store.selectedGeminiModel,
+                aspectRatio: CharacterReferenceWorkflowCatalog.defaultMasterSheetAspectRatio,
+                imageSize: CharacterReferenceWorkflowCatalog.defaultMasterSheetImageSize,
+                referenceItems: references
+            )
+        }
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Master Sheet Request\(count == 1 ? "" : "s")",
+            confirmTitle: "Run \(count) Master Sheet Request\(count == 1 ? "" : "s")",
+            actions: Array(repeating: .masterSheet, count: count)
+        )
+    }
+
+    private func prepareMasterSheetEditPlan(_ variant: CharacterLookDevelopmentVariant) {
+        guard let character else { return }
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "Edit Master Reference Sheet",
+                destinationDescription: "Saved as a new master-sheet variant for \(character.name)",
+                prompt: editPromptScaffold(
+                    subject: "the first attached master reference sheet",
+                    preservationNotes: "the same character identity, facial features, anime style, panel layout, and overall sheet composition unless explicitly changed"
+                ),
+                model: GeminiModel(rawValue: variant.model) ?? store.selectedGeminiModel,
+                aspectRatio: variant.aspectRatio,
+                imageSize: variant.imageSize,
+                referenceItems: editReferenceDrafts(
+                    primaryLabel: "Image to Edit",
+                    primaryPath: variant.imagePath,
+                    additionalPaths: store.masterReferenceSheetReferencePaths(for: character.id, limit: 8)
+                )
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Master Sheet Edit",
+            confirmTitle: "Run Master Sheet Edit",
+            actions: [.masterSheet],
+            persistPromptEditsToWorkflowDefaults: false
+        )
+    }
+
+    private func prepareHeadSheetPlan() {
+        guard let character else { return }
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "Head Turnaround Sheet",
+                destinationDescription: "Saved to Characters/\(character.assetFolderSlug)/reference-workflow/head-sheet",
+                prompt: character.headTurnaroundSheetPrompt,
+                model: store.selectedGeminiModel,
+                aspectRatio: CharacterReferenceWorkflowCatalog.sectionSheetAspectRatio,
+                imageSize: CharacterReferenceWorkflowCatalog.sectionSheetImageSize,
+                referenceItems: referenceDrafts(from: store.headSheetReferencePaths(for: character.id, limit: 8))
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Head Turnaround Sheet",
+            confirmTitle: "Run Head Sheet Request",
+            actions: [.headSheet]
+        )
+    }
+
+    private func prepareHeadBatchPlan() {
+        guard let character else { return }
+        let references = referenceDrafts(from: store.headReferencePaths(for: character.id, limit: 8))
+        let slots = character.headTurnaroundSlots.filter { $0.approvedVariant == nil }
+        let targetSlots = slots.isEmpty ? character.headTurnaroundSlots : slots
+        preflightDrafts = targetSlots.map { slot in
+            GeminiGenerationDraft(
+                title: "Head • \(slot.title)",
+                destinationDescription: "Saved to Characters/\(character.assetFolderSlug)/reference-workflow/head-turnaround",
+                prompt: slot.prompt,
+                model: store.selectedGeminiModel,
+                aspectRatio: slot.recommendedAspectRatio,
+                imageSize: slot.recommendedImageSize,
+                referenceItems: references
+            )
+        }
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Head Turnaround Batch",
+            confirmTitle: "Run \(targetSlots.count) Head Request\(targetSlots.count == 1 ? "" : "s")",
+            actions: targetSlots.map { .headPose($0.id) }
+        )
+    }
+
+    private func prepareHeadSlotPlan(_ slot: CharacterPoseSlot) {
+        guard let character else { return }
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "Head • \(slot.title)",
+                destinationDescription: "Saved to Characters/\(character.assetFolderSlug)/reference-workflow/head-turnaround",
+                prompt: slot.prompt,
+                model: store.selectedGeminiModel,
+                aspectRatio: slot.recommendedAspectRatio,
+                imageSize: slot.recommendedImageSize,
+                referenceItems: referenceDrafts(from: store.headReferencePaths(for: character.id, limit: 8))
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Head Pose Request",
+            confirmTitle: "Run Head Request",
+            actions: [.headPose(slot.id)]
+        )
+    }
+
+    private func prepareHeadSlotEditPlan(_ slot: CharacterPoseSlot, variant: CharacterLookDevelopmentVariant) {
+        guard let character else { return }
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "Edit Head • \(slot.title)",
+                destinationDescription: "Saved as a new head-turnaround variant for \(slot.title)",
+                prompt: editPromptScaffold(
+                    subject: "the first attached head-turnaround image",
+                    preservationNotes: "the same character identity, head angle, neutral expression, framing, and overall anime rendering unless explicitly changed"
+                ),
+                model: GeminiModel(rawValue: variant.model) ?? store.selectedGeminiModel,
+                aspectRatio: variant.aspectRatio,
+                imageSize: variant.imageSize,
+                referenceItems: editReferenceDrafts(
+                    primaryLabel: "Image to Edit",
+                    primaryPath: variant.imagePath,
+                    additionalPaths: store.headReferencePaths(for: character.id, limit: 8)
+                )
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Head Edit",
+            confirmTitle: "Run Head Edit",
+            actions: [.headPose(slot.id)],
+            persistPromptEditsToWorkflowDefaults: false
+        )
+    }
+
+    private func prepareHeadSheetEditPlan(_ variant: CharacterLookDevelopmentVariant) {
+        guard let character else { return }
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "Edit Head Turnaround Sheet",
+                destinationDescription: "Saved as a new head-sheet variant for \(character.name)",
+                prompt: editPromptScaffold(
+                    subject: "the first attached head turnaround sheet",
+                    preservationNotes: "the same character identity, 2x3 layout, head pose order, neutral expressions, and overall anime rendering unless explicitly changed"
+                ),
+                model: GeminiModel(rawValue: variant.model) ?? store.selectedGeminiModel,
+                aspectRatio: variant.aspectRatio,
+                imageSize: variant.imageSize,
+                referenceItems: editReferenceDrafts(
+                    primaryLabel: "Image to Edit",
+                    primaryPath: variant.imagePath,
+                    additionalPaths: store.headSheetReferencePaths(for: character.id, limit: 8)
+                )
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Head Sheet Edit",
+            confirmTitle: "Run Head Sheet Edit",
+            actions: [.headSheet],
+            persistPromptEditsToWorkflowDefaults: false
+        )
+    }
+
+    private func prepareCostumeBatchPlan(_ costume: CharacterCostumeReferenceSet) {
+        guard let character else { return }
+        let references = referenceDrafts(from: store.fullBodyReferencePaths(for: character.id, costumeID: costume.id, limit: 8))
+        let slots = costume.fullBodySlots.filter { $0.approvedVariant == nil }
+        let targetSlots = slots.isEmpty ? costume.fullBodySlots : slots
+        preflightDrafts = targetSlots.map { slot in
+            GeminiGenerationDraft(
+                title: "\(costume.name) • \(slot.title)",
+                destinationDescription: "Saved to Characters/\(character.assetFolderSlug)/reference-workflow/\(CharacterReferenceWorkflowCatalog.slug(from: costume.name))/fullbody",
+                prompt: slot.prompt,
+                model: store.selectedGeminiModel,
+                aspectRatio: slot.recommendedAspectRatio,
+                imageSize: slot.recommendedImageSize,
+                referenceItems: references
+            )
+        }
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Costume Pose Batch",
+            confirmTitle: "Run \(targetSlots.count) Full-Body Request\(targetSlots.count == 1 ? "" : "s")",
+            actions: targetSlots.map { .costumePose(costumeID: costume.id, slotID: $0.id) }
+        )
+    }
+
+    private func prepareCostumeSheetPlan(_ costume: CharacterCostumeReferenceSet) {
+        guard let character else { return }
+        let allPaths = store.fullBodySheetReferencePaths(for: character.id, costumeID: costume.id, limit: 8)
+        let masterPath = store.normalizedMasterSheetPath(for: character.id)
+        let prechecked: Set<String> = masterPath.map { [$0] } ?? []
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "\(costume.name) Sheet",
+                destinationDescription: "Saved to Characters/\(character.assetFolderSlug)/reference-workflow/\(CharacterReferenceWorkflowCatalog.slug(from: costume.name))/sheet",
+                prompt: costume.sheetPrompt,
+                model: store.selectedGeminiModel,
+                aspectRatio: CharacterReferenceWorkflowCatalog.sectionSheetAspectRatio,
+                imageSize: CharacterReferenceWorkflowCatalog.sectionSheetImageSize,
+                referenceItems: referenceDrafts(from: allPaths, onlyPrecheck: prechecked)
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview \(costume.name) Sheet",
+            confirmTitle: "Run Costume Sheet Request",
+            actions: [.costumeSheet(costume.id)]
+        )
+    }
+
+    private func prepareCostumeSlotPlan(costumeID: UUID, slot: CharacterPoseSlot) {
+        guard let character else { return }
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "Full Body • \(slot.title)",
+                destinationDescription: "Saved to Characters/\(character.assetFolderSlug)/reference-workflow/fullbody",
+                prompt: slot.prompt,
+                model: store.selectedGeminiModel,
+                aspectRatio: slot.recommendedAspectRatio,
+                imageSize: slot.recommendedImageSize,
+                referenceItems: referenceDrafts(from: store.fullBodyReferencePaths(for: character.id, costumeID: costumeID, limit: 8))
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Full-Body Pose Request",
+            confirmTitle: "Run Full-Body Request",
+            actions: [.costumePose(costumeID: costumeID, slotID: slot.id)]
+        )
+    }
+
+    private func prepareCostumeSlotEditPlan(
+        costumeID: UUID,
+        slot: CharacterPoseSlot,
+        variant: CharacterLookDevelopmentVariant
+    ) {
+        guard let character else { return }
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "Edit Full Body • \(slot.title)",
+                destinationDescription: "Saved as a new full-body variant for \(slot.title)",
+                prompt: editPromptScaffold(
+                    subject: "the first attached full-body image",
+                    preservationNotes: "the same character identity, body angle, costume silhouette, style, and framing unless explicitly changed"
+                ),
+                model: GeminiModel(rawValue: variant.model) ?? store.selectedGeminiModel,
+                aspectRatio: variant.aspectRatio,
+                imageSize: variant.imageSize,
+                referenceItems: editReferenceDrafts(
+                    primaryLabel: "Image to Edit",
+                    primaryPath: variant.imagePath,
+                    additionalPaths: store.fullBodyReferencePaths(for: character.id, costumeID: costumeID, limit: 8)
+                )
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Full-Body Edit",
+            confirmTitle: "Run Full-Body Edit",
+            actions: [.costumePose(costumeID: costumeID, slotID: slot.id)],
+            persistPromptEditsToWorkflowDefaults: false
+        )
+    }
+
+    private func prepareCostumeSheetEditPlan(_ costume: CharacterCostumeReferenceSet, variant: CharacterLookDevelopmentVariant) {
+        guard let character else { return }
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "Edit \(costume.name) Sheet",
+                destinationDescription: "Saved as a new \(costume.name) sheet variant",
+                prompt: editPromptScaffold(
+                    subject: "the first attached full-body turnaround sheet",
+                    preservationNotes: "the same character identity, costume, 2x3 layout, pose order, and overall style unless explicitly changed"
+                ),
+                model: GeminiModel(rawValue: variant.model) ?? store.selectedGeminiModel,
+                aspectRatio: variant.aspectRatio,
+                imageSize: variant.imageSize,
+                referenceItems: editReferenceDrafts(
+                    primaryLabel: "Image to Edit",
+                    primaryPath: variant.imagePath,
+                    additionalPaths: store.fullBodySheetReferencePaths(for: character.id, costumeID: costume.id, limit: 8)
+                )
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview \(costume.name) Sheet Edit",
+            confirmTitle: "Run Costume Sheet Edit",
+            actions: [.costumeSheet(costume.id)],
+            persistPromptEditsToWorkflowDefaults: false
+        )
+    }
+
+    private func prepareAccessoryBatchPlan(_ costume: CharacterCostumeReferenceSet) {
+        guard let character else { return }
+        let references = referenceDrafts(from: store.accessoryReferencePaths(for: character.id, costumeID: costume.id, limit: 8))
+        preflightDrafts = costume.accessorySlots.map { slot in
+            GeminiGenerationDraft(
+                title: "\(costume.name) • \(slot.title)",
+                destinationDescription: "Saved to Characters/\(character.assetFolderSlug)/reference-workflow/\(CharacterReferenceWorkflowCatalog.slug(from: costume.name))/accessories",
+                prompt: slot.prompt,
+                model: store.selectedGeminiModel,
+                aspectRatio: slot.recommendedAspectRatio,
+                imageSize: slot.recommendedImageSize,
+                referenceItems: references
+            )
+        }
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Accessory Batch",
+            confirmTitle: "Run \(costume.accessorySlots.count) Accessory Requests",
+            actions: costume.accessorySlots.map { .accessory(costumeID: costume.id, accessoryID: $0.id) }
+        )
+    }
+
+    private func prepareAccessoryPlan(costumeID: UUID, slot: CharacterAccessorySlot) {
+        guard let character else { return }
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "Accessory • \(slot.title)",
+                destinationDescription: "Saved to Characters/\(character.assetFolderSlug)/reference-workflow/accessories",
+                prompt: slot.prompt,
+                model: store.selectedGeminiModel,
+                aspectRatio: slot.recommendedAspectRatio,
+                imageSize: slot.recommendedImageSize,
+                referenceItems: referenceDrafts(from: store.accessoryReferencePaths(for: character.id, costumeID: costumeID, limit: 8))
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Accessory Request",
+            confirmTitle: "Run Accessory Request",
+            actions: [.accessory(costumeID: costumeID, accessoryID: slot.id)]
+        )
+    }
+
+    private func prepareAccessoryEditPlan(
+        costumeID: UUID,
+        slot: CharacterAccessorySlot,
+        variant: CharacterLookDevelopmentVariant
+    ) {
+        guard let character else { return }
+        preflightDrafts = [
+            GeminiGenerationDraft(
+                title: "Edit Accessory • \(slot.title)",
+                destinationDescription: "Saved as a new accessory variant for \(slot.title)",
+                prompt: editPromptScaffold(
+                    subject: "the first attached accessory image",
+                    preservationNotes: "the same character identity, accessory design, style, and framing unless explicitly changed"
+                ),
+                model: GeminiModel(rawValue: variant.model) ?? store.selectedGeminiModel,
+                aspectRatio: variant.aspectRatio,
+                imageSize: variant.imageSize,
+                referenceItems: editReferenceDrafts(
+                    primaryLabel: "Image to Edit",
+                    primaryPath: variant.imagePath,
+                    additionalPaths: store.accessoryReferencePaths(for: character.id, costumeID: costumeID, limit: 8)
+                )
+            )
+        ]
+        pendingPlan = PendingGenerationPlan(
+            title: "Preview Accessory Edit",
+            confirmTitle: "Run Accessory Edit",
+            actions: [.accessory(costumeID: costumeID, accessoryID: slot.id)],
+            persistPromptEditsToWorkflowDefaults: false
+        )
+    }
+
+    private func run(plan: PendingGenerationPlan, drafts: [GeminiGenerationDraft]) {
+        guard let character else { return }
+        isGenerating = true
+        generationStatus = nil
+        generationError = nil
+        generatingActions = []
+
+        Task { @MainActor in
+            let service = GeminiImageService()
+            do {
+                for (index, pair) in zip(plan.actions, drafts).enumerated() {
+                    let requestNumber = index + 1
+                    let total = drafts.count
+                    generationStatus = "Generating \(requestNumber) of \(total)…"
+                    generatingActions = [pair.0]
+
+                    if plan.persistPromptEditsToWorkflowDefaults {
+                        switch pair.0 {
+                        case .masterSheet:
+                            store.updateMasterReferenceSheetPrompt(pair.1.prompt, for: character.id)
+                        case .headSheet:
+                            store.updateHeadTurnaroundSheetPrompt(pair.1.prompt, for: character.id)
+                        case .headPose(let slotID):
+                            store.updateHeadTurnaroundPrompt(pair.1.prompt, slotID: slotID, for: character.id)
+                        case .costumeSheet(let costumeID):
+                            store.updateCostumeSheetPrompt(pair.1.prompt, costumeID: costumeID, for: character.id)
+                        case .costumePose(let costumeID, let slotID):
+                            store.updateCostumePosePrompt(pair.1.prompt, costumeID: costumeID, slotID: slotID, for: character.id)
+                        case .accessory(let costumeID, let accessoryID):
+                            store.updateAccessoryPrompt(pair.1.prompt, costumeID: costumeID, accessoryID: accessoryID, for: character.id)
+                        }
+                    }
+
+                    let request = GeminiImageService.GenerationRequest(
+                        prompt: pair.1.prompt,
+                        referenceImages: buildReferenceImages(from: pair.1.referenceItems),
+                        model: pair.1.model,
+                        aspectRatio: pair.1.aspectRatio,
+                        imageSize: pair.1.imageSize
+                    )
+
+                    let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
+
+                    switch pair.0 {
+                    case .masterSheet:
+                        try store.storeMasterReferenceSheetVariant(
+                            result.imageData,
+                            prompt: pair.1.prompt,
+                            model: pair.1.model,
+                            for: character.id,
+                            aspectRatio: pair.1.aspectRatio,
+                            imageSize: pair.1.imageSize
+                        )
+                    case .headSheet:
+                        try store.storeHeadTurnaroundSheetVariant(
+                            result.imageData,
+                            prompt: pair.1.prompt,
+                            model: pair.1.model,
+                            for: character.id,
+                            aspectRatio: pair.1.aspectRatio,
+                            imageSize: pair.1.imageSize
+                        )
+                    case .headPose(let slotID):
+                        try store.storeHeadTurnaroundVariant(
+                            result.imageData,
+                            prompt: pair.1.prompt,
+                            model: pair.1.model,
+                            slotID: slotID,
+                            for: character.id,
+                            aspectRatio: pair.1.aspectRatio,
+                            imageSize: pair.1.imageSize
+                        )
+                    case .costumeSheet(let costumeID):
+                        try store.storeCostumeSheetVariant(
+                            result.imageData,
+                            prompt: pair.1.prompt,
+                            model: pair.1.model,
+                            costumeID: costumeID,
+                            for: character.id,
+                            aspectRatio: pair.1.aspectRatio,
+                            imageSize: pair.1.imageSize
+                        )
+                    case .costumePose(let costumeID, let slotID):
+                        try store.storeCostumePoseVariant(
+                            result.imageData,
+                            prompt: pair.1.prompt,
+                            model: pair.1.model,
+                            costumeID: costumeID,
+                            slotID: slotID,
+                            for: character.id,
+                            aspectRatio: pair.1.aspectRatio,
+                            imageSize: pair.1.imageSize
+                        )
+                    case .accessory(let costumeID, let accessoryID):
+                        try store.storeAccessoryVariant(
+                            result.imageData,
+                            prompt: pair.1.prompt,
+                            model: pair.1.model,
+                            costumeID: costumeID,
+                            accessoryID: accessoryID,
+                            for: character.id,
+                            aspectRatio: pair.1.aspectRatio,
+                            imageSize: pair.1.imageSize
+                        )
+                    }
+                }
+
+                generationStatus = "Finished \(drafts.count) request\(drafts.count == 1 ? "" : "s")."
+            } catch {
+                generationError = error.localizedDescription
+            }
+
+            generatingActions = []
+            isGenerating = false
+        }
+    }
+
+    private static let batchTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd'T'HHmmssSSS'Z'"
+        return formatter
+    }()
+
+    private func submitBatch(plan: PendingGenerationPlan, drafts: [GeminiGenerationDraft]) {
+        guard let character,
+              let animateURL = store.animateURL else { return }
+
+        isGenerating = true
+        generationStatus = "Submitting batch…"
+        generationError = nil
+
+        Task { @MainActor in
+            defer {
+                isGenerating = false
+            }
+
+            do {
+                let stamp = Self.batchTimestampFormatter.string(from: Date())
+                let batchSlug = plan.title
+                    .lowercased()
+                    .replacingOccurrences(of: " ", with: "-")
+                    .replacingOccurrences(of: "•", with: "")
+                    .replacingOccurrences(of: "  ", with: "-")
+
+                let outputRoot = animateURL
+                    .appendingPathComponent("characters")
+                    .appendingPathComponent(character.assetFolderSlug)
+                    .appendingPathComponent("reference-workflow-batches")
+                    .appendingPathComponent("\(stamp)-\(batchSlug)")
+
+                let promptRequests = try drafts.map { draft in
+                    GeminiBatchSubmissionPlan.PromptRequest(
+                        id: draft.title
+                            .lowercased()
+                            .replacingOccurrences(of: "°", with: "deg")
+                            .replacingOccurrences(of: " ", with: "-")
+                            .replacingOccurrences(of: "•", with: "")
+                            .replacingOccurrences(of: "  ", with: "-"),
+                        title: draft.title,
+                        prompt: draft.prompt,
+                        referencePaths: try resolvedBatchReferencePaths(from: draft.includedReferenceItems)
+                    )
+                }
+
+                let submissionPlan = GeminiBatchSubmissionPlan(
+                    characterName: character.name,
+                    characterSlug: character.assetFolderSlug,
+                    displayName: "\(character.name.lowercased().replacingOccurrences(of: " ", with: "-"))-refworkflow-\(stamp.lowercased())",
+                    model: drafts.first?.model ?? store.selectedGeminiModel,
+                    aspectRatio: drafts.first?.aspectRatio ?? "1:1",
+                    imageSize: drafts.first?.imageSize ?? "2K",
+                    outputRoot: outputRoot,
+                    prompts: promptRequests
+                )
+
+                let service = GeminiBatchService()
+                let submission = try await service.submit(plan: submissionPlan, apiKey: store.geminiAPIKey)
+                try service.launchWatchdog(metadataPath: submission.metadataPath, apiKey: store.geminiAPIKey)
+
+                store.registerInspirationBatchJob(
+                    CharacterInspirationBatchJob(
+                        title: plan.title,
+                        batchName: submission.batchName,
+                        metadataPath: submission.metadataPath.path,
+                        outputRootPath: submission.outputRoot.path,
+                        state: submission.state,
+                        promptCount: submission.promptCount,
+                        submittedAt: submission.submittedAt
+                    ),
+                    for: character.id
+                )
+                store.refreshInspirationBatchJobs()
+                generationStatus = "Submitted \(submission.promptCount)-image batch. Watchdog is active."
+            } catch {
+                generationError = error.localizedDescription
+            }
+        }
+    }
+
+    private func resolvedBatchReferencePaths(
+        from references: [GeminiGenerationReferenceDraft]
+    ) throws -> [String] {
+        let included = references.filter(\.isIncluded)
+        return try included.map { reference in
+            if let resolvedURL = store.resolvedCharacterAssetURL(for: reference.path) {
+                return resolvedURL.path
+            }
+
+            let candidate = URL(fileURLWithPath: reference.path)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate.path
+            }
+
+            throw NSError(
+                domain: "CharacterReferenceWorkflowSheet.BatchReferences",
+                code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Reference image could not be resolved for batch submission: \(reference.path)"
+                ]
+            )
+        }
+    }
+
+    private func referenceDrafts(from paths: [String]) -> [GeminiGenerationReferenceDraft] {
+        paths.map { path in
+            GeminiGenerationReferenceDraft(
+                label: URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent,
+                path: path,
+                isIncluded: true
+            )
+        }
+    }
+
+    private func referenceDrafts(from paths: [String], onlyPrecheck precheckedPaths: Set<String>) -> [GeminiGenerationReferenceDraft] {
+        paths.map { path in
+            GeminiGenerationReferenceDraft(
+                label: URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent,
+                path: path,
+                isIncluded: precheckedPaths.contains(path)
+            )
+        }
+    }
+
+    private func editReferenceDrafts(
+        primaryLabel: String,
+        primaryPath: String,
+        additionalPaths: [String]
+    ) -> [GeminiGenerationReferenceDraft] {
+        var ordered = [GeminiGenerationReferenceDraft(label: primaryLabel, path: primaryPath, isIncluded: true)]
+        var seen = Set([primaryPath])
+        for path in additionalPaths where seen.insert(path).inserted {
+            ordered.append(
+                GeminiGenerationReferenceDraft(
+                    label: URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent,
+                    path: path,
+                    isIncluded: true
+                )
+            )
+        }
+        return ordered
+    }
+
+    private func editPromptScaffold(subject: String, preservationNotes: String) -> String {
+        """
+        Edit \(subject).
+
+        Preserve \(preservationNotes).
+
+        Requested edits:
+        - Describe the exact changes you want here.
+
+        Keep everything else unchanged.
+        """
+    }
+
+    private func showPromptPreview(title: String, variant: CharacterLookDevelopmentVariant) {
+        promptPreview = VariantPromptPreview(
+            title: title,
+            prompt: variant.prompt,
+            model: variant.model,
+            aspectRatio: variant.aspectRatio,
+            imageSize: variant.imageSize
+        )
+    }
+
+    private func masterSheetSourceCandidates(for character: AnimationCharacter) -> [String] {
+        var ordered: [String] = []
+        var seen = Set<String>()
+
+        func append(_ path: String?) {
+            guard let path, seen.insert(path).inserted else { return }
+            ordered.append(path)
+        }
+
+        // Curated picks first so they appear at the top of the source list
+        append(character.inspirationReferenceImagePath)
+        character.curatedInspirationImagePaths.forEach { append($0) }
+        character.inspirationImagePaths.forEach { append($0) }
+        return ordered
+    }
+
+    private func importExistingMasterSheet() {
+        let panel = NSOpenPanel()
+        panel.title = "Attach Existing Master Reference Sheet"
+        panel.allowedContentTypes = [.png, .jpeg, .tiff]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try store.importMasterReferenceSheetVariant(from: url, for: characterID)
+            generationStatus = "Attached existing master sheet."
+        } catch {
+            generationError = error.localizedDescription
+        }
+    }
+
+    private func importHeadTurnaroundVariant(_ slot: CharacterPoseSlot) {
+        guard let url = chooseWorkflowVariantImage(title: "Upload \(slot.title) Head Variant") else { return }
+        do {
+            try store.importHeadTurnaroundVariant(from: url, slotID: slot.id, for: characterID)
+            generationStatus = "Uploaded \(slot.title)."
+        } catch {
+            generationError = error.localizedDescription
+        }
+    }
+
+    private func importHeadTurnaroundSheet() {
+        guard let url = chooseWorkflowVariantImage(title: "Attach Head Turnaround Sheet") else { return }
+        do {
+            try store.importHeadTurnaroundSheetVariant(from: url, for: characterID)
+            generationStatus = "Attached head sheet."
+        } catch {
+            generationError = error.localizedDescription
+        }
+    }
+
+    private func importCostumePoseVariant(costumeID: UUID, slot: CharacterPoseSlot) {
+        guard let url = chooseWorkflowVariantImage(title: "Upload \(slot.title) Full-Body Variant") else { return }
+        do {
+            try store.importCostumePoseVariant(from: url, costumeID: costumeID, slotID: slot.id, for: characterID)
+            generationStatus = "Uploaded \(slot.title)."
+        } catch {
+            generationError = error.localizedDescription
+        }
+    }
+
+    private func importCostumeSheet(costumeID: UUID, costumeName: String) {
+        guard let url = chooseWorkflowVariantImage(title: "Attach \(costumeName) Sheet") else { return }
+        do {
+            try store.importCostumeSheetVariant(from: url, costumeID: costumeID, for: characterID)
+            generationStatus = "Attached \(costumeName) sheet."
+        } catch {
+            generationError = error.localizedDescription
+        }
+    }
+
+    private func importAccessoryVariant(costumeID: UUID, slot: CharacterAccessorySlot) {
+        guard let url = chooseWorkflowVariantImage(title: "Upload \(slot.title) Accessory Variant") else { return }
+        do {
+            try store.importAccessoryVariant(from: url, costumeID: costumeID, accessoryID: slot.id, for: characterID)
+            generationStatus = "Uploaded \(slot.title)."
+        } catch {
+            generationError = error.localizedDescription
+        }
+    }
+
+    private func chooseWorkflowVariantImage(title: String) -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.allowedContentTypes = [.png, .jpeg, .tiff]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    private func buildReferenceImages(from references: [GeminiGenerationReferenceDraft]) -> [GeminiImageService.ReferenceImage] {
+        references
+            .filter(\.isIncluded)
+            .compactMap { reference in
+                let url = store.resolvedCharacterAssetURL(for: reference.path) ?? URL(fileURLWithPath: reference.path)
+                return GeminiImageService.referenceImage(from: url)
+            }
+    }
+
+    @ViewBuilder
+    private func masterSheetSourceCard(character: AnimationCharacter, path: String) -> some View {
+        let isIncluded = character.masterReferenceSourceImagePaths.contains(path) || character.curatedInspirationImagePaths.contains(path)
+
+        VStack(alignment: .leading, spacing: 8) {
+            if let image = store.thumbnailImage(for: path, maxSize: 132) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 132, height: 132)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .onTapGesture(count: 2) {
+                        openQuickLook(for: [path], startingAt: 0)
+                    }
+                    .contextMenu {
+                        Button("Show in Finder", systemImage: "folder") {
+                            showInFinder(at: path)
+                        }
+                        Button("Copy Image", systemImage: "doc.on.doc") {
+                            copyImage(at: path)
+                        }
+                        Button("Quick Look", systemImage: "eye") {
+                            openQuickLook(for: [path], startingAt: 0)
+                        }
+                    }
+            } else {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.quaternary.opacity(0.2))
+                    .frame(width: 132, height: 132)
+            }
+
+            Toggle(isOn: Binding(
+                get: { isIncluded },
+                set: { store.setMasterReferenceSourceInclusion($0, path: path, for: characterID) }
+            )) {
+                Text(URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent)
+                    .font(.caption2)
+                    .lineLimit(2)
+            }
+            .toggleStyle(.checkbox)
+            .frame(width: 132, alignment: .leading)
+        }
+        .padding(10)
+        .background(.background.opacity(0.78), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(isIncluded ? Color.accentColor : Color.secondary, lineWidth: isIncluded ? 2 : 1)
+        }
+    }
+
+    private func openQuickLook(
+        for paths: [String],
+        startingAt index: Int
+    ) {
+        let resolvedItems = paths.enumerated().compactMap { offset, path -> (Int, URL)? in
+            guard let url = store.resolvedCharacterAssetURL(for: path) else { return nil }
+            return (offset, url)
+        }
+
+        guard !resolvedItems.isEmpty else { return }
+
+        let quickLookIndex = resolvedItems.firstIndex(where: { $0.0 == index }) ?? 0
+        QuickLookPreviewController.shared.present(
+            urls: resolvedItems.map(\.1),
+            startAt: quickLookIndex
+        )
+    }
+
+    private func copyImage(at path: String) {
+        guard let url = store.resolvedCharacterAssetURL(for: path),
+              ImageClipboardService.copyImage(at: url) else {
+            store.statusMessage = "Could not copy image"
+            return
+        }
+        store.statusMessage = "Copied image"
+    }
+
+    private func showInFinder(at path: String) {
+        guard let url = store.resolvedCharacterAssetURL(for: path) else {
+            store.statusMessage = "Could not locate image"
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+}
+
+@available(macOS 26.0, *)
+private struct ReferenceVariantCard: View {
+    let store: AnimateStore
+    let variant: CharacterLookDevelopmentVariant
+    let title: String
+    let isApproved: Bool
+    let onQuickLook: () -> Void
+    let onCopy: () -> Void
+    let onEdit: () -> Void
+    let onShowPrompt: () -> Void
+    let onApprove: () -> Void
+    let onDelete: () -> Void
+    let approveLabel: String
+    let approvedLabel: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            thumbnail
+                .onTapGesture(count: 2, perform: onQuickLook)
+                .contextMenu {
+                    Button("View Prompt", systemImage: "eye.circle") {
+                        onShowPrompt()
+                    }
+                    Button("Edit", systemImage: "slider.horizontal.3") {
+                        onEdit()
+                    }
+                    Button("Show in Finder", systemImage: "folder") {
+                        if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                    }
+                    Button("Copy Image", systemImage: "doc.on.doc") {
+                        onCopy()
+                    }
+                    Button("Quick Look", systemImage: "eye") {
+                        onQuickLook()
+                    }
+                }
+
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                Button {
+                    onShowPrompt()
+                } label: {
+                    Image(systemName: "eye.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("View Prompt")
+            }
+
+            Text("\(variant.imageSize) • \(variant.aspectRatio)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
+            HStack {
+                Button(isApproved ? approvedLabel : approveLabel) {
+                    onApprove()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(isApproved)
+
+                Button("Edit") {
+                    onEdit()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Spacer()
+
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .frame(width: 220)
+        .padding(12)
+        .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(isApproved ? Color.green : Color.secondary, lineWidth: isApproved ? 2 : 1)
+        }
+    }
+
+    @ViewBuilder
+    private var thumbnail: some View {
+        if let image = store.thumbnailImage(for: variant.imagePath, maxSize: 196) {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 196, height: 196)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        } else {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.quaternary.opacity(0.22))
+                .frame(width: 196, height: 196)
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct MiniVariantChip: View {
+    let store: AnimateStore
+    let variant: CharacterLookDevelopmentVariant
+    let isApproved: Bool
+    let onQuickLook: () -> Void
+    let onCopy: () -> Void
+    let onEdit: () -> Void
+    let onShowPrompt: () -> Void
+    let onApprove: () -> Void
+    let onDelete: () -> Void
+    let onAdjustCrop: () -> Void
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if let image = store.thumbnailImage(for: variant.imagePath, maxSize: 72) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 72, height: 72)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .onTapGesture(count: 2, perform: onQuickLook)
+                    .contextMenu {
+                        Button("View Prompt", systemImage: "eye.circle") {
+                            onShowPrompt()
+                        }
+                        Button("Edit", systemImage: "slider.horizontal.3") {
+                            onEdit()
+                        }
+                        Button("Show in Finder", systemImage: "folder") {
+                            if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
+                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                            }
+                        }
+                        Button("Copy Image", systemImage: "doc.on.doc") {
+                            onCopy()
+                        }
+                        Divider()
+                        Button("Adjust Crop", systemImage: "crop") {
+                            onAdjustCrop()
+                        }
+                        Button("Quick Look", systemImage: "eye") {
+                            onQuickLook()
+                        }
+                    }
+            } else {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.quaternary.opacity(0.2))
+                    .frame(width: 72, height: 72)
+            }
+
+            Button(isApproved ? "Approved" : "Use") {
+                onApprove()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            .disabled(isApproved)
+
+            Button("Edit") {
+                onEdit()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+
+            Button {
+                onShowPrompt()
+            } label: {
+                Image(systemName: "eye.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("View Prompt")
+
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(8)
+        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(isApproved ? Color.green.opacity(0.5) : .clear, lineWidth: 2)
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct VariantPromptPreviewSheet: View {
+    let preview: CharacterReferenceWorkflowSheet.VariantPromptPreview
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(preview.title)
+                        .font(.headline)
+                    Text("\(preview.imageSize) • \(preview.aspectRatio) • \(preview.model)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
+
+            ScrollView {
+                Text(preview.prompt)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(14)
+                    .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+        }
+        .padding()
+        .frame(minWidth: 720, minHeight: 420)
+    }
+}
