@@ -66,13 +66,16 @@ struct CharacterMouthEngine: Sendable {
 
         if let beat = blocking.lipsyncBeats.first(where: { $0.startFrame <= frame && frame <= $0.endFrame }) {
             return canonicalized(
-                state: state(for: syntheticViseme(in: beat, frame: frame, baseFPS: baseFPS, characterName: characterName)),
+                state: state(for: syntheticViseme(in: beat, frame: frame, baseFPS: baseFPS, characterName: characterName, profile: profile)),
                 profile: profile
             )
         }
 
         if blocking.actingBeats.contains(where: { $0.startFrame <= frame && frame <= $0.endFrame && talksOrSings($0.action) }) {
-            let cycle = [PrestonBlairViseme.consonant, .ai, .e, .o, .rest]
+            let cycle = plannedCycle(
+                base: [.consonant, .ai, .e, .o, .rest],
+                profile: profile
+            )
             let step = max(1, baseFPS / 12)
             let index = (frame / step) % cycle.count
             return canonicalized(state: state(for: cycle[index]), profile: profile)
@@ -96,11 +99,18 @@ private extension CharacterMouthEngine {
         in beat: CharacterLipsyncBeat,
         frame: Int,
         baseFPS: Int,
-        characterName: String
+        characterName: String,
+        profile: Character3DPerformanceProfile?
     ) -> PrestonBlairViseme {
         let mode = beat.mode.lowercased()
-        let singingCycle: [PrestonBlairViseme] = [.ai, .o, .e, .u, .ai, .rest]
-        let speechCycle: [PrestonBlairViseme] = [.consonant, .ai, .e, .mbp, .o, .rest]
+        let singingCycle = plannedCycle(
+            base: [.ai, .o, .e, .u, .ai, .rest],
+            profile: profile
+        )
+        let speechCycle = plannedCycle(
+            base: [.consonant, .ai, .e, .mbp, .o, .rest],
+            profile: profile
+        )
         let cycle = mode.contains("sing") ? singingCycle : speechCycle
         let step = max(1, baseFPS / (mode.contains("sing") ? 8 : 12))
         let phase = ((frame - beat.startFrame) / step + abs(characterName.hashValue % cycle.count)) % cycle.count
@@ -150,6 +160,31 @@ private extension CharacterMouthEngine {
         return value.contains("speak") || value.contains("sing") || value.contains("shout") || value.contains("call")
     }
 
+    func plannedCycle(
+        base: [PrestonBlairViseme],
+        profile: Character3DPerformanceProfile?
+    ) -> [PrestonBlairViseme] {
+        guard let profile else {
+            return base
+        }
+
+        let available = profile.availableVisemes()
+        guard !available.isEmpty else {
+            return base
+        }
+
+        var ordered: [PrestonBlairViseme] = []
+        for viseme in base where available.contains(viseme) && !ordered.contains(viseme) {
+            ordered.append(viseme)
+        }
+
+        if !ordered.isEmpty {
+            return ordered
+        }
+
+        return available
+    }
+
     func canonicalized(
         state: CharacterMouthState,
         profile: Character3DPerformanceProfile?
@@ -159,9 +194,7 @@ private extension CharacterMouthEngine {
               canonicalCue.caseInsensitiveCompare(state.cue) != .orderedSame else {
             return state
         }
-        let canonicalViseme = PrestonBlairViseme.allCases.first {
-            $0.token.caseInsensitiveCompare(canonicalCue) == .orderedSame
-        }
+        let canonicalViseme = profile.canonicalVisemeToken(for: state)
         return state.withCue(canonicalCue, viseme: canonicalViseme)
     }
 }

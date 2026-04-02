@@ -57,7 +57,9 @@ struct CharacterExpressionEngine: Sendable {
             ?? "neutral"
         let intensity = activeIntensity(in: blocking, frame: frame)
         let canonicalCue = profile?.canonicalExpressionCue(for: cue)
-        let behaviorCue = canonicalCue.flatMap { isSemanticExpressionCue($0) ? $0 : nil } ?? cue
+        let behaviorCue = profile?.expressionBehaviorCue(for: cue)
+            ?? canonicalCue.flatMap { isSemanticExpressionCue($0) ? $0 : nil }
+            ?? cue
         var state = stateForCue(behaviorCue, intensity: intensity)
         if let canonicalCue, canonicalCue.caseInsensitiveCompare(state.cue) != .orderedSame {
             state = state.withCue(canonicalCue)
