@@ -4,38 +4,7 @@ import ProjectKit
 
 @available(macOS 26.0, *)
 struct Animate3DInspectorView: View {
-    struct PreflightOwner {
-        var characterID: UUID?
-        var characterSlug: String?
-        var displayName: String
-        var outputRootRelativePath: String?
-
-        @MainActor
-        init(item: Animate3DGenerationQueueItem, store: AnimateStore) {
-            if let slug = item.characterSlug,
-               let character = store.characters.first(where: { $0.assetFolderSlug == slug || $0.owpSlug == slug }) {
-                characterID = character.id
-                characterSlug = character.assetFolderSlug
-                displayName = character.name
-                outputRootRelativePath = nil
-            } else {
-                characterID = nil
-                characterSlug = nil
-                displayName = item.characterName ?? "Environment"
-                let trimmed = item.targetRelativePath.trimmingCharacters(in: .whitespacesAndNewlines)
-                let normalized = trimmed.hasPrefix("Animate/")
-                    ? String(trimmed.dropFirst("Animate/".count))
-                    : trimmed
-                let directory = normalized.hasSuffix("/")
-                    ? normalized
-                    : (normalized as NSString).deletingLastPathComponent
-                let cleaned = directory.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                outputRootRelativePath = cleaned.isEmpty
-                    ? "3d/generation-queue-batches"
-                    : "\(cleaned)/batch-queue-batches"
-            }
-        }
-    }
+    typealias PreflightOwner = Animate3DGenerationQueueActionSupport.PreflightOwner
 
     @Bindable var store: AnimateStore
     let scenario: Animate3DPreviewScenario
@@ -901,10 +870,11 @@ struct Animate3DInspectorView: View {
         _ item: Animate3DGenerationQueueItem,
         status: Animate3DProductionStatus
     ) {
-        let queued = Animate3DAssetGapQueueService(store: store).queue(
+        let queued = Animate3DGenerationQueueActionSupport.queue(
             item: item,
             scene: selectedScene,
-            status: status
+            status: status,
+            store: store
         )
         store.statusMessage = queued > 0
             ? "Queued \(item.title)"
@@ -915,87 +885,52 @@ struct Animate3DInspectorView: View {
         _ item: Animate3DGenerationQueueItem,
         status: Animate3DProductionStatus
     ) {
-        guard let draft = Animate3DAssetGapQueueService(store: store).draft(
+        guard let result = Animate3DGenerationQueueActionSupport.draft(
             for: item,
             scene: selectedScene,
-            status: status
+            status: status,
+            store: store
         ) else {
             store.statusMessage = "No draftable Gemini request exists for \(item.title)."
             return
         }
-        preflightDrafts = [draft]
-        preflightOwner = PreflightOwner(item: item, store: store)
+        preflightDrafts = [result.draft]
+        preflightOwner = result.owner
         showPreflight = true
     }
 
     private func queuePreflightDrafts(_ drafts: [GeminiGenerationDraft]) {
         guard let owner = preflightOwner else { return }
-        for draft in drafts {
-            if let characterID = owner.characterID {
-                store.addToBatchQueue(
-                    characterID: characterID,
-                    characterName: owner.displayName,
-                    draftTitle: draft.title,
-                    draft: draft,
-                    characterSlug: owner.characterSlug
-                )
-            } else if let outputRootRelativePath = owner.outputRootRelativePath {
-                store.addToBatchQueue(
-                    pipelineName: owner.displayName,
-                    draftTitle: draft.title,
-                    draft: draft,
-                    outputRootRelativePath: outputRootRelativePath
-                )
-            }
-        }
-        store.statusMessage = "Queued \(drafts.count) 3D preflight draft\(drafts.count == 1 ? "" : "s")"
+        let queued = Animate3DGenerationQueueActionSupport.queuePreflightDrafts(
+            drafts,
+            owner: owner,
+            store: store
+        )
+        store.statusMessage = "Queued \(queued) 3D preflight draft\(queued == 1 ? "" : "s")"
         preflightOwner = nil
     }
 
     private func revealGenerationItem(_ item: Animate3DGenerationQueueItem) {
         guard let projectURL else { return }
-        let trimmed = item.targetRelativePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard !trimmed.isEmpty else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([
-            projectURL.appendingPathComponent(trimmed)
-        ])
+        Animate3DGenerationQueueActionSupport.reveal(item: item, projectURL: projectURL)
     }
 
     private func manifestEditorContext(
         for item: Animate3DGenerationQueueItem
     ) -> Animate3DRegistryEditorContext? {
-        guard let manifestKind = item.manifestKind,
-              let relativePath = manifestRelativePath(for: manifestKind) else {
-            return nil
-        }
-        return Animate3DRegistryEditorContext(
-            kind: manifestKind,
-            title: item.kind.title,
-            relativePath: relativePath
+        guard let projectURL else { return nil }
+        return Animate3DGenerationQueueActionSupport.manifestEditorContext(
+            for: item,
+            projectURL: projectURL
         )
     }
 
     private func manifestRelativePath(for kind: Animate3DRegistryManifestKind) -> String? {
         guard let projectURL else { return nil }
-        let index = ProjectDatabaseBridge.loadAnimate3DRegistryIndexFromDisk(projectURL: projectURL) ?? Animate3DRegistryIndex()
-        switch kind {
-        case .assetRegistry:
-            return index.assetRegistryPath
-        case .characterRegistry:
-            return index.characterRegistryPath
-        case .motionRegistry:
-            return index.motionRegistryPath
-        case .worldCatalog:
-            return index.worldCatalogPath
-        case .styleProfiles:
-            return index.styleProfilesPath
-        case .cameraPresets:
-            return index.cameraPresetsPath
-        case .lightRigs:
-            return index.lightRigsPath
-        case .atmospherePresets:
-            return index.atmospherePresetsPath
-        }
+        return Animate3DGenerationQueueActionSupport.manifestRelativePath(
+            for: kind,
+            projectURL: projectURL
+        )
     }
 
     private func queueBundleContext(for item: Animate3DGenerationQueueItem) -> String? {
