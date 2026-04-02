@@ -129,4 +129,27 @@ final class MeshyServiceTests: XCTestCase {
         let oldModel = MeshyMultiImageRequest(imageURLs: ["img"], aiModel: "meshy-5", shouldTexture: true)
         XCTAssertEqual(oldModel.estimatedCredits, 15)
     }
+
+    func testCredentialStoreRoundTrip() {
+        let store = MeshyCredentialStore()
+        store.clearAPIKey()
+
+        XCTAssertEqual(store.loadAPIKey(), "")
+
+        store.saveAPIKey("msy_test_key_12345")
+        XCTAssertEqual(store.loadAPIKey(), "msy_test_key_12345")
+
+        store.saveAPIKey("  msy_updated_key  ")
+        XCTAssertEqual(store.loadAPIKey(), "msy_updated_key")
+
+        store.clearAPIKey()
+        XCTAssertEqual(store.loadAPIKey(), "")
+    }
+
+    func testCredentialStoreClearsOnEmptyString() {
+        let store = MeshyCredentialStore()
+        store.saveAPIKey("msy_temp")
+        store.saveAPIKey("")
+        XCTAssertEqual(store.loadAPIKey(), "")
+    }
 }
