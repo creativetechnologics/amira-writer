@@ -403,6 +403,56 @@ final class Animate3DGenerationQueuePlannerTests: XCTestCase {
         XCTAssertTrue(materialItem.prompt.contains("hold x1"))
     }
 
+    func testPlannerUsesWorldContextInMissingWorldAndAtmospherePrompts() throws {
+        let projectURL = try makeProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
+
+        let store = AnimateStore()
+        store.owpURL = projectURL
+
+        let scene = AnimationScene(
+            id: UUID(uuidString: "99999999-8888-7777-6666-555555555555")!,
+            name: "Moon Arrival",
+            backgroundID: nil,
+            characterIDs: [],
+            keyframes: [],
+            owpSongPath: "Songs/moon-arrival.ows"
+        )
+
+        let items = Animate3DGenerationQueuePlanner(store: store)
+            .buildPlan(
+                scene: scene,
+                backgroundName: "Moon Valley",
+                worldChunk: nil,
+                styleProfile: Animate3DStyleProfileDescriptor(
+                    profileID: "amira-default",
+                    title: "Amira Default",
+                    notes: "",
+                    celBands: 3,
+                    outlineWidth: 1
+                ),
+                lightRig: nil,
+                atmospherePreset: nil,
+                bundleReadiness: [],
+                runtimeCharacters: []
+            )
+
+        let worldItem = try XCTUnwrap(items.first(where: { $0.kind == .worldChunk }))
+        XCTAssertTrue(worldItem.contextSummary?.contains("runtime world:") == true)
+        XCTAssertTrue(worldItem.contextSummary?.contains("scene Moon Arrival") == true)
+        XCTAssertTrue(worldItem.contextSummary?.contains("place Moon Valley") == true)
+        XCTAssertTrue(worldItem.contextSummary?.contains("style Amira Default") == true)
+        XCTAssertTrue(worldItem.prompt.contains("Current world context"))
+
+        let atmosphereItem = try XCTUnwrap(items.first(where: { $0.kind == .atmospherePreset }))
+        XCTAssertTrue(atmosphereItem.contextSummary?.contains("runtime world:") == true)
+        XCTAssertTrue(atmosphereItem.contextSummary?.contains("scene Moon Arrival") == true)
+        XCTAssertTrue(atmosphereItem.contextSummary?.contains("place Moon Valley") == true)
+        XCTAssertTrue(atmosphereItem.prompt.contains("Current world context"))
+    }
+
     private func sampleProductionPlan(scene: AnimationScene) -> SceneProductionPlan {
         SceneProductionPlan(
             sceneID: scene.id,

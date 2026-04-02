@@ -76,6 +76,14 @@ struct Animate3DGenerationQueuePlanner {
         let registryBundleService = Animate3DRegistryBundleService(store: store)
         var items: [Animate3DGenerationQueueItem] = []
         let runtimeStatusesBySlug = Dictionary(grouping: runtimeCharacters) { $0.characterSlug.lowercased() }
+        let worldContextSummary = summarizeWorldContext(
+            scene: scene,
+            backgroundName: productionPlan.backgroundName,
+            worldChunk: productionPlan.worldChunk,
+            styleProfile: productionPlan.styleProfile,
+            lightRig: productionPlan.lightRig,
+            atmospherePreset: productionPlan.atmospherePreset
+        )
 
         let sceneCharacters = scene.characterIDs.compactMap { id in
             store.characters.first(where: { $0.id == id })
@@ -267,7 +275,10 @@ struct Animate3DGenerationQueuePlanner {
                     detail: "Map this scene place to an explorable 3D zone in the world catalog.",
                     destinationPath: "Animate/3d/world-catalog/world-catalog.json",
                     providerHint: "World registry",
-                    prompt: "Create a world catalog entry for \(placeName) with placeNames, preview image, mesh path, and linked light/atmosphere presets.",
+                    prompt: worldContextSummary.map {
+                        "Create a world catalog entry for \(placeName) with placeNames, preview image, mesh path, and linked light/atmosphere presets. Current world context: \($0)."
+                    } ?? "Create a world catalog entry for \(placeName) with placeNames, preview image, mesh path, and linked light/atmosphere presets.",
+                    contextSummary: worldContextSummary.map { "runtime world: \($0)" },
                     characterName: "Environment",
                     sceneName: scene.name,
                     placeName: placeName,
@@ -284,7 +295,10 @@ struct Animate3DGenerationQueuePlanner {
                         detail: "Add a preview image that the 3D engine can use as a background while world meshes are incomplete.",
                         destinationPath: "Animate/3d/world-catalog/",
                         providerHint: GeminiModel.flash.displayName,
-                        prompt: "Generate a 21:9 cel-shaded anime environment plate for \(placeName) suitable for use as a 3D world chunk preview.",
+                        prompt: worldContextSummary.map {
+                            "Generate a 21:9 cel-shaded anime environment plate for \(placeName) suitable for use as a 3D world chunk preview. Current world context: \($0)."
+                        } ?? "Generate a 21:9 cel-shaded anime environment plate for \(placeName) suitable for use as a 3D world chunk preview.",
+                        contextSummary: worldContextSummary.map { "runtime world: \($0)" },
                         characterName: "Environment",
                         sceneName: scene.name,
                         placeName: placeName,
@@ -300,7 +314,10 @@ struct Animate3DGenerationQueuePlanner {
                         detail: "Add the actual 3D world geometry for this chunk.",
                         destinationPath: "Animate/3d/world-catalog/",
                         providerHint: "World Labs / local DCC",
-                        prompt: "Generate or export the 3D world mesh for \(placeName) as an explorable cel-shaded zone.",
+                        prompt: worldContextSummary.map {
+                            "Generate or export the 3D world mesh for \(placeName) as an explorable cel-shaded zone. Current world context: \($0)."
+                        } ?? "Generate or export the 3D world mesh for \(placeName) as an explorable cel-shaded zone.",
+                        contextSummary: worldContextSummary.map { "runtime world: \($0)" },
                         characterName: "Environment",
                         sceneName: scene.name,
                         placeName: placeName,
@@ -318,7 +335,10 @@ struct Animate3DGenerationQueuePlanner {
                     detail: "Add a reusable lighting package for this world chunk/scene.",
                     destinationPath: "Animate/3d/light-rigs/light-rigs.json",
                     providerHint: "In-app registry",
-                    prompt: "Create a cinematic anime light rig for \(placeName) with balanced key, fill, and rim intensities.",
+                    prompt: worldContextSummary.map {
+                        "Create a cinematic anime light rig for \(placeName) with balanced key, fill, and rim intensities. Current world context: \($0)."
+                    } ?? "Create a cinematic anime light rig for \(placeName) with balanced key, fill, and rim intensities.",
+                    contextSummary: worldContextSummary.map { "runtime world: \($0)" },
                     characterName: "Environment",
                     sceneName: scene.name,
                     placeName: placeName,
@@ -335,7 +355,10 @@ struct Animate3DGenerationQueuePlanner {
                     detail: "Add haze/fog/palette settings for the scene world chunk.",
                     destinationPath: "Animate/3d/atmosphere-presets/atmosphere-presets.json",
                     providerHint: "In-app registry",
-                    prompt: "Create an atmosphere preset for \(placeName) defining fog density, haze, and a cel-shaded anime palette tint.",
+                    prompt: worldContextSummary.map {
+                        "Create an atmosphere preset for \(placeName) defining fog density, haze, and a cel-shaded anime palette tint. Current world context: \($0)."
+                    } ?? "Create an atmosphere preset for \(placeName) defining fog density, haze, and a cel-shaded anime palette tint.",
+                    contextSummary: worldContextSummary.map { "runtime world: \($0)" },
                     characterName: "Environment",
                     sceneName: scene.name,
                     placeName: placeName,
@@ -436,6 +459,35 @@ struct Animate3DGenerationQueuePlanner {
             parts.append("motion hints: \(hintSummary.joined(separator: ", "))")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
+    }
+
+    private func summarizeWorldContext(
+        scene: AnimationScene,
+        backgroundName: String?,
+        worldChunk: Animate3DWorldChunkDescriptor?,
+        styleProfile: Animate3DStyleProfileDescriptor?,
+        lightRig: Animate3DLightRigDescriptor?,
+        atmospherePreset: Animate3DAtmospherePresetDescriptor?
+    ) -> String? {
+        var parts: [String] = ["scene \(scene.name)"]
+        if let backgroundName, !backgroundName.isEmpty {
+            parts.append("place \(backgroundName)")
+        }
+        if let worldChunk {
+            let chunkTitle = worldChunk.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            parts.append("chunk \(chunkTitle.isEmpty ? "\(worldChunk.worldID)/\(worldChunk.zoneID)" : chunkTitle)")
+        }
+        if let styleProfile {
+            parts.append("style \(styleProfile.title)")
+        }
+        if let lightRig {
+            parts.append("light \(lightRig.title)")
+        }
+        if let atmospherePreset {
+            parts.append("atmo \(atmospherePreset.title)")
+        }
+        let uniqueParts = Array(NSOrderedSet(array: parts)) as? [String] ?? parts
+        return uniqueParts.joined(separator: " • ")
     }
 
     private func summarizeVisemeCues(_ statuses: [Animate3DCharacterPerformanceStatus]) -> String? {
