@@ -72,7 +72,7 @@ final class Animate3DGenerationQueuePlannerTests: XCTestCase {
         XCTAssertFalse(items.contains(where: { $0.kind == .materialProfile }))
     }
 
-    func testPlannerUsesRuntimeMotionCuesInMissingMotionPrompt() throws {
+    func testPlannerUsesRuntimeMotionCuesInMissingMotionAndBodyModelPrompts() throws {
         let projectURL = try makeProjectURL()
         defer { try? FileManager.default.removeItem(at: projectURL) }
 
@@ -156,12 +156,16 @@ final class Animate3DGenerationQueuePlannerTests: XCTestCase {
                         resolvedBundleAssetPaths: [],
                         readyCategories: [],
                         registryBackedCategories: [],
-                        missingCategories: [.motions],
+                        missingCategories: [.motions, .models],
                         totalFileCount: 0
                     )
                 ],
                 runtimeCharacters: [runtimeStatus]
             )
+
+        let bodyModelItem = try XCTUnwrap(items.first(where: { $0.kind == .bodyModel }))
+        XCTAssertTrue(bodyModelItem.detail.contains("determined"))
+        XCTAssertTrue(bodyModelItem.prompt.contains("Determined Listening"))
 
         let motionItem = try XCTUnwrap(items.first(where: { $0.kind == .motionSet }))
         XCTAssertTrue(motionItem.detail.contains("determined"))

@@ -88,16 +88,21 @@ struct Animate3DGenerationQueuePlanner {
                 ?? character.approvedHeadTurnaroundSheetVariant?.imagePath
                 ?? character.masterReferenceSourceImagePaths.first
             let runtimeStatuses = runtimeStatusesBySlug[character.assetFolderSlug.lowercased()] ?? []
+            let motionCueSummary = summarizeMotionCues(runtimeStatuses)
 
             if !hasCharacterAsset(.models, character: character, inventory: inventory, registryBundleService: registryBundleService) {
                 items.append(
                     queueItem(
                         kind: .bodyModel,
                         title: "\(character.name) 3D body model",
-                        detail: "Generate a cel-shaded 3D body model aligned to the approved turnaround/master sheet.",
+                        detail: motionCueSummary.map {
+                            "Generate a cel-shaded 3D body model aligned to the approved turnaround/master sheet. Preserve silhouettes for \($0)."
+                        } ?? "Generate a cel-shaded 3D body model aligned to the approved turnaround/master sheet.",
                         destinationPath: "Animate/characters/\(character.assetFolderSlug)/models/",
                         providerHint: "Meshy / Rodin / local 2D→3D",
-                        prompt: "Create a cel-shaded anime 3D body model for \(character.name) using \(referencePrompt(referencePath)) as the geometry and costume reference.",
+                        prompt: motionCueSummary.map {
+                            "Create a cel-shaded anime 3D body model for \(character.name) using \(referencePrompt(referencePath)) as the geometry and costume reference. Preserve readable silhouettes for the currently observed staging cues: \($0)."
+                        } ?? "Create a cel-shaded anime 3D body model for \(character.name) using \(referencePrompt(referencePath)) as the geometry and costume reference.",
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -173,7 +178,6 @@ struct Animate3DGenerationQueuePlanner {
             }
 
             if !hasCharacterAsset(.motions, character: character, inventory: inventory, registryBundleService: registryBundleService) {
-                let motionCueSummary = summarizeMotionCues(runtimeStatuses)
                 items.append(
                     queueItem(
                         kind: .motionSet,
