@@ -274,10 +274,20 @@ struct Animate3DProductionPreviewView: View {
     private func authoredResolutionLine(for status: Animate3DCharacterPerformanceStatus) -> String? {
         var parts: [String] = []
         if status.sourceExpressionCue.caseInsensitiveCompare(status.activeExpressionCue) != .orderedSame {
-            parts.append("expr \(status.sourceExpressionCue)→\(status.activeExpressionCue)")
+            var label = "expr \(status.sourceExpressionCue)→\(status.activeExpressionCue)"
+            if let behaviorCue = status.expressionBehaviorCue,
+               behaviorCue.caseInsensitiveCompare(status.activeExpressionCue) != .orderedSame {
+                label += " [\(behaviorCue)]"
+            }
+            if let provenance = status.expressionCueProvenance, !provenance.isEmpty {
+                label += " {\(provenance)}"
+            }
+            parts.append(label)
         } else if let resolvedExpressionPresetCue = status.resolvedExpressionPresetCue,
                   resolvedExpressionPresetCue.caseInsensitiveCompare(status.activeExpressionCue) != .orderedSame {
             parts.append("expr→\(resolvedExpressionPresetCue)")
+        } else if let provenance = status.expressionCueProvenance, !provenance.isEmpty {
+            parts.append("expr {\(provenance)}")
         }
         if status.sourceVisemeCue.caseInsensitiveCompare(status.activeVisemeCue) != .orderedSame {
             parts.append("vis \(status.sourceVisemeCue)→\(status.activeVisemeCue)")

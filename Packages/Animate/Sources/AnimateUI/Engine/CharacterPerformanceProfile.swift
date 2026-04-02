@@ -2,6 +2,13 @@ import AppKit
 import SceneKit
 
 @available(macOS 26.0, *)
+struct CharacterExpressionCueResolution: Sendable, Hashable {
+    var canonicalCue: String?
+    var behaviorCue: String
+    var provenance: String?
+}
+
+@available(macOS 26.0, *)
 struct CharacterPerformanceExpressionPreset: Codable, Sendable, Hashable {
     var aliases: [String] = []
     var baseCue: String?
@@ -87,16 +94,83 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
         return nil
     }
 
+    func expressionCueResolution(for cue: String) -> CharacterExpressionCueResolution? {
+        guard let normalizedCue = Self.normalizedToken(cue) else { return nil }
+
+        if let resolved = resolvedExpressionPreset(for: normalizedCue) {
+            let searchTerms = expressionSearchTerms(for: (key: resolved.key, value: resolved.preset))
+            if let baseCue = Self.normalizedToken(resolved.preset.baseCue) {
+                return CharacterExpressionCueResolution(
+                    canonicalCue: resolved.key,
+                    behaviorCue: baseCue,
+                    provenance: "baseCue:\(baseCue)"
+                )
+            }
+            if let semanticCue = searchTerms.first(where: { Self.isSemanticExpressionCue($0) }) {
+                let aliasMatch = searchTerms.first(where: {
+                    $0.caseInsensitiveCompare(normalizedCue) == .orderedSame &&
+                    $0.caseInsensitiveCompare(resolved.key) != .orderedSame
+                })
+                let provenance = aliasMatch.map { "alias:\($0)" }
+                return CharacterExpressionCueResolution(
+                    canonicalCue: resolved.key,
+                    behaviorCue: semanticCue,
+                    provenance: provenance
+                )
+            }
+            return CharacterExpressionCueResolution(
+                canonicalCue: resolved.key,
+                behaviorCue: normalizedCue,
+                provenance: nil
+            )
+        }
+
+        let available = availableExpressionBehaviorCues()
+        guard !available.isEmpty else { return nil }
+
+        if let family = Self.expressionCueFamilies.first(where: { family in
+            family.contains { normalizedCue.contains($0) }
+        }) {
+            if let familyCue = available.first(where: { cue in
+                family.contains { cue.contains($0) }
+            }) {
+                return CharacterExpressionCueResolution(
+                    canonicalCue: nil,
+                    behaviorCue: familyCue,
+                    provenance: "familyFallback:\(familyCue)"
+                )
+            }
+        }
+
+        if let neutralCue = available.first(where: { $0.contains("neutral") || $0.contains("rest") || $0.contains("default") }) {
+            return CharacterExpressionCueResolution(
+                canonicalCue: nil,
+                behaviorCue: neutralCue,
+                provenance: "neutralFallback:\(neutralCue)"
+            )
+        }
+
+        if let first = available.first {
+            return CharacterExpressionCueResolution(
+                canonicalCue: nil,
+                behaviorCue: first,
+                provenance: "poolFallback:\(first)"
+            )
+        }
+
+        return nil
+    }
+
     func canonicalExpressionCue(for cue: String) -> String? {
-        resolvedExpressionPreset(for: cue)?.key
+        expressionCueResolution(for: cue)?.canonicalCue
     }
 
     func expressionBehaviorCue(for cue: String) -> String? {
-        guard let resolved = resolvedExpressionPreset(for: cue) else { return nil }
-        if let baseCue = Self.normalizedToken(resolved.preset.baseCue) {
-            return baseCue
-        }
-        return expressionSearchTerms(for: (key: resolved.key, value: resolved.preset)).first(where: { Self.isSemanticExpressionCue($0) })
+        expressionCueResolution(for: cue)?.behaviorCue
+    }
+
+    func expressionCueProvenance(for cue: String) -> String? {
+        expressionCueResolution(for: cue)?.provenance
     }
 
     func resolvedVisemePreset(
@@ -237,6 +311,21 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
     ) -> [String] {
         let tokens = [entry.key] + entry.value.aliases + [entry.value.baseCue].compactMap { $0 }
         return Self.normalizedTokens(tokens)
+    }
+
+    private func availableExpressionBehaviorCues() -> [String] {
+        var ordered: [String] = []
+        for entry in expressionPresets {
+            let searchTerms = expressionSearchTerms(for: entry)
+            let behaviorCue = Self.normalizedToken(entry.value.baseCue)
+                ?? searchTerms.first(where: { Self.isSemanticExpressionCue($0) })
+            guard let behaviorCue,
+                  !ordered.contains(where: { $0.caseInsensitiveCompare(behaviorCue) == .orderedSame }) else {
+                continue
+            }
+            ordered.append(behaviorCue)
+        }
+        return ordered
     }
 
     private func visemeSearchTerms(

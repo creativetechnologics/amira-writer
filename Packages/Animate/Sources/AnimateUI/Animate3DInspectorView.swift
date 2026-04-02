@@ -175,6 +175,13 @@ struct Animate3DInspectorView: View {
                                     if status.sourceExpressionCue.caseInsensitiveCompare(status.activeExpressionCue) != .orderedSame {
                                         inspectorRow(label: "Source Expr", value: status.sourceExpressionCue)
                                     }
+                                    if let behaviorCue = status.expressionBehaviorCue,
+                                       behaviorCue.caseInsensitiveCompare(status.activeExpressionCue) != .orderedSame {
+                                        inspectorRow(label: "Expr Drive", value: behaviorCue)
+                                    }
+                                    if let provenance = status.expressionCueProvenance, !provenance.isEmpty {
+                                        inspectorRow(label: "Expr Provenance", value: provenance)
+                                    }
                                     if status.sourceVisemeCue.caseInsensitiveCompare(status.activeVisemeCue) != .orderedSame {
                                         inspectorRow(label: "Source Viseme", value: status.sourceVisemeCue)
                                     }

@@ -132,6 +132,67 @@ final class CharacterPerformanceProfileTests: XCTestCase {
         XCTAssertLessThan(state.browLift, 0)
     }
 
+    func testExpressionCueResolutionReportsBaseCueProvenance() {
+        let profile = Character3DPerformanceProfile(
+            expressionPresets: [
+                "hero_resolve": CharacterPerformanceExpressionPreset(
+                    aliases: ["determined"],
+                    baseCue: "angry",
+                    browLift: -0.2,
+                    browTilt: -0.3,
+                    eyeOpen: 0.8,
+                    smile: -0.1,
+                    headPitch: 0
+                )
+            ]
+        )
+
+        let resolution = profile.expressionCueResolution(for: "determined")
+        XCTAssertEqual(resolution?.canonicalCue, "hero_resolve")
+        XCTAssertEqual(resolution?.behaviorCue, "angry")
+        XCTAssertEqual(resolution?.provenance, "baseCue:angry")
+    }
+
+    func testExpressionEngineFallsBackToAvailableNeutralCuePool() {
+        let profile = Character3DPerformanceProfile(
+            expressionPresets: [
+                "hero_neutral": CharacterPerformanceExpressionPreset(
+                    aliases: [],
+                    baseCue: "neutral",
+                    browLift: 0,
+                    browTilt: 0,
+                    eyeOpen: 1,
+                    smile: 0,
+                    headPitch: 0
+                )
+            ]
+        )
+        let blocking = CharacterBlockingPlan(
+            characterName: "Luke",
+            characterSlug: "luke",
+            preferredCostumeName: nil,
+            entranceFrame: 0,
+            exitFrame: nil,
+            keyPositions: [],
+            actingBeats: [
+                ActingBeat(startFrame: 0, endFrame: 12, action: "alarm", intensity: 0.7)
+            ],
+            lipsyncBeats: [],
+            holdStyle: .onTwos
+        )
+
+        let state = CharacterExpressionEngine().state(
+            for: "Luke",
+            blocking: blocking,
+            frame: 4,
+            liveCue: nil,
+            profile: profile
+        )
+
+        XCTAssertEqual(state.cue, "neutral")
+        XCTAssertEqual(profile.expressionCueProvenance(for: "alarm"), "neutralFallback:neutral")
+    }
+
     func testMouthEngineRetagsAndRemapsCanonicalVisemeCue() {
         let profile = Character3DPerformanceProfile(
             visemePresets: [

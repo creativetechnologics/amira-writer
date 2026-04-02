@@ -26,6 +26,8 @@ struct Animate3DCharacterPerformanceStatus: Identifiable, Hashable, Sendable {
     var resolvedVisemePresetCue: String?
     var sourceExpressionCue: String
     var sourceVisemeCue: String
+    var expressionBehaviorCue: String?
+    var expressionCueProvenance: String?
     var activeExpressionCue: String
     var activeVisemeCue: String
     var isVisible: Bool
