@@ -87,6 +87,7 @@ struct Animate3DGenerationQueuePlanner {
             let referencePath = character.approvedMasterReferenceSheetVariant?.imagePath
                 ?? character.approvedHeadTurnaroundSheetVariant?.imagePath
                 ?? character.masterReferenceSourceImagePaths.first
+            let runtimeStatuses = runtimeStatusesBySlug[character.assetFolderSlug.lowercased()] ?? []
 
             if !hasCharacterAsset(.models, character: character, inventory: inventory, registryBundleService: registryBundleService) {
                 items.append(
@@ -123,14 +124,19 @@ struct Animate3DGenerationQueuePlanner {
             }
 
             if !hasCharacterAsset(.mouthProfiles, character: character, inventory: inventory, registryBundleService: registryBundleService) {
+                let visemeSummary = summarizeVisemeCues(runtimeStatuses)
                 items.append(
                     queueItem(
                         kind: .mouthProfile,
                         title: "\(character.name) mouth profile",
-                        detail: "Add viseme presets for lyrical mouth movement.",
+                        detail: visemeSummary.map {
+                            "Add viseme presets for lyrical mouth movement. Prioritize \($0)."
+                        } ?? "Add viseme presets for lyrical mouth movement.",
                         destinationPath: "Animate/characters/\(character.assetFolderSlug)/mouth-profiles/",
                         providerHint: "JSON viseme profile",
-                        prompt: "Create a Preston-Blair style viseme mouth profile for \(character.name) tuned for anime singing and dialogue.",
+                        prompt: visemeSummary.map {
+                            "Create a Preston-Blair style viseme mouth profile for \(character.name) tuned for anime singing and dialogue. Prioritize the currently observed mouth/viseme cues: \($0)."
+                        } ?? "Create a Preston-Blair style viseme mouth profile for \(character.name) tuned for anime singing and dialogue.",
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -140,14 +146,19 @@ struct Animate3DGenerationQueuePlanner {
             }
 
             if !hasCharacterAsset(.expressions, character: character, inventory: inventory, registryBundleService: registryBundleService) {
+                let expressionSummary = summarizeExpressionCues(runtimeStatuses)
                 items.append(
                     queueItem(
                         kind: .expressionLibrary,
                         title: "\(character.name) expression library",
-                        detail: "Add authored expression presets beyond the fallback heuristic runtime.",
+                        detail: expressionSummary.map {
+                            "Add authored expression presets beyond the fallback heuristic runtime. Prioritize \($0)."
+                        } ?? "Add authored expression presets beyond the fallback heuristic runtime.",
                         destinationPath: "Animate/characters/\(character.assetFolderSlug)/expressions/",
                         providerHint: "Nano Banana 2 / JSON metadata",
-                        prompt: "Generate an expression library for \(character.name) covering joy, sadness, anger, determination, surprise, attentive, and neutral anime states.",
+                        prompt: expressionSummary.map {
+                            "Generate an expression library for \(character.name) covering joy, sadness, anger, determination, surprise, attentive, and neutral anime states. Prioritize the currently observed expression cues: \($0)."
+                        } ?? "Generate an expression library for \(character.name) covering joy, sadness, anger, determination, surprise, attentive, and neutral anime states.",
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -157,9 +168,7 @@ struct Animate3DGenerationQueuePlanner {
             }
 
             if !hasCharacterAsset(.motions, character: character, inventory: inventory, registryBundleService: registryBundleService) {
-                let motionCueSummary = summarizeMotionCues(
-                    runtimeStatusesBySlug[character.assetFolderSlug.lowercased()] ?? []
-                )
+                let motionCueSummary = summarizeMotionCues(runtimeStatuses)
                 items.append(
                     queueItem(
                         kind: .motionSet,
@@ -355,6 +364,40 @@ struct Animate3DGenerationQueuePlanner {
             [status.sourceActionCue, status.sourcePoseCue, status.resolvedMotionTitle]
                 .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
+        })).sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+        guard !cues.isEmpty else { return nil }
+        return cues.joined(separator: ", ")
+    }
+
+    private func summarizeExpressionCues(_ statuses: [Animate3DCharacterPerformanceStatus]) -> String? {
+        let cues = Array(Set(statuses.flatMap { status in
+            [
+                status.sourceExpressionCue,
+                status.expressionBehaviorCue,
+                status.activeExpressionCue,
+                status.resolvedExpressionPresetCue
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        })).sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+        guard !cues.isEmpty else { return nil }
+        return cues.joined(separator: ", ")
+    }
+
+    private func summarizeVisemeCues(_ statuses: [Animate3DCharacterPerformanceStatus]) -> String? {
+        let cues = Array(Set(statuses.flatMap { status in
+            [
+                status.sourceVisemeCue,
+                status.activeVisemeCue,
+                status.resolvedVisemePresetCue,
+                status.mouthProfileID
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         })).sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }
