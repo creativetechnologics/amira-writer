@@ -110,6 +110,23 @@ final class AnimateStore {
         }
     }
 
+    // MARK: - Meshy Settings
+
+    var meshyAPIKey: String = "" {
+        didSet {
+            guard !isHydratingMeshySettings else { return }
+            meshyCredentialStore.saveAPIKey(meshyAPIKey)
+        }
+    }
+
+    var meshyBalance: Int?
+    var meshyGenerationTaskID: String?
+    var meshyGenerationStatus: MeshyTaskStatus?
+    var meshyGenerationProgress: Int = 0
+    var meshyGenerationError: String?
+    var isGeneratingMeshy3D: Bool = false
+    var meshyGeneratingCharacterID: UUID?
+
     // MARK: - Generation Sheet State
 
     var showGenerationSheet: Bool = false
@@ -196,6 +213,7 @@ final class AnimateStore {
     @ObservationIgnored private var displayLinkRunning = false
     @ObservationIgnored private var displayLinkProxy: AnimateDisplayLinkProxy?
     @ObservationIgnored private var isHydratingGeminiSettings = false
+    @ObservationIgnored private var isHydratingMeshySettings = false
 
     // MARK: - Track Resolution Cache
     // Caches the result of timelineTrack(for:role:) and related lookups so
@@ -209,6 +227,7 @@ final class AnimateStore {
     private let characterPackageSelectionStore = CharacterPackageSelectionStore()
     private let sceneShotPresetStore = SceneShotPresetStore()
     private let geminiCredentialStore = GeminiCredentialStore()
+    private let meshyCredentialStore = MeshyCredentialStore()
     private let sceneAutomationPlanner = SceneAutomationPlanner()
     private var backgroundIndexRefreshTask: Task<Void, Never>?
     private var externalFileWatchWorkItem: DispatchWorkItem?
@@ -246,6 +265,7 @@ final class AnimateStore {
     init() {
         observePersistedSaveState()
         hydrateGeminiSettings()
+        hydrateMeshySettings()
     }
 
     func setGeminiAPIKey(_ apiKey: String) {
@@ -254,6 +274,15 @@ final class AnimateStore {
 
     func clearGeminiAPIKey() {
         geminiAPIKey = ""
+    }
+
+    func setMeshyAPIKey(_ apiKey: String) {
+        meshyAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func clearMeshyAPIKey() {
+        meshyAPIKey = ""
+        meshyBalance = nil
     }
 
     private func hydrateGeminiSettings() {
@@ -266,6 +295,12 @@ final class AnimateStore {
             selectedGeminiModel = .flash
         }
         isHydratingGeminiSettings = false
+    }
+
+    private func hydrateMeshySettings() {
+        isHydratingMeshySettings = true
+        meshyAPIKey = meshyCredentialStore.loadAPIKey()
+        isHydratingMeshySettings = false
     }
 
     func startPlayback() {
@@ -7575,5 +7610,153 @@ final class AnimateStore {
         let resolved = timelineTrack(forObjectNamed: objectName, role: role)
         objectTrackCache[key] = resolved
         return resolved
+    }
+
+    // MARK: - Meshy 3D Generation
+
+    func generateMeshy3DModel(
+        for characterID: UUID,
+        imageURLs: [String],
+        textureImageURL: String?,
+        config: MeshyMultiImageRequest
+    ) async {
+        guard !meshyAPIKey.isEmpty else {
+            meshyGenerationError = "No Meshy API key configured. Open Settings to add one."
+            return
+        }
+        guard !isGeneratingMeshy3D else { return }
+
+        isGeneratingMeshy3D = true
+        meshyGeneratingCharacterID = characterID
+        meshyGenerationError = nil
+        meshyGenerationProgress = 0
+        meshyGenerationStatus = .pending
+
+        do {
+            let service = MeshyService(apiKey: meshyAPIKey)
+            var request = config
+            request.imageURLs = imageURLs
+            if let textureURL = textureImageURL {
+                request.textureImageURL = textureURL
+            }
+
+            let endpoint: String
+            let taskID: String
+            if imageURLs.count > 1 {
+                taskID = try await service.createMultiImageTo3D(request)
+                endpoint = "multi-image-to-3d"
+            } else {
+                let singleRequest = MeshyImageRequest(
+                    imageURL: imageURLs[0],
+                    aiModel: request.aiModel,
+                    topology: request.topology,
+                    targetPolycount: request.targetPolycount,
+                    shouldRemesh: request.shouldRemesh,
+                    shouldTexture: request.shouldTexture,
+                    enablePBR: request.enablePBR,
+                    removeLighting: request.removeLighting,
+                    textureImageURL: request.textureImageURL,
+                    targetFormats: request.targetFormats
+                )
+                taskID = try await service.createImageTo3D(singleRequest)
+                endpoint = "image-to-3d"
+            }
+
+            meshyGenerationTaskID = taskID
+
+            let result = try await service.pollUntilComplete(
+                endpoint: endpoint,
+                taskID: taskID
+            ) { [weak self] progress in
+                Task { @MainActor in
+                    self?.meshyGenerationStatus = progress.status
+                    self?.meshyGenerationProgress = progress.progress
+                }
+            }
+
+            guard let modelURLs = result.modelURLs else {
+                throw MeshyService.ServiceError.invalidResponse
+            }
+
+            try await downloadMeshyAssets(
+                service: service,
+                characterID: characterID,
+                taskID: taskID,
+                modelURLs: modelURLs,
+                thumbnailURL: result.thumbnailURL
+            )
+
+            meshyGenerationStatus = .succeeded
+
+        } catch {
+            meshyGenerationError = error.localizedDescription
+            meshyGenerationStatus = .failed
+        }
+
+        isGeneratingMeshy3D = false
+    }
+
+    private func downloadMeshyAssets(
+        service: MeshyService,
+        characterID: UUID,
+        taskID: String,
+        modelURLs: [String: String],
+        thumbnailURL: String?
+    ) async throws {
+        guard let character = characters.first(where: { $0.id == characterID }),
+              let animateURL = animateURL else { return }
+
+        let slug = character.owpSlug.isEmpty ? character.id.uuidString : character.owpSlug
+        let assetDir = animateURL
+            .appendingPathComponent("Characters")
+            .appendingPathComponent(slug)
+            .appendingPathComponent("3d-models")
+            .appendingPathComponent(taskID)
+
+        try FileManager.default.createDirectory(at: assetDir, withIntermediateDirectories: true)
+
+        for (format, urlString) in modelURLs {
+            guard let remoteURL = URL(string: urlString) else { continue }
+            if format.hasPrefix("pre_remeshed") || format == "mtl" { continue }
+            let destination = assetDir.appendingPathComponent("model.\(format)")
+            try await service.downloadAsset(from: remoteURL, to: destination)
+
+            let model3D = Character3DModel(
+                costumeName: "meshy-\(taskID.prefix(8))",
+                modelFileName: "model.\(format)",
+                modelFormat: format,
+                notes: "Generated via Meshy.ai (\(taskID))"
+            )
+            addModel3D(model3D, to: characterID)
+        }
+
+        if let thumbURLString = thumbnailURL, let thumbURL = URL(string: thumbURLString) {
+            let thumbDest = assetDir.appendingPathComponent("thumbnail.png")
+            try? await service.downloadAsset(from: thumbURL, to: thumbDest)
+        }
+
+        let metadataURL = assetDir.appendingPathComponent("metadata.json")
+        let metadata: [String: Any] = [
+            "taskID": taskID,
+            "modelURLs": modelURLs,
+            "downloadedAt": ISO8601DateFormatter().string(from: Date())
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: metadata, options: .prettyPrinted) {
+            try? data.write(to: metadataURL)
+        }
+    }
+
+    private func addModel3D(_ model: Character3DModel, to characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        characters[index].models3D.append(model)
+    }
+
+    func fetchMeshyBalance() async {
+        guard !meshyAPIKey.isEmpty else {
+            meshyBalance = nil
+            return
+        }
+        let service = MeshyService(apiKey: meshyAPIKey)
+        meshyBalance = try? await service.checkBalance()
     }
 }
