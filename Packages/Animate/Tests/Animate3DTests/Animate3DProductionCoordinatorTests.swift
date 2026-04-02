@@ -190,6 +190,72 @@ final class Animate3DProductionCoordinatorTests: XCTestCase {
         XCTAssertEqual(runtimeStatus.holdProvenance, "motion:tag:determined:x2")
     }
 
+    func testRefreshPublishesDescriptorHoldOverrideFromRegistry() async throws {
+        let projectURL = try makeProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
+
+        let character = AnimationCharacter(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-111111111111")!,
+            name: "Luke",
+            description: "Pilot",
+            owpSlug: "luke",
+            parts: []
+        )
+        let scene = AnimationScene(
+            id: UUID(uuidString: "DDDDDDDD-EEEE-FFFF-AAAA-BBBBBBBBBBBB")!,
+            name: "Descriptor Hold Scene",
+            backgroundID: nil,
+            characterIDs: [character.id],
+            keyframes: [],
+            owpSongPath: "Songs/test.ows"
+        )
+
+        try writeProfileFragments(
+            at: projectURL.appendingPathComponent("Animate"),
+            slug: character.assetFolderSlug
+        )
+        try ProjectDatabaseBridge.saveAnimate3DMotionRegistryToDisk(
+            Animate3DMotionRegistry(
+                motions: [
+                    Animate3DMotionSetDescriptor(
+                        motionID: "motion-focus-close",
+                        title: "Focus Close Hold",
+                        relativePath: "Animate/characters/shared/motions/focus-close.json",
+                        tags: ["focus"],
+                        notes: "",
+                        preferredHoldMultiplier: 1
+                    )
+                ]
+            ),
+            projectURL: projectURL
+        )
+
+        let store = AnimateStore()
+        store.owpURL = projectURL
+        store.workingOWPURL = projectURL
+        store.characters = [character]
+        store.scenes = [scene]
+
+        let coordinator = Animate3DProductionCoordinator(store: store)
+        let lyrics = """
+        [scene: "Luke Scene" | bg=Debug Stage]
+        [action: "Luke" | focus | bars=1]
+        """
+        await coordinator.refresh(
+            scene: scene,
+            lyrics: lyrics,
+            scenario: .empty,
+            forceReload: true
+        )
+
+        let runtimeStatus = try XCTUnwrap(coordinator.status.runtimeCharacters.first)
+        XCTAssertEqual(runtimeStatus.resolvedMotionID, "motion-focus-close")
+        XCTAssertEqual(runtimeStatus.resolvedHoldMultiplier, 1)
+        XCTAssertEqual(runtimeStatus.holdProvenance, "descriptor:hold:x1")
+    }
+
     private func makeProjectURL() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Animate3DProductionCoordinatorTests-\(UUID().uuidString)")

@@ -73,6 +73,10 @@ struct Animate3DMotionSetDescriptor: Codable, Sendable, Hashable, Identifiable {
     var relativePath: String
     var tags: [String] = []
     var notes: String = ""
+    var preferredHoldMultiplier: Int?
+    var bodyPitchOffset: Double?
+    var bodyRollOffset: Double?
+    var bodyVerticalOffset: Double?
 }
 
 @available(macOS 26.0, *)

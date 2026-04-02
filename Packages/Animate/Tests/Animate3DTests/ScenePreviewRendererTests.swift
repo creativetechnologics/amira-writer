@@ -270,6 +270,137 @@ final class ScenePreviewRendererTests: XCTestCase {
         XCTAssertEqual(characterNode.position.x, 0, accuracy: 0.001)
     }
 
+    func testRendererAppliesDescriptorAuthoredMotionOverrides() async throws {
+        let projectURL = try makeProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
+        let animateURL = projectURL.appendingPathComponent("Animate")
+
+        let character = AnimationCharacter(
+            id: UUID(uuidString: "BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF")!,
+            name: "Mira",
+            description: "Lead",
+            owpSlug: "mira",
+            parts: []
+        )
+
+        try writeProfileFragments(at: animateURL, slug: character.assetFolderSlug)
+        try ProjectDatabaseBridge.saveAnimate3DMotionRegistryToDisk(
+            Animate3DMotionRegistry(
+                motions: [
+                    Animate3DMotionSetDescriptor(
+                        motionID: "motion-custom-hold",
+                        title: "Custom Hold",
+                        relativePath: "Animate/characters/shared/motions/custom-hold.json",
+                        tags: ["focus"],
+                        notes: "",
+                        preferredHoldMultiplier: 1,
+                        bodyPitchOffset: -0.12,
+                        bodyRollOffset: 0.08,
+                        bodyVerticalOffset: 0.2
+                    )
+                ]
+            ),
+            projectURL: projectURL
+        )
+
+        let store = AnimateStore()
+        store.owpURL = projectURL
+        store.workingOWPURL = projectURL
+        store.characters = [character]
+
+        let plan = SceneProductionPlan(
+            sceneID: UUID(uuidString: "12121212-3434-5656-7878-909090909090")!,
+            sceneName: "Descriptor Motion Override",
+            backgroundName: nil,
+            totalFrames: 24,
+            baseFPS: 24,
+            worldChunk: nil,
+            styleProfile: nil,
+            availableCameraPresetCount: 1,
+            lightRig: nil,
+            atmospherePreset: nil,
+            characterBlocking: [
+                CharacterBlockingPlan(
+                    characterName: character.name,
+                    characterSlug: character.assetFolderSlug,
+                    preferredCostumeName: nil,
+                    entranceFrame: 0,
+                    exitFrame: nil,
+                    keyPositions: [
+                        BlockingKeyframe(
+                            frame: 0,
+                            position: SIMD3<Double>(0, 0, 0),
+                            facing: .camera,
+                            pose: "focus",
+                            emotion: "neutral",
+                            easing: .linear
+                        ),
+                        BlockingKeyframe(
+                            frame: 4,
+                            position: SIMD3<Double>(4, 0, 0),
+                            facing: .camera,
+                            pose: "focus",
+                            emotion: "neutral",
+                            easing: .linear
+                        )
+                    ],
+                    actingBeats: [
+                        ActingBeat(startFrame: 0, endFrame: 12, action: "focus", intensity: 0.7)
+                    ],
+                    lipsyncBeats: [],
+                    holdStyle: .onFours
+                )
+            ],
+            cameraChoreography: CameraChoreographyPlan(
+                keyframes: [
+                    CameraChoreographyPlan.CameraKeyframe(
+                        frame: 0,
+                        focalLength: 50,
+                        position: SIMD3<Double>(0, 1.5, 8),
+                        lookAt: SIMD3<Double>(0, 1.0, -3),
+                        roll: 0,
+                        movement: .hold,
+                        easing: .linear,
+                        shotType: .wide,
+                        shotIntent: nil,
+                        focusCharacter: character.name
+                    )
+                ]
+            ),
+            objectPlacements: [],
+            depthAssignments: [
+                DepthAssignment(elementName: character.name, elementType: .character, depthLayer: "mid", zPosition: -3)
+            ],
+            frameRateProfile: VariableFrameRateProfile(
+                characterHoldStyles: [character.name: .onFours],
+                defaultCharacterHold: .onFours,
+                cameraHold: .onOnes,
+                backgroundHold: .onOnes,
+                defaultObjectHold: .onTwos
+            )
+        )
+
+        let renderer = ScenePreviewRenderer(store: store)
+        await renderer.loadPlan(plan)
+        renderer.renderFrame(3)
+
+        let status = try XCTUnwrap(renderer.characterPerformanceStatuses.first)
+        XCTAssertEqual(status.resolvedMotionID, "motion-custom-hold")
+        XCTAssertEqual(status.resolvedHoldMultiplier, 1)
+        XCTAssertEqual(status.holdProvenance, "descriptor:hold:x1")
+
+        let characterNode = try XCTUnwrap(
+            renderer.sceneKitScene.rootNode.childNode(withName: "stage", recursively: false)?
+                .childNode(withName: "character_\(character.assetFolderSlug)", recursively: true)
+        )
+        XCTAssertEqual(characterNode.position.x, 3, accuracy: 0.001)
+        XCTAssertEqual(characterNode.position.y, 0.2, accuracy: 0.001)
+        XCTAssertEqual(characterNode.eulerAngles.x, -0.19, accuracy: 0.001)
+        XCTAssertEqual(characterNode.eulerAngles.z, 0.08, accuracy: 0.001)
+    }
+
     private func makeProjectURL() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScenePreviewRendererTests-")

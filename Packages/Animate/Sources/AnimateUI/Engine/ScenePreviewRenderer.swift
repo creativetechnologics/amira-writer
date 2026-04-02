@@ -704,6 +704,16 @@ extension ScenePreviewRenderer {
             roll += sin(cycle * 2.1) * 0.06
         }
 
+        if let bodyVerticalOffset = motion.descriptor.bodyVerticalOffset {
+            verticalOffset += bodyVerticalOffset
+        }
+        if let bodyPitchOffset = motion.descriptor.bodyPitchOffset {
+            pitch += bodyPitchOffset
+        }
+        if let bodyRollOffset = motion.descriptor.bodyRollOffset {
+            roll += bodyRollOffset
+        }
+
         node.position = scnPosition(basePosition + SIMD3<Double>(0, verticalOffset, 0))
         node.eulerAngles.x = CGFloat(pitch)
         node.eulerAngles.z = CGFloat(roll)
@@ -744,6 +754,12 @@ extension ScenePreviewRenderer {
             return HoldResolution(
                 multiplier: baseMultiplier,
                 provenance: "blocking:x\(baseMultiplier)"
+            )
+        }
+        if let preferredHoldMultiplier = resolvedMotion.descriptor.preferredHoldMultiplier {
+            return HoldResolution(
+                multiplier: max(1, preferredHoldMultiplier),
+                provenance: "descriptor:hold:x\(max(1, preferredHoldMultiplier))"
             )
         }
 
