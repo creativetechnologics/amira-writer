@@ -105,6 +105,13 @@ private extension CharacterExpressionEngine {
 
     func stateForCue(_ cue: String, intensity: Double) -> CharacterExpressionState {
         let normalizedIntensity = max(0.2, min(1.0, intensity))
+
+        // Primary lookup: EmotionLibrary expanded preset library
+        if let preset = EmotionLibrary.resolve(cue) {
+            return expressionState(from: preset, cue: preset.id, intensity: normalizedIntensity)
+        }
+
+        // Fallback: hardcoded families for backwards compatibility
         switch cue {
         case _ where cue.contains("joy") || cue.contains("happy") || cue.contains("hope") || cue.contains("warm"):
             return CharacterExpressionState(cue: "joy", intensity: normalizedIntensity, browLift: 0.28, browTilt: -0.08, eyeOpen: 0.92, smile: 0.75, blink: 0, headPitch: -0.04)
@@ -121,6 +128,19 @@ private extension CharacterExpressionEngine {
         }
     }
 
+    func expressionState(from preset: EmotionLibrary.ExpressionPreset, cue: String, intensity: Double) -> CharacterExpressionState {
+        CharacterExpressionState(
+            cue: cue,
+            intensity: intensity,
+            browLift: preset.browLift * intensity,
+            browTilt: preset.browTilt * intensity,
+            eyeOpen: 1.0 + (preset.eyeOpen - 1.0) * intensity,
+            smile: preset.smile * intensity,
+            blink: 0,
+            headPitch: preset.headPitch * intensity
+        )
+    }
+
     func blinkValue(for characterName: String, frame: Int, cue: String) -> Double {
         let seed = abs(characterName.lowercased().hashValue % 11) + 5
         let period = max(18, seed * 6)
@@ -132,7 +152,12 @@ private extension CharacterExpressionEngine {
     }
 
     func isSemanticExpressionCue(_ cue: String) -> Bool {
-        [
+        // Check EmotionLibrary first for expanded preset coverage
+        if EmotionLibrary.resolve(cue) != nil {
+            return true
+        }
+        // Fallback: original hardcoded list
+        return [
             "joy", "happy", "hope", "warm", "smile",
             "sad", "grief", "worry", "tired",
             "angry", "fury", "intense", "determined",
