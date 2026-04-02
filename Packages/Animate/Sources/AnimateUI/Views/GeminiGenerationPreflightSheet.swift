@@ -26,6 +26,7 @@ struct GeminiGenerationDraft: Identifiable, Hashable, Sendable {
     var imageSize: String
     var referenceItems: [GeminiGenerationReferenceDraft]
     var pricingMode: PricingMode = .standard
+    var isSelected: Bool = true
 
     var estimatedCost: Double {
         switch pricingMode {
@@ -59,8 +60,12 @@ struct GeminiGenerationPreflightSheet: View {
         drafts.count > 1
     }
 
+    private var selectedDrafts: [GeminiGenerationDraft] {
+        drafts.filter(\.isSelected)
+    }
+
     private var totalCost: Double {
-        drafts.reduce(0) { $0 + $1.estimatedCost }
+        selectedDrafts.reduce(0) { $0 + $1.estimatedCost }
     }
 
     var body: some View {
@@ -122,7 +127,7 @@ struct GeminiGenerationPreflightSheet: View {
 
             Spacer()
 
-            Label("\(drafts.count) request\(drafts.count == 1 ? "" : "s")", systemImage: "sparkles.rectangle.stack")
+            Label("\(selectedDrafts.count)/\(drafts.count) selected", systemImage: "sparkles.rectangle.stack")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
@@ -134,9 +139,9 @@ struct GeminiGenerationPreflightSheet: View {
 
     private var summaryCard: some View {
         HStack(spacing: 16) {
-            preflightMetric(title: "Total Estimated Cost", value: "$\(String(format: "%.3f", totalCost))", icon: "creditcard.fill", tint: .orange)
-            preflightMetric(title: "Models", value: drafts.map(\.model.displayName).joined(separator: ", "), icon: "cpu", tint: .purple)
-            preflightMetric(title: "Sizes", value: Set(drafts.map(\.imageSize)).sorted().joined(separator: ", "), icon: "arrow.up.left.and.arrow.down.right", tint: .blue)
+            preflightMetric(title: "Selected Cost", value: "$\(String(format: "%.3f", totalCost))", icon: "creditcard.fill", tint: .orange)
+            preflightMetric(title: "Models", value: selectedDrafts.map(\.model.displayName).joined(separator: ", "), icon: "cpu", tint: .purple)
+            preflightMetric(title: "Sizes", value: Set(selectedDrafts.map(\.imageSize)).sorted().joined(separator: ", "), icon: "arrow.up.left.and.arrow.down.right", tint: .blue)
         }
         .padding(14)
         .background(.quaternary.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -241,8 +246,13 @@ struct GeminiGenerationPreflightSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(draft.wrappedValue.title)
-                        .font(.headline)
+                    HStack(spacing: 8) {
+                        Toggle(isOn: draft.isSelected) {
+                            Text(draft.wrappedValue.title)
+                                .font(.headline)
+                        }
+                        .toggleStyle(.checkbox)
+                    }
                     Text(draft.wrappedValue.destinationDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -361,8 +371,13 @@ struct GeminiGenerationPreflightSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(draft.wrappedValue.title)
-                        .font(.headline)
+                    HStack(spacing: 8) {
+                        Toggle(isOn: draft.isSelected) {
+                            Text(draft.wrappedValue.title)
+                                .font(.headline)
+                        }
+                        .toggleStyle(.checkbox)
+                    }
                     Text(draft.wrappedValue.destinationDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -523,10 +538,10 @@ struct GeminiGenerationPreflightSheet: View {
             .keyboardShortcut(.cancelAction)
 
             Button(selectedMode == .standard ? confirmTitle : "Add to Queue") {
-                onConfirm(drafts, selectedMode)
+                onConfirm(selectedDrafts, selectedMode)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(store.geminiAPIKey.isEmpty || drafts.isEmpty)
+            .disabled(store.geminiAPIKey.isEmpty || selectedDrafts.isEmpty)
             .keyboardShortcut(.defaultAction)
         }
         .padding()
