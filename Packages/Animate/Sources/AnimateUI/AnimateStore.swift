@@ -7751,6 +7751,70 @@ final class AnimateStore {
         characters[index].models3D.append(model)
     }
 
+    // MARK: - Meshy Bridge (auto-trigger from batch completion)
+
+    /// Called when a Gemini batch item completes that may need 3D conversion.
+    /// Checks the provider route and, if it's a Meshy route, triggers the bridge.
+    func handleBatchItemCompletion(
+        kind: String,
+        characterID: UUID?,
+        characterSlug: String?,
+        costumeName: String?,
+        generatedImagePaths: [String]
+    ) async {
+        let route = Animate3DGenerationProviderRoute.defaultRoute(for: kind)
+        guard route == .meshy,
+              !meshyAPIKey.isEmpty,
+              let characterID,
+              let characterSlug,
+              let animateURL,
+              !generatedImagePaths.isEmpty
+        else { return }
+
+        let job = MeshyBridgeService.BridgeJob(
+            characterID: characterID,
+            characterSlug: characterSlug,
+            costumeName: costumeName ?? "default",
+            sourceImagePaths: generatedImagePaths,
+            meshyConfig: MeshyMultiImageRequest(
+                imageURLs: [],
+                targetPolycount: 100_000,
+                targetFormats: ["glb", "usdz"]
+            )
+        )
+
+        isGeneratingMeshy3D = true
+        meshyGeneratingCharacterID = characterID
+        meshyGenerationError = nil
+        meshyGenerationProgress = 0
+        meshyGenerationStatus = .pending
+
+        do {
+            let result = try await MeshyBridgeService.execute(
+                job: job,
+                apiKey: meshyAPIKey,
+                animateURL: animateURL
+            ) { [weak self] status, progress in
+                Task { @MainActor in
+                    self?.meshyGenerationStatus = status
+                    self?.meshyGenerationProgress = progress
+                }
+            }
+
+            // Register downloaded models on the character
+            for model in result.models {
+                addModel3D(model, to: characterID)
+            }
+
+            meshyGenerationStatus = .succeeded
+        } catch {
+            meshyGenerationError = error.localizedDescription
+            meshyGenerationStatus = .failed
+        }
+
+        isGeneratingMeshy3D = false
+    }
+
     func fetchMeshyBalance() async {
         guard !meshyAPIKey.isEmpty else {
             meshyBalance = nil
