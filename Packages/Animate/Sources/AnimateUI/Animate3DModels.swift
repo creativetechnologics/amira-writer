@@ -117,11 +117,35 @@ final class Animate3DTestHarnessState {
     var showsShotLabels = true
     var showsPackageCutouts = true
     var autoResetOnScenarioChange = true
+    var pinnedGenerationQueueItemIDs: Set<UUID> = []
+    var skippedGenerationQueueItemIDs: Set<UUID> = []
 
     @ObservationIgnored private var timer: Timer?
 
     func reset() {
         previewFrame = 0
+    }
+
+    func togglePinnedGenerationQueueItem(_ id: UUID) {
+        if pinnedGenerationQueueItemIDs.contains(id) {
+            pinnedGenerationQueueItemIDs.remove(id)
+        } else {
+            pinnedGenerationQueueItemIDs.insert(id)
+            skippedGenerationQueueItemIDs.remove(id)
+        }
+    }
+
+    func toggleSkippedGenerationQueueItem(_ id: UUID) {
+        if skippedGenerationQueueItemIDs.contains(id) {
+            skippedGenerationQueueItemIDs.remove(id)
+        } else {
+            skippedGenerationQueueItemIDs.insert(id)
+            pinnedGenerationQueueItemIDs.remove(id)
+        }
+    }
+
+    func restoreSkippedGenerationQueueItems() {
+        skippedGenerationQueueItemIDs.removeAll()
     }
 
     func clamp(to scenario: Animate3DPreviewScenario) {

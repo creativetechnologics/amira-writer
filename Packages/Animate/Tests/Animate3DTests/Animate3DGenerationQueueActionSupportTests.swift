@@ -225,6 +225,53 @@ final class Animate3DGenerationQueueActionSupportTests: XCTestCase {
         XCTAssertTrue(Animate3DGenerationQueueActionSupport.isQueued(item: worldItem, store: store))
     }
 
+    func testPrioritizedItemsPromotesPinnedAndFiltersSkipped() {
+        var body = Animate3DGenerationQueueItem(
+            kind: .bodyModel,
+            title: "Body",
+            detail: "Generate body.",
+            destinationPath: "Animate/characters/body/",
+            providerHint: "Meshy",
+            prompt: "Generate body.",
+            characterSlug: "body",
+            characterName: "Body"
+        )
+        body.id = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+
+        var face = Animate3DGenerationQueueItem(
+            kind: .faceRig,
+            title: "Face",
+            detail: "Generate face.",
+            destinationPath: "Animate/characters/face/",
+            providerHint: "Gemini",
+            prompt: "Generate face.",
+            contextSummary: "runtime facial: sing, smile",
+            characterSlug: "face",
+            characterName: "Face"
+        )
+        face.id = UUID(uuidString: "66666666-7777-8888-9999-AAAAAAAAAAAA")!
+
+        var world = Animate3DGenerationQueueItem(
+            kind: .worldMesh,
+            title: "World",
+            detail: "Manual world mesh.",
+            destinationPath: "Animate/3d/world-catalog/world.glb",
+            providerHint: "World Labs",
+            prompt: "Generate world.",
+            characterSlug: nil,
+            characterName: nil
+        )
+        world.id = UUID(uuidString: "BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF")!
+
+        let prioritized = Animate3DGenerationQueueActionSupport.prioritizedItems(
+            from: [body, face, world],
+            pinnedIDs: [world.id],
+            skippedIDs: [body.id]
+        )
+
+        XCTAssertEqual(prioritized.map(\.id), [world.id, face.id])
+    }
+
     private func makeProjectURL() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Animate3DQueueActionSupportTests-\(UUID().uuidString)")

@@ -38,6 +38,31 @@ enum Animate3DGenerationQueueActionSupport {
         }
     }
 
+    static func prioritizedItems(
+        from items: [Animate3DGenerationQueueItem],
+        pinnedIDs: Set<UUID>,
+        skippedIDs: Set<UUID>
+    ) -> [Animate3DGenerationQueueItem] {
+        items
+            .filter { !skippedIDs.contains($0.id) }
+            .sorted { lhs, rhs in
+                let lhsPinned = pinnedIDs.contains(lhs.id)
+                let rhsPinned = pinnedIDs.contains(rhs.id)
+                if lhsPinned != rhsPinned {
+                    return lhsPinned && !rhsPinned
+                }
+                if lhs.isBatchDraftable != rhs.isBatchDraftable {
+                    return lhs.isBatchDraftable && !rhs.isBatchDraftable
+                }
+                let lhsHasContext = !(lhs.contextSummary?.isEmpty ?? true)
+                let rhsHasContext = !(rhs.contextSummary?.isEmpty ?? true)
+                if lhsHasContext != rhsHasContext {
+                    return lhsHasContext && !rhsHasContext
+                }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+    }
+
     static func queue(
         item: Animate3DGenerationQueueItem,
         scene: AnimationScene?,

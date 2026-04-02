@@ -74,18 +74,19 @@ struct Animate3DProductionPreviewView: View {
     }
 
     private var prioritizedQueueItems: [Animate3DGenerationQueueItem] {
-        status.generationQueueItems
-            .sorted { lhs, rhs in
-                if lhs.isBatchDraftable != rhs.isBatchDraftable {
-                    return lhs.isBatchDraftable && !rhs.isBatchDraftable
-                }
-                let lhsHasContext = !(lhs.contextSummary?.isEmpty ?? true)
-                let rhsHasContext = !(rhs.contextSummary?.isEmpty ?? true)
-                if lhsHasContext != rhsHasContext {
-                    return lhsHasContext && !rhsHasContext
-                }
-                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-            }
+        Animate3DGenerationQueueActionSupport.prioritizedItems(
+            from: status.generationQueueItems,
+            pinnedIDs: harnessState.pinnedGenerationQueueItemIDs,
+            skippedIDs: harnessState.skippedGenerationQueueItemIDs
+        )
+    }
+
+    private var pinnedVisibleCount: Int {
+        visiblePriorityQueueItems.filter { harnessState.pinnedGenerationQueueItemIDs.contains($0.id) }.count
+    }
+
+    private var skippedQueueItemCount: Int {
+        status.generationQueueItems.filter { harnessState.skippedGenerationQueueItemIDs.contains($0.id) }.count
     }
 
     var body: some View {
@@ -342,6 +343,13 @@ struct Animate3DProductionPreviewView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(visibleQueueableItems.isEmpty || selectedScene == nil)
+
+                if skippedQueueItemCount > 0 {
+                    Button("Restore Skipped") {
+                        harnessState.restoreSkippedGenerationQueueItems()
+                    }
+                    .buttonStyle(.bordered)
+                }
             }
 
             if !status.warnings.isEmpty {
@@ -373,6 +381,12 @@ struct Animate3DProductionPreviewView: View {
                             if visibleManualCount > 0 {
                                 badge("Manual \(visibleManualCount)", tint: .gray)
                             }
+                            if pinnedVisibleCount > 0 {
+                                badge("Pinned \(pinnedVisibleCount)", tint: .pink)
+                            }
+                            if skippedQueueItemCount > 0 {
+                                badge("Skipped \(skippedQueueItemCount)", tint: .red)
+                            }
                             if hiddenQueueItemCount > 0 {
                                 badge("+\(hiddenQueueItemCount) more", tint: .orange)
                             }
@@ -402,6 +416,18 @@ struct Animate3DProductionPreviewView: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             HStack(spacing: 8) {
+                                Button(harnessState.pinnedGenerationQueueItemIDs.contains(item.id) ? "Unpin" : "Pin") {
+                                    harnessState.togglePinnedGenerationQueueItem(item.id)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+
+                                Button(harnessState.skippedGenerationQueueItemIDs.contains(item.id) ? "Restore" : "Skip") {
+                                    harnessState.toggleSkippedGenerationQueueItem(item.id)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+
                                 if item.isBatchDraftable {
                                     Button("Preflight") {
                                         openGenerationPreflight(item)
