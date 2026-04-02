@@ -210,9 +210,21 @@ extension SceneAssetPipeline {
         slug: String,
         costumeName: String? = nil
     ) -> String? {
+        let relativePaths = characterPerformanceProfileSourceRelativePaths(
+            slug: slug,
+            costumeName: costumeName
+        )
+        guard !relativePaths.isEmpty else { return nil }
+        return relativePaths.joined(separator: ", ")
+    }
+
+    func characterPerformanceProfileSourceRelativePaths(
+        slug: String,
+        costumeName: String? = nil
+    ) -> [String] {
         guard let store,
               let animateURL = store.animateURL else {
-            return nil
+            return []
         }
         let cacheKey = costumeName.map { "\(slug)/\($0)" } ?? slug
         if characterPerformanceProfiles[cacheKey] == nil,
@@ -220,9 +232,7 @@ extension SceneAssetPipeline {
             _ = loadCharacterPerformanceProfile(slug: slug, costumeName: costumeName)
         }
         let sourceURLs = characterPerformanceProfileSources[cacheKey] ?? []
-        guard !sourceURLs.isEmpty else {
-            return nil
-        }
+        guard !sourceURLs.isEmpty else { return [] }
         let basePath = animateURL.path.hasSuffix("/") ? animateURL.path : animateURL.path + "/"
         return sourceURLs.map { sourceURL in
             let sourcePath = sourceURL.path
@@ -230,7 +240,17 @@ extension SceneAssetPipeline {
                 return sourceURL.lastPathComponent
             }
             return "Animate/" + String(sourcePath.dropFirst(basePath.count))
-        }.joined(separator: ", ")
+        }
+    }
+
+    func characterPerformanceProfileSourceCount(
+        slug: String,
+        costumeName: String? = nil
+    ) -> Int {
+        characterPerformanceProfileSourceRelativePaths(
+            slug: slug,
+            costumeName: costumeName
+        ).count
     }
 
     func characterModelFileName(

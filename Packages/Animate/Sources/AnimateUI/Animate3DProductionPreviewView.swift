@@ -69,13 +69,28 @@ struct Animate3DProductionPreviewView: View {
 
                     if !visiblePerformanceStatuses.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
-                            ForEach(visiblePerformanceStatuses.prefix(3)) { performanceStatus in
-                                HStack(spacing: 8) {
-                                    badge(performanceStatus.characterName, tint: .white.opacity(0.24))
-                                    Text("\(performanceStatus.activeExpressionCue) • \(performanceStatus.activeVisemeCue)")
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundStyle(.white.opacity(0.82))
-                                        .lineLimit(1)
+                            ForEach(visiblePerformanceStatuses.prefix(2)) { performanceStatus in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 8) {
+                                        badge(performanceStatus.characterName, tint: .white.opacity(0.24))
+                                        if let bundle = performanceStatus.resolvedBundleCostumeName, !bundle.isEmpty {
+                                            badge(bundle, tint: .white.opacity(0.16))
+                                        }
+                                        Text("\(performanceStatus.activeExpressionCue)\(performanceStatus.usingExpressionPreset ? "✓" : "") • \(performanceStatus.activeVisemeCue)\(performanceStatus.usingVisemePreset ? "✓" : "")")
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(.white.opacity(0.82))
+                                            .lineLimit(1)
+                                    }
+                                    Text(overlayTelemetry(for: performanceStatus))
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.62))
+                                        .lineLimit(2)
+                                    if let modelSourcePath = performanceStatus.modelSourcePath {
+                                        Text(modelSourcePath)
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundStyle(.white.opacity(0.5))
+                                            .lineLimit(1)
+                                    }
                                 }
                             }
                         }
@@ -237,6 +252,17 @@ struct Animate3DProductionPreviewView: View {
             .padding(.vertical, 4)
             .background(Capsule().fill(tint.opacity(0.26)))
             .foregroundStyle(.white)
+    }
+
+    private func overlayTelemetry(for status: Animate3DCharacterPerformanceStatus) -> String {
+        var parts: [String] = []
+        parts.append("merged \(status.profileSourceCount)")
+        parts.append("expr \(status.expressionPresetCount)")
+        parts.append("vis \(status.visemePresetCount)")
+        if let mouthProfileID = status.mouthProfileID, !mouthProfileID.isEmpty {
+            parts.append("mouth \(mouthProfileID)")
+        }
+        return parts.joined(separator: " • ")
     }
 }
 

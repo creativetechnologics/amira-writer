@@ -28,6 +28,7 @@ final class ScenePreviewRenderer {
     private var depthManager = SceneDepthManager()
     private var currentPlan: SceneProductionPlan?
     private var characterPerformanceStatusesByName: [String: Animate3DCharacterPerformanceStatus] = [:]
+    private var characterPerformanceProfilesByName: [String: Character3DPerformanceProfile] = [:]
 
     /// Per-character hold multipliers (character name -> hold frames).
     /// Camera always runs on ones (multiplier 1).
@@ -175,6 +176,7 @@ extension ScenePreviewRenderer {
         characterNodes.removeAll()
         characterPerformanceDrivers.removeAll()
         characterPerformanceStatusesByName.removeAll()
+        characterPerformanceProfilesByName.removeAll()
         propNodes.removeAll()
         worldNode = nil
         backgroundNode = nil
@@ -199,9 +201,16 @@ extension ScenePreviewRenderer {
                 slug: blocking.characterSlug,
                 costumeName: blocking.preferredCostumeName
             )
+            if let performanceProfile {
+                characterPerformanceProfilesByName[blocking.characterName] = performanceProfile
+            }
             let driver = CharacterPerformanceDriver(
                 rootNode: node,
                 profile: performanceProfile
+            )
+            let profileSourcePaths = assetPipeline.characterPerformanceProfileSourceRelativePaths(
+                slug: blocking.characterSlug,
+                costumeName: blocking.preferredCostumeName
             )
             characterPerformanceDrivers[blocking.characterName] = driver
             characterPerformanceStatusesByName[blocking.characterName] = Animate3DCharacterPerformanceStatus(
@@ -228,6 +237,13 @@ extension ScenePreviewRenderer {
                     slug: blocking.characterSlug,
                     costumeName: blocking.preferredCostumeName
                 ),
+                profileSourceCount: profileSourcePaths.count,
+                profileSourcePaths: profileSourcePaths,
+                mouthProfileID: performanceProfile?.mouthProfileID,
+                expressionPresetCount: performanceProfile?.expressionPresets.count ?? 0,
+                visemePresetCount: performanceProfile?.visemePresets.count ?? 0,
+                usingExpressionPreset: false,
+                usingVisemePreset: false,
                 activeExpressionCue: performanceProfile == nil ? "fallback:neutral" : "neutral",
                 activeVisemeCue: performanceProfile == nil ? "fallback:rest" : "rest",
                 isVisible: false
@@ -511,8 +527,12 @@ extension ScenePreviewRenderer {
             mouth: mouthState
         )
         if var status = characterPerformanceStatusesByName[blocking.characterName] {
+            let performanceProfile = characterPerformanceProfilesByName[blocking.characterName]
             status.activeExpressionCue = expressionState.cue
             status.activeVisemeCue = mouthState.viseme.token
+            status.usingExpressionPreset = performanceProfile?.expressionPresets[expressionState.cue] != nil
+            status.usingVisemePreset = performanceProfile?.visemePresets[mouthState.viseme.token] != nil
+                || performanceProfile?.visemePresets[mouthState.cue] != nil
             status.driverMode = characterPerformanceDrivers[blocking.characterName]?.driverMode ?? status.driverMode
             characterPerformanceStatusesByName[blocking.characterName] = status
         }

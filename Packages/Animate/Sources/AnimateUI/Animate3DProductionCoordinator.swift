@@ -15,6 +15,13 @@ struct Animate3DCharacterPerformanceStatus: Identifiable, Hashable, Sendable {
     var driverMode: CharacterPerformanceDriverMode
     var profileSourceFileName: String?
     var profileSourcePath: String?
+    var profileSourceCount: Int
+    var profileSourcePaths: [String]
+    var mouthProfileID: String?
+    var expressionPresetCount: Int
+    var visemePresetCount: Int
+    var usingExpressionPreset: Bool
+    var usingVisemePreset: Bool
     var activeExpressionCue: String
     var activeVisemeCue: String
     var isVisible: Bool

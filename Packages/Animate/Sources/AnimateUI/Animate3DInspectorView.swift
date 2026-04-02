@@ -186,8 +186,24 @@ struct Animate3DInspectorView: View {
                                     } else {
                                         inspectorRow(label: "Profile", value: "No authored profile loaded")
                                     }
+                                    inspectorRow(label: "Merged Sources", value: "\(status.profileSourceCount)")
+                                    inspectorRow(label: "Expr Presets", value: "\(status.expressionPresetCount)")
+                                    inspectorRow(label: "Viseme Presets", value: "\(status.visemePresetCount)")
+                                    inspectorRow(
+                                        label: "Overlay Use",
+                                        value: overlayUsageSummary(for: status)
+                                    )
+                                    if let mouthProfileID = status.mouthProfileID, !mouthProfileID.isEmpty {
+                                        inspectorRow(label: "Mouth Profile", value: mouthProfileID)
+                                    }
                                     if let profileSourcePath = status.profileSourcePath {
                                         Text(profileSourcePath)
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    if !status.profileSourcePaths.isEmpty {
+                                        Text(status.profileSourcePaths.joined(separator: "\n"))
                                             .font(.system(size: 10, design: .monospaced))
                                             .foregroundStyle(.secondary)
                                             .fixedSize(horizontal: false, vertical: true)
@@ -952,6 +968,21 @@ struct Animate3DInspectorView: View {
             lines.append("Resolved Path: \(resolvedPath)")
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    private func overlayUsageSummary(
+        for status: Animate3DCharacterPerformanceStatus
+    ) -> String {
+        switch (status.usingExpressionPreset, status.usingVisemePreset) {
+        case (true, true):
+            return "expression + mouth"
+        case (true, false):
+            return "expression"
+        case (false, true):
+            return "mouth"
+        case (false, false):
+            return "fallback"
+        }
     }
 
     private func resolvedBundlePath(
