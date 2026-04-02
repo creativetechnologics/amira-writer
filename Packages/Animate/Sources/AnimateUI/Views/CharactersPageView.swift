@@ -355,22 +355,41 @@ struct CharactersPageView: View {
                         counterText: "\(character.inspirationImagePaths.count) images",
                         isExpanded: $showInspirationPane,
                         trailing: {
-                            HStack(spacing: 8) {
+                            ViewThatFits {
+                                HStack(spacing: 8) {
+                                    Menu {
+                                        inspirationGenerationMenuItems(for: character, wardrobe: character.defaultWardrobeType)
+                                    } label: {
+                                        Label("Generate", systemImage: "sparkles")
+                                    }
+                                    .menuStyle(.button)
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                    .disabled(store.geminiAPIKey.isEmpty || isGeneratingInspiration || isSubmittingInspirationBatch)
+
+                                    Button("Import") {
+                                        store.importInspirationImages(for: character.id)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+
                                 Menu {
-                                    inspirationGenerationMenuItems(for: character, wardrobe: character.defaultWardrobeType)
+                                    Section("Generate") {
+                                        inspirationGenerationMenuItems(for: character, wardrobe: character.defaultWardrobeType)
+                                    }
+                                    Section {
+                                        Button("Import Images", systemImage: "square.and.arrow.down") {
+                                            store.importInspirationImages(for: character.id)
+                                        }
+                                    }
                                 } label: {
-                                    Label("Generate", systemImage: "sparkles")
+                                    Image(systemName: "plus.circle.fill")
                                 }
                                 .menuStyle(.button)
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.small)
                                 .disabled(store.geminiAPIKey.isEmpty || isGeneratingInspiration || isSubmittingInspirationBatch)
-
-                                Button("Import") {
-                                    store.importInspirationImages(for: character.id)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
                             }
                         }
                     ) {
@@ -427,12 +446,23 @@ struct CharactersPageView: View {
                         counterText: "\(installedPackages(for: character).count) packages",
                         isExpanded: $showPackagesPane,
                         trailing: {
-                            Button("Import Package...") {
-                                openCharacterPackagePicker()
+                            ViewThatFits {
+                                Button("Import Package...") {
+                                    openCharacterPackagePicker()
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(store.animateURL == nil)
+
+                                Button {
+                                    openCharacterPackagePicker()
+                                } label: {
+                                    Image(systemName: "square.and.arrow.down")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(store.animateURL == nil)
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(store.animateURL == nil)
                         }
                     ) {
                         characterPackagesSection(character)
