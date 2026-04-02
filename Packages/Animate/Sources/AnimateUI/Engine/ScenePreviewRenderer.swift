@@ -35,6 +35,17 @@ final class ScenePreviewRenderer {
     private var characterHoldMultipliers: [String: Int] = [:]
     private var cameraHoldMultiplier: Int = 1
 
+    private struct MotionContext {
+        var actionCue: String?
+        var poseCue: String?
+        var resolvedMotion: (descriptor: Animate3DMotionSetDescriptor, provenance: String)?
+    }
+
+    private struct HoldResolution {
+        var multiplier: Int
+        var provenance: String?
+    }
+
     // MARK: Scene Graph
 
     private let scene = SCNScene()
@@ -256,6 +267,8 @@ extension ScenePreviewRenderer {
                 resolvedMotionID: nil,
                 resolvedMotionTitle: nil,
                 motionProvenance: nil,
+                resolvedHoldMultiplier: blocking.holdStyle.holdFrames,
+                holdProvenance: "blocking:x\(blocking.holdStyle.holdFrames)",
                 activeExpressionCue: performanceProfile == nil ? "fallback:neutral" : "neutral",
                 activeVisemeCue: performanceProfile == nil ? "fallback:rest" : "rest",
                 isVisible: false
@@ -322,9 +335,18 @@ extension ScenePreviewRenderer {
 
         // Characters at their individual hold rates
         for blocking in plan.characterBlocking {
-            let holdMult = characterHoldMultipliers[blocking.characterName] ?? 2
-            let charFrame = quantize(rawFrame, holdMultiplier: holdMult)
-            updateCharacter(blocking: blocking, frame: charFrame)
+            let motionContext = motionContext(for: blocking, frame: rawFrame)
+            let holdResolution = resolveHoldMultiplier(
+                for: blocking,
+                motionContext: motionContext
+            )
+            let charFrame = quantize(rawFrame, holdMultiplier: holdResolution.multiplier)
+            updateCharacter(
+                blocking: blocking,
+                frame: charFrame,
+                motionContext: motionContext,
+                holdResolution: holdResolution
+            )
         }
 
         // Objects
@@ -456,23 +478,14 @@ extension ScenePreviewRenderer {
 
     // MARK: Characters
 
-    private func updateCharacter(blocking: CharacterBlockingPlan, frame: Int) {
+    private func updateCharacter(
+        blocking: CharacterBlockingPlan,
+        frame: Int,
+        motionContext: MotionContext,
+        holdResolution: HoldResolution
+    ) {
         guard let node = characterNodes[blocking.characterName] else { return }
-        let actionCue = blocking.actingBeats
-            .first(where: { $0.startFrame <= frame && frame <= $0.endFrame })?
-            .action
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let poseCue = blocking.keyPositions
-            .sorted { $0.frame < $1.frame }
-            .last(where: { $0.frame <= frame })?
-            .pose
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let resolvedMotion = assetPipeline.resolveMotionSet(
-            actionCue: actionCue,
-            poseCue: poseCue
-        )
+        let resolvedMotion = motionContext.resolvedMotion
 
         // Visibility: respect entrance/exit frames
         let visible = frame >= blocking.entranceFrame
@@ -496,7 +509,12 @@ extension ScenePreviewRenderer {
                 movementDelta: SIMD3<Double>(0, 0, 0),
                 motion: resolvedMotion
             )
-            applyPerformance(blocking: blocking, frame: frame)
+            applyPerformance(
+                blocking: blocking,
+                frame: frame,
+                motionContext: motionContext,
+                holdResolution: holdResolution
+            )
             return
         }
         if frame >= last.frame {
@@ -509,7 +527,12 @@ extension ScenePreviewRenderer {
                 movementDelta: SIMD3<Double>(0, 0, 0),
                 motion: resolvedMotion
             )
-            applyPerformance(blocking: blocking, frame: frame)
+            applyPerformance(
+                blocking: blocking,
+                frame: frame,
+                motionContext: motionContext,
+                holdResolution: holdResolution
+            )
             return
         }
 
@@ -545,10 +568,20 @@ extension ScenePreviewRenderer {
             motion: resolvedMotion
         )
 
-        applyPerformance(blocking: blocking, frame: frame)
+        applyPerformance(
+            blocking: blocking,
+            frame: frame,
+            motionContext: motionContext,
+            holdResolution: holdResolution
+        )
     }
 
-    private func applyPerformance(blocking: CharacterBlockingPlan, frame: Int) {
+    private func applyPerformance(
+        blocking: CharacterBlockingPlan,
+        frame: Int,
+        motionContext: MotionContext,
+        holdResolution: HoldResolution
+    ) {
         let profile = characterPerformanceProfilesByName[blocking.characterName]
         let liveExpression = store?.evaluatedExpression(
             for: blocking.characterName,
@@ -590,32 +623,20 @@ extension ScenePreviewRenderer {
             expression: expressionState,
             mouth: mouthState
         )
-        let activeActionCue = blocking.actingBeats
-            .first(where: { $0.startFrame <= frame && frame <= $0.endFrame })?
-            .action
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let activePoseCue = blocking.keyPositions
-            .sorted { $0.frame < $1.frame }
-            .last(where: { $0.frame <= frame })?
-            .pose
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let resolvedMotion = assetPipeline.resolveMotionSet(
-            actionCue: activeActionCue,
-            poseCue: activePoseCue
-        )
+        let resolvedMotion = motionContext.resolvedMotion
         if var status = characterPerformanceStatusesByName[blocking.characterName] {
             status.sourceExpressionCue = rawExpressionState.cue
             status.sourceVisemeCue = rawMouthState.cue
             status.expressionBehaviorCue = profile?.expressionBehaviorCue(for: rawExpressionState.cue)
             status.expressionCueProvenance = profile?.expressionCueProvenance(for: rawExpressionState.cue)
             status.visemeCueProvenance = profile?.visemeCueProvenance(for: rawMouthState)
-            status.sourceActionCue = activeActionCue
-            status.sourcePoseCue = activePoseCue
+            status.sourceActionCue = motionContext.actionCue
+            status.sourcePoseCue = motionContext.poseCue
             status.resolvedMotionID = resolvedMotion?.descriptor.motionID
             status.resolvedMotionTitle = resolvedMotion?.descriptor.title
             status.motionProvenance = resolvedMotion?.provenance
+            status.resolvedHoldMultiplier = holdResolution.multiplier
+            status.holdProvenance = holdResolution.provenance
             status.activeExpressionCue = expressionState.cue
             status.activeVisemeCue = mouthState.cue
             status.usingExpressionPreset = applicationResult?.usedExpressionPreset ?? false
@@ -686,6 +707,73 @@ extension ScenePreviewRenderer {
         node.position = scnPosition(basePosition + SIMD3<Double>(0, verticalOffset, 0))
         node.eulerAngles.x = CGFloat(pitch)
         node.eulerAngles.z = CGFloat(roll)
+    }
+
+    private func motionContext(
+        for blocking: CharacterBlockingPlan,
+        frame: Int
+    ) -> MotionContext {
+        let actionCue = blocking.actingBeats
+            .first(where: { $0.startFrame <= frame && frame <= $0.endFrame })?
+            .action
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let poseCue = blocking.keyPositions
+            .sorted { $0.frame < $1.frame }
+            .last(where: { $0.frame <= frame })?
+            .pose
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return MotionContext(
+            actionCue: actionCue,
+            poseCue: poseCue,
+            resolvedMotion: assetPipeline.resolveMotionSet(
+                actionCue: actionCue,
+                poseCue: poseCue
+            )
+        )
+    }
+
+    private func resolveHoldMultiplier(
+        for blocking: CharacterBlockingPlan,
+        motionContext: MotionContext
+    ) -> HoldResolution {
+        let baseMultiplier = characterHoldMultipliers[blocking.characterName]
+            ?? blocking.holdStyle.holdFrames
+        guard let resolvedMotion = motionContext.resolvedMotion else {
+            return HoldResolution(
+                multiplier: baseMultiplier,
+                provenance: "blocking:x\(baseMultiplier)"
+            )
+        }
+
+        let tags = Set(
+            resolvedMotion.descriptor.tags.map { $0.lowercased() } +
+            resolvedMotion.descriptor.title
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map { String($0).lowercased() }
+        )
+        let fastTags: Set<String> = ["run", "sprint", "dash", "jump", "celebrate", "triumph", "move", "walk", "stride", "cross", "sing", "belt"]
+        let slowTags: Set<String> = ["wait", "listen", "think", "idle", "observe", "hesitate", "pause"]
+        let presentationalTags: Set<String> = ["present", "offer", "gesture", "point", "determined", "resolve", "heroic", "focus"]
+
+        let adjustedMultiplier: Int
+        if !tags.isDisjoint(with: slowTags) {
+            adjustedMultiplier = max(baseMultiplier, 3)
+        } else if !tags.isDisjoint(with: fastTags) {
+            adjustedMultiplier = tags.contains("run") || tags.contains("sprint") || tags.contains("dash")
+                ? 1
+                : min(baseMultiplier, 2)
+        } else if !tags.isDisjoint(with: presentationalTags) {
+            adjustedMultiplier = 2
+        } else {
+            adjustedMultiplier = baseMultiplier
+        }
+
+        return HoldResolution(
+            multiplier: max(1, adjustedMultiplier),
+            provenance: "motion:\(resolvedMotion.provenance):x\(max(1, adjustedMultiplier))"
+        )
     }
 
     // MARK: Props / Objects

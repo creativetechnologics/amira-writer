@@ -34,6 +34,8 @@ struct Animate3DCharacterPerformanceStatus: Identifiable, Hashable, Sendable {
     var resolvedMotionID: String?
     var resolvedMotionTitle: String?
     var motionProvenance: String?
+    var resolvedHoldMultiplier: Int
+    var holdProvenance: String?
     var activeExpressionCue: String
     var activeVisemeCue: String
     var isVisible: Bool

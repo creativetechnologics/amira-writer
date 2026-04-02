@@ -186,6 +186,8 @@ final class Animate3DProductionCoordinatorTests: XCTestCase {
         XCTAssertEqual(runtimeStatus.resolvedMotionID, "motion-determined")
         XCTAssertEqual(runtimeStatus.resolvedMotionTitle, "Determined Acting")
         XCTAssertEqual(runtimeStatus.motionProvenance, "tag:determined")
+        XCTAssertEqual(runtimeStatus.resolvedHoldMultiplier, 2)
+        XCTAssertEqual(runtimeStatus.holdProvenance, "motion:tag:determined:x2")
     }
 
     private func makeProjectURL() throws -> URL {

@@ -308,6 +308,11 @@ struct Animate3DProductionPreviewView: View {
             }
             parts.append(label)
         }
+        var holdLabel = "hold x\(status.resolvedHoldMultiplier)"
+        if let provenance = status.holdProvenance, !provenance.isEmpty {
+            holdLabel += " {\(provenance)}"
+        }
+        parts.append(holdLabel)
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 }
