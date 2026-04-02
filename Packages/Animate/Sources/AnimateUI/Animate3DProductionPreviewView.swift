@@ -26,6 +26,21 @@ struct Animate3DProductionPreviewView: View {
         status.generationQueueItems.filter(\.isBatchDraftable).count
     }
 
+    private var prioritizedQueueItems: [Animate3DGenerationQueueItem] {
+        status.generationQueueItems
+            .sorted { lhs, rhs in
+                if lhs.isBatchDraftable != rhs.isBatchDraftable {
+                    return lhs.isBatchDraftable && !rhs.isBatchDraftable
+                }
+                let lhsHasContext = !(lhs.contextSummary?.isEmpty ?? true)
+                let rhsHasContext = !(rhs.contextSummary?.isEmpty ?? true)
+                if lhsHasContext != rhsHasContext {
+                    return lhsHasContext && !rhsHasContext
+                }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             previewHeader
@@ -245,6 +260,42 @@ struct Animate3DProductionPreviewView: View {
                         Text("• \(warning)")
                             .font(.system(size: 11))
                             .foregroundStyle(OperaChromeTheme.textSecondary)
+                    }
+                }
+            }
+
+            if !prioritizedQueueItems.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Priority 3D Gaps")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1.0)
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+
+                    ForEach(prioritizedQueueItems.prefix(3), id: \.id) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                badge(item.kind.title, tint: item.isBatchDraftable ? .blue : .gray)
+                                Text(item.title)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(OperaChromeTheme.textPrimary)
+                                    .lineLimit(1)
+                            }
+                            Text(item.detail)
+                                .font(.system(size: 11))
+                                .foregroundStyle(OperaChromeTheme.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if let contextSummary = item.contextSummary, !contextSummary.isEmpty {
+                                Text(contextSummary)
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.white.opacity(0.04))
+                        )
                     }
                 }
             }
