@@ -65,6 +65,15 @@ struct CharacterMouthEngine: Sendable {
         }
 
         if let beat = blocking.lipsyncBeats.first(where: { $0.startFrame <= frame && frame <= $0.endFrame }) {
+            let keyframes = syntheticKeyframes(in: beat, baseFPS: baseFPS, characterName: characterName, profile: profile)
+            if !keyframes.isEmpty {
+                let snapshot = VisemeBlendEngine.blendedState(at: frame, keyframes: keyframes, transitionFrames: 3, fps: baseFPS)
+                let currentViseme = syntheticViseme(in: beat, frame: frame, baseFPS: baseFPS, characterName: characterName, profile: profile)
+                return canonicalized(
+                    state: mouthState(from: snapshot, viseme: currentViseme),
+                    profile: profile
+                )
+            }
             return canonicalized(
                 state: state(for: syntheticViseme(in: beat, frame: frame, baseFPS: baseFPS, characterName: characterName, profile: profile)),
                 profile: profile
@@ -183,6 +192,57 @@ private extension CharacterMouthEngine {
         }
 
         return available
+    }
+
+    func mouthState(from snapshot: VisemeBlendEngine.MouthSnapshot, viseme: PrestonBlairViseme) -> CharacterMouthState {
+        CharacterMouthState(
+            cue: viseme.token,
+            viseme: viseme,
+            jawOpen: snapshot.jawOpen,
+            mouthWidth: snapshot.mouthWidth,
+            mouthHeight: snapshot.mouthHeight,
+            pucker: snapshot.pucker,
+            smileBlend: snapshot.smileBlend
+        )
+    }
+
+    /// Build a full sequence of `TimedViseme` keyframes covering the lipsync beat,
+    /// suitable for smooth interpolation via `VisemeBlendEngine`.
+    func syntheticKeyframes(
+        in beat: CharacterLipsyncBeat,
+        baseFPS: Int,
+        characterName: String,
+        profile: Character3DPerformanceProfile?
+    ) -> [VisemeBlendEngine.TimedViseme] {
+        let mode = beat.mode.lowercased()
+        let singingCycle = plannedCycle(
+            base: [.ai, .o, .e, .u, .ai, .rest],
+            profile: profile
+        )
+        let speechCycle = plannedCycle(
+            base: [.consonant, .ai, .e, .mbp, .o, .rest],
+            profile: profile
+        )
+        let cycle = mode.contains("sing") ? singingCycle : speechCycle
+        guard !cycle.isEmpty else { return [] }
+
+        let step = max(1, baseFPS / (mode.contains("sing") ? 8 : 12))
+        let phaseOffset = abs(characterName.hashValue % cycle.count)
+
+        var keyframes: [VisemeBlendEngine.TimedViseme] = []
+        var f = beat.startFrame
+        while f <= beat.endFrame {
+            let phase = ((f - beat.startFrame) / step + phaseOffset) % cycle.count
+            let nextStepFrame = min(beat.endFrame + 1, f + step)
+            let duration = nextStepFrame - f
+            keyframes.append(VisemeBlendEngine.TimedViseme(
+                frame: f,
+                viseme: cycle[phase],
+                durationFrames: duration
+            ))
+            f = nextStepFrame
+        }
+        return keyframes
     }
 
     func canonicalized(
