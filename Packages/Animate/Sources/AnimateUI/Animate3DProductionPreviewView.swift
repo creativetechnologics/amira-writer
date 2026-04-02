@@ -4,11 +4,47 @@ import ProjectKit
 
 @available(macOS 26.0, *)
 struct Animate3DProductionPreviewView: View {
+    struct PreflightOwner {
+        var characterID: UUID?
+        var characterSlug: String?
+        var displayName: String
+        var outputRootRelativePath: String?
+
+        @MainActor
+        init(item: Animate3DGenerationQueueItem, store: AnimateStore) {
+            if let slug = item.characterSlug,
+               let character = store.characters.first(where: { $0.assetFolderSlug == slug || $0.owpSlug == slug }) {
+                characterID = character.id
+                characterSlug = character.assetFolderSlug
+                displayName = character.name
+                outputRootRelativePath = nil
+            } else {
+                characterID = nil
+                characterSlug = nil
+                displayName = item.characterName ?? "Environment"
+                let trimmed = item.targetRelativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+                let normalized = trimmed.hasPrefix("Animate/")
+                    ? String(trimmed.dropFirst("Animate/".count))
+                    : trimmed
+                let directory = normalized.hasSuffix("/")
+                    ? normalized
+                    : (normalized as NSString).deletingLastPathComponent
+                let cleaned = directory.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                outputRootRelativePath = cleaned.isEmpty
+                    ? "3d/generation-queue-batches"
+                    : "\(cleaned)/batch-queue-batches"
+            }
+        }
+    }
+
     @Bindable var store: AnimateStore
     @Bindable var harnessState: Animate3DTestHarnessState
     let scenario: Animate3DPreviewScenario
     let status: Animate3DProductionStatus
     let renderer: ScenePreviewRenderer
+    @State private var preflightDrafts: [GeminiGenerationDraft] = []
+    @State private var preflightOwner: PreflightOwner?
+    @State private var showPreflight = false
 
     private var displayFrame: Int {
         scenario.sourceKind == .selectedTimeline ? store.currentFrame : harnessState.previewFrame
@@ -24,6 +60,10 @@ struct Animate3DProductionPreviewView: View {
 
     private var draftableQueueCount: Int {
         status.generationQueueItems.filter(\.isBatchDraftable).count
+    }
+
+    private var nextDraftableQueueItem: Animate3DGenerationQueueItem? {
+        prioritizedQueueItems.first(where: \.isBatchDraftable)
     }
 
     private var prioritizedQueueItems: [Animate3DGenerationQueueItem] {
@@ -133,6 +173,22 @@ struct Animate3DProductionPreviewView: View {
                 .padding(.bottom, 16)
         }
         .background(OperaChromeTheme.workspaceBackground)
+        .sheet(isPresented: $showPreflight) {
+            GeminiGenerationPreflightSheet(
+                store: store,
+                drafts: $preflightDrafts,
+                title: "Preview 3D Generation Draft",
+                confirmTitle: "Queue Draft",
+                onConfirm: { drafts, _ in
+                    queuePreflightDrafts(drafts)
+                    showPreflight = false
+                },
+                onCancel: {
+                    preflightOwner = nil
+                    showPreflight = false
+                }
+            )
+        }
     }
 
     private var previewHeader: some View {
@@ -252,6 +308,12 @@ struct Animate3DProductionPreviewView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!hasMissing3DDrafts || store.selectedScene == nil)
+
+                Button("Preflight Next Draft") {
+                    openGenerationPreflight()
+                }
+                .buttonStyle(.bordered)
+                .disabled(nextDraftableQueueItem == nil || store.selectedScene == nil)
             }
 
             if !status.warnings.isEmpty {
@@ -368,6 +430,45 @@ struct Animate3DProductionPreviewView: View {
             parts.append("hints \(motionHintSummary)")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
+    }
+
+    private func openGenerationPreflight() {
+        guard let item = nextDraftableQueueItem,
+              let draft = Animate3DAssetGapQueueService(store: store).draft(
+                for: item,
+                scene: store.selectedScene,
+                status: status
+              ) else {
+            store.statusMessage = "No draftable 3D request available for preflight."
+            return
+        }
+        preflightDrafts = [draft]
+        preflightOwner = PreflightOwner(item: item, store: store)
+        showPreflight = true
+    }
+
+    private func queuePreflightDrafts(_ drafts: [GeminiGenerationDraft]) {
+        guard let owner = preflightOwner else { return }
+        for draft in drafts {
+            if let characterID = owner.characterID {
+                store.addToBatchQueue(
+                    characterID: characterID,
+                    characterName: owner.displayName,
+                    draftTitle: draft.title,
+                    draft: draft,
+                    characterSlug: owner.characterSlug
+                )
+            } else if let outputRootRelativePath = owner.outputRootRelativePath {
+                store.addToBatchQueue(
+                    pipelineName: owner.displayName,
+                    draftTitle: draft.title,
+                    draft: draft,
+                    outputRootRelativePath: outputRootRelativePath
+                )
+            }
+        }
+        store.statusMessage = "Queued \(drafts.count) 3D preflight draft\(drafts.count == 1 ? "" : "s")"
+        preflightOwner = nil
     }
 }
 
