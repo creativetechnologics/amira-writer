@@ -76,17 +76,23 @@ struct Animate3DProductionPreviewView: View {
     private var prioritizedQueueItems: [Animate3DGenerationQueueItem] {
         Animate3DGenerationQueueActionSupport.prioritizedItems(
             from: status.generationQueueItems,
-            pinnedIDs: harnessState.pinnedGenerationQueueItemIDs,
-            skippedIDs: harnessState.skippedGenerationQueueItemIDs
+            pinnedKeys: harnessState.pinnedGenerationQueueItemKeys,
+            skippedKeys: harnessState.skippedGenerationQueueItemKeys
         )
     }
 
     private var pinnedVisibleCount: Int {
-        visiblePriorityQueueItems.filter { harnessState.pinnedGenerationQueueItemIDs.contains($0.id) }.count
+        visiblePriorityQueueItems.filter { harnessState.pinnedGenerationQueueItemKeys.contains($0.stableKey) }.count
     }
 
     private var skippedQueueItemCount: Int {
-        status.generationQueueItems.filter { harnessState.skippedGenerationQueueItemIDs.contains($0.id) }.count
+        status.generationQueueItems.filter { harnessState.skippedGenerationQueueItemKeys.contains($0.stableKey) }.count
+    }
+
+    private var overriddenVisibleCount: Int {
+        visiblePriorityQueueItems.filter {
+            harnessState.generationDraftOverride(for: $0.stableKey).hasVisibleChanges
+        }.count
     }
 
     var body: some View {
@@ -387,6 +393,9 @@ struct Animate3DProductionPreviewView: View {
                             if skippedQueueItemCount > 0 {
                                 badge("Skipped \(skippedQueueItemCount)", tint: .red)
                             }
+                            if overriddenVisibleCount > 0 {
+                                badge("Overrides \(overriddenVisibleCount)", tint: .purple)
+                            }
                             if hiddenQueueItemCount > 0 {
                                 badge("+\(hiddenQueueItemCount) more", tint: .orange)
                             }
@@ -399,6 +408,9 @@ struct Animate3DProductionPreviewView: View {
                                 badge(item.kind.title, tint: item.isBatchDraftable ? .blue : .gray)
                                 if itemIsQueued(item) {
                                     badge("Queued", tint: .green)
+                                }
+                                if generationDraftOverride(for: item).isLocked {
+                                    badge("Locked", tint: .purple)
                                 }
                                 Text(item.title)
                                     .font(.system(size: 12, weight: .semibold))
@@ -415,15 +427,19 @@ struct Animate3DProductionPreviewView: View {
                                     .foregroundStyle(.orange)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
+                            Text("Provider: \(effectiveProviderHint(for: item))")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(OperaChromeTheme.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
                             HStack(spacing: 8) {
-                                Button(harnessState.pinnedGenerationQueueItemIDs.contains(item.id) ? "Unpin" : "Pin") {
-                                    harnessState.togglePinnedGenerationQueueItem(item.id)
+                                Button(isPinned(item) ? "Unpin" : "Pin") {
+                                    harnessState.togglePinnedGenerationQueueItem(item.stableKey)
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
 
-                                Button(harnessState.skippedGenerationQueueItemIDs.contains(item.id) ? "Restore" : "Skip") {
-                                    harnessState.toggleSkippedGenerationQueueItem(item.id)
+                                Button(isSkipped(item) ? "Restore" : "Skip") {
+                                    harnessState.toggleSkippedGenerationQueueItem(item.stableKey)
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
@@ -455,6 +471,18 @@ struct Animate3DProductionPreviewView: View {
                                     }
                                     .buttonStyle(.bordered)
                                     .controlSize(.small)
+                                }
+                            }
+
+                            if isPinned(item) || generationDraftOverride(for: item).hasVisibleChanges {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    TextField("Provider override", text: providerOverrideBinding(for: item))
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("Prompt appendix / extra constraints", text: promptAppendixBinding(for: item), axis: .vertical)
+                                        .textFieldStyle(.roundedBorder)
+                                        .lineLimit(2...4)
+                                    Toggle("Lock override", isOn: lockedOverrideBinding(for: item))
+                                        .toggleStyle(.checkbox)
                                 }
                             }
                         }
@@ -541,6 +569,46 @@ struct Animate3DProductionPreviewView: View {
         store.workingOWPURL ?? store.owpURL
     }
 
+    private func isPinned(_ item: Animate3DGenerationQueueItem) -> Bool {
+        harnessState.pinnedGenerationQueueItemKeys.contains(item.stableKey)
+    }
+
+    private func isSkipped(_ item: Animate3DGenerationQueueItem) -> Bool {
+        harnessState.skippedGenerationQueueItemKeys.contains(item.stableKey)
+    }
+
+    private func generationDraftOverride(for item: Animate3DGenerationQueueItem) -> Animate3DGenerationDraftOverride {
+        harnessState.generationDraftOverride(for: item.stableKey)
+    }
+
+    private func providerOverrideBinding(for item: Animate3DGenerationQueueItem) -> Binding<String> {
+        Binding(
+            get: { generationDraftOverride(for: item).providerHintOverride },
+            set: { harnessState.setProviderHintOverride($0, for: item.stableKey) }
+        )
+    }
+
+    private func promptAppendixBinding(for item: Animate3DGenerationQueueItem) -> Binding<String> {
+        Binding(
+            get: { generationDraftOverride(for: item).promptAppendix },
+            set: { harnessState.setPromptAppendix($0, for: item.stableKey) }
+        )
+    }
+
+    private func lockedOverrideBinding(for item: Animate3DGenerationQueueItem) -> Binding<Bool> {
+        Binding(
+            get: { generationDraftOverride(for: item).isLocked },
+            set: { harnessState.setGenerationDraftLocked($0, for: item.stableKey) }
+        )
+    }
+
+    private func effectiveProviderHint(for item: Animate3DGenerationQueueItem) -> String {
+        Animate3DGenerationQueueActionSupport.effectiveProviderHint(
+            for: item,
+            overridesByStableKey: harnessState.generationDraftOverridesByStableKey
+        )
+    }
+
     private func itemIsQueued(_ item: Animate3DGenerationQueueItem) -> Bool {
         Animate3DGenerationQueueActionSupport.isQueued(item: item, store: store)
     }
@@ -550,7 +618,8 @@ struct Animate3DProductionPreviewView: View {
             item: item,
             scene: selectedScene,
             status: status,
-            store: store
+            store: store,
+            overridesByStableKey: harnessState.generationDraftOverridesByStableKey
         )
         store.statusMessage = queued > 0
             ? "Queued \(item.title)"
@@ -562,7 +631,8 @@ struct Animate3DProductionPreviewView: View {
             for: item,
             scene: selectedScene,
             status: status,
-            store: store
+            store: store,
+            overridesByStableKey: harnessState.generationDraftOverridesByStableKey
         ) else {
             store.statusMessage = "No draftable Gemini request exists for \(item.title)."
             return
@@ -614,7 +684,8 @@ struct Animate3DProductionPreviewView: View {
                 for: item,
                 scene: selectedScene,
                 status: status,
-                store: store
+                store: store,
+                overridesByStableKey: harnessState.generationDraftOverridesByStableKey
             ) else {
                 continue
             }
@@ -652,7 +723,8 @@ struct Animate3DProductionPreviewView: View {
             items: visibleQueueableItems,
             scene: selectedScene,
             status: status,
-            store: store
+            store: store,
+            overridesByStableKey: harnessState.generationDraftOverridesByStableKey
         )
         store.statusMessage = queued > 0
             ? "Queued \(queued) visible 3D draft\(queued == 1 ? "" : "s")"

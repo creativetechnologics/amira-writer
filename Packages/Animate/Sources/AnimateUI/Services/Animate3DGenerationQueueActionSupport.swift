@@ -40,14 +40,14 @@ enum Animate3DGenerationQueueActionSupport {
 
     static func prioritizedItems(
         from items: [Animate3DGenerationQueueItem],
-        pinnedIDs: Set<UUID>,
-        skippedIDs: Set<UUID>
+        pinnedKeys: Set<String>,
+        skippedKeys: Set<String>
     ) -> [Animate3DGenerationQueueItem] {
         items
-            .filter { !skippedIDs.contains($0.id) }
+            .filter { !skippedKeys.contains($0.stableKey) }
             .sorted { lhs, rhs in
-                let lhsPinned = pinnedIDs.contains(lhs.id)
-                let rhsPinned = pinnedIDs.contains(rhs.id)
+                let lhsPinned = pinnedKeys.contains(lhs.stableKey)
+                let rhsPinned = pinnedKeys.contains(rhs.stableKey)
                 if lhsPinned != rhsPinned {
                     return lhsPinned && !rhsPinned
                 }
@@ -63,27 +63,90 @@ enum Animate3DGenerationQueueActionSupport {
             }
     }
 
+    static func effectiveProviderHint(
+        for item: Animate3DGenerationQueueItem,
+        overridesByStableKey: [String: Animate3DGenerationDraftOverride] = [:]
+    ) -> String {
+        let override = overridesByStableKey[item.stableKey] ?? Animate3DGenerationDraftOverride()
+        let trimmed = override.providerHintOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? item.providerHint : trimmed
+    }
+
+    static func effectivePromptAppendix(
+        for item: Animate3DGenerationQueueItem,
+        overridesByStableKey: [String: Animate3DGenerationDraftOverride] = [:]
+    ) -> String? {
+        let trimmed = (overridesByStableKey[item.stableKey]?.promptAppendix ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func hasLockedOverride(
+        for item: Animate3DGenerationQueueItem,
+        overridesByStableKey: [String: Animate3DGenerationDraftOverride] = [:]
+    ) -> Bool {
+        overridesByStableKey[item.stableKey]?.isLocked ?? false
+    }
+
+    static func applyOverrides(
+        to draft: GeminiGenerationDraft,
+        item: Animate3DGenerationQueueItem,
+        overridesByStableKey: [String: Animate3DGenerationDraftOverride] = [:]
+    ) -> GeminiGenerationDraft {
+        let override = overridesByStableKey[item.stableKey] ?? Animate3DGenerationDraftOverride()
+        var updated = draft
+        if let promptAppendix = effectivePromptAppendix(for: item, overridesByStableKey: overridesByStableKey) {
+            updated.prompt += "\n\nOverride Notes:\n" + promptAppendix
+        }
+        var contextLines: [String] = []
+        if let existing = updated.contextNote?.trimmingCharacters(in: .whitespacesAndNewlines), !existing.isEmpty {
+            contextLines.append(existing)
+        }
+        let provider = effectiveProviderHint(for: item, overridesByStableKey: overridesByStableKey)
+        if provider.caseInsensitiveCompare(item.providerHint) != .orderedSame || !provider.isEmpty {
+            contextLines.append("provider: \(provider)")
+        }
+        if override.isLocked {
+            contextLines.append("locked override")
+        }
+        updated.contextNote = contextLines.isEmpty ? nil : contextLines.joined(separator: "\n")
+        return updated
+    }
+
     static func queue(
         item: Animate3DGenerationQueueItem,
         scene: AnimationScene?,
         status: Animate3DProductionStatus,
-        store: AnimateStore
+        store: AnimateStore,
+        overridesByStableKey: [String: Animate3DGenerationDraftOverride] = [:]
     ) -> Int {
-        Animate3DAssetGapQueueService(store: store).queue(
-            item: item,
+        guard let result = draft(
+            for: item,
             scene: scene,
-            status: status
-        )
+            status: status,
+            store: store,
+            overridesByStableKey: overridesByStableKey
+        ) else {
+            return 0
+        }
+        return queuePreflightDrafts([result.draft], owner: result.owner, store: store)
     }
 
     static func queue(
         items: [Animate3DGenerationQueueItem],
         scene: AnimationScene?,
         status: Animate3DProductionStatus,
-        store: AnimateStore
+        store: AnimateStore,
+        overridesByStableKey: [String: Animate3DGenerationDraftOverride] = [:]
     ) -> Int {
         items.reduce(into: 0) { queued, item in
-            queued += queue(item: item, scene: scene, status: status, store: store)
+            queued += queue(
+                item: item,
+                scene: scene,
+                status: status,
+                store: store,
+                overridesByStableKey: overridesByStableKey
+            )
         }
     }
 
@@ -91,7 +154,8 @@ enum Animate3DGenerationQueueActionSupport {
         for item: Animate3DGenerationQueueItem,
         scene: AnimationScene?,
         status: Animate3DProductionStatus,
-        store: AnimateStore
+        store: AnimateStore,
+        overridesByStableKey: [String: Animate3DGenerationDraftOverride] = [:]
     ) -> (draft: GeminiGenerationDraft, owner: PreflightOwner)? {
         guard let draft = Animate3DAssetGapQueueService(store: store).draft(
             for: item,
@@ -100,7 +164,8 @@ enum Animate3DGenerationQueueActionSupport {
         ) else {
             return nil
         }
-        return (draft, PreflightOwner(item: item, store: store))
+        let overriddenDraft = applyOverrides(to: draft, item: item, overridesByStableKey: overridesByStableKey)
+        return (overriddenDraft, PreflightOwner(item: item, store: store))
     }
 
     static func queuePreflightDrafts(

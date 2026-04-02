@@ -265,11 +265,51 @@ final class Animate3DGenerationQueueActionSupportTests: XCTestCase {
 
         let prioritized = Animate3DGenerationQueueActionSupport.prioritizedItems(
             from: [body, face, world],
-            pinnedIDs: [world.id],
-            skippedIDs: [body.id]
+            pinnedKeys: [world.stableKey],
+            skippedKeys: [body.stableKey]
         )
 
         XCTAssertEqual(prioritized.map(\.id), [world.id, face.id])
+    }
+
+    func testApplyOverridesUpdatesPromptAndContext() {
+        let item = Animate3DGenerationQueueItem(
+            kind: .bodyModel,
+            title: "Luke body model",
+            detail: "Generate Luke body model.",
+            destinationPath: "Animate/characters/luke/models/",
+            providerHint: "Meshy / Rodin / local 2D→3D",
+            prompt: "Generate Luke body model.",
+            contextSummary: "runtime motion: determined",
+            characterSlug: "luke",
+            characterName: "Luke"
+        )
+        let draft = GeminiGenerationDraft(
+            title: item.title,
+            destinationDescription: item.destinationDescription,
+            prompt: item.prompt,
+            contextNote: item.contextSummary,
+            model: .flash,
+            aspectRatio: item.draftAspectRatio,
+            imageSize: "1K",
+            referenceItems: []
+        )
+        let override = Animate3DGenerationDraftOverride(
+            providerHintOverride: "World Labs Marble",
+            promptAppendix: "Keep the silhouette extremely readable.",
+            isLocked: true
+        )
+
+        let updated = Animate3DGenerationQueueActionSupport.applyOverrides(
+            to: draft,
+            item: item,
+            overridesByStableKey: [item.stableKey: override]
+        )
+
+        XCTAssertTrue(updated.prompt.contains("Override Notes"))
+        XCTAssertTrue(updated.prompt.contains("Keep the silhouette extremely readable."))
+        XCTAssertTrue(updated.contextNote?.contains("provider: World Labs Marble") == true)
+        XCTAssertTrue(updated.contextNote?.contains("locked override") == true)
     }
 
     private func makeProjectURL() throws -> URL {

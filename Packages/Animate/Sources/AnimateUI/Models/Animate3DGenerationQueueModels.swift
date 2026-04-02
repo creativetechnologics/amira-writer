@@ -57,6 +57,19 @@ struct Animate3DGenerationQueueItem: Identifiable, Hashable, Sendable {
     var placeName: String?
     var manifestKind: Animate3DRegistryManifestKind?
 
+    var stableKey: String {
+        [
+            kind.rawValue,
+            title.lowercased(),
+            destinationPath.lowercased(),
+            (characterSlug ?? "").lowercased(),
+            (characterName ?? "").lowercased(),
+            (sceneName ?? "").lowercased(),
+            (placeName ?? "").lowercased(),
+            manifestKind?.rawValue.lowercased() ?? ""
+        ].joined(separator: "|")
+    }
+
     var summary: String {
         [detail, contextSummary, providerHint]
             .compactMap { value in

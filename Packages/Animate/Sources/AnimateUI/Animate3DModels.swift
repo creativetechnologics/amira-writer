@@ -98,6 +98,19 @@ enum Animate3DRendererMode: String, CaseIterable, Identifiable {
 }
 
 @available(macOS 26.0, *)
+struct Animate3DGenerationDraftOverride: Hashable, Sendable {
+    var providerHintOverride: String = ""
+    var promptAppendix: String = ""
+    var isLocked: Bool = false
+
+    var hasVisibleChanges: Bool {
+        !providerHintOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+        !promptAppendix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+        isLocked
+    }
+}
+
+@available(macOS 26.0, *)
 @Observable @MainActor
 final class Animate3DTestHarnessState {
     var scenarioMode: Animate3DScenarioMode = .auto
@@ -117,8 +130,9 @@ final class Animate3DTestHarnessState {
     var showsShotLabels = true
     var showsPackageCutouts = true
     var autoResetOnScenarioChange = true
-    var pinnedGenerationQueueItemIDs: Set<UUID> = []
-    var skippedGenerationQueueItemIDs: Set<UUID> = []
+    var pinnedGenerationQueueItemKeys: Set<String> = []
+    var skippedGenerationQueueItemKeys: Set<String> = []
+    var generationDraftOverridesByStableKey: [String: Animate3DGenerationDraftOverride] = [:]
 
     @ObservationIgnored private var timer: Timer?
 
@@ -126,26 +140,56 @@ final class Animate3DTestHarnessState {
         previewFrame = 0
     }
 
-    func togglePinnedGenerationQueueItem(_ id: UUID) {
-        if pinnedGenerationQueueItemIDs.contains(id) {
-            pinnedGenerationQueueItemIDs.remove(id)
+    func togglePinnedGenerationQueueItem(_ key: String) {
+        if pinnedGenerationQueueItemKeys.contains(key) {
+            pinnedGenerationQueueItemKeys.remove(key)
         } else {
-            pinnedGenerationQueueItemIDs.insert(id)
-            skippedGenerationQueueItemIDs.remove(id)
+            pinnedGenerationQueueItemKeys.insert(key)
+            skippedGenerationQueueItemKeys.remove(key)
         }
     }
 
-    func toggleSkippedGenerationQueueItem(_ id: UUID) {
-        if skippedGenerationQueueItemIDs.contains(id) {
-            skippedGenerationQueueItemIDs.remove(id)
+    func toggleSkippedGenerationQueueItem(_ key: String) {
+        if skippedGenerationQueueItemKeys.contains(key) {
+            skippedGenerationQueueItemKeys.remove(key)
         } else {
-            skippedGenerationQueueItemIDs.insert(id)
-            pinnedGenerationQueueItemIDs.remove(id)
+            skippedGenerationQueueItemKeys.insert(key)
+            pinnedGenerationQueueItemKeys.remove(key)
         }
     }
 
     func restoreSkippedGenerationQueueItems() {
-        skippedGenerationQueueItemIDs.removeAll()
+        skippedGenerationQueueItemKeys.removeAll()
+    }
+
+    func generationDraftOverride(for key: String) -> Animate3DGenerationDraftOverride {
+        generationDraftOverridesByStableKey[key] ?? Animate3DGenerationDraftOverride()
+    }
+
+    func setProviderHintOverride(_ value: String, for key: String) {
+        var override = generationDraftOverride(for: key)
+        override.providerHintOverride = value
+        storeGenerationDraftOverride(override, for: key)
+    }
+
+    func setPromptAppendix(_ value: String, for key: String) {
+        var override = generationDraftOverride(for: key)
+        override.promptAppendix = value
+        storeGenerationDraftOverride(override, for: key)
+    }
+
+    func setGenerationDraftLocked(_ locked: Bool, for key: String) {
+        var override = generationDraftOverride(for: key)
+        override.isLocked = locked
+        storeGenerationDraftOverride(override, for: key)
+    }
+
+    private func storeGenerationDraftOverride(_ override: Animate3DGenerationDraftOverride, for key: String) {
+        if override.hasVisibleChanges {
+            generationDraftOverridesByStableKey[key] = override
+        } else {
+            generationDraftOverridesByStableKey.removeValue(forKey: key)
+        }
     }
 
     func clamp(to scenario: Animate3DPreviewScenario) {
