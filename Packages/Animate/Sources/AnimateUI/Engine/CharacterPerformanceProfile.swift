@@ -213,6 +213,43 @@ struct Character3DPerformanceProfile: Codable, Sendable, Hashable {
         }
     }
 
+    func visemeCueProvenance(for mouthState: CharacterMouthState) -> String? {
+        let candidates = Self.visemeFallbacks[mouthState.viseme.token, default: [mouthState.viseme.token]]
+        let extraCandidates = [mouthState.cue.lowercased(), mouthState.viseme.token.lowercased()]
+        let orderedCandidates = Array(NSOrderedSet(array: candidates + extraCandidates)) as? [String] ?? (candidates + extraCandidates)
+
+        for candidate in orderedCandidates {
+            if let exact = visemePresets.first(where: { entry in
+                visemeSearchTerms(for: entry).contains { term in
+                    term.caseInsensitiveCompare(candidate) == .orderedSame
+                }
+            }) {
+                if let baseToken = Self.normalizedToken(exact.value.baseVisemeToken) {
+                    return "baseViseme:\(baseToken)"
+                }
+                let aliasMatch = visemeSearchTerms(for: exact).first(where: {
+                    $0.caseInsensitiveCompare(candidate) == .orderedSame &&
+                    $0.caseInsensitiveCompare(exact.key) != .orderedSame
+                })
+                return aliasMatch.map { "alias:\($0)" }
+            }
+            if let tokenMatch = visemePresets.first(where: { entry in
+                visemeSearchTerms(for: entry).contains(where: { Self.visemeKey($0, matches: candidate) })
+            }) {
+                if let baseToken = Self.normalizedToken(tokenMatch.value.baseVisemeToken) {
+                    return "baseViseme:\(baseToken)"
+                }
+                let aliasMatch = visemeSearchTerms(for: tokenMatch).first(where: {
+                    Self.visemeKey($0, matches: candidate) &&
+                    $0.caseInsensitiveCompare(tokenMatch.key) != .orderedSame
+                })
+                return aliasMatch.map { "alias:\($0)" }
+            }
+        }
+
+        return nil
+    }
+
     func availableVisemes() -> [PrestonBlairViseme] {
         var ordered: [PrestonBlairViseme] = []
         for entry in visemePresets {

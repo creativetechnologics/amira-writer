@@ -290,10 +290,16 @@ struct Animate3DProductionPreviewView: View {
             parts.append("expr {\(provenance)}")
         }
         if status.sourceVisemeCue.caseInsensitiveCompare(status.activeVisemeCue) != .orderedSame {
-            parts.append("vis \(status.sourceVisemeCue)→\(status.activeVisemeCue)")
+            var label = "vis \(status.sourceVisemeCue)→\(status.activeVisemeCue)"
+            if let provenance = status.visemeCueProvenance, !provenance.isEmpty {
+                label += " {\(provenance)}"
+            }
+            parts.append(label)
         } else if let resolvedVisemePresetCue = status.resolvedVisemePresetCue,
                   resolvedVisemePresetCue.caseInsensitiveCompare(status.activeVisemeCue) != .orderedSame {
             parts.append("vis→\(resolvedVisemePresetCue)")
+        } else if let provenance = status.visemeCueProvenance, !provenance.isEmpty {
+            parts.append("vis {\(provenance)}")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }

@@ -250,6 +250,7 @@ extension ScenePreviewRenderer {
                 sourceVisemeCue: performanceProfile == nil ? "fallback:rest" : "rest",
                 expressionBehaviorCue: nil,
                 expressionCueProvenance: nil,
+                visemeCueProvenance: nil,
                 activeExpressionCue: performanceProfile == nil ? "fallback:neutral" : "neutral",
                 activeVisemeCue: performanceProfile == nil ? "fallback:rest" : "rest",
                 isVisible: false
@@ -553,6 +554,7 @@ extension ScenePreviewRenderer {
             status.sourceVisemeCue = rawMouthState.cue
             status.expressionBehaviorCue = profile?.expressionBehaviorCue(for: rawExpressionState.cue)
             status.expressionCueProvenance = profile?.expressionCueProvenance(for: rawExpressionState.cue)
+            status.visemeCueProvenance = profile?.visemeCueProvenance(for: rawMouthState)
             status.activeExpressionCue = expressionState.cue
             status.activeVisemeCue = mouthState.cue
             status.usingExpressionPreset = applicationResult?.usedExpressionPreset ?? false

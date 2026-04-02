@@ -230,6 +230,7 @@ final class CharacterPerformanceProfileTests: XCTestCase {
 
         XCTAssertEqual(state.cue, "hero_open")
         XCTAssertEqual(state.viseme, PrestonBlairViseme.o)
+        XCTAssertEqual(profile.visemeCueProvenance(for: state), "baseViseme:o")
     }
 
     func testMouthEngineSpeechCycleUsesAvailableProfileVisemes() {
