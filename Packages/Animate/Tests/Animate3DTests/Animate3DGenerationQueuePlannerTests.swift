@@ -72,6 +72,103 @@ final class Animate3DGenerationQueuePlannerTests: XCTestCase {
         XCTAssertFalse(items.contains(where: { $0.kind == .materialProfile }))
     }
 
+    func testPlannerUsesRuntimeMotionCuesInMissingMotionPrompt() throws {
+        let projectURL = try makeProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
+
+        let store = AnimateStore()
+        store.owpURL = projectURL
+        store.characters = [
+            AnimationCharacter(
+                id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+                name: "Luke",
+                description: "Pilot",
+                owpSlug: "luke",
+                parts: []
+            )
+        ]
+
+        let scene = AnimationScene(
+            id: UUID(uuidString: "99999999-8888-7777-6666-555555555555")!,
+            name: "Luke Scene",
+            backgroundID: nil,
+            characterIDs: [store.characters[0].id],
+            keyframes: [],
+            owpSongPath: "Songs/luke.ows"
+        )
+
+        let runtimeStatus = Animate3DCharacterPerformanceStatus(
+            characterName: "Luke",
+            characterSlug: "luke",
+            preferredCostumeName: nil,
+            resolvedBundleCostumeName: nil,
+            resolvedBundleSourcePath: nil,
+            resolvedBundleAssetPaths: [],
+            modelFileName: nil,
+            modelSourcePath: nil,
+            driverMode: .generatedOverlay,
+            profileSourceFileName: nil,
+            profileSourcePath: nil,
+            profileSourceCount: 0,
+            profileSourcePaths: [],
+            mouthProfileID: nil,
+            expressionPresetCount: 0,
+            visemePresetCount: 0,
+            usingExpressionPreset: false,
+            usingVisemePreset: false,
+            resolvedExpressionPresetCue: nil,
+            resolvedVisemePresetCue: nil,
+            sourceExpressionCue: "neutral",
+            sourceVisemeCue: "rest",
+            expressionBehaviorCue: nil,
+            expressionCueProvenance: nil,
+            visemeCueProvenance: nil,
+            sourceActionCue: "determined",
+            sourcePoseCue: "listen",
+            resolvedMotionID: "motion-determined-listen",
+            resolvedMotionTitle: "Determined Listening",
+            motionProvenance: "semantic:determined+listen",
+            resolvedHoldMultiplier: 2,
+            holdProvenance: "motion:semantic:determined+listen:x2",
+            motionHintSummary: nil,
+            activeExpressionCue: "neutral",
+            activeVisemeCue: "rest",
+            isVisible: true
+        )
+
+        let items = Animate3DGenerationQueuePlanner(store: store)
+            .buildPlan(
+                scene: scene,
+                backgroundName: "Moon Valley",
+                worldChunk: nil,
+                styleProfile: nil,
+                lightRig: nil,
+                atmospherePreset: nil,
+                bundleReadiness: [
+                    Animate3DCharacterBundleReadinessStatus(
+                        characterName: "Luke",
+                        characterSlug: "luke",
+                        preferredCostumeName: nil,
+                        resolvedBundleCostumeName: nil,
+                        resolvedBundleSourcePath: nil,
+                        resolvedBundleAssetPaths: [],
+                        readyCategories: [],
+                        registryBackedCategories: [],
+                        missingCategories: [.motions],
+                        totalFileCount: 0
+                    )
+                ],
+                runtimeCharacters: [runtimeStatus]
+            )
+
+        let motionItem = try XCTUnwrap(items.first(where: { $0.kind == .motionSet }))
+        XCTAssertTrue(motionItem.detail.contains("determined"))
+        XCTAssertTrue(motionItem.detail.contains("listen"))
+        XCTAssertTrue(motionItem.prompt.contains("Determined Listening"))
+    }
+
     private func sampleProductionPlan(scene: AnimationScene) -> SceneProductionPlan {
         SceneProductionPlan(
             sceneID: scene.id,

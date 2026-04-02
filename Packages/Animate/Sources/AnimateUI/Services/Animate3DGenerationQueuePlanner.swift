@@ -12,7 +12,8 @@ struct Animate3DGenerationQueuePlanner {
         styleProfile: Animate3DStyleProfileDescriptor?,
         lightRig: Animate3DLightRigDescriptor?,
         atmospherePreset: Animate3DAtmospherePresetDescriptor?,
-        bundleReadiness: [Animate3DCharacterBundleReadinessStatus]
+        bundleReadiness: [Animate3DCharacterBundleReadinessStatus],
+        runtimeCharacters: [Animate3DCharacterPerformanceStatus] = []
     ) -> [Animate3DGenerationQueueItem] {
         let productionPlan = SceneProductionPlan(
             sceneID: scene.id,
@@ -37,7 +38,11 @@ struct Animate3DGenerationQueuePlanner {
                 defaultObjectHold: .onTwos
             )
         )
-        let allItems = plan(scene: scene, productionPlan: productionPlan).items
+        let allItems = plan(
+            scene: scene,
+            productionPlan: productionPlan,
+            runtimeCharacters: runtimeCharacters
+        ).items
         let missingCategoriesBySlug = Dictionary(
             uniqueKeysWithValues: bundleReadiness.map { ($0.characterSlug, Set($0.missingCategories)) }
         )
@@ -64,11 +69,13 @@ struct Animate3DGenerationQueuePlanner {
 
     func plan(
         scene: AnimationScene,
-        productionPlan: SceneProductionPlan
+        productionPlan: SceneProductionPlan,
+        runtimeCharacters: [Animate3DCharacterPerformanceStatus] = []
     ) -> Animate3DGenerationQueue {
         let assetService = Animate3DCharacterAssetService()
         let registryBundleService = Animate3DRegistryBundleService(store: store)
         var items: [Animate3DGenerationQueueItem] = []
+        let runtimeStatusesBySlug = Dictionary(grouping: runtimeCharacters) { $0.characterSlug.lowercased() }
 
         let sceneCharacters = scene.characterIDs.compactMap { id in
             store.characters.first(where: { $0.id == id })
@@ -150,14 +157,21 @@ struct Animate3DGenerationQueuePlanner {
             }
 
             if !hasCharacterAsset(.motions, character: character, inventory: inventory, registryBundleService: registryBundleService) {
+                let motionCueSummary = summarizeMotionCues(
+                    runtimeStatusesBySlug[character.assetFolderSlug.lowercased()] ?? []
+                )
                 items.append(
                     queueItem(
                         kind: .motionSet,
                         title: "\(character.name) motion set",
-                        detail: "Add reusable locomotion and acting clips for low-touch staging.",
+                        detail: motionCueSummary.map {
+                            "Add reusable locomotion and acting clips for low-touch staging. Prioritize \($0)."
+                        } ?? "Add reusable locomotion and acting clips for low-touch staging.",
                         destinationPath: "Animate/characters/\(character.assetFolderSlug)/motions/",
                         providerHint: "Motion clips / animation JSON",
-                        prompt: "Author a reusable motion set for \(character.name) including idle, walk, turn, present, listen, react, and sing beats.",
+                        prompt: motionCueSummary.map {
+                            "Author a reusable motion set for \(character.name) including idle, walk, turn, present, listen, react, and sing beats. Prioritize the currently observed scene cues: \($0)."
+                        } ?? "Author a reusable motion set for \(character.name) including idle, walk, turn, present, listen, react, and sing beats.",
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -334,6 +348,18 @@ struct Animate3DGenerationQueuePlanner {
 
     private func referencePrompt(_ path: String?) -> String {
         path ?? "the approved turnaround and master-sheet references"
+    }
+
+    private func summarizeMotionCues(_ statuses: [Animate3DCharacterPerformanceStatus]) -> String? {
+        let cues = Array(Set(statuses.flatMap { status in
+            [status.sourceActionCue, status.sourcePoseCue, status.resolvedMotionTitle]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        })).sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+        guard !cues.isEmpty else { return nil }
+        return cues.joined(separator: ", ")
     }
 
     private func matchesMissing(

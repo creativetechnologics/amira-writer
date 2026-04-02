@@ -345,7 +345,8 @@ private extension Animate3DProductionCoordinator {
             styleProfile: plan.styleProfile,
             lightRig: plan.lightRig,
             atmospherePreset: plan.atmospherePreset,
-            bundleReadiness: bundleReadiness
+            bundleReadiness: bundleReadiness,
+            runtimeCharacters: renderer.characterPerformanceStatuses
         )
 
         var warnings: [String] = []
