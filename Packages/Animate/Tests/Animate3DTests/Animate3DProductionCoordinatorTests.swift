@@ -70,6 +70,58 @@ final class Animate3DProductionCoordinatorTests: XCTestCase {
         XCTAssertEqual(runtimeStatus.modelSourcePath, bodyPath)
     }
 
+    func testRefreshPublishesFacialProvenanceFromSidecars() async throws {
+        let projectURL = try makeProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
+
+        let character = AnimationCharacter(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+            name: "Luke",
+            description: "Pilot",
+            owpSlug: "luke",
+            parts: []
+        )
+        let scene = AnimationScene(
+            id: UUID(uuidString: "99999999-8888-7777-6666-555555555555")!,
+            name: "Luke Scene",
+            backgroundID: nil,
+            characterIDs: [character.id],
+            keyframes: [],
+            owpSongPath: "Songs/luke.ows"
+        )
+
+        try writeProfileFragments(
+            at: projectURL.appendingPathComponent("Animate"),
+            slug: character.assetFolderSlug
+        )
+
+        let store = AnimateStore()
+        store.owpURL = projectURL
+        store.workingOWPURL = projectURL
+        store.characters = [character]
+        store.scenes = [scene]
+
+        let coordinator = Animate3DProductionCoordinator(store: store)
+        await coordinator.refresh(
+            scene: scene,
+            lyrics: "",
+            scenario: .empty,
+            forceReload: true
+        )
+
+        let runtimeStatus = try XCTUnwrap(coordinator.status.runtimeCharacters.first)
+        XCTAssertEqual(runtimeStatus.characterName, character.name)
+        XCTAssertEqual(runtimeStatus.sourceExpressionCue, "neutral")
+        XCTAssertEqual(runtimeStatus.expressionBehaviorCue, "neutral")
+        XCTAssertEqual(runtimeStatus.activeExpressionCue, "hero_neutral")
+        XCTAssertEqual(runtimeStatus.expressionCueProvenance, "baseCue:neutral")
+        XCTAssertEqual(runtimeStatus.sourceVisemeCue, "rest")
+        XCTAssertEqual(runtimeStatus.activeVisemeCue, "hero_rest")
+        XCTAssertEqual(runtimeStatus.visemeCueProvenance, "baseViseme:rest")
+    }
+
     private func makeProjectURL() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Animate3DProductionCoordinatorTests-\(UUID().uuidString)")
@@ -80,5 +132,79 @@ final class Animate3DProductionCoordinatorTests: XCTestCase {
     private func createDataFile(_ data: Data, at url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url)
+    }
+
+    private func writeProfileFragments(at animateURL: URL, slug: String) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+
+        let faceRigProfile = Character3DPerformanceProfile(
+            headNodeName: "head",
+            faceNodeName: "face",
+            jawNodeName: "jaw",
+            mouthNodeName: "mouth",
+            leftEyeNodeName: "eye_l",
+            rightEyeNodeName: "eye_r",
+            leftBrowNodeName: "brow_l",
+            rightBrowNodeName: "brow_r"
+        )
+        let mouthProfile = Character3DPerformanceProfile(
+            mouthProfileID: "lipsync-default",
+            visemePresets: [
+                "hero_rest": CharacterPerformanceMouthPreset(
+                    aliases: [],
+                    baseVisemeToken: "rest",
+                    jawOpen: 0.02,
+                    mouthWidth: 0.42,
+                    mouthHeight: 0.08,
+                    pucker: 0,
+                    smileBlend: 0
+                )
+            ]
+        )
+        let expressionProfile = Character3DPerformanceProfile(
+            expressionPresets: [
+                "hero_neutral": CharacterPerformanceExpressionPreset(
+                    aliases: [],
+                    baseCue: "neutral",
+                    browLift: 0,
+                    browTilt: 0,
+                    eyeOpen: 1,
+                    smile: 0,
+                    headPitch: 0
+                )
+            ]
+        )
+
+        try writeProfile(faceRigProfile, encoder: encoder, to: animateURL
+            .appendingPathComponent("characters")
+            .appendingPathComponent(slug)
+            .appendingPathComponent("face-rigs")
+            .appendingPathComponent("face-performance.json"))
+
+        try writeProfile(mouthProfile, encoder: encoder, to: animateURL
+            .appendingPathComponent("characters")
+            .appendingPathComponent(slug)
+            .appendingPathComponent("mouth-profiles")
+            .appendingPathComponent("performance-profile.json"))
+
+        try writeProfile(expressionProfile, encoder: encoder, to: animateURL
+            .appendingPathComponent("characters")
+            .appendingPathComponent(slug)
+            .appendingPathComponent("expressions")
+            .appendingPathComponent("face-performance.json"))
+    }
+
+    private func writeProfile(
+        _ profile: Character3DPerformanceProfile,
+        encoder: JSONEncoder,
+        to url: URL
+    ) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try encoder.encode(profile)
+        try data.write(to: url, options: .atomic)
     }
 }
