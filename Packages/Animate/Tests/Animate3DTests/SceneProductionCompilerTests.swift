@@ -38,10 +38,47 @@ final class SceneProductionCompilerTests: XCTestCase {
         XCTAssertEqual(plan.characterBlocking[0].lipsyncBeats[0].songName, "silver")
     }
 
+    func testCompilerResolvesDisplayNameToCanonicalSlugAndCostume() {
+        let input = SceneProductionInput(
+            sceneName: "Silver Corridor",
+            sceneID: UUID(uuidString: "ABCDEFAB-CDEF-ABCD-EFAB-CDEFABCDEFAB")!,
+            lyrics: "",
+            directions: [
+                SceneDirection(
+                    tag: .enter,
+                    primaryValue: "Mark Price",
+                    parameters: ["position": "center_left", "bars": "1-2"]
+                )
+            ],
+            shots: [],
+            characterSlugs: ["mark-price"],
+            characterCast: [
+                SceneProductionCharacterInput(
+                    name: "Mark Price",
+                    slug: "mark-price",
+                    preferredCostumeName: "Dress Uniform"
+                )
+            ],
+            objectSetups: [],
+            backgroundName: "Silver Corridor Plate",
+            baseFPS: 24,
+            totalBeats: 16,
+            bpm: 120
+        )
+
+        let plan = SceneProductionCompiler.compile(input)
+
+        XCTAssertEqual(plan.characterBlocking.count, 1)
+        XCTAssertEqual(plan.characterBlocking[0].characterName, "Mark Price")
+        XCTAssertEqual(plan.characterBlocking[0].characterSlug, "mark-price")
+        XCTAssertEqual(plan.characterBlocking[0].preferredCostumeName, "Dress Uniform")
+    }
+
     func testMouthEnginePrefersLiveVisemeCue() {
         let blocking = CharacterBlockingPlan(
             characterName: "Mark",
             characterSlug: "mark",
+            preferredCostumeName: nil,
             entranceFrame: 0,
             exitFrame: nil,
             keyPositions: [

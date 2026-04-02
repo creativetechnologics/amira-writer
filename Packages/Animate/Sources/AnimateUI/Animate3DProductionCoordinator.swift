@@ -136,10 +136,20 @@ final class Animate3DProductionCoordinator: ObservableObject {
 @available(macOS 26.0, *)
 private extension Animate3DProductionCoordinator {
     func signatureFor(scene: AnimationScene, lyrics: String, store: AnimateStore) -> String {
+        let assetService = Animate3DCharacterAssetService()
+        let registryBundleService = Animate3DRegistryBundleService(store: store)
         let modelSignature = scene.characterIDs.compactMap { id in
             store.characters.first(where: { $0.id == id })
         }.map { character in
-            "\(character.assetFolderSlug):\(character.models3D.map(\.modelFileName).joined(separator: ","))"
+            let inventory = assetService.inventory(for: character.assetFolderSlug, in: store.animateURL)
+            let inventorySignature = Animate3DCharacterAssetCategory.allCases.map { category in
+                let files = inventory.files(for: category).map {
+                    "\($0.relativePath):\(Int(($0.modificationDate ?? .distantPast).timeIntervalSince1970))"
+                }.joined(separator: ",")
+                return "\(category.folderName)=\(files)"
+            }.joined(separator: ";")
+            let registrySignature = registryBundleService.signature(for: character.assetFolderSlug)
+            return "\(character.assetFolderSlug):models3D=\(character.models3D.map(\.modelFileName).joined(separator: ","))#inventory=\(inventorySignature)#registry=\(registrySignature)"
         }.joined(separator: "|")
         let shotSignature = scene.shots.map { "\($0.id.uuidString):\($0.startFrame)-\($0.endFrame)" }.joined(separator: "|")
         let objectSignature = scene.objectSetups.map { "\($0.objectName):\($0.enterFrame)-\($0.exitFrame ?? -1)" }.joined(separator: "|")
@@ -175,6 +185,21 @@ private extension Animate3DProductionCoordinator {
         let backgroundName = scene.backgroundID.flatMap { id in
             store.backgrounds.first(where: { $0.id == id })?.name
         } ?? scenario.backgroundName
+        let automationProfile = store.resolvedAutomationProfile(for: scene)
+        let characterCast = scene.characterIDs.compactMap { id -> SceneProductionCharacterInput? in
+            guard let character = store.characters.first(where: { $0.id == id }) else {
+                return nil
+            }
+            let preferredCostumeName = automationProfile?
+                .characterProfile(for: id)?
+                .preferredCostumeName
+                ?? character.costumeReferenceSets.first?.name
+            return SceneProductionCharacterInput(
+                name: character.name,
+                slug: character.assetFolderSlug,
+                preferredCostumeName: preferredCostumeName
+            )
+        }
         let projectURL = store.workingOWPURL ?? store.owpURL
         let worldCatalog = projectURL.flatMap(ProjectDatabaseBridge.loadAnimate3DWorldCatalogFromDisk(projectURL:))
             ?? Animate3DWorldCatalog()
@@ -204,6 +229,7 @@ private extension Animate3DProductionCoordinator {
             directions: parseResult?.directions ?? [],
             shots: scene.shots,
             characterSlugs: characterSlugs,
+            characterCast: characterCast,
             objectSetups: scene.objectSetups,
             backgroundName: backgroundName,
             worldChunk: worldChunk,
@@ -225,26 +251,35 @@ private extension Animate3DProductionCoordinator {
         renderer: ScenePreviewRenderer
     ) -> Animate3DProductionStatus {
         let registryBundleService = Animate3DRegistryBundleService(store: store)
+        let preferredCostumeBySlug = Dictionary(
+            uniqueKeysWithValues: plan.characterBlocking.map { ($0.characterSlug, $0.preferredCostumeName) }
+        )
         let sceneCharacters = scene.characterIDs.compactMap { id in
             store.characters.first(where: { $0.id == id })
         }
         let modelBackedCount = sceneCharacters.filter { character in
             let inventory = Animate3DCharacterAssetService().inventory(for: character.assetFolderSlug, in: store.animateURL)
+            let preferredCostume = preferredCostumeBySlug[character.assetFolderSlug] ?? nil
             return !inventory.files(for: .models).isEmpty
-                || !character.models3D.isEmpty
-                || registryBundleService.provides(.models, for: character.assetFolderSlug)
+                || character.models3D.contains(where: {
+                    preferredCostume == nil || $0.costumeName.caseInsensitiveCompare(preferredCostume ?? "") == .orderedSame
+                })
+                || registryBundleService.provides(.models, for: character.assetFolderSlug, costumeName: preferredCostume)
         }.count
-        let profileCount = sceneCharacters.filter { character in
-            renderer.assetProfileExists(slug: character.assetFolderSlug)
+        let profileCount = plan.characterBlocking.filter { blocking in
+            renderer.assetProfileExists(slug: blocking.characterSlug, costumeName: blocking.preferredCostumeName)
         }.count
         let assetService = Animate3DCharacterAssetService()
         let bundleReadiness: [Animate3DCharacterBundleReadinessStatus] = sceneCharacters.map { character in
             let inventory = assetService.inventory(for: character.assetFolderSlug, in: store.animateURL)
+            let preferredCostume = preferredCostumeBySlug[character.assetFolderSlug] ?? nil
             let categories = Animate3DCharacterAssetCategory.allCases
             let readyCategories = categories.filter { category in
                 !inventory.files(for: category).isEmpty
-                    || (category == .models && !character.models3D.isEmpty)
-                    || registryBundleService.provides(category, for: character.assetFolderSlug)
+                    || (category == .models && character.models3D.contains(where: {
+                        preferredCostume == nil || $0.costumeName.caseInsensitiveCompare(preferredCostume ?? "") == .orderedSame
+                    }))
+                    || registryBundleService.provides(category, for: character.assetFolderSlug, costumeName: preferredCostume)
             }
             let missingCategories = categories.filter { !readyCategories.contains($0) }
             return Animate3DCharacterBundleReadinessStatus(
@@ -357,6 +392,15 @@ private extension Animate3DProductionCoordinator {
     }
 
     func registrySignature(projectURL: URL) -> String {
+        let assetBundles = ProjectDatabaseBridge.loadAnimate3DAssetRegistryFromDisk(projectURL: projectURL)?.bundles.map {
+            "\($0.characterSlug)|\($0.costumeName)|\($0.bodyModelPath)|\($0.faceRigPath ?? "nil")|\($0.mouthProfilePath ?? "nil")|\($0.expressionLibraryPath ?? "nil")|\($0.motionSetPaths.joined(separator: ","))|\($0.materialProfilePath ?? "nil")"
+        }.joined(separator: ";") ?? "assets:nil"
+        let characterBundles = ProjectDatabaseBridge.loadAnimate3DCharacterRegistryFromDisk(projectURL: projectURL)?.bundles.map {
+            "\($0.characterSlug)|\($0.costumeName)|\($0.bodyModelPath)|\($0.faceRigPath ?? "nil")|\($0.mouthProfilePath ?? "nil")|\($0.expressionLibraryPath ?? "nil")|\($0.motionSetPaths.joined(separator: ","))|\($0.materialProfilePath ?? "nil")"
+        }.joined(separator: ";") ?? "chars:nil"
+        let motions = ProjectDatabaseBridge.loadAnimate3DMotionRegistryFromDisk(projectURL: projectURL)?.motions.map {
+            "\($0.motionID)|\($0.relativePath)|\($0.tags.joined(separator: ","))"
+        }.joined(separator: ";") ?? "motions:nil"
         let world = ProjectDatabaseBridge.loadAnimate3DWorldCatalogFromDisk(projectURL: projectURL)?.chunks.map {
             "\($0.worldID)|\($0.zoneID)|\($0.title)|\($0.previewImagePath ?? "nil")|\($0.styleProfileID ?? "nil")|\($0.lightRigID ?? "nil")|\($0.atmospherePresetID ?? "nil")"
         }.joined(separator: ";") ?? "world:nil"
@@ -372,7 +416,7 @@ private extension Animate3DProductionCoordinator {
         let atmosphere = ProjectDatabaseBridge.loadAnimate3DAtmospherePresetsFromDisk(projectURL: projectURL)?.presets.map {
             "\($0.presetID)|\($0.fogDensity)|\($0.haze)|\($0.colorHex)"
         }.joined(separator: ";") ?? "atmo:nil"
-        return [world, styles, cameras, lights, atmosphere].joined(separator: "#")
+        return [assetBundles, characterBundles, motions, world, styles, cameras, lights, atmosphere].joined(separator: "#")
     }
 }
 

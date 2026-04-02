@@ -8,6 +8,13 @@ import simd
 // MARK: - Input / Output Types
 
 @available(macOS 26.0, *)
+struct SceneProductionCharacterInput: Sendable, Hashable {
+    var name: String
+    var slug: String
+    var preferredCostumeName: String?
+}
+
+@available(macOS 26.0, *)
 struct SceneProductionInput: Sendable {
     var sceneName: String
     var sceneID: UUID
@@ -15,6 +22,7 @@ struct SceneProductionInput: Sendable {
     var directions: [SceneDirection]
     var shots: [AnimationSceneShot]
     var characterSlugs: [String]
+    var characterCast: [SceneProductionCharacterInput] = []
     var objectSetups: [ObjectSetup]
     var backgroundName: String?
     var worldChunk: Animate3DWorldChunkDescriptor? = nil
@@ -45,7 +53,7 @@ struct SceneProductionPlan: Sendable {
 
 @available(macOS 26.0, *)
 struct CharacterBlockingPlan: Sendable {
-    var characterName: String, characterSlug: String
+    var characterName: String, characterSlug: String, preferredCostumeName: String?
     var entranceFrame: Int, exitFrame: Int?
     var keyPositions: [BlockingKeyframe]
     var actingBeats: [ActingBeat]
@@ -170,19 +178,49 @@ enum SceneProductionCompiler {
     // MARK: Character Blocking
 
     private static func compileBlocking(_ input: SceneProductionInput, _ t: TC) -> [CharacterBlockingPlan] {
-        var names = Set(input.characterSlugs)
-        for d in input.directions where [.enter,.exit,.move,.emotion,.action,.gesture,.lipsync].contains(d.tag) {
-            let n = d.primaryValue.trimmingCharacters(in: .init(charactersIn: "\""))
-            if !n.isEmpty { names.insert(n) }
+        var charactersByCanonicalKey: [String: SceneProductionCharacterInput] = [:]
+        for character in input.characterCast {
+            charactersByCanonicalKey[canonicalCharacterKey(character.slug)] = character
         }
-        return names.sorted().enumerated().map { i, n in blocking(for: n, input.directions, t, i) }
+        for slug in input.characterSlugs where charactersByCanonicalKey[canonicalCharacterKey(slug)] == nil {
+            let cleaned = cleanedCharacterIdentifier(slug)
+            let fallback = SceneProductionCharacterInput(
+                name: cleaned,
+                slug: normalizedFallbackSlug(cleaned),
+                preferredCostumeName: nil
+            )
+            charactersByCanonicalKey[canonicalCharacterKey(fallback.slug)] = fallback
+        }
+        for d in input.directions where [.enter,.exit,.move,.emotion,.action,.gesture,.lipsync].contains(d.tag) {
+            let raw = cleanedCharacterIdentifier(d.primaryValue)
+            guard !raw.isEmpty else { continue }
+            let resolved = resolveCharacter(raw, from: input.characterCast) ?? SceneProductionCharacterInput(
+                name: raw,
+                slug: normalizedFallbackSlug(raw),
+                preferredCostumeName: nil
+            )
+            charactersByCanonicalKey[canonicalCharacterKey(resolved.slug)] = resolved
+        }
+        return charactersByCanonicalKey.values
+            .sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            .enumerated()
+            .map { i, character in
+                blocking(for: character, input.directions, t, i)
+            }
     }
 
-    private static func blocking(for name: String, _ dirs: [SceneDirection], _ t: TC, _ idx: Int) -> CharacterBlockingPlan {
-        let slug = name.lowercased().replacingOccurrences(of: " ", with: "_").replacingOccurrences(of: "\"", with: "")
+    private static func blocking(
+        for character: SceneProductionCharacterInput,
+        _ dirs: [SceneDirection],
+        _ t: TC,
+        _ idx: Int
+    ) -> CharacterBlockingPlan {
+        let name = character.name
+        let slug = character.slug
         let relevant = dirs.filter {
-            let p = $0.primaryValue.trimmingCharacters(in: .init(charactersIn: "\"")).lowercased()
-            return p == name.lowercased() || p == slug
+            matchesCharacter($0.primaryValue, character: character)
         }
         var kps: [BlockingKeyframe] = [], beats: [ActingBeat] = [], lipsyncBeats: [CharacterLipsyncBeat] = []
         var eFrame = 0, xFrame: Int?, curPos = defaultPos(idx), curFace: FacingDirection = .camera, curEmo = "neutral"
@@ -260,7 +298,7 @@ enum SceneProductionCompiler {
         beats.sort { $0.startFrame < $1.startFrame }
         lipsyncBeats.sort { $0.startFrame < $1.startFrame }
         if kps.isEmpty { kf(0, Stage.charPos(defaultPos(idx)), "standing", .linear) }
-        return CharacterBlockingPlan(characterName: name, characterSlug: slug,
+        return CharacterBlockingPlan(characterName: name, characterSlug: slug, preferredCostumeName: character.preferredCostumeName,
             entranceFrame: eFrame, exitFrame: xFrame, keyPositions: kps,
             actingBeats: beats, lipsyncBeats: lipsyncBeats, holdStyle: .onTwos)
     }
@@ -456,5 +494,45 @@ enum SceneProductionCompiler {
     }
     private static func focalAfter(_ mv: CameraMovement, _ base: Double) -> Double {
         switch mv { case .zoomIn: min(135, base + 15); case .zoomOut: max(18, base - 15); default: base }
+    }
+
+    private static func resolveCharacter(
+        _ raw: String,
+        from cast: [SceneProductionCharacterInput]
+    ) -> SceneProductionCharacterInput? {
+        let target = canonicalCharacterKey(raw)
+        return cast.first(where: { character in
+            canonicalCharacterKey(character.name) == target || canonicalCharacterKey(character.slug) == target
+        })
+    }
+
+    private static func matchesCharacter(
+        _ raw: String,
+        character: SceneProductionCharacterInput
+    ) -> Bool {
+        let target = canonicalCharacterKey(raw)
+        return canonicalCharacterKey(character.name) == target
+            || canonicalCharacterKey(character.slug) == target
+    }
+
+    private static func cleanedCharacterIdentifier(_ value: String) -> String {
+        value.trimmingCharacters(in: .init(charactersIn: "\"' "))
+    }
+
+    private static func normalizedFallbackSlug(_ value: String) -> String {
+        cleanedCharacterIdentifier(value)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: "\"", with: "")
+            .replacingOccurrences(of: "'", with: "")
+    }
+
+    private static func canonicalCharacterKey(_ value: String) -> String {
+        cleanedCharacterIdentifier(value)
+            .lowercased()
+            .unicodeScalars
+            .filter(CharacterSet.alphanumerics.contains)
+            .map(String.init)
+            .joined()
     }
 }

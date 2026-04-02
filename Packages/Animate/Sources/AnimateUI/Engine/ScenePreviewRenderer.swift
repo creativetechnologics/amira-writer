@@ -187,12 +187,16 @@ extension ScenePreviewRenderer {
         for (index, blocking) in plan.characterBlocking.enumerated() {
             let node = assetPipeline.characterNode(
                 slug: blocking.characterSlug,
+                costumeName: blocking.preferredCostumeName,
                 color: palette[index % palette.count]
             )
             node.name = "character_\(blocking.characterSlug)"
             stageNode.addChildNode(node)
             characterNodes[blocking.characterName] = node
-            let performanceProfile = assetPipeline.loadCharacterPerformanceProfile(slug: blocking.characterSlug)
+            let performanceProfile = assetPipeline.loadCharacterPerformanceProfile(
+                slug: blocking.characterSlug,
+                costumeName: blocking.preferredCostumeName
+            )
             let driver = CharacterPerformanceDriver(
                 rootNode: node,
                 profile: performanceProfile
@@ -201,10 +205,19 @@ extension ScenePreviewRenderer {
             characterPerformanceStatusesByName[blocking.characterName] = Animate3DCharacterPerformanceStatus(
                 characterName: blocking.characterName,
                 characterSlug: blocking.characterSlug,
-                modelFileName: assetPipeline.characterModelFileName(slug: blocking.characterSlug),
+                modelFileName: assetPipeline.characterModelFileName(
+                    slug: blocking.characterSlug,
+                    costumeName: blocking.preferredCostumeName
+                ),
                 driverMode: driver.driverMode,
-                profileSourceFileName: assetPipeline.characterPerformanceProfileSourceFileName(slug: blocking.characterSlug),
-                profileSourcePath: assetPipeline.characterPerformanceProfileSourceRelativePath(slug: blocking.characterSlug),
+                profileSourceFileName: assetPipeline.characterPerformanceProfileSourceFileName(
+                    slug: blocking.characterSlug,
+                    costumeName: blocking.preferredCostumeName
+                ),
+                profileSourcePath: assetPipeline.characterPerformanceProfileSourceRelativePath(
+                    slug: blocking.characterSlug,
+                    costumeName: blocking.preferredCostumeName
+                ),
                 activeExpressionCue: performanceProfile == nil ? "fallback:neutral" : "neutral",
                 activeVisemeCue: performanceProfile == nil ? "fallback:rest" : "rest",
                 isVisible: false
@@ -541,8 +554,8 @@ extension ScenePreviewRenderer {
 
     var celShadingSettings: CelShadingSettings { currentCelShadingSettings }
 
-    func assetProfileExists(slug: String) -> Bool {
-        assetPipeline.hasCharacterPerformanceProfile(slug: slug)
+    func assetProfileExists(slug: String, costumeName: String? = nil) -> Bool {
+        assetPipeline.hasCharacterPerformanceProfile(slug: slug, costumeName: costumeName)
     }
 
     var characterPerformanceStatuses: [Animate3DCharacterPerformanceStatus] {

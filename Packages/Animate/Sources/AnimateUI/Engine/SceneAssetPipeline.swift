@@ -32,7 +32,7 @@ final class SceneAssetPipeline {
     /// Loaded character models keyed by character slug.
     private var characterModels: [String: SCNNode] = [:]
     private var characterPerformanceProfiles: [String: Character3DPerformanceProfile?] = [:]
-    private var characterPerformanceProfileSources: [String: URL?] = [:]
+    private var characterPerformanceProfileSources: [String: [URL]] = [:]
     private var registryProjectURL: URL?
     private var assetRegistry = Animate3DAssetRegistry()
     private var characterRegistry = Animate3DCharacterRegistry()
@@ -128,8 +128,12 @@ extension SceneAssetPipeline {
 
     /// Returns a character node — the loaded 3D model if available, otherwise
     /// a mannequin placeholder coloured to match the character.
-    func characterNode(slug: String, color: NSColor) -> SCNNode {
-        if let loaded = loadCharacterModel(slug: slug) {
+    func characterNode(
+        slug: String,
+        costumeName: String? = nil,
+        color: NSColor
+    ) -> SCNNode {
+        if let loaded = loadCharacterModel(slug: slug, costumeName: costumeName) {
             return loaded.clone()
         }
         return Animate3DModelFactory.makeHumanoidPlaceholder(color: color)
@@ -149,21 +153,33 @@ extension SceneAssetPipeline {
                   $0.assetFolderSlug == slug || $0.owpSlug == slug
               }) else {
             characterPerformanceProfiles[cacheKey] = nil
-            characterPerformanceProfileSources[cacheKey] = nil
+            characterPerformanceProfileSources[cacheKey] = []
             return nil
         }
         ensureRegistriesLoaded()
 
-        guard let url = resolvePerformanceProfileURL(for: character, slug: slug, costumeName: costumeName),
-              let data = try? Data(contentsOf: url),
-              let profile = try? JSONDecoder().decode(Character3DPerformanceProfile.self, from: data) else {
+        let urls = resolvePerformanceProfileURLs(for: character, slug: slug, costumeName: costumeName)
+        let profiles = urls.compactMap { url -> Character3DPerformanceProfile? in
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return try? JSONDecoder().decode(Character3DPerformanceProfile.self, from: data)
+        }
+
+        let mergedProfile = profiles.reduce(Character3DPerformanceProfile?.none) {
+            (partial: Character3DPerformanceProfile?, next: Character3DPerformanceProfile) in
+            if let partial {
+                return partial.merging(next)
+            }
+            return next
+        }
+
+        guard let profile = mergedProfile else {
             characterPerformanceProfiles[cacheKey] = nil
-            characterPerformanceProfileSources[cacheKey] = nil
+            characterPerformanceProfileSources[cacheKey] = []
             return nil
         }
 
         characterPerformanceProfiles[cacheKey] = profile
-        characterPerformanceProfileSources[cacheKey] = url
+        characterPerformanceProfileSources[cacheKey] = urls
         return profile
     }
 
@@ -183,10 +199,11 @@ extension SceneAssetPipeline {
            characterPerformanceProfileSources[cacheKey] == nil {
             _ = loadCharacterPerformanceProfile(slug: slug, costumeName: costumeName)
         }
-        guard let sourceURL = characterPerformanceProfileSources[cacheKey] ?? nil else {
+        let sourceURLs = characterPerformanceProfileSources[cacheKey] ?? []
+        guard !sourceURLs.isEmpty else {
             return nil
         }
-        return sourceURL.lastPathComponent
+        return sourceURLs.map(\.lastPathComponent).joined(separator: ", ")
     }
 
     func characterPerformanceProfileSourceRelativePath(
@@ -202,15 +219,18 @@ extension SceneAssetPipeline {
            characterPerformanceProfileSources[cacheKey] == nil {
             _ = loadCharacterPerformanceProfile(slug: slug, costumeName: costumeName)
         }
-        guard let sourceURL = characterPerformanceProfileSources[cacheKey] ?? nil else {
+        let sourceURLs = characterPerformanceProfileSources[cacheKey] ?? []
+        guard !sourceURLs.isEmpty else {
             return nil
         }
         let basePath = animateURL.path.hasSuffix("/") ? animateURL.path : animateURL.path + "/"
-        let sourcePath = sourceURL.path
-        guard sourcePath.hasPrefix(basePath) else {
-            return sourceURL.lastPathComponent
-        }
-        return "Animate/" + String(sourcePath.dropFirst(basePath.count))
+        return sourceURLs.map { sourceURL in
+            let sourcePath = sourceURL.path
+            guard sourcePath.hasPrefix(basePath) else {
+                return sourceURL.lastPathComponent
+            }
+            return "Animate/" + String(sourcePath.dropFirst(basePath.count))
+        }.joined(separator: ", ")
     }
 
     func characterModelFileName(
@@ -274,20 +294,28 @@ extension SceneAssetPipeline {
         return scanDirectoryForModel(at: modelsDir)
     }
 
-    private func resolvePerformanceProfileURL(
+    private func resolvePerformanceProfileURLs(
         for character: AnimationCharacter,
         slug: String,
         costumeName: String?
-    ) -> URL? {
-        if let bundle = bundleDescriptor(for: slug, costumeName: costumeName) {
-            if let url = registryRelativeURL(for: bundle.faceRigPath) {
-                return url
+    ) -> [URL] {
+        var urls: [URL] = []
+
+        func appendIfExists(_ candidate: URL?) {
+            guard let candidate,
+                  FileManager.default.fileExists(atPath: candidate.path),
+                  !urls.contains(candidate) else {
+                return
             }
-            if let url = registryRelativeURL(for: bundle.mouthProfilePath) {
-                return url
-            }
+            urls.append(candidate)
         }
-        guard let animateURL = store?.animateURL else { return nil }
+
+        if let bundle = bundleDescriptor(for: slug, costumeName: costumeName) {
+            appendIfExists(registryRelativeURL(for: bundle.faceRigPath))
+            appendIfExists(registryRelativeURL(for: bundle.mouthProfilePath))
+            appendIfExists(registryRelativeURL(for: bundle.expressionLibraryPath))
+        }
+        guard let animateURL = store?.animateURL else { return urls }
         let modelsDir = animateURL
             .appendingPathComponent("characters")
             .appendingPathComponent(slug)
@@ -305,16 +333,11 @@ extension SceneAssetPipeline {
                 .deletingPathExtension()
                 .lastPathComponent
             let exact = modelsDir.appendingPathComponent("\(baseName).performance.json")
-            if FileManager.default.fileExists(atPath: exact.path) {
-                return exact
-            }
+            appendIfExists(exact)
         }
 
         for fileName in Self.performanceProfileFileNames {
-            let url = modelsDir.appendingPathComponent(fileName)
-            if FileManager.default.fileExists(atPath: url.path) {
-                return url
-            }
+            appendIfExists(modelsDir.appendingPathComponent(fileName))
         }
 
         let faceRigDir = animateURL
@@ -322,22 +345,26 @@ extension SceneAssetPipeline {
             .appendingPathComponent(slug)
             .appendingPathComponent("face-rigs")
         for fileName in Self.performanceProfileFileNames {
-            let url = faceRigDir.appendingPathComponent(fileName)
-            if FileManager.default.fileExists(atPath: url.path) {
-                return url
-            }
+            appendIfExists(faceRigDir.appendingPathComponent(fileName))
         }
 
         let mouthProfileDir = animateURL
             .appendingPathComponent("characters")
             .appendingPathComponent(slug)
             .appendingPathComponent("mouth-profiles")
-        let fallback = mouthProfileDir.appendingPathComponent("default.performance.json")
-        if FileManager.default.fileExists(atPath: fallback.path) {
-            return fallback
+        for fileName in Self.performanceProfileFileNames + ["default.performance.json"] {
+            appendIfExists(mouthProfileDir.appendingPathComponent(fileName))
         }
 
-        return nil
+        let expressionsDir = animateURL
+            .appendingPathComponent("characters")
+            .appendingPathComponent(slug)
+            .appendingPathComponent("expressions")
+        for fileName in Self.performanceProfileFileNames + ["default.performance.json"] {
+            appendIfExists(expressionsDir.appendingPathComponent(fileName))
+        }
+
+        return urls
     }
 
     /// Scans a directory for the first supported 3D model file.
