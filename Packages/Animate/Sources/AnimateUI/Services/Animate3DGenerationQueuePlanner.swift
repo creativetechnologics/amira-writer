@@ -67,6 +67,7 @@ struct Animate3DGenerationQueuePlanner {
         productionPlan: SceneProductionPlan
     ) -> Animate3DGenerationQueue {
         let assetService = Animate3DCharacterAssetService()
+        let registryBundleService = Animate3DRegistryBundleService(store: store)
         var items: [Animate3DGenerationQueueItem] = []
 
         let sceneCharacters = scene.characterIDs.compactMap { id in
@@ -80,7 +81,7 @@ struct Animate3DGenerationQueuePlanner {
                 ?? character.approvedHeadTurnaroundSheetVariant?.imagePath
                 ?? character.masterReferenceSourceImagePaths.first
 
-            if character.models3D.isEmpty && inventory.files(for: .models).isEmpty {
+            if !hasCharacterAsset(.models, character: character, inventory: inventory, registryBundleService: registryBundleService) {
                 items.append(
                     queueItem(
                         kind: .bodyModel,
@@ -97,7 +98,7 @@ struct Animate3DGenerationQueuePlanner {
                 )
             }
 
-            if inventory.files(for: .faceRigs).isEmpty {
+            if !hasCharacterAsset(.faceRigs, character: character, inventory: inventory, registryBundleService: registryBundleService) {
                 items.append(
                     queueItem(
                         kind: .faceRig,
@@ -114,7 +115,7 @@ struct Animate3DGenerationQueuePlanner {
                 )
             }
 
-            if inventory.files(for: .mouthProfiles).isEmpty {
+            if !hasCharacterAsset(.mouthProfiles, character: character, inventory: inventory, registryBundleService: registryBundleService) {
                 items.append(
                     queueItem(
                         kind: .mouthProfile,
@@ -131,7 +132,7 @@ struct Animate3DGenerationQueuePlanner {
                 )
             }
 
-            if inventory.files(for: .expressions).isEmpty {
+            if !hasCharacterAsset(.expressions, character: character, inventory: inventory, registryBundleService: registryBundleService) {
                 items.append(
                     queueItem(
                         kind: .expressionLibrary,
@@ -148,7 +149,7 @@ struct Animate3DGenerationQueuePlanner {
                 )
             }
 
-            if inventory.files(for: .motions).isEmpty {
+            if !hasCharacterAsset(.motions, character: character, inventory: inventory, registryBundleService: registryBundleService) {
                 items.append(
                     queueItem(
                         kind: .motionSet,
@@ -165,7 +166,7 @@ struct Animate3DGenerationQueuePlanner {
                 )
             }
 
-            if inventory.files(for: .materials).isEmpty {
+            if !hasCharacterAsset(.materials, character: character, inventory: inventory, registryBundleService: registryBundleService) {
                 items.append(
                     queueItem(
                         kind: .materialProfile,
@@ -347,5 +348,20 @@ struct Animate3DGenerationQueuePlanner {
         return missing.contains { slug, categories in
             item.destinationPath.contains("/\(slug)/") && categories.contains(category)
         }
+    }
+
+    private func hasCharacterAsset(
+        _ category: Animate3DCharacterAssetCategory,
+        character: AnimationCharacter,
+        inventory: Animate3DCharacterAssetInventory,
+        registryBundleService: Animate3DRegistryBundleService
+    ) -> Bool {
+        if !inventory.files(for: category).isEmpty {
+            return true
+        }
+        if category == .models && !character.models3D.isEmpty {
+            return true
+        }
+        return registryBundleService.provides(category, for: character.assetFolderSlug)
     }
 }

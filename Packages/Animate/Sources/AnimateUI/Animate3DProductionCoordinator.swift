@@ -224,10 +224,16 @@ private extension Animate3DProductionCoordinator {
         store: AnimateStore,
         renderer: ScenePreviewRenderer
     ) -> Animate3DProductionStatus {
+        let registryBundleService = Animate3DRegistryBundleService(store: store)
         let sceneCharacters = scene.characterIDs.compactMap { id in
             store.characters.first(where: { $0.id == id })
         }
-        let modelBackedCount = sceneCharacters.filter { !$0.models3D.isEmpty }.count
+        let modelBackedCount = sceneCharacters.filter { character in
+            let inventory = Animate3DCharacterAssetService().inventory(for: character.assetFolderSlug, in: store.animateURL)
+            return !inventory.files(for: .models).isEmpty
+                || !character.models3D.isEmpty
+                || registryBundleService.provides(.models, for: character.assetFolderSlug)
+        }.count
         let profileCount = sceneCharacters.filter { character in
             renderer.assetProfileExists(slug: character.assetFolderSlug)
         }.count
@@ -236,7 +242,9 @@ private extension Animate3DProductionCoordinator {
             let inventory = assetService.inventory(for: character.assetFolderSlug, in: store.animateURL)
             let categories = Animate3DCharacterAssetCategory.allCases
             let readyCategories = categories.filter { category in
-                !inventory.files(for: category).isEmpty || (category == .models && !character.models3D.isEmpty)
+                !inventory.files(for: category).isEmpty
+                    || (category == .models && !character.models3D.isEmpty)
+                    || registryBundleService.provides(category, for: character.assetFolderSlug)
             }
             let missingCategories = categories.filter { !readyCategories.contains($0) }
             return Animate3DCharacterBundleReadinessStatus(
