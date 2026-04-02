@@ -24,6 +24,7 @@ struct CharactersPageView: View {
     @AppStorage("charactersPage.showMeshy3DGenerationPane") private var showMeshy3DGenerationPane: Bool = false
     @AppStorage("charactersPage.show3DSidecarsPane") private var show3DSidecarsPane: Bool = true
     @AppStorage("charactersPage.show3DModelsPane") private var show3DModelsPane: Bool = false
+    @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
     @State private var inspirationPendingPlan: PendingInspirationGenerationPlan?
     @State private var inspirationDrafts: [GeminiGenerationDraft] = []
     @State private var inspirationGenerationErrorMessage: String?
@@ -466,6 +467,17 @@ struct CharactersPageView: View {
                         }
                     ) {
                         characterPackagesSection(character)
+                    }
+
+                    collapsiblePane(
+                        title: "Expression Library",
+                        icon: "face.smiling",
+                        counterText: "\(EmotionLibrary.presets.count) presets",
+                        isExpanded: $showExpressionLibraryPane
+                    ) {
+                        if showExpressionLibraryPane {
+                            ExpressionLibraryView()
+                        }
                     }
 
                     collapsiblePane(
