@@ -99,6 +99,74 @@ final class Animate3DGenerationQueueActionSupportTests: XCTestCase {
         XCTAssertEqual(context?.relativePath, Animate3DRegistryIndex().worldCatalogPath)
     }
 
+    func testQueuePreflightDraftsSupportsMultipleOwnersByDraftID() {
+        let store = AnimateStore()
+        let character = AnimationCharacter(
+            id: UUID(uuidString: "BBBBBBBB-CCCC-DDDD-EEEE-FFFFFFFFFFFF")!,
+            name: "Amira",
+            description: "Lead",
+            owpSlug: "amira",
+            parts: []
+        )
+        store.characters = [character]
+
+        let characterItem = Animate3DGenerationQueueItem(
+            kind: .faceRig,
+            title: "Amira face rig",
+            detail: "Generate Amira face rig.",
+            destinationPath: "Animate/characters/amira/face-rigs/",
+            providerHint: "Gemini",
+            prompt: "Generate Amira face rig.",
+            characterSlug: "amira",
+            characterName: "Amira"
+        )
+        let pipelineItem = Animate3DGenerationQueueItem(
+            kind: .worldPreviewImage,
+            title: "Citadel preview",
+            detail: "Generate citadel preview.",
+            destinationPath: "Animate/3d/world-catalog/citadel.png",
+            providerHint: "Nano Banana 2",
+            prompt: "Generate citadel preview.",
+            characterSlug: nil,
+            characterName: "Environment"
+        )
+
+        let characterDraft = GeminiGenerationDraft(
+            title: characterItem.title,
+            destinationDescription: characterItem.destinationDescription,
+            prompt: characterItem.prompt,
+            contextNote: nil,
+            model: .flash,
+            aspectRatio: characterItem.draftAspectRatio,
+            imageSize: "1K",
+            referenceItems: []
+        )
+        let pipelineDraft = GeminiGenerationDraft(
+            title: pipelineItem.title,
+            destinationDescription: pipelineItem.destinationDescription,
+            prompt: pipelineItem.prompt,
+            contextNote: "runtime world: citadel",
+            model: .flash,
+            aspectRatio: pipelineItem.draftAspectRatio,
+            imageSize: "1K",
+            referenceItems: []
+        )
+
+        let queued = Animate3DGenerationQueueActionSupport.queuePreflightDrafts(
+            [characterDraft, pipelineDraft],
+            ownersByDraftID: [
+                characterDraft.id: Animate3DGenerationQueueActionSupport.PreflightOwner(item: characterItem, store: store),
+                pipelineDraft.id: Animate3DGenerationQueueActionSupport.PreflightOwner(item: pipelineItem, store: store)
+            ],
+            store: store
+        )
+
+        XCTAssertEqual(queued, 2)
+        XCTAssertEqual(store.batchQueue.count, 2)
+        XCTAssertEqual(store.batchQueue.first?.characterID, character.id)
+        XCTAssertEqual(store.batchQueue.last?.outputRootRelativePath, "3d/world-catalog/batch-queue-batches")
+    }
+
     private func makeProjectURL() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Animate3DQueueActionSupportTests-\(UUID().uuidString)")
