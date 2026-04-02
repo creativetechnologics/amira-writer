@@ -103,6 +103,7 @@ struct Animate3DGenerationQueuePlanner {
                         prompt: motionCueSummary.map {
                             "Create a cel-shaded anime 3D body model for \(character.name) using \(referencePrompt(referencePath)) as the geometry and costume reference. Preserve readable silhouettes for the currently observed staging cues: \($0)."
                         } ?? "Create a cel-shaded anime 3D body model for \(character.name) using \(referencePrompt(referencePath)) as the geometry and costume reference.",
+                        contextSummary: motionCueSummary.map { "runtime motion: \($0)" },
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -125,6 +126,7 @@ struct Animate3DGenerationQueuePlanner {
                         prompt: facialSummary.map {
                             "Author a face-rig sidecar for \(character.name) with brows, eyes, mouth, jaw, and blendshape mappings for cel-shaded performance. Prioritize the currently observed facial coverage: \($0)."
                         } ?? "Author a face-rig sidecar for \(character.name) with brows, eyes, mouth, jaw, and blendshape mappings for cel-shaded performance.",
+                        contextSummary: facialSummary.map { "runtime facial: \($0)" },
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -147,6 +149,7 @@ struct Animate3DGenerationQueuePlanner {
                         prompt: visemeSummary.map {
                             "Create a Preston-Blair style viseme mouth profile for \(character.name) tuned for anime singing and dialogue. Prioritize the currently observed mouth/viseme cues: \($0)."
                         } ?? "Create a Preston-Blair style viseme mouth profile for \(character.name) tuned for anime singing and dialogue.",
+                        contextSummary: visemeSummary.map { "runtime mouth: \($0)" },
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -169,6 +172,7 @@ struct Animate3DGenerationQueuePlanner {
                         prompt: expressionSummary.map {
                             "Generate an expression library for \(character.name) covering joy, sadness, anger, determination, surprise, attentive, and neutral anime states. Prioritize the currently observed expression cues: \($0)."
                         } ?? "Generate an expression library for \(character.name) covering joy, sadness, anger, determination, surprise, attentive, and neutral anime states.",
+                        contextSummary: expressionSummary.map { "runtime expression: \($0)" },
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -190,6 +194,7 @@ struct Animate3DGenerationQueuePlanner {
                         prompt: motionCueSummary.map {
                             "Author a reusable motion set for \(character.name) including idle, walk, turn, present, listen, react, and sing beats. Prioritize the currently observed scene cues: \($0)."
                         } ?? "Author a reusable motion set for \(character.name) including idle, walk, turn, present, listen, react, and sing beats.",
+                        contextSummary: motionCueSummary.map { "runtime motion: \($0)" },
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -212,6 +217,7 @@ struct Animate3DGenerationQueuePlanner {
                         prompt: materialSummary.map {
                             "Create a cel-shaded material profile for \(character.name) with anime-safe skin, fabric, hair, and outline response. Prioritize the currently observed rendering needs: \($0)."
                         } ?? "Create a cel-shaded material profile for \(character.name) with anime-safe skin, fabric, hair, and outline response.",
+                        contextSummary: materialSummary.map { "runtime render: \($0)" },
                         characterSlug: character.assetFolderSlug,
                         characterName: character.name,
                         sceneName: scene.name,
@@ -348,6 +354,7 @@ struct Animate3DGenerationQueuePlanner {
         destinationPath: String,
         providerHint: String,
         prompt: String,
+        contextSummary: String? = nil,
         characterSlug: String? = nil,
         characterName: String? = nil,
         sceneName: String? = nil,
@@ -361,6 +368,7 @@ struct Animate3DGenerationQueuePlanner {
             destinationPath: destinationPath,
             providerHint: providerHint,
             prompt: prompt,
+            contextSummary: contextSummary,
             characterSlug: characterSlug,
             characterName: characterName,
             sceneName: sceneName,

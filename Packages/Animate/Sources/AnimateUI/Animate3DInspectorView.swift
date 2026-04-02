@@ -356,6 +356,12 @@ struct Animate3DInspectorView: View {
                                         .font(.system(size: 11))
                                         .foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
+                                    if let contextSummary = item.contextSummary, !contextSummary.isEmpty {
+                                        Text(contextSummary)
+                                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(.orange)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
                                     HStack(spacing: 8) {
                                         if item.isBatchDraftable {
                                             Button("Preflight") {

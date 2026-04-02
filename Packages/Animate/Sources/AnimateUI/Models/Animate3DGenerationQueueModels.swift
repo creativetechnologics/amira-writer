@@ -50,6 +50,7 @@ struct Animate3DGenerationQueueItem: Identifiable, Hashable, Sendable {
     var destinationPath: String
     var providerHint: String
     var prompt: String
+    var contextSummary: String?
     var characterSlug: String?
     var characterName: String?
     var sceneName: String?
@@ -57,7 +58,13 @@ struct Animate3DGenerationQueueItem: Identifiable, Hashable, Sendable {
     var manifestKind: Animate3DRegistryManifestKind?
 
     var summary: String {
-        detail + " · " + providerHint
+        [detail, contextSummary, providerHint]
+            .compactMap { value in
+                guard let value else { return nil }
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            .joined(separator: " · ")
     }
 
     var targetRelativePath: String {
