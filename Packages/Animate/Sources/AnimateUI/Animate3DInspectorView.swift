@@ -213,9 +213,23 @@ struct Animate3DInspectorView: View {
                                             tint: readiness.isReady ? .green : .orange
                                         )
                                     }
+                                    if let preferredCostumeName = readiness.preferredCostumeName,
+                                       !preferredCostumeName.isEmpty {
+                                        inspectorRow(label: "Costume", value: preferredCostumeName)
+                                    }
+                                    if let resolvedBundleCostumeName = readiness.resolvedBundleCostumeName,
+                                       !resolvedBundleCostumeName.isEmpty {
+                                        inspectorRow(label: "Bundle", value: resolvedBundleCostumeName)
+                                    }
                                     inspectorRow(label: "Files", value: "\(readiness.totalFileCount)")
                                     if !readiness.readyCategories.isEmpty {
                                         Text("Ready: \(readiness.readyCategories.map(\.displayName).joined(separator: ", "))")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    if !readiness.registryBackedCategories.isEmpty {
+                                        Text("Registry: \(readiness.registryBackedCategories.map(\.displayName).joined(separator: ", "))")
                                             .font(.system(size: 11))
                                             .foregroundStyle(.secondary)
                                             .fixedSize(horizontal: false, vertical: true)

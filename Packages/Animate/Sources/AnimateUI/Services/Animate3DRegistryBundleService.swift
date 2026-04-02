@@ -88,6 +88,32 @@ struct Animate3DRegistryBundleService {
         }
     }
 
+    func signature(
+        for slug: String,
+        costumeName: String? = nil
+    ) -> String {
+        guard let bundle = bundleDescriptor(for: slug, costumeName: costumeName) else {
+            return "\(slug):registry:none"
+        }
+
+        let scalarPaths: [(String, String?)] = [
+            ("body", bundle.bodyModelPath),
+            ("face", bundle.faceRigPath),
+            ("mouth", bundle.mouthProfilePath),
+            ("expr", bundle.expressionLibraryPath),
+            ("material", bundle.materialProfilePath)
+        ]
+
+        let scalarParts = scalarPaths.map { label, relativePath in
+            signaturePart(label: label, relativePath: relativePath)
+        }
+        let motionParts = bundle.motionSetPaths.sorted().map {
+            signaturePart(label: "motion", relativePath: $0)
+        }
+
+        return ([ "\(slug):\(bundle.costumeName)" ] + scalarParts + motionParts).joined(separator: "|")
+    }
+
     private func resolvedURL(for relativePath: String?) -> URL? {
         guard let trimmed = normalized(relativePath) else {
             return nil
@@ -114,5 +140,17 @@ struct Animate3DRegistryBundleService {
         guard let path else { return nil }
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func signaturePart(label: String, relativePath: String?) -> String {
+        guard let normalizedPath = normalized(relativePath) else {
+            return "\(label):nil"
+        }
+        guard let url = resolvedURL(for: normalizedPath) else {
+            return "\(label):\(normalizedPath):missing"
+        }
+        let modificationDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?
+            .timeIntervalSince1970 ?? 0
+        return "\(label):\(normalizedPath):\(Int(modificationDate))"
     }
 }

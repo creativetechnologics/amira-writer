@@ -257,6 +257,14 @@ extension SceneAssetPipeline {
         return character.models3D.first?.modelFileName
     }
 
+    func resolvedBundleDescriptor(
+        slug: String,
+        costumeName: String? = nil
+    ) -> Animate3DCharacterBundleDescriptor? {
+        ensureRegistriesLoaded()
+        return bundleDescriptor(for: slug, costumeName: costumeName)
+    }
+
     // MARK: Private — Model File Resolution
 
     /// Resolves the on-disk URL for a character's 3D model file.

@@ -205,6 +205,11 @@ extension ScenePreviewRenderer {
             characterPerformanceStatusesByName[blocking.characterName] = Animate3DCharacterPerformanceStatus(
                 characterName: blocking.characterName,
                 characterSlug: blocking.characterSlug,
+                preferredCostumeName: blocking.preferredCostumeName,
+                resolvedBundleCostumeName: assetPipeline.resolvedBundleDescriptor(
+                    slug: blocking.characterSlug,
+                    costumeName: blocking.preferredCostumeName
+                )?.costumeName,
                 modelFileName: assetPipeline.characterModelFileName(
                     slug: blocking.characterSlug,
                     costumeName: blocking.preferredCostumeName

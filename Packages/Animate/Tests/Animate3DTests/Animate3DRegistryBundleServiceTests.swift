@@ -50,6 +50,33 @@ final class Animate3DRegistryBundleServiceTests: XCTestCase {
         XCTAssertTrue(service.provides(.materials, for: "luke"))
     }
 
+    func testRegistrySignatureIncludesResolvedPathsAndTimestamps() throws {
+        let projectURL = try makeProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        let modelPath = "Animate/3d/generated-assets/luke/default/luke.glb"
+        try createDataFile(Data([1, 2, 3]), at: projectURL.appendingPathComponent(modelPath))
+
+        let service = Animate3DRegistryBundleService(
+            projectURL: projectURL,
+            animateURL: projectURL.appendingPathComponent("Animate"),
+            assetRegistry: Animate3DAssetRegistry(),
+            characterRegistry: Animate3DCharacterRegistry(
+                bundles: [
+                    Animate3DCharacterBundleDescriptor(
+                        characterSlug: "luke",
+                        costumeName: "default",
+                        bodyModelPath: modelPath
+                    )
+                ]
+            )
+        )
+
+        let signature = service.signature(for: "luke")
+        XCTAssertTrue(signature.contains("body:\(modelPath):"))
+        XCTAssertTrue(signature.contains("luke:default"))
+    }
+
     private func makeProjectURL() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Animate3DRegistryBundleServiceTests-\(UUID().uuidString)")

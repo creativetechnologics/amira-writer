@@ -6,6 +6,8 @@ struct Animate3DCharacterPerformanceStatus: Identifiable, Hashable, Sendable {
     var id: String { characterName }
     var characterName: String
     var characterSlug: String
+    var preferredCostumeName: String?
+    var resolvedBundleCostumeName: String?
     var modelFileName: String?
     var driverMode: CharacterPerformanceDriverMode
     var profileSourceFileName: String?
@@ -31,7 +33,10 @@ struct Animate3DCharacterBundleReadinessStatus: Identifiable, Hashable, Sendable
     var id: String { characterSlug }
     var characterName: String
     var characterSlug: String
+    var preferredCostumeName: String?
+    var resolvedBundleCostumeName: String?
     var readyCategories: [Animate3DCharacterAssetCategory]
+    var registryBackedCategories: [Animate3DCharacterAssetCategory]
     var missingCategories: [Animate3DCharacterAssetCategory]
     var totalFileCount: Int
 
@@ -281,11 +286,24 @@ private extension Animate3DProductionCoordinator {
                     }))
                     || registryBundleService.provides(category, for: character.assetFolderSlug, costumeName: preferredCostume)
             }
+            let registryBackedCategories = categories.filter { category in
+                inventory.files(for: category).isEmpty
+                    && !(category == .models && character.models3D.contains(where: {
+                        preferredCostume == nil || $0.costumeName.caseInsensitiveCompare(preferredCostume ?? "") == .orderedSame
+                    }))
+                    && registryBundleService.provides(category, for: character.assetFolderSlug, costumeName: preferredCostume)
+            }
             let missingCategories = categories.filter { !readyCategories.contains($0) }
             return Animate3DCharacterBundleReadinessStatus(
                 characterName: character.name,
                 characterSlug: character.assetFolderSlug,
+                preferredCostumeName: preferredCostume,
+                resolvedBundleCostumeName: registryBundleService.bundleDescriptor(
+                    for: character.assetFolderSlug,
+                    costumeName: preferredCostume
+                )?.costumeName,
                 readyCategories: readyCategories,
+                registryBackedCategories: registryBackedCategories,
                 missingCategories: missingCategories,
                 totalFileCount: inventory.totalFileCount
             )
