@@ -100,6 +100,14 @@ struct GeminiGenerationPreflightSheet: View {
         selectedDrafts.filter { $0.overrideTelemetry?.hasVisibleChanges == true }.count
     }
 
+    private var overriddenDrafts: [GeminiGenerationDraft] {
+        drafts.filter { $0.overrideTelemetry?.hasVisibleChanges == true }
+    }
+
+    private var selectedOverriddenDrafts: [GeminiGenerationDraft] {
+        selectedDrafts.filter { $0.overrideTelemetry?.hasVisibleChanges == true }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -170,11 +178,63 @@ struct GeminiGenerationPreflightSheet: View {
     }
 
     private var summaryCard: some View {
-        HStack(spacing: 16) {
-            preflightMetric(title: "Selected Cost", value: "$\(String(format: "%.3f", totalCost))", icon: "creditcard.fill", tint: .orange)
-            preflightMetric(title: "Models", value: selectedDrafts.map(\.model.displayName).joined(separator: ", "), icon: "cpu", tint: .purple)
-            preflightMetric(title: "Sizes", value: Set(selectedDrafts.map(\.imageSize)).sorted().joined(separator: ", "), icon: "arrow.up.left.and.arrow.down.right", tint: .blue)
-            preflightMetric(title: "Overrides", value: selectedOverrideCount == 0 ? "None" : "\(selectedOverrideCount) selected", icon: "slider.horizontal.3", tint: .pink)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 16) {
+                preflightMetric(title: "Selected Cost", value: "$\(String(format: "%.3f", totalCost))", icon: "creditcard.fill", tint: .orange)
+                preflightMetric(title: "Models", value: selectedDrafts.map(\.model.displayName).joined(separator: ", "), icon: "cpu", tint: .purple)
+                preflightMetric(title: "Sizes", value: Set(selectedDrafts.map(\.imageSize)).sorted().joined(separator: ", "), icon: "arrow.up.left.and.arrow.down.right", tint: .blue)
+                preflightMetric(title: "Overrides", value: selectedOverrideCount == 0 ? "None" : "\(selectedOverrideCount) selected", icon: "slider.horizontal.3", tint: .pink)
+            }
+
+            if usesSharedConfiguration {
+                HStack(spacing: 8) {
+                    Button("Select All") {
+                        setSelectionState(true, for: drafts.indices)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Select None") {
+                        setSelectionState(false, for: drafts.indices)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Only Overrides") {
+                        selectOnlyOverrides()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(overriddenDrafts.isEmpty)
+                }
+            }
+
+            if !selectedOverriddenDrafts.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Selected Override Drafts")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    ForEach(selectedOverriddenDrafts, id: \.id) { draft in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(draft.title)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if let telemetry = draft.overrideTelemetry {
+                                ForEach(telemetry.badgeLabels, id: \.self) { badge in
+                                    Text(badge)
+                                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 3)
+                                        .background(Capsule().fill(Color.pink.opacity(0.14)))
+                                        .foregroundStyle(.pink)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         .padding(14)
         .background(.quaternary.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -317,6 +377,19 @@ struct GeminiGenerationPreflightSheet: View {
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.pink.opacity(0.18))
+        }
+    }
+
+    private func setSelectionState(_ isSelected: Bool, for indices: some Sequence<Int>) {
+        for index in indices {
+            guard drafts.indices.contains(index) else { continue }
+            drafts[index].isSelected = isSelected
+        }
+    }
+
+    private func selectOnlyOverrides() {
+        for index in drafts.indices {
+            drafts[index].isSelected = drafts[index].overrideTelemetry?.hasVisibleChanges == true
         }
     }
 
