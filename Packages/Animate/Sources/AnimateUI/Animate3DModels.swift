@@ -777,3 +777,44 @@ struct Animate3DFrameSnapshot: Hashable, Sendable {
         objects: []
     )
 }
+
+// MARK: - Override Persistence
+
+@available(macOS 26.0, *)
+extension Animate3DTestHarnessState {
+    /// Save current override state to disk
+    func saveOverrides(animateURL: URL) {
+        var draftOverrides: [String: Animate3DGenerationOverridePersistence.PersistedDraftOverride] = [:]
+        for (key, override) in generationDraftOverridesByStableKey {
+            draftOverrides[key] = .init(
+                providerHintOverride: override.providerHintOverride,
+                promptAppendix: override.promptAppendix,
+                isLocked: override.isLocked
+            )
+        }
+
+        let state = Animate3DGenerationOverridePersistence.PersistedOverrideState(
+            pinnedKeys: pinnedGenerationQueueItemKeys,
+            skippedKeys: skippedGenerationQueueItemKeys,
+            draftOverrides: draftOverrides
+        )
+
+        Animate3DGenerationOverridePersistence.save(state, animateURL: animateURL)
+    }
+
+    /// Load override state from disk
+    func loadOverrides(animateURL: URL) {
+        let persisted = Animate3DGenerationOverridePersistence.load(animateURL: animateURL)
+        pinnedGenerationQueueItemKeys = persisted.pinnedKeys
+        skippedGenerationQueueItemKeys = persisted.skippedKeys
+
+        generationDraftOverridesByStableKey = [:]
+        for (key, override) in persisted.draftOverrides {
+            generationDraftOverridesByStableKey[key] = Animate3DGenerationDraftOverride(
+                providerHintOverride: override.providerHintOverride,
+                promptAppendix: override.promptAppendix,
+                isLocked: override.isLocked
+            )
+        }
+    }
+}
