@@ -122,6 +122,72 @@ final class Animate3DProductionCoordinatorTests: XCTestCase {
         XCTAssertEqual(runtimeStatus.visemeCueProvenance, "baseViseme:rest")
     }
 
+    func testRefreshPublishesMotionProvenanceFromRegistry() async throws {
+        let projectURL = try makeProjectURL()
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
+
+        let character = AnimationCharacter(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+            name: "Luke",
+            description: "Pilot",
+            owpSlug: "luke",
+            parts: []
+        )
+        let scene = AnimationScene(
+            id: UUID(uuidString: "99999999-8888-7777-6666-555555555555")!,
+            name: "Luke Scene",
+            backgroundID: nil,
+            characterIDs: [character.id],
+            keyframes: [],
+            owpSongPath: "Songs/luke.ows"
+        )
+
+        try writeProfileFragments(
+            at: projectURL.appendingPathComponent("Animate"),
+            slug: character.assetFolderSlug
+        )
+        try ProjectDatabaseBridge.saveAnimate3DMotionRegistryToDisk(
+            Animate3DMotionRegistry(
+                motions: [
+                    Animate3DMotionSetDescriptor(
+                        motionID: "motion-determined",
+                        title: "Determined Acting",
+                        relativePath: "Animate/characters/shared/motions/determined.json",
+                        tags: ["determined", "resolve"],
+                        notes: ""
+                    )
+                ]
+            ),
+            projectURL: projectURL
+        )
+
+        let store = AnimateStore()
+        store.owpURL = projectURL
+        store.workingOWPURL = projectURL
+        store.characters = [character]
+        store.scenes = [scene]
+
+        let coordinator = Animate3DProductionCoordinator(store: store)
+        let lyrics = """
+        [scene: "Luke Scene" | bg=Debug Stage]
+        [action: "Luke" | determined | bars=1]
+        """
+        await coordinator.refresh(
+            scene: scene,
+            lyrics: lyrics,
+            scenario: .empty,
+            forceReload: true
+        )
+
+        let runtimeStatus = try XCTUnwrap(coordinator.status.runtimeCharacters.first)
+        XCTAssertEqual(runtimeStatus.sourceActionCue, "determined")
+        XCTAssertEqual(runtimeStatus.resolvedMotionID, "motion-determined")
+        XCTAssertEqual(runtimeStatus.resolvedMotionTitle, "Determined Acting")
+        XCTAssertEqual(runtimeStatus.motionProvenance, "tag:determined")
+    }
+
     private func makeProjectURL() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("Animate3DProductionCoordinatorTests-\(UUID().uuidString)")
