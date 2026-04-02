@@ -26,6 +26,7 @@ final class Animate3DAssetGapQueueServiceTests: XCTestCase {
                 destinationPath: "Animate/characters/luke/models/",
                 providerHint: "Meshy",
                 prompt: "Generate Luke body model.",
+                contextSummary: "runtime motion: determined, listen",
                 characterSlug: "luke",
                 characterName: "Luke"
             ),
@@ -71,6 +72,7 @@ final class Animate3DAssetGapQueueServiceTests: XCTestCase {
         let characterItem = try? XCTUnwrap(store.batchQueue.first(where: { $0.characterID == character.id }))
         XCTAssertEqual(characterItem?.characterSlug, "luke")
         XCTAssertNil(characterItem?.outputRootRelativePath)
+        XCTAssertEqual(characterItem?.draft.contextNote, "runtime motion: determined, listen")
 
         let pipelineItem = try? XCTUnwrap(store.batchQueue.first(where: { $0.characterID == nil }))
         XCTAssertEqual(pipelineItem?.characterName, "Environment")
