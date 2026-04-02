@@ -112,6 +112,10 @@ struct GeminiGenerationPreflightSheet: View {
         selectedDrafts.filter { $0.overrideTelemetry?.isLocked == true }.count
     }
 
+    private var lockedOverrideDrafts: [GeminiGenerationDraft] {
+        drafts.filter { $0.overrideTelemetry?.isLocked == true }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -210,6 +214,13 @@ struct GeminiGenerationPreflightSheet: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(overriddenDrafts.isEmpty)
+
+                    Button("Only Locked") {
+                        selectOnlyLockedOverrides()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(lockedOverrideDrafts.isEmpty)
                 }
             }
 
@@ -394,6 +405,12 @@ struct GeminiGenerationPreflightSheet: View {
     private func selectOnlyOverrides() {
         for index in drafts.indices {
             drafts[index].isSelected = drafts[index].overrideTelemetry?.hasVisibleChanges == true
+        }
+    }
+
+    private func selectOnlyLockedOverrides() {
+        for index in drafts.indices {
+            drafts[index].isSelected = drafts[index].overrideTelemetry?.isLocked == true
         }
     }
 
