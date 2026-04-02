@@ -108,6 +108,10 @@ struct GeminiGenerationPreflightSheet: View {
         selectedDrafts.filter { $0.overrideTelemetry?.hasVisibleChanges == true }
     }
 
+    private var selectedLockedOverrideCount: Int {
+        selectedDrafts.filter { $0.overrideTelemetry?.isLocked == true }.count
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -673,6 +677,10 @@ struct GeminiGenerationPreflightSheet: View {
                 Label("Set a Gemini API key before generating.", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .font(.callout)
+            } else if !selectedDrafts.isEmpty {
+                Text(selectionSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Spacer()
@@ -694,7 +702,7 @@ struct GeminiGenerationPreflightSheet: View {
             }
             .keyboardShortcut(.cancelAction)
 
-            Button(selectedMode == .standard ? confirmTitle : "Add to Queue") {
+            Button(confirmButtonTitle) {
                 onConfirm(selectedDrafts, selectedMode)
             }
             .buttonStyle(.borderedProminent)
@@ -702,6 +710,24 @@ struct GeminiGenerationPreflightSheet: View {
             .keyboardShortcut(.defaultAction)
         }
         .padding()
+    }
+
+    private var selectionSummary: String {
+        var parts = ["\(selectedDrafts.count) selected"]
+        if selectedOverrideCount > 0 {
+            parts.append("\(selectedOverrideCount) overridden")
+        }
+        if selectedLockedOverrideCount > 0 {
+            parts.append("\(selectedLockedOverrideCount) locked")
+        }
+        return parts.joined(separator: " • ")
+    }
+
+    private var confirmButtonTitle: String {
+        let count = selectedDrafts.count
+        let base = selectedMode == .standard ? confirmTitle : "Add to Queue"
+        guard count > 0 else { return base }
+        return "\(base) (\(count))"
     }
 
     private var sharedModelBinding: Binding<GeminiModel> {
