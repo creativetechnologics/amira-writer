@@ -110,6 +110,7 @@ final class ScenePreviewRendererTests: XCTestCase {
         XCTAssertEqual(status.visemePresetCount, 1)
         XCTAssertEqual(status.activeExpressionCue, "hero_angry")
         XCTAssertEqual(status.resolvedExpressionPresetCue, "hero_angry")
+        XCTAssertEqual(status.expressionCueProvenance, "baseCue:angry")
         XCTAssertTrue(status.usingExpressionPreset)
         XCTAssertEqual(status.activeVisemeCue, "rest")
         XCTAssertEqual(status.resolvedVisemePresetCue, "rest")
