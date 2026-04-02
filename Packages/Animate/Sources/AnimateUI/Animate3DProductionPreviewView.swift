@@ -57,6 +57,10 @@ struct Animate3DProductionPreviewView: View {
         visibleDraftableQueueItems.filter { !itemIsQueued($0) }
     }
 
+    private var allQueueableItems: [Animate3DGenerationQueueItem] {
+        prioritizedQueueItems.filter { $0.isBatchDraftable && !itemIsQueued($0) }
+    }
+
     private var hiddenQueueItemCount: Int {
         max(prioritizedQueueItems.count - visiblePriorityQueueItems.count, 0)
     }
@@ -321,6 +325,12 @@ struct Animate3DProductionPreviewView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!hasMissing3DDrafts || selectedScene == nil)
 
+                Button("Preflight All Drafts") {
+                    openAllGenerationPreflight()
+                }
+                .buttonStyle(.bordered)
+                .disabled(allQueueableItems.isEmpty || selectedScene == nil)
+
                 Button("Queue Visible Drafts") {
                     queueVisibleDrafts()
                 }
@@ -566,11 +576,14 @@ struct Animate3DProductionPreviewView: View {
         preflightOwnersByDraftID = [:]
     }
 
-    private func openVisibleGenerationPreflight() {
+    private func openGenerationPreflight(
+        for items: [Animate3DGenerationQueueItem],
+        emptyMessage: String
+    ) {
         var drafts: [GeminiGenerationDraft] = []
         var ownersByDraftID: [UUID: PreflightOwner] = [:]
 
-        for item in visibleQueueableItems {
+        for item in items {
             guard let result = Animate3DGenerationQueueActionSupport.draft(
                 for: item,
                 scene: selectedScene,
@@ -584,7 +597,7 @@ struct Animate3DProductionPreviewView: View {
         }
 
         guard !drafts.isEmpty else {
-            store.statusMessage = "No visible draftable 3D requests available for preflight."
+            store.statusMessage = emptyMessage
             return
         }
 
@@ -592,6 +605,20 @@ struct Animate3DProductionPreviewView: View {
         preflightOwner = drafts.count == 1 ? ownersByDraftID[drafts[0].id] : nil
         preflightOwnersByDraftID = ownersByDraftID
         showPreflight = true
+    }
+
+    private func openAllGenerationPreflight() {
+        openGenerationPreflight(
+            for: allQueueableItems,
+            emptyMessage: "No draftable 3D requests available for preflight."
+        )
+    }
+
+    private func openVisibleGenerationPreflight() {
+        openGenerationPreflight(
+            for: visibleQueueableItems,
+            emptyMessage: "No visible draftable 3D requests available for preflight."
+        )
     }
 
     private func queueVisibleDrafts() {
@@ -604,14 +631,6 @@ struct Animate3DProductionPreviewView: View {
         store.statusMessage = queued > 0
             ? "Queued \(queued) visible 3D draft\(queued == 1 ? "" : "s")"
             : "Visible 3D gaps are already queued or require manual authoring"
-    }
-
-    private func openGenerationPreflight() {
-        guard let item = nextDraftableQueueItem else {
-            store.statusMessage = "No draftable 3D request available for preflight."
-            return
-        }
-        openGenerationPreflight(item)
     }
 
     private func queuePreflightDrafts(_ drafts: [GeminiGenerationDraft]) {
