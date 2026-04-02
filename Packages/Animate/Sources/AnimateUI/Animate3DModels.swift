@@ -114,7 +114,7 @@ struct Animate3DGenerationDraftOverride: Hashable, Sendable {
 @Observable @MainActor
 final class Animate3DTestHarnessState {
     var scenarioMode: Animate3DScenarioMode = .auto
-    var rendererMode: Animate3DRendererMode = .productionEngine
+    var rendererMode: Animate3DRendererMode = .translationHarness
     var playbackStyle: Animate3DPlaybackStyle = .onTwos
     var previewFrame: Int = 0
     var isPlaying = false

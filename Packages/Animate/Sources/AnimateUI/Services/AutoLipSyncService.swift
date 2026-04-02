@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 /// Orchestrates automatic lip sync generation from audio files.
@@ -55,7 +56,7 @@ struct AutoLipSyncService: Sendable {
         } else {
             return generateWithSyllableHeuristic(
                 text: dialogueText ?? "",
-                estimatedDurationSeconds: audioDuration(url: audioURL) ?? 5.0,
+                estimatedDurationSeconds: await audioDuration(url: audioURL) ?? 5.0,
                 fps: fps,
                 startFrame: startFrame
             )
@@ -187,15 +188,13 @@ struct AutoLipSyncService: Sendable {
         )
     }
 
-    // MARK: - Audio Duration Estimation
+    // MARK: - Audio Duration
 
-    /// Estimate audio file duration from file size.
-    /// Avoids importing AVFoundation for a quick heuristic.
-    /// Rough estimate: ~176 KB/s for 44.1 kHz, 16-bit stereo.
-    static func audioDuration(url: URL) -> Double? {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let fileSize = attrs[.size] as? Int64,
-              fileSize > 0 else { return nil }
-        return Double(fileSize) / 176_000.0
+    /// Get accurate audio duration using AVFoundation (works for WAV, MP3, AAC, FLAC, etc.)
+    static func audioDuration(url: URL) async -> Double? {
+        let asset = AVURLAsset(url: url)
+        guard let duration = try? await asset.load(.duration) else { return nil }
+        let seconds = duration.seconds
+        return seconds.isFinite && seconds > 0 ? seconds : nil
     }
 }

@@ -101,22 +101,15 @@ struct FBXMotionClipLoader: Sendable {
     /// Load a motion clip from an FBX, DAE, or USDZ file
     /// Uses ModelIO to extract animation data, then converts to our MotionClip format
     static func load(from url: URL) throws -> MotionClip {
-        let asset = MDLAsset(url: url)
-        asset.loadTextures()
-
-        // Extract animation data
         let scnScene = try SCNScene(url: url)
 
         // Find the animation duration and frame count
         var maxDuration: TimeInterval = 0
-        var allAnimationKeys: [String] = []
 
         scnScene.rootNode.enumerateChildNodes({ node, _ in
             for key in node.animationKeys {
-                allAnimationKeys.append(key)
                 if let player = node.animationPlayer(forKey: key) {
-                    let animation = player.animation
-                    maxDuration = max(maxDuration, animation.duration)
+                    maxDuration = max(maxDuration, player.animation.duration)
                 }
             }
         })
@@ -135,6 +128,10 @@ struct FBXMotionClipLoader: Sendable {
             )
         }
 
+        // Use an offscreen SCNRenderer to evaluate animations at arbitrary times
+        let renderer = SCNRenderer(device: nil, options: nil)
+        renderer.scene = scnScene
+
         // Sample the animation at 30fps
         let fps: Double = 30
         let frameCount = Int(ceil(maxDuration * fps))
@@ -143,6 +140,8 @@ struct FBXMotionClipLoader: Sendable {
 
         for i in 0..<frameCount {
             let time = Double(i) / fps
+            // Advance SceneKit's animation clock so joint transforms update
+            renderer.render(atTime: time)
             let frame = sampleScene(scnScene.rootNode, at: time, frameIndex: i)
             discoveredJoints.formUnion(frame.jointRotations.keys)
             frames.append(frame)
@@ -217,11 +216,14 @@ struct FBXMotionClipLoader: Sendable {
 
         var mapping: [String: String] = [:]
 
+        // Build a lowercased lookup for O(1) exact matching (avoids .contains() substring
+        // collisions like "Spine" matching "Spine1")
+        let lowerToOriginal = Dictionary(targetJointNames.map { ($0.lowercased(), $0) },
+                                         uniquingKeysWith: { first, _ in first })
+
         for (smplJoint, candidates) in jointNameMapping {
             for candidate in candidates {
-                if let match = targetJointNames.first(where: {
-                    $0.lowercased() == candidate.lowercased() || $0.contains(candidate)
-                }) {
+                if let match = lowerToOriginal[candidate.lowercased()] {
                     mapping[smplJoint] = match
                     break
                 }
@@ -231,27 +233,47 @@ struct FBXMotionClipLoader: Sendable {
         return mapping
     }
 
-    /// Apply a motion frame to a target node hierarchy using a retarget map
+    /// Pre-resolved node references for per-frame performance.
+    /// Build once with `buildNodeCache`, then pass to `apply()` every frame.
+    typealias NodeCache = [String: SCNNode]
+
+    /// Walk the target hierarchy once and resolve every retarget-mapped joint to its SCNNode.
+    static func buildNodeCache(targetRoot: SCNNode, retargetMap: [String: String]) -> NodeCache {
+        var cache: NodeCache = [:]
+        for (smplJoint, targetName) in retargetMap {
+            if let node = targetRoot.childNode(withName: targetName, recursively: true) {
+                cache[smplJoint] = node
+            }
+        }
+        return cache
+    }
+
+    /// Apply a motion frame using a pre-built node cache (O(joints) with no tree walks).
+    static func apply(
+        frame: MotionFrame,
+        nodeCache: NodeCache,
+        rootPositionScale: Float = 1.0
+    ) {
+        if let pelvisNode = nodeCache["Pelvis"] {
+            pelvisNode.simdPosition = frame.rootPosition * rootPositionScale
+            pelvisNode.simdOrientation = frame.rootRotation
+        }
+
+        for (smplJoint, rotation) in frame.jointRotations {
+            if let targetNode = nodeCache[smplJoint] {
+                targetNode.simdOrientation = rotation
+            }
+        }
+    }
+
+    /// Convenience: apply without a cache (walks the tree each call — use for one-off poses).
     static func apply(
         frame: MotionFrame,
         to targetRoot: SCNNode,
         retargetMap: [String: String],
         rootPositionScale: Float = 1.0
     ) {
-        // Apply root transform
-        if let pelvisMapping = retargetMap["Pelvis"],
-           let pelvisNode = targetRoot.childNode(withName: pelvisMapping, recursively: true) {
-            pelvisNode.simdPosition = frame.rootPosition * rootPositionScale
-            pelvisNode.simdOrientation = frame.rootRotation
-        }
-
-        // Apply joint rotations
-        for (smplJoint, rotation) in frame.jointRotations {
-            // Try direct name match first
-            if let targetName = retargetMap[smplJoint],
-               let targetNode = targetRoot.childNode(withName: targetName, recursively: true) {
-                targetNode.simdOrientation = rotation
-            }
-        }
+        let cache = buildNodeCache(targetRoot: targetRoot, retargetMap: retargetMap)
+        apply(frame: frame, nodeCache: cache, rootPositionScale: rootPositionScale)
     }
 }

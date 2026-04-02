@@ -1,10 +1,14 @@
 import Foundation
 import AVFoundation
 
-/// Frame-accurate audio playback for animation preview
+/// Frame-accurate audio playback for animation preview.
+///
+/// During playback, `currentTime` updates automatically via an internal timer (~60 Hz)
+/// so SwiftUI bindings stay live. For tighter drift correction (e.g. in a display-link
+/// driven animation loop), call `syncToFrame(_:)` each frame.
 @available(macOS 26.0, *)
 @MainActor
-final class AnimationAudioPlayer: ObservableObject {
+final class AnimationAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     @Published var isPlaying: Bool = false
     @Published var currentTime: TimeInterval = 0
@@ -15,9 +19,16 @@ final class AnimationAudioPlayer: ObservableObject {
     private var audioPlayer: AVAudioPlayer?
     private var audioURL: URL?
     private let fps: Int
+    private var playbackTimer: Timer?
+
+    override init() {
+        self.fps = 24
+        super.init()
+    }
 
     init(fps: Int = 24) {
         self.fps = fps
+        super.init()
     }
 
     // MARK: - Loading
@@ -30,6 +41,7 @@ final class AnimationAudioPlayer: ObservableObject {
 
         do {
             let player = try AVAudioPlayer(contentsOf: url)
+            player.delegate = self
             player.prepareToPlay()
             player.enableRate = true  // Allow rate adjustment for sync
             self.audioPlayer = player
@@ -59,20 +71,50 @@ final class AnimationAudioPlayer: ObservableObject {
         guard let player = audioPlayer, isLoaded else { return }
         player.play()
         isPlaying = true
+        startPlaybackTimer()
     }
 
     /// Pause playback
     func pause() {
         audioPlayer?.pause()
         isPlaying = false
+        stopPlaybackTimer()
     }
 
     /// Stop and reset to beginning
     func stop() {
+        stopPlaybackTimer()
         audioPlayer?.stop()
         audioPlayer?.currentTime = 0
         isPlaying = false
         currentTime = 0
+    }
+
+    // MARK: - AVAudioPlayerDelegate
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
+            self.isPlaying = false
+            self.stopPlaybackTimer()
+            self.currentTime = self.duration
+        }
+    }
+
+    // MARK: - Playback Timer
+
+    private func startPlaybackTimer() {
+        stopPlaybackTimer()
+        playbackTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let player = self.audioPlayer, self.isPlaying else { return }
+                self.currentTime = player.currentTime
+            }
+        }
+    }
+
+    private func stopPlaybackTimer() {
+        playbackTimer?.invalidate()
+        playbackTimer = nil
     }
 
     // MARK: - Frame Sync
