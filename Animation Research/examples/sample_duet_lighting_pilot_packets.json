@@ -1,0 +1,263 @@
+{
+  "packets": [
+    {
+      "packetId": "duet-district-clinic-exterior-001",
+      "shotId": "duet-clinic-ext-001",
+      "locationId": "district-clinic-exterior",
+      "lightingProfile": "daylight_soft",
+      "routingMode": "internal",
+      "sharedLightWorldNotes": [
+        "soft clinic daylight across both characters",
+        "shared wall bounce from clinic facade"
+      ],
+      "duetReadBalance": "Luke keeps utility-cloth readability while Amira keeps face-framing softness under the same daylight.",
+      "characters": [
+        {
+          "characterId": "luke-hart",
+          "costumePackId": "costume_medic_desert",
+          "readPriority": "uniform and satchel readability",
+          "lightingRisks": [
+            "dusty flattening of pockets"
+          ],
+          "protectionFlags": {
+            "faceProtection": true,
+            "mouthVisibilityProtection": true
+          },
+          "mouthAngles": [
+            "front",
+            "quarterLeft"
+          ]
+        },
+        {
+          "characterId": "amira-nazari",
+          "costumePackId": "costume_civilian_default",
+          "readPriority": "face-framing and scarf edge readability",
+          "lightingRisks": [
+            "cool bounce flattening face contour"
+          ],
+          "protectionFlags": {
+            "faceProtection": true,
+            "mouthVisibilityProtection": true
+          },
+          "mouthAngles": [
+            "front",
+            "quarterRight"
+          ]
+        }
+      ],
+      "requiredFiles": [
+        "character-package-luke.json",
+        "character-package-amira.json",
+        "motion-plan.json",
+        "lighting-plan.json",
+        "routing.json"
+      ]
+    },
+    {
+      "packetId": "duet-rooftop-sunset-001",
+      "shotId": "duet-rooftop-001",
+      "locationId": "rooftop-sunset",
+      "lightingProfile": "sunset_warm",
+      "routingMode": "internal",
+      "sharedLightWorldNotes": [
+        "single warm sunset key from horizon side",
+        "shared rim against sky band"
+      ],
+      "duetReadBalance": "Luke carries stronger jaw/shoulder rim while Amira carries warmer face/scarf elegance without leaving the same sunset world.",
+      "characters": [
+        {
+          "characterId": "luke-hart",
+          "costumePackId": "costume_plain_clothes",
+          "readPriority": "jawline and grounded civilian silhouette",
+          "lightingRisks": [
+            "shirt values over-warming"
+          ],
+          "protectionFlags": {
+            "faceProtection": true,
+            "mouthVisibilityProtection": true
+          },
+          "mouthAngles": [
+            "quarterLeft"
+          ]
+        },
+        {
+          "characterId": "amira-nazari",
+          "costumePackId": "costume_civilian_default",
+          "readPriority": "face grace and scarf contour",
+          "lightingRisks": [
+            "warm saturation drift in scarf/skin"
+          ],
+          "protectionFlags": {
+            "faceProtection": true,
+            "mouthVisibilityProtection": true
+          },
+          "mouthAngles": [
+            "quarterRight"
+          ]
+        }
+      ],
+      "requiredFiles": [
+        "character-package-luke.json",
+        "character-package-amira.json",
+        "motion-plan.json",
+        "lighting-plan.json",
+        "routing.json"
+      ]
+    },
+    {
+      "packetId": "duet-village-street-night-001",
+      "shotId": "duet-village-night-001",
+      "locationId": "village-street-night",
+      "lightingProfile": "moonlight_blue",
+      "routingMode": "hybrid",
+      "sharedLightWorldNotes": [
+        "shared blue night world with limited practical spill",
+        "night fill reserved for face readability"
+      ],
+      "duetReadBalance": "Luke survives cooler silhouette shaping while Amira receives stronger protected fill without breaking the shared moonlit scene.",
+      "characters": [
+        {
+          "characterId": "luke-hart",
+          "costumePackId": "costume_medic_desert",
+          "readPriority": "silhouette and strap separation",
+          "lightingRisks": [
+            "mouth readability under low fill"
+          ],
+          "protectionFlags": {
+            "faceProtection": true,
+            "mouthVisibilityProtection": true
+          },
+          "mouthAngles": [
+            "profileLeft",
+            "quarterLeft"
+          ]
+        },
+        {
+          "characterId": "amira-nazari",
+          "costumePackId": "costume_civilian_default",
+          "readPriority": "eyes, mouth, and scarf edge under cool night",
+          "lightingRisks": [
+            "face can disappear before Luke's"
+          ],
+          "protectionFlags": {
+            "faceProtection": true,
+            "mouthVisibilityProtection": true
+          },
+          "mouthAngles": [
+            "profileRight",
+            "quarterRight"
+          ]
+        }
+      ],
+      "requiredFiles": [
+        "character-package-luke.json",
+        "character-package-amira.json",
+        "motion-plan.json",
+        "lighting-plan.json",
+        "routing.json"
+      ]
+    },
+    {
+      "packetId": "duet-clinic-interior-fluorescent-001",
+      "shotId": "duet-clinic-int-001",
+      "locationId": "clinic-interior-fluorescent",
+      "lightingProfile": "fluorescent_clinic",
+      "routingMode": "internal",
+      "sharedLightWorldNotes": [
+        "shared overhead fluorescent pool",
+        "cool clinical fill with limited local warmth correction"
+      ],
+      "duetReadBalance": "Luke keeps uniform hierarchy while Amira avoids skin/scarf deadening under the same fluorescent source.",
+      "characters": [
+        {
+          "characterId": "luke-hart",
+          "costumePackId": "costume_medic_desert",
+          "readPriority": "uniform utility detail under flat light",
+          "lightingRisks": [
+            "fabric hierarchy collapse"
+          ],
+          "protectionFlags": {
+            "faceProtection": true,
+            "mouthVisibilityProtection": true
+          },
+          "mouthAngles": [
+            "front"
+          ]
+        },
+        {
+          "characterId": "amira-nazari",
+          "costumePackId": "costume_civilian_default",
+          "readPriority": "facial warmth and scarf separation under cool fill",
+          "lightingRisks": [
+            "sickly face tone"
+          ],
+          "protectionFlags": {
+            "faceProtection": true,
+            "mouthVisibilityProtection": true
+          },
+          "mouthAngles": [
+            "front"
+          ]
+        }
+      ],
+      "requiredFiles": [
+        "character-package-luke.json",
+        "character-package-amira.json",
+        "motion-plan.json",
+        "lighting-plan.json",
+        "routing.json"
+      ]
+    },
+    {
+      "packetId": "duet-family-courtyard-001",
+      "shotId": "duet-courtyard-001",
+      "locationId": "family-courtyard",
+      "lightingProfile": "sunset_warm",
+      "routingMode": "internal",
+      "sharedLightWorldNotes": [
+        "shared warm courtyard bounce",
+        "soft domestic sunset value structure"
+      ],
+      "duetReadBalance": "Luke softens into domestic light while Amira keeps emotional face/scarf nuance under the same courtyard warmth.",
+      "characters": [
+        {
+          "characterId": "luke-hart",
+          "costumePackId": "costume_plain_clothes",
+          "readPriority": "masculine silhouette with softened warmth",
+          "lightingRisks": [
+            "shirt contrast reduction"
+          ],
+          "protectionFlags": {
+            "faceProtection": true,
+            "mouthVisibilityProtection": true
+          },
+          "mouthAngles": [
+            "quarterLeft"
+          ]
+        },
+        {
+          "characterId": "amira-nazari",
+          "costumePackId": "costume_civilian_default",
+          "readPriority": "face and scarf nuance in warm domestic bounce",
+          "lightingRisks": [
+            "over-warming skin and scarf together"
+          ],
+          "protectionFlags": {
+            "faceProtection": true,
+            "mouthVisibilityProtection": true
+          },
+          "mouthAngles": [
+            "quarterRight"
+          ]
+        }
+      ],
+      "requiredFiles": [
+        "character-package-luke.json",
+        "character-package-amira.json",
+        "motion-plan.json",
+        "lighting-plan.json",
+        "routing.json"
+      ]
+    }
+  ]
+}

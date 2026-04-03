@@ -1,0 +1,44 @@
+{
+  "asset_id": "sheet_body_luke_medic_desert_variant_03",
+  "character_name": "Luke Hart",
+  "asset_role": "costume_sheet",
+  "expected_angle": "front",
+  "expected_costume": "medic_desert",
+  "expected_pose": "front_neutral",
+  "overall_decision": "edit",
+  "overall_confidence": 0.86,
+  "issue_summary": "Identity and pose are acceptable; chest pockets and scarf placement drifted.",
+  "issues": [
+    {
+      "severity": "major",
+      "category": "costume",
+      "message": "Chest pocket count and placement do not match the approved costume sheet.",
+      "evidence": "Two oversized chest pockets appear where the approved sheet has one flatter pocket shape per side.",
+      "fix_strategy": "edit",
+      "edit_instruction": "Reduce the front chest pockets to the approved flatter medic-desert design and keep the rest unchanged."
+    },
+    {
+      "severity": "minor",
+      "category": "costume",
+      "message": "Scarf drape is slightly too bulky.",
+      "evidence": "The scarf rises too high at the neck compared with the approved sheet.",
+      "fix_strategy": "edit",
+      "edit_instruction": "Slim the scarf drape slightly while keeping the same color and fabric."
+    }
+  ],
+  "edit_recommendation": {
+    "use_edit": true,
+    "edit_prompt": "Keep the same character, angle, pose, and costume colors. Replace the oversized chest pockets with the approved flatter medic-desert pocket design and slim the scarf drape slightly. Do not change face, body, pose, or background.",
+    "preserve_facts": [
+      "same character identity",
+      "same front-neutral pose",
+      "same desert medic costume colors"
+    ],
+    "change_facts": [
+      "chest pocket placement",
+      "scarf bulk"
+    ]
+  },
+  "next_action": "edit_and_recheck",
+  "notes": "Good candidate for a targeted edit pass."
+}

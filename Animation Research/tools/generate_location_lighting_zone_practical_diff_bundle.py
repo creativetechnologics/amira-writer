@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+from location_lighting_zone_practical_diff_report import report
+
+
+def to_markdown(payload: dict) -> str:
+    lines = ['# Location Lighting Zone/Practical Diff Report', '']
+    lines.append(f"Regression detected: {'yes' if payload['hasRegression'] else 'no'}")
+    lines.append('')
+    lines.append('## summary')
+    for key, value in payload.get('summary', {}).items():
+        lines.append(f'- {key}: {value}')
+    lines.append('')
+    lines.append('## regressions')
+    if payload['regressions']:
+        for item in payload['regressions']:
+            lines.append(f"- [{item['severity']}] {item['description']}")
+    else:
+        lines.append('- none')
+    lines.append('')
+    lines.append('## warnings')
+    if payload['warnings']:
+        for item in payload['warnings']:
+            lines.append(f"- [{item['severity']}] {item['description']}")
+    else:
+        lines.append('- none')
+    return '\n'.join(lines) + '\n'
+
+
+def main() -> int:
+    if len(sys.argv) != 4:
+        print('Usage: generate_location_lighting_zone_practical_diff_bundle.py <old-index.json> <new-index.json> <out-dir>')
+        return 2
+    out = Path(sys.argv[3])
+    out.mkdir(parents=True, exist_ok=True)
+    payload = report(Path(sys.argv[1]), Path(sys.argv[2]))
+    (out / 'location_lighting_zone_practical_diff_report.json').write_text(json.dumps(payload, indent=2) + '\n')
+    (out / 'location_lighting_zone_practical_diff_report.md').write_text(to_markdown(payload))
+    print(json.dumps({'outDir': str(out), 'hasRegression': payload['hasRegression']}, indent=2))
+    return 1 if payload['hasRegression'] else 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

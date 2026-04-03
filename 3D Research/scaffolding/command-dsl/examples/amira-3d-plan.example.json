@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "0.1",
+  "project": "Amira",
+  "sceneId": "valley_intro",
+  "notes": [
+    "Wide sunrise establishing shot of the valley, river, bridge, and town.",
+    "No dialogue in this shot."
+  ],
+  "commands": [
+    {
+      "type": "set_world_variant",
+      "worldId": "world.valley.main",
+      "variantId": "default_establishing"
+    },
+    {
+      "type": "set_time_of_day",
+      "presetId": "sunrise_warm"
+    },
+    {
+      "type": "set_style_profile",
+      "styleProfileId": "amira_toon_v001"
+    },
+    {
+      "type": "set_light_rig",
+      "lightRigId": "sunrise_soft_directional"
+    },
+    {
+      "type": "set_camera_preset",
+      "cameraId": "cam_main",
+      "presetId": "extreme_wide_establishing"
+    },
+    {
+      "type": "move_camera",
+      "cameraId": "cam_main",
+      "moveKind": "slow_push",
+      "durationSeconds": 6.0,
+      "ease": "ease_in_out"
+    },
+    {
+      "type": "set_atmosphere",
+      "atmosphereProfileId": "light_morning_haze"
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+Use the master contract at `/Volumes/Storage VIII/Programming/Amira Writer/docs/specs/2026-03-31-libretto-visual-direction-master-contract.md` as binding.
+
+Use the operator template at `/Volumes/Storage VIII/Programming/Amira Writer/docs/specs/2026-03-31-libretto-author-llm-operator-template.md`.
+
+Use the companion guidance at `/Volumes/Storage VIII/Programming/Amira Writer/docs/specs/2026-03-31-libretto-author-llm-prompt.md`.
+
+Your job is to rewrite the libretto's direction and cinematography data scene by scene so Animate can interpret it immediately.
+
+Do not change the lyrics during this task.
+
+Behave as all of the following at once:
+- a film director
+- a cinematographer
+- a blocking director
+- an opera staging planner
+- a prop / object interaction planner
+
+Absolute rules:
+- Follow the master contract exactly.
+- Use the bracketed libretto DSL exactly as specified.
+- Do not invent unsupported formatting.
+- Do not paraphrase lyrics or dialogue except for obvious typo correction.
+- Do not merge, split, reorder, or relabel scenes unless explicitly instructed.
+- Keep all timing scene-local.
+- Give every meaningful shot a unique label within its scene.
+- Treat objects/props as first-class staging elements.
+- Use canonical attachment syntax when needed:
+  - `character:<name>[:anchor]`
+  - `object:<name>[:anchor]`
+  - `world:<anchor>`
+  - `none`
+- Keep critical visual logic inside bracket blocks, not vague prose.
+
+Required working method:
+1. Work scene by scene, in order.
+2. Read the dramatic and musical meaning of the scene.
+3. Identify cast, place, recurring objects, and important interactions.
+4. Create or refine a clean scene-local shot list.
+5. Direct the scene like a real filmmaker:
+   - shot choices
+   - blocking
+   - camera logic
+   - object interaction
+   - lighting
+   - lipsync hooks where useful
+6. Make the result Animate-ready immediately.
+
+When the operator provides a filled scene packet, use it directly.
+If a scene packet is not filled, infer carefully from the libretto while staying inside the contract.
+
+Output rules:
+- Output only the rewritten scene/libretto text unless explicitly asked for analysis.
+- Do not output JSON unless explicitly requested.
+- Do not summarize the contract back.
+- Just produce the final scene-by-scene rewritten libretto in the contract format.
+
+Before finalizing each scene, self-check:
+- shot labels are unique
+- timing is scene-local
+- camera direction is valid
+- character names are consistent
+- object names are stable
+- object interactions are explicit
+- attachment syntax is valid
+- the scene is directed, not merely annotated
+- the result is immediately usable by Animate
+
+
+I would like you to test this out on a single scene first. Let's have you do it on 2.29.0

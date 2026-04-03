@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "0.1",
+  "characters": [
+    {
+      "characterId": "char.amira",
+      "displayName": "Amira",
+      "bodyAssetId": "character_amira_body_v001",
+      "faceRigId": "face_rig_amira_v001",
+      "mouthProfileId": "mouth_amira_v001",
+      "defaultStyleProfileId": "amira_toon_v001",
+      "supportedMotionSets": [
+        "walk_basic_v001",
+        "idle_dialogue_v001",
+        "turn_soft_v001"
+      ]
+    },
+    {
+      "characterId": "char.luke",
+      "displayName": "Luke",
+      "bodyAssetId": "character_luke_body_v001",
+      "faceRigId": "face_rig_luke_v001",
+      "mouthProfileId": "mouth_luke_v001",
+      "defaultStyleProfileId": "amira_toon_v001",
+      "supportedMotionSets": [
+        "walk_basic_v001",
+        "idle_dialogue_v001"
+      ]
+    }
+  ]
+}

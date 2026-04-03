@@ -1,0 +1,18 @@
+{
+  "packetId": "luke-dialogue-pilot-packet-001",
+  "characterId": "luke-hart",
+  "shotId": "luke-dialogue-pilot-001",
+  "costumePackId": "costume_medic_desert",
+  "routingMode": "internal",
+  "readinessStatus": "dialogue-ready",
+  "requiredFiles": [
+    "character-package.json",
+    "motion-plan.json",
+    "mouth-profiles/front.json",
+    "reviews/review-01.json",
+    "promotion-records/head-sheet.json",
+    "readiness.json",
+    "routing.json"
+  ],
+  "notes": "Research-only pilot bundle example"
+}

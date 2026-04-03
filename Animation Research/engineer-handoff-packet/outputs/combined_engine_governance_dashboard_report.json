@@ -1,0 +1,33 @@
+{
+  "overallState": "yellow",
+  "highestContiguousReadyBand": "B6",
+  "highestExitReadyBand": "B6",
+  "promotionReadyBands": [
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6"
+  ],
+  "blockedBands": [],
+  "highestRiskPackages": [
+    "B1-adapter-contract-loaders",
+    "B1-runtime-fixture-harness",
+    "B2-adapter-pilot-binding"
+  ],
+  "programRiskIds": [
+    "program-single-root",
+    "program-long-serial-chain",
+    "program-weak-parallel-relief"
+  ],
+  "triggerPackageCount": 11,
+  "minimumReentryBand": "B1",
+  "implementationTestReady": true,
+  "topConcerns": [
+    "2 high-severity program risks remain active.",
+    "At least one tracked change class reopens the rollout from B1.",
+    "All bands are promotable, but promotion still depends on maintaining the current artifact set."
+  ],
+  "valid": true
+}

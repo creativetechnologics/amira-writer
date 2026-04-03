@@ -1,0 +1,53 @@
+{
+  "catalogId": "amira-lighting-materials-v1",
+  "responses": [
+    {
+      "id": "skin-default",
+      "materialFamily": "skin",
+      "lineProtection": 0.92,
+      "skinToneProtection": true,
+      "tintSensitivity": 0.35,
+      "shadowStrength": 0.28,
+      "highlightClamp": 0.22,
+      "saturationClamp": 0.18,
+      "allowEmissiveBoost": false,
+      "notes": "Protect facial identity and mouth readability."
+    },
+    {
+      "id": "hair-dark",
+      "materialFamily": "hair",
+      "lineProtection": 0.88,
+      "skinToneProtection": false,
+      "tintSensitivity": 0.2,
+      "shadowStrength": 0.34,
+      "highlightClamp": 0.16,
+      "saturationClamp": 0.1,
+      "allowEmissiveBoost": false,
+      "notes": "Allow mild rim response without flattening silhouettes."
+    },
+    {
+      "id": "cotton-uniform",
+      "materialFamily": "cotton-fabric",
+      "lineProtection": 0.82,
+      "skinToneProtection": false,
+      "tintSensitivity": 0.52,
+      "shadowStrength": 0.36,
+      "highlightClamp": 0.25,
+      "saturationClamp": 0.2,
+      "allowEmissiveBoost": false,
+      "notes": "Preserve distinction between fabric folds and insignia."
+    },
+    {
+      "id": "concrete-wall",
+      "materialFamily": "concrete",
+      "lineProtection": 0.72,
+      "skinToneProtection": false,
+      "tintSensitivity": 0.58,
+      "shadowStrength": 0.31,
+      "highlightClamp": 0.3,
+      "saturationClamp": 0.25,
+      "allowEmissiveBoost": false,
+      "notes": "Allows stronger atmosphere shifts than character materials."
+    }
+  ]
+}

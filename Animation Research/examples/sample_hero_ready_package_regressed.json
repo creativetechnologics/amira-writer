@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "packageId": "luke-hart-vnext-hero-ready-regressed",
+  "characterIdentity": {
+    "characterId": "luke-hart",
+    "displayName": "Luke Hart",
+    "masterSheetAssetID": "sheet_master_luke_default",
+    "headSheetAssetID": "sheet_head_luke_default"
+  },
+  "costumePacks": [
+    {
+      "id": "costume_medic_desert",
+      "label": "Medic Desert",
+      "sheetAssetID": "sheet_body_luke_medic_desert",
+      "accessorySetIDs": [
+        "acc_satchel_default"
+      ]
+    }
+  ],
+  "mouthProfiles": [
+    {
+      "id": "mouth_front_luke",
+      "angleFamily": "front"
+    },
+    {
+      "id": "mouth_quarter_left_luke",
+      "angleFamily": "quarterLeft"
+    }
+  ],
+  "motionPrimitives": [
+    {
+      "id": "idle_front",
+      "name": "idle_front"
+    },
+    {
+      "id": "walk_lr",
+      "name": "walk_left_to_right"
+    },
+    {
+      "id": "turn_front_qleft",
+      "name": "turn_front_to_quarter_left"
+    },
+    {
+      "id": "react_worried",
+      "name": "react_worried"
+    }
+  ],
+  "qa": {
+    "status": "dialogue-ready"
+  }
+}

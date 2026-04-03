@@ -1,0 +1,50 @@
+{
+  "workPackageCount": 18,
+  "tracks": [
+    "adapter-track",
+    "fixture-track",
+    "runtime-track",
+    "validation-track"
+  ],
+  "packagesByTrack": {
+    "adapter-track": 6,
+    "runtime-track": 6,
+    "validation-track": 6
+  },
+  "bandsCoveredByTrack": {
+    "adapter-track": [
+      "B1",
+      "B2",
+      "B3",
+      "B4",
+      "B5",
+      "B6"
+    ],
+    "runtime-track": [
+      "B1",
+      "B2",
+      "B3",
+      "B4",
+      "B5",
+      "B6"
+    ],
+    "validation-track": [
+      "B1",
+      "B2",
+      "B3",
+      "B4",
+      "B5",
+      "B6"
+    ],
+    "fixture-track": [
+      "B1",
+      "B2",
+      "B3",
+      "B4",
+      "B5",
+      "B6"
+    ]
+  },
+  "invalidAssignments": [],
+  "valid": true
+}

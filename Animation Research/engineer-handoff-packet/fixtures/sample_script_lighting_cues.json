@@ -1,0 +1,17 @@
+{
+  "sceneId": "scene-12",
+  "shotId": "scene-12-shot-04",
+  "scriptCues": {
+    "timeOfDay": "sunset",
+    "location": "district clinic exterior",
+    "weather": "dry and dusty",
+    "practicals": [],
+    "performance": "sung dialogue",
+    "camera": "medium close-up"
+  },
+  "suggestedProfile": "sunset_warm",
+  "autoProtections": {
+    "faceProtection": true,
+    "mouthVisibilityProtection": true
+  }
+}

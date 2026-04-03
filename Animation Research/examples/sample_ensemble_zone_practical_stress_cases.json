@@ -1,0 +1,124 @@
+{
+  "cases": [
+    {
+      "shotId": "ensemble-clinic-exterior-001",
+      "locationId": "district-clinic-exterior",
+      "participantCount": 4,
+      "baselineReadinessTier": "internal-ready",
+      "beats": [
+        {
+          "beatId": "b01",
+          "activeZoneCount": 2,
+          "activePracticalCount": 0,
+          "movingPracticalCount": 0,
+          "occlusionRisk": 0.2,
+          "worldKeyStability": 0.95
+        },
+        {
+          "beatId": "b02",
+          "activeZoneCount": 3,
+          "activePracticalCount": 1,
+          "movingPracticalCount": 0,
+          "occlusionRisk": 0.35,
+          "worldKeyStability": 0.92
+        }
+      ]
+    },
+    {
+      "shotId": "ensemble-rooftop-sunset-001",
+      "locationId": "rooftop-sunset",
+      "participantCount": 4,
+      "baselineReadinessTier": "internal-ready",
+      "beats": [
+        {
+          "beatId": "b01",
+          "activeZoneCount": 3,
+          "activePracticalCount": 0,
+          "movingPracticalCount": 0,
+          "occlusionRisk": 0.4,
+          "worldKeyStability": 0.9
+        },
+        {
+          "beatId": "b02",
+          "activeZoneCount": 4,
+          "activePracticalCount": 1,
+          "movingPracticalCount": 0,
+          "occlusionRisk": 0.45,
+          "worldKeyStability": 0.86
+        }
+      ]
+    },
+    {
+      "shotId": "ensemble-village-night-001",
+      "locationId": "village-street-night",
+      "participantCount": 5,
+      "baselineReadinessTier": "hybrid-ready",
+      "beats": [
+        {
+          "beatId": "b01",
+          "activeZoneCount": 3,
+          "activePracticalCount": 2,
+          "movingPracticalCount": 1,
+          "occlusionRisk": 0.65,
+          "worldKeyStability": 0.82
+        },
+        {
+          "beatId": "b02",
+          "activeZoneCount": 4,
+          "activePracticalCount": 3,
+          "movingPracticalCount": 2,
+          "occlusionRisk": 0.82,
+          "worldKeyStability": 0.72
+        }
+      ]
+    },
+    {
+      "shotId": "ensemble-clinic-interior-001",
+      "locationId": "clinic-interior-fluorescent",
+      "participantCount": 4,
+      "baselineReadinessTier": "internal-ready",
+      "beats": [
+        {
+          "beatId": "b01",
+          "activeZoneCount": 2,
+          "activePracticalCount": 1,
+          "movingPracticalCount": 0,
+          "occlusionRisk": 0.25,
+          "worldKeyStability": 0.96
+        },
+        {
+          "beatId": "b02",
+          "activeZoneCount": 2,
+          "activePracticalCount": 1,
+          "movingPracticalCount": 0,
+          "occlusionRisk": 0.3,
+          "worldKeyStability": 0.94
+        }
+      ]
+    },
+    {
+      "shotId": "ensemble-family-courtyard-001",
+      "locationId": "family-courtyard",
+      "participantCount": 4,
+      "baselineReadinessTier": "internal-ready",
+      "beats": [
+        {
+          "beatId": "b01",
+          "activeZoneCount": 3,
+          "activePracticalCount": 1,
+          "movingPracticalCount": 0,
+          "occlusionRisk": 0.3,
+          "worldKeyStability": 0.93
+        },
+        {
+          "beatId": "b02",
+          "activeZoneCount": 3,
+          "activePracticalCount": 1,
+          "movingPracticalCount": 0,
+          "occlusionRisk": 0.36,
+          "worldKeyStability": 0.91
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "assetId": "sheet_head_luke_default_v05",
+  "slot": "head_turnaround_default",
+  "reviewStatus": "approved",
+  "promotionDecision": "promote_reference",
+  "reasons": [
+    "identity stable",
+    "angle family correct",
+    "clean enough to guide future generations"
+  ],
+  "humanApproved": true,
+  "promotedAt": "2026-03-31T01:20:00Z"
+}

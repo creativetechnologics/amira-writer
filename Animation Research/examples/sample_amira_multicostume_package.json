@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "packageId": "amira-nazari-vnext-multicostume",
+  "characterIdentity": {
+    "characterId": "amira-nazari",
+    "displayName": "Amira Nazari",
+    "masterSheetAssetID": "sheet_master_amira_default",
+    "headSheetAssetID": "sheet_head_amira_default"
+  },
+  "costumePacks": [
+    {
+      "id": "costume_civilian_default",
+      "label": "Civilian Default",
+      "sheetAssetID": "sheet_body_amira_civilian_default",
+      "accessorySetIDs": ["acc_headscarf_default"]
+    },
+    {
+      "id": "costume_ceremony",
+      "label": "Ceremony",
+      "sheetAssetID": "sheet_body_amira_ceremony",
+      "accessorySetIDs": ["acc_headscarf_ceremony"]
+    }
+  ],
+  "mouthProfiles": [
+    {"id": "mouth_front_amira", "angleFamily": "front"},
+    {"id": "mouth_quarter_left_amira", "angleFamily": "quarterLeft"},
+    {"id": "mouth_quarter_right_amira", "angleFamily": "quarterRight"},
+    {"id": "mouth_profile_left_amira", "angleFamily": "profileLeft"},
+    {"id": "mouth_profile_right_amira", "angleFamily": "profileRight"}
+  ],
+  "motionPrimitives": [
+    {"id": "idle_front", "name": "idle_front"},
+    {"id": "turn_soft", "name": "turn_front_to_quarter_right"},
+    {"id": "gesture_open", "name": "gesture_open_hand"},
+    {"id": "react_sad", "name": "react_sad"},
+    {"id": "walk_soft", "name": "walk_slow"},
+    {"id": "sing_hold", "name": "sing_hold_pose"}
+  ],
+  "qa": {"status": "performance-ready"}
+}

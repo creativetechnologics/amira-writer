@@ -1,0 +1,88 @@
+{
+  "shots": [
+    {
+      "shotId": "dialogue_closeup_01",
+      "label": "Dialogue Close-up",
+      "category": "dialogue_closeup",
+      "defaultRouting": "internal",
+      "exampleParameters": {
+        "camera": 2,
+        "action": 1,
+        "fx": 0,
+        "revision": 9
+      }
+    },
+    {
+      "shotId": "singing_medium_01",
+      "label": "Singing Medium Close-up",
+      "category": "singing_medium",
+      "defaultRouting": "internal",
+      "exampleParameters": {
+        "camera": 2,
+        "action": 2,
+        "fx": 1,
+        "revision": 9
+      }
+    },
+    {
+      "shotId": "walk_talk_01",
+      "label": "Walk and Talk",
+      "category": "walk_talk",
+      "defaultRouting": "internal",
+      "exampleParameters": {
+        "camera": 3,
+        "action": 3,
+        "fx": 1,
+        "revision": 8
+      }
+    },
+    {
+      "shotId": "duet_two_shot_01",
+      "label": "Duet Two Shot",
+      "category": "duet_two_shot",
+      "defaultRouting": "hybrid",
+      "exampleParameters": {
+        "camera": 3,
+        "action": 3,
+        "fx": 2,
+        "revision": 8
+      }
+    },
+    {
+      "shotId": "transition_fx_01",
+      "label": "FX Transition",
+      "category": "fx_transition",
+      "defaultRouting": "hybrid",
+      "exampleParameters": {
+        "camera": 4,
+        "action": 2,
+        "fx": 4,
+        "revision": 6
+      }
+    },
+    {
+      "shotId": "battlefield_wide_01",
+      "label": "Battlefield Wide",
+      "category": "spectacle_wide",
+      "defaultRouting": "ai-video-fallback",
+      "exampleParameters": {
+        "camera": 5,
+        "action": 5,
+        "fx": 4,
+        "revision": 4
+      }
+    },
+    {
+      "shotId": "crowd_market_01",
+      "label": "Crowd Market Wide",
+      "category": "crowd_wide",
+      "defaultRouting": "ai-video-fallback",
+      "exampleParameters": {
+        "camera": 4,
+        "action": 4,
+        "fx": 2,
+        "revision": 5
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "duetReads": [
+    {
+      "locationId": "district-clinic-exterior",
+      "sharedLight": "soft clinic daylight",
+      "Luke": "utility cloth stays readable",
+      "Amira": "face/scarf contour stays soft"
+    },
+    {
+      "locationId": "rooftop-sunset",
+      "sharedLight": "warm horizon sunset",
+      "Luke": "jaw/shoulder rim favored",
+      "Amira": "scarf/face elegance favored"
+    },
+    {
+      "locationId": "village-street-night",
+      "sharedLight": "moonlit blue night",
+      "Luke": "cool silhouette survives",
+      "Amira": "extra fill needed for eyes and mouth"
+    },
+    {
+      "locationId": "clinic-interior-fluorescent",
+      "sharedLight": "cool overhead clinical fill",
+      "Luke": "uniform hierarchy risk",
+      "Amira": "skin warmth risk"
+    },
+    {
+      "locationId": "family-courtyard",
+      "sharedLight": "warm courtyard bounce",
+      "Luke": "domestic warmth softens silhouette",
+      "Amira": "emotional warmth must avoid oversaturation"
+    }
+  ]
+}

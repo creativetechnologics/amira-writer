@@ -1,0 +1,15 @@
+{
+  "count": 5,
+  "categories": [
+    "action_insert",
+    "chase_wide",
+    "crowd_leads",
+    "ensemble_dialogue",
+    "group_walk"
+  ],
+  "defaultRoutingCounts": {
+    "internal": 0,
+    "hybrid": 4,
+    "ai-video-fallback": 1
+  }
+}

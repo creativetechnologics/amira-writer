@@ -1,0 +1,100 @@
+{
+  "Luke Hart": {
+    "front": {
+      "speech": {
+        "calm": {
+          "opennessBias": 0.0,
+          "releaseSoftness": 0.25,
+          "smileTendency": 0.05,
+          "strainAllowance": 0.1
+        },
+        "concerned": {
+          "opennessBias": 0.08,
+          "releaseSoftness": 0.35,
+          "smileTendency": 0.0,
+          "strainAllowance": 0.2
+        }
+      },
+      "singing": {
+        "resolute": {
+          "opennessBias": 0.25,
+          "releaseSoftness": 0.2,
+          "smileTendency": 0.04,
+          "strainAllowance": 0.3
+        }
+      }
+    },
+    "quarterLeft": {
+      "speech": {
+        "calm": {
+          "opennessBias": -0.02,
+          "releaseSoftness": 0.28,
+          "smileTendency": 0.03,
+          "strainAllowance": 0.1
+        }
+      },
+      "singing": {
+        "resolute": {
+          "opennessBias": 0.18,
+          "releaseSoftness": 0.22,
+          "smileTendency": 0.02,
+          "strainAllowance": 0.26
+        }
+      }
+    }
+  },
+  "Amira Nazari": {
+    "front": {
+      "speech": {
+        "calm": {
+          "opennessBias": 0.02,
+          "releaseSoftness": 0.45,
+          "smileTendency": 0.12,
+          "strainAllowance": 0.08
+        }
+      },
+      "singing": {
+        "lyrical-strong": {
+          "opennessBias": 0.22,
+          "releaseSoftness": 0.32,
+          "smileTendency": 0.1,
+          "strainAllowance": 0.2
+        },
+        "sorrow": {
+          "opennessBias": 0.12,
+          "releaseSoftness": 0.55,
+          "smileTendency": -0.05,
+          "strainAllowance": 0.18
+        }
+      }
+    },
+    "quarterRight": {
+      "speech": {
+        "calm": {
+          "opennessBias": 0.0,
+          "releaseSoftness": 0.42,
+          "smileTendency": 0.08,
+          "strainAllowance": 0.08
+        }
+      }
+    }
+  },
+  "Yasmin Nazari": {
+    "front": {
+      "speech": {
+        "calm": {
+          "opennessBias": -0.03,
+          "releaseSoftness": 0.4,
+          "smileTendency": 0.08,
+          "strainAllowance": 0.05
+        },
+        "worried": {
+          "opennessBias": 0.03,
+          "releaseSoftness": 0.42,
+          "smileTendency": -0.02,
+          "strainAllowance": 0.1
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,350 @@
+{
+  "triggerPackages": [
+    {
+      "workPackageId": "B1-adapter-contract-loaders",
+      "bandId": "B1",
+      "ownerTrack": "adapter-track",
+      "riskLevel": "critical",
+      "fallbackTracks": [
+        "fixture-track",
+        "validation-track"
+      ],
+      "immediateActions": [
+        "Freeze the adapter contract early and keep a minimal compatibility shim available.",
+        "Promote schema and fixture checks before runtime wiring expands.",
+        "Protect focus time for adapter-track while this package is active.",
+        "Use support tracks in B1 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Advance same-band support work: B1-validation-contract-gate.",
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Expand fixture coverage and diff outputs so downstream validation can start immediately once the blocker clears."
+      ],
+      "exitCriteria": [
+        "B1-adapter-contract-loaders has a stable artifact path and updated validation output.",
+        "B1 downstream packages can resume without changing the shared contract."
+      ]
+    },
+    {
+      "workPackageId": "B1-runtime-fixture-harness",
+      "bandId": "B1",
+      "ownerTrack": "runtime-track",
+      "riskLevel": "critical",
+      "fallbackTracks": [
+        "fixture-track",
+        "validation-track"
+      ],
+      "immediateActions": [
+        "Limit scope to the smallest deterministic harness that proves the band objective.",
+        "Keep fallback stubs for non-critical subsystems so downstream validation can start sooner.",
+        "Protect focus time for runtime-track while this package is active.",
+        "Use support tracks in B1 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Advance same-band support work: B1-validation-contract-gate.",
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Expand fixture coverage and diff outputs so downstream validation can start immediately once the blocker clears."
+      ],
+      "exitCriteria": [
+        "B1-runtime-fixture-harness has a stable artifact path and updated validation output.",
+        "B1 downstream packages can resume without changing the shared contract."
+      ]
+    },
+    {
+      "workPackageId": "B2-adapter-pilot-binding",
+      "bandId": "B2",
+      "ownerTrack": "adapter-track",
+      "riskLevel": "critical",
+      "fallbackTracks": [
+        "fixture-track",
+        "validation-track"
+      ],
+      "immediateActions": [
+        "Freeze the adapter contract early and keep a minimal compatibility shim available.",
+        "Promote schema and fixture checks before runtime wiring expands.",
+        "Protect focus time for adapter-track while this package is active.",
+        "Use support tracks in B2 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Advance same-band support work: B2-validation-pilot-gate.",
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Expand fixture coverage and diff outputs so downstream validation can start immediately once the blocker clears."
+      ],
+      "exitCriteria": [
+        "B2-adapter-pilot-binding has a stable artifact path and updated validation output.",
+        "B2 downstream packages can resume without changing the shared contract."
+      ]
+    },
+    {
+      "workPackageId": "B2-runtime-single-character-pilot",
+      "bandId": "B2",
+      "ownerTrack": "runtime-track",
+      "riskLevel": "critical",
+      "fallbackTracks": [
+        "fixture-track",
+        "validation-track"
+      ],
+      "immediateActions": [
+        "Limit scope to the smallest deterministic harness that proves the band objective.",
+        "Keep fallback stubs for non-critical subsystems so downstream validation can start sooner.",
+        "Protect focus time for runtime-track while this package is active.",
+        "Use support tracks in B2 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Advance same-band support work: B2-validation-pilot-gate.",
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Expand fixture coverage and diff outputs so downstream validation can start immediately once the blocker clears."
+      ],
+      "exitCriteria": [
+        "B2-runtime-single-character-pilot has a stable artifact path and updated validation output.",
+        "B2 downstream packages can resume without changing the shared contract."
+      ]
+    },
+    {
+      "workPackageId": "B3-runtime-singing-readability",
+      "bandId": "B3",
+      "ownerTrack": "runtime-track",
+      "riskLevel": "critical",
+      "fallbackTracks": [
+        "fixture-track",
+        "validation-track"
+      ],
+      "immediateActions": [
+        "Limit scope to the smallest deterministic harness that proves the band objective.",
+        "Keep fallback stubs for non-critical subsystems so downstream validation can start sooner.",
+        "Protect focus time for runtime-track while this package is active.",
+        "Use support tracks in B3 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Expand fixture coverage and diff outputs so downstream validation can start immediately once the blocker clears."
+      ],
+      "exitCriteria": [
+        "B3-runtime-singing-readability has a stable artifact path and updated validation output.",
+        "B3 downstream packages can resume without changing the shared contract."
+      ]
+    },
+    {
+      "workPackageId": "B3-adapter-singing-layer",
+      "bandId": "B3",
+      "ownerTrack": "adapter-track",
+      "riskLevel": "high",
+      "fallbackTracks": [
+        "fixture-track",
+        "validation-track"
+      ],
+      "immediateActions": [
+        "Freeze the adapter contract early and keep a minimal compatibility shim available.",
+        "Promote schema and fixture checks before runtime wiring expands.",
+        "Protect focus time for adapter-track while this package is active.",
+        "Use support tracks in B3 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Expand fixture coverage and diff outputs so downstream validation can start immediately once the blocker clears."
+      ],
+      "exitCriteria": [
+        "B3-adapter-singing-layer has a stable artifact path and updated validation output.",
+        "B3 downstream packages can resume without changing the shared contract."
+      ]
+    },
+    {
+      "workPackageId": "B3-validation-singing-gate",
+      "bandId": "B3",
+      "ownerTrack": "validation-track",
+      "riskLevel": "high",
+      "fallbackTracks": [
+        "fixture-track"
+      ],
+      "immediateActions": [
+        "Run validation gates on partial artifacts early instead of waiting for full rollout completion.",
+        "Automate regression outputs so governance checks do not become manual blockers.",
+        "Protect focus time for validation-track while this package is active.",
+        "Use support tracks in B3 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Harden policy, documentation, and audit expectations while runtime work continues in parallel."
+      ],
+      "exitCriteria": [
+        "B3-validation-singing-gate has a stable artifact path and updated validation output.",
+        "B3 downstream packages can resume without changing the shared contract."
+      ]
+    },
+    {
+      "workPackageId": "B4-adapter-routing-contracts",
+      "bandId": "B4",
+      "ownerTrack": "adapter-track",
+      "riskLevel": "high",
+      "fallbackTracks": [
+        "fixture-track",
+        "validation-track"
+      ],
+      "immediateActions": [
+        "Freeze the adapter contract early and keep a minimal compatibility shim available.",
+        "Promote schema and fixture checks before runtime wiring expands.",
+        "Protect focus time for adapter-track while this package is active.",
+        "Use support tracks in B4 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Expand fixture coverage and diff outputs so downstream validation can start immediately once the blocker clears."
+      ],
+      "exitCriteria": [
+        "B4-adapter-routing-contracts has a stable artifact path and updated validation output.",
+        "B4 downstream packages can resume without changing the shared contract."
+      ]
+    },
+    {
+      "workPackageId": "B4-runtime-routing-handshake",
+      "bandId": "B4",
+      "ownerTrack": "runtime-track",
+      "riskLevel": "high",
+      "fallbackTracks": [
+        "fixture-track",
+        "validation-track"
+      ],
+      "immediateActions": [
+        "Limit scope to the smallest deterministic harness that proves the band objective.",
+        "Keep fallback stubs for non-critical subsystems so downstream validation can start sooner.",
+        "Protect focus time for runtime-track while this package is active.",
+        "Use support tracks in B4 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Expand fixture coverage and diff outputs so downstream validation can start immediately once the blocker clears."
+      ],
+      "exitCriteria": [
+        "B4-runtime-routing-handshake has a stable artifact path and updated validation output.",
+        "B4 downstream packages can resume without changing the shared contract."
+      ]
+    },
+    {
+      "workPackageId": "B4-validation-routing-cross-check",
+      "bandId": "B4",
+      "ownerTrack": "validation-track",
+      "riskLevel": "high",
+      "fallbackTracks": [
+        "fixture-track"
+      ],
+      "immediateActions": [
+        "Run validation gates on partial artifacts early instead of waiting for full rollout completion.",
+        "Automate regression outputs so governance checks do not become manual blockers.",
+        "Protect focus time for validation-track while this package is active.",
+        "Use support tracks in B4 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Harden policy, documentation, and audit expectations while runtime work continues in parallel."
+      ],
+      "exitCriteria": [
+        "B4-validation-routing-cross-check has a stable artifact path and updated validation output.",
+        "B4 downstream packages can resume without changing the shared contract."
+      ]
+    },
+    {
+      "workPackageId": "B5-adapter-ensemble-coverage",
+      "bandId": "B5",
+      "ownerTrack": "adapter-track",
+      "riskLevel": "high",
+      "fallbackTracks": [
+        "fixture-track",
+        "validation-track"
+      ],
+      "immediateActions": [
+        "Freeze the adapter contract early and keep a minimal compatibility shim available.",
+        "Promote schema and fixture checks before runtime wiring expands.",
+        "Protect focus time for adapter-track while this package is active.",
+        "Use support tracks in B5 for fixture and audit maintenance: fixture-track."
+      ],
+      "keepMovingWork": [
+        "Keep global parallel-relief packages moving: B1-validation-contract-gate.",
+        "Expand fixture coverage and diff outputs so downstream validation can start immediately once the blocker clears."
+      ],
+      "exitCriteria": [
+        "B5-adapter-ensemble-coverage has a stable artifact path and updated validation output.",
+        "B5 downstream packages can resume without changing the shared contract."
+      ]
+    }
+  ],
+  "bandPlaybooks": [
+    {
+      "bandId": "B1",
+      "primaryBlockers": [
+        "B1-adapter-contract-loaders",
+        "B1-runtime-fixture-harness"
+      ],
+      "adapterFallback": "Keep compatibility adapters and schema guards moving inside B1 while the main adapter blocker clears.",
+      "runtimeFallback": "Advance deterministic harness work and non-blocking playback probes inside B1 without widening scope.",
+      "validationFallback": "Keep regression gates, audits, and acceptance checks warm for B1 so blocked work can re-enter quickly.",
+      "fixtureFallback": "Expand fixtures, examples, and handoff coverage for B1 so downstream teams stay unblocked."
+    },
+    {
+      "bandId": "B2",
+      "primaryBlockers": [
+        "B2-adapter-pilot-binding",
+        "B2-runtime-single-character-pilot"
+      ],
+      "adapterFallback": "Keep compatibility adapters and schema guards moving inside B2 while the main adapter blocker clears.",
+      "runtimeFallback": "Advance deterministic harness work and non-blocking playback probes inside B2 without widening scope.",
+      "validationFallback": "Keep regression gates, audits, and acceptance checks warm for B2 so blocked work can re-enter quickly.",
+      "fixtureFallback": "Expand fixtures, examples, and handoff coverage for B2 so downstream teams stay unblocked."
+    },
+    {
+      "bandId": "B3",
+      "primaryBlockers": [
+        "B3-runtime-singing-readability",
+        "B3-adapter-singing-layer",
+        "B3-validation-singing-gate"
+      ],
+      "adapterFallback": "Keep compatibility adapters and schema guards moving inside B3 while the main adapter blocker clears.",
+      "runtimeFallback": "Advance deterministic harness work and non-blocking playback probes inside B3 without widening scope.",
+      "validationFallback": "Keep regression gates, audits, and acceptance checks warm for B3 so blocked work can re-enter quickly.",
+      "fixtureFallback": "Expand fixtures, examples, and handoff coverage for B3 so downstream teams stay unblocked."
+    },
+    {
+      "bandId": "B4",
+      "primaryBlockers": [
+        "B4-adapter-routing-contracts",
+        "B4-runtime-routing-handshake",
+        "B4-validation-routing-cross-check"
+      ],
+      "adapterFallback": "Keep compatibility adapters and schema guards moving inside B4 while the main adapter blocker clears.",
+      "runtimeFallback": "Advance deterministic harness work and non-blocking playback probes inside B4 without widening scope.",
+      "validationFallback": "Keep regression gates, audits, and acceptance checks warm for B4 so blocked work can re-enter quickly.",
+      "fixtureFallback": "Expand fixtures, examples, and handoff coverage for B4 so downstream teams stay unblocked."
+    },
+    {
+      "bandId": "B5",
+      "primaryBlockers": [
+        "B5-adapter-ensemble-coverage"
+      ],
+      "adapterFallback": "Keep compatibility adapters and schema guards moving inside B5 while the main adapter blocker clears.",
+      "runtimeFallback": "Advance deterministic harness work and non-blocking playback probes inside B5 without widening scope.",
+      "validationFallback": "Keep regression gates, audits, and acceptance checks warm for B5 so blocked work can re-enter quickly.",
+      "fixtureFallback": "Expand fixtures, examples, and handoff coverage for B5 so downstream teams stay unblocked."
+    },
+    {
+      "bandId": "B6",
+      "primaryBlockers": [
+        "B6-adapter-upgrade-and-schema-policy"
+      ],
+      "adapterFallback": "Keep compatibility adapters and schema guards moving inside B6 while the main adapter blocker clears.",
+      "runtimeFallback": "Advance deterministic harness work and non-blocking playback probes inside B6 without widening scope.",
+      "validationFallback": "Keep regression gates, audits, and acceptance checks warm for B6 so blocked work can re-enter quickly.",
+      "fixtureFallback": "Expand fixtures, examples, and handoff coverage for B6 so downstream teams stay unblocked."
+    }
+  ],
+  "trackFallbacks": {
+    "validation-track": "Convert partial artifacts into continuously runnable gates so quality checks do not stall.",
+    "fixture-track": "Expand fixtures, examples, and handoff artifacts so restart cost stays low.",
+    "runtime-track": "Keep deterministic harnesses minimal and avoid branching into new scene classes while blocked.",
+    "adapter-track": "Hold contract shape stable, narrow scope, and advance schema guards."
+  },
+  "globalContingencies": [
+    "Protect the first adapter and runtime packages from side work while they remain on the critical path.",
+    "Use validation-track and fixture-track as the default relief valves whenever a runtime or adapter package slips.",
+    "Do not widen scope inside a blocked band; only advance already-declared fallback work."
+  ],
+  "valid": true
+}

@@ -1,0 +1,48 @@
+{
+  "shotId": "duet-village-night-lyric-001",
+  "locationId": "village-street-night",
+  "lightingProfile": "moonlight_blue",
+  "sharedLightWorld": "cool moonlit street with sparse practical spill pools",
+  "beats": [
+    {
+      "beatId": "b01",
+      "description": "Luke and Amira enter the street in profile and begin a walk-and-talk phrase",
+      "focusCharacter": "both",
+      "cameraBias": "profile",
+      "zoneFocus": [
+        "street-plane",
+        "far-alley"
+      ],
+      "practicalCue": [],
+      "performanceMode": "sung dialogue"
+    },
+    {
+      "beatId": "b02",
+      "description": "They cross the window-lamp spill and Amira takes the line",
+      "focusCharacter": "amira",
+      "cameraBias": "quarter-right",
+      "zoneFocus": [
+        "shopfront",
+        "street-plane"
+      ],
+      "practicalCue": [
+        "window-lamp"
+      ],
+      "performanceMode": "sung close-up"
+    },
+    {
+      "beatId": "b03",
+      "description": "They pause near the fire basket and Luke answers in a lower register",
+      "focusCharacter": "luke",
+      "cameraBias": "quarter-left",
+      "zoneFocus": [
+        "shopfront",
+        "far-alley"
+      ],
+      "practicalCue": [
+        "fire-basket"
+      ],
+      "performanceMode": "dialogue"
+    }
+  ]
+}

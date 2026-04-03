@@ -1,0 +1,146 @@
+{
+  "summary": {
+    "oldBeatCount": 3,
+    "newBeatCount": 3,
+    "removedBeats": [],
+    "oldParticipantCount": 4,
+    "newParticipantCount": 4,
+    "oldRecommendedRouting": "internal",
+    "newRecommendedRouting": "ai-video-fallback"
+  },
+  "oldReadiness": {
+    "shotId": "ensemble-courtyard-lyric-001",
+    "locationId": "family-courtyard",
+    "participantCount": 4,
+    "continuityScore": 1.0,
+    "focusProtectionScore": 1.0,
+    "ensembleProtectionScore": 1.0,
+    "practicalScore": 1.0,
+    "packageScore": 0.75,
+    "packageFloor": 0.65,
+    "ensembleDensityScore": 0.8,
+    "weightedScore": 0.93,
+    "readinessTier": "internal-ready",
+    "recommendedRouting": "internal",
+    "perParticipantCoverage": {
+      "luke-hart": 1.0,
+      "amira-nazari": 1.0,
+      "yasmin-nazari": 1.0,
+      "johnny-ward": 1.0
+    },
+    "blockingIssues": [],
+    "warnings": [],
+    "valid": true
+  },
+  "newReadiness": {
+    "shotId": "ensemble-courtyard-lyric-001",
+    "locationId": "family-courtyard",
+    "participantCount": 4,
+    "continuityScore": 0.667,
+    "focusProtectionScore": 0.0,
+    "ensembleProtectionScore": 0.0,
+    "practicalScore": 0.667,
+    "packageScore": 0.463,
+    "packageFloor": 0.0,
+    "ensembleDensityScore": 0.8,
+    "weightedScore": 0.399,
+    "readinessTier": "fallback-only",
+    "recommendedRouting": "ai-video-fallback",
+    "perParticipantCoverage": {
+      "luke-hart": 1.0,
+      "amira-nazari": 0.5,
+      "yasmin-nazari": 1.0,
+      "johnny-ward": 0.0
+    },
+    "blockingIssues": [
+      "missing-shared-light-world",
+      "johnny-ward:package-below-blocking-ready",
+      "b01:missing-required-protection:ch08_amira_protect",
+      "b02:missing-shared-world-note",
+      "b02:missing-required-protection:ch10_support_protect_b",
+      "b02:practical-uses-world-key:door-reflect",
+      "b03:missing-required-protection:ch10_support_protect_b"
+    ],
+    "warnings": [],
+    "valid": false
+  },
+  "regressions": [
+    {
+      "severity": "BLOCK",
+      "description": "Shared light world changed",
+      "details": {
+        "from": "soft courtyard daylight with warm wall bounce and controlled doorway contrast",
+        "to": ""
+      }
+    },
+    {
+      "severity": "BLOCK",
+      "description": "b01 lost required participant protection",
+      "details": {
+        "missingRequiredProtection": [
+          "ch08_amira_protect"
+        ]
+      }
+    },
+    {
+      "severity": "BLOCK",
+      "description": "b02 lost required participant protection",
+      "details": {
+        "missingRequiredProtection": [
+          "ch10_support_protect_b"
+        ]
+      }
+    },
+    {
+      "severity": "BLOCK",
+      "description": "b02 lost shared-world continuity note",
+      "details": {}
+    },
+    {
+      "severity": "BLOCK",
+      "description": "b02 practical channel hijacks world key",
+      "details": {
+        "practical": "door-reflect",
+        "channels": [
+          "ch01_world_key"
+        ]
+      }
+    },
+    {
+      "severity": "BLOCK",
+      "description": "b03 lost required participant protection",
+      "details": {
+        "missingRequiredProtection": [
+          "ch10_support_protect_b"
+        ]
+      }
+    },
+    {
+      "severity": "BLOCK",
+      "description": "Routing pressure worsened to ai-video-fallback",
+      "details": {
+        "from": "internal",
+        "to": "ai-video-fallback"
+      }
+    }
+  ],
+  "warnings": [
+    {
+      "severity": "WARN",
+      "description": "amira-nazari protection coverage decreased",
+      "details": {
+        "from": 1.0,
+        "to": 0.5
+      }
+    },
+    {
+      "severity": "WARN",
+      "description": "johnny-ward protection coverage decreased",
+      "details": {
+        "from": 1.0,
+        "to": 0.0
+      }
+    }
+  ],
+  "hasRegression": true
+}

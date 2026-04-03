@@ -1,0 +1,9 @@
+{
+  "sourceImage": "luke-anime-reference-sheet-4k-v2-16x9.png",
+  "pipeline": "local_visual_hull_from_reference_sheet",
+  "notes": [
+    "Geometry reconstructed from front plus side silhouettes of the supplied reference sheet.",
+    "Vertex colors projected from front, back, and side panels of the same sheet.",
+    "Final cel shading is expected to come from the viewer/runtime toon material, not from baked lighting."
+  ]
+}

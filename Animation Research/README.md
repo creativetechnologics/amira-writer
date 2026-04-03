@@ -1,0 +1,314 @@
+# Animation Research
+
+This folder is the long-form research workspace for Amira Writer's future semi-autonomous 2D animation system.
+
+## Core research files
+- `01-character-package-architecture.md` — what a production-grade character package should contain, how granular it should be, and why.
+- `02-mouth-engine-and-lipsync.md` — separate mouth engine architecture, viseme strategy, singing vs speech rules, angle-aware mouth assets.
+- `03-ai-asset-generation-pipeline.md` — Nano Banana / Gemini-driven asset generation workflow, QA loops, and package-building pipeline.
+- `04-hybrid-animation-and-ai-video.md` — how to split work between the internal engine and AI video generation.
+- `05-llm-motion-planning-and-runtime.md` — sparse motion plans, runtime composition, overlays, and JSON-style plan design.
+- `06-existing-tool-paradigms-and-lessons.md` — what to borrow from Spine, Live2D, Harmony, Moho, Rhubarb, Papagayo, and game runtimes.
+
+## Extended planning docs
+- `16-runtime-contracts-and-slot-in-plan.md` — how the research contracts should slot into the app later.
+- `17-character-package-build-playbook.md` — practical build order for character packages, QA, and promotion rules.
+- `18-mouth-profile-catalog-and-lyric-engine.md` — angle-aware mouth inventory, singing rules, and lyric-engine plan.
+- `19-real-character-package-plans.md` — Luke/Amira/Yasmin package estimates, tiers, and cost planning.
+- `20-correction-orchestrator-and-review-loop.md` — deterministic approve/edit/regenerate controller design.
+- `21-adapter-layer-and-compatibility-plan.md` — non-destructive adapter strategy for future app integration.
+- `22-handoff-integration-checklist.md` — explicit handoff checklist for when app integration begins.
+- `23-first-implementation-sprint-plan.md` — suggested first real sprint when leaving the sandbox.
+- `24-risk-register-and-mitigation.md` — major risks and mitigations.
+- `25-package-promotion-and-approval-workflow.md` — candidate-to-approved reference promotion rules.
+- `26-shot-routing-decision-matrix.md` — internal vs hybrid vs AI-video routing guidance.
+- `27-handoff-bundle-summary.md` — concise summary of the whole research bundle.
+- `28-singing-mouth-timing-heuristics.md` — detailed singing-specific timing and emotional mouth rules.
+- `29-first-pilot-bundle-definition.md` — exact first pilot package/shot target.
+- `30-tiered-package-checklists.md` — hero/supporting/background package checklists.
+- `31-pilot-execution-packet-spec.md` — required contents of the first real pilot packet.
+- `32-shot-library-and-routing-cases.md` — reusable shot library categories and routing guidance.
+- `33-mouth-emotion-modifier-matrix.md` — emotional overlays for mouth behavior.
+- `34-adapter-interface-pseudocode.md` — code-like future adapter contracts.
+- `35-pilot-packet-template-and-layout.md` — exact template structure for the first executable pilot packet.
+- `36-readiness-to-routing-bridge.md` — logic for converting package readiness into routing decisions.
+- `37-character-mouth-emotion-presets.md` — per-character mouth emotion defaults.
+- `38-engineer-handoff-one-pager.md` — concise engineering summary.
+- `39-schema-evolution-and-upgrade-strategy.md` — safe future schema/version evolution strategy.
+- `40-engineer-pilot-handoff-packet.md` — contents of the pilot engineering handoff.
+- `41-duet-group-and-transition-routing-cases.md` — extra duet/group/transition routing examples.
+- `42-mouth-emotion-preset-tables.md` — broader preset table reference.
+- `43-package-diff-and-regression-strategy.md` — how to detect coverage loss between package revisions.
+- `44-engineer-adapter-task-checklists.md` — concrete engineer task breakdown for future adapters.
+- `45-handoff-fixture-map.md` — fixture map for handoff packet consumers.
+- `46-final-implementation-roadmap.md` — condensed recommended implementation order.
+- `47-angle-and-performance-mouth-presets.md` — angle/performance preset strategy.
+- `48-ensemble-and-action-shot-library.md` — ensemble/action shot cases and routing.
+- `49-schema-upgrade-transform-sketches.md` — example upgrade transforms.
+- `50-engineer-handoff-bundle-assembly-guide.md` — how to assemble the handoff bundle into a working engineering packet.
+- `51-detailed-character-mouth-preset-catalog.md` — richer per-character mouth preset catalog.
+- `52-expanded-shot-routing-reference.md` — expanded routing reference matrix.
+- `53-package-diff-report-bundle.md` — diff bundle output expectations.
+- `54-handoff-output-bundle-notes.md` — generated handoff output bundle notes.
+- `55-pilot-integration-acceptance-matrix.md` — final gate for the first real engineering pilot.
+- `56-lighting-and-recolor-engine.md` — runtime lighting/recolor engine for characters and backgrounds.
+- `57-lighting-runtime-contracts.md` — contract objects for profiles, response metadata, and shot lighting plans.
+- `58-background-lighting-and-scene-grade.md` — background/depth-zone lighting strategy.
+- `59-lighting-engine-handoff.md` — first engineering pilot plan for the lighting subsystem.
+- `60-script-to-lighting-plan-translation.md` — how script cues become deterministic lighting plans.
+- `61-material-response-library-and-asset-tagging.md` — how assets declare material/lighting behavior.
+- `62-lighting-readiness-and-promotion-rules.md` — how lighting affects readiness and promotion.
+- `63-lighting-aware-ensemble-routing-cases.md` — routing cases where lighting complexity changes the result.
+- `64-lighting-handoff-fixture-usage.md` — how engineers should use the lighting fixtures in the handoff bundle.
+- `65-lighting-profile-library.md` — starter reusable lighting profile library.
+- `66-lighting-aware-package-and-location-sets.md` — how character packages and location sets declare lighting compatibility.
+- `67-weather-practical-camera-lighting-rules.md` — translation rules for weather, practicals, and camera context.
+- `68-lighting-promotion-and-readiness-reporting.md` — required lighting readiness/promotion reports.
+- `69-key-location-lighting-set-catalog.md` — reusable lighting sets for the most-used hero locations.
+- `70-hero-location-lighting-profile-map.md` — maps Luke/Amira to their dominant location-lighting needs.
+- `71-side-by-side-lighting-pilot-bundles.md` — paired Luke/Amira lighting pilot bundles across the top hero locations.
+- `72-hero-lighting-read-differences.md` — how Luke and Amira should read differently under the same lighting.
+- `73-duet-lighting-pilot-packets.md` — duet-scene pilot packets for Luke and Amira across the top locations.
+- `74-unified-duet-lighting-balance-rules.md` — rules for keeping one unified light world while respecting both characters.
+- `75-location-specific-duet-lighting-plans.md` — one dedicated lighting-plan JSON per top duet location.
+- `76-location-lighting-profile-channel-assignments.md` — channel-level defaults for each key hero location and profile family.
+- `77-duet-motion-lighting-fixtures.md` — ties duet lighting packets to motion beats and mouth overlays.
+- `78-lighting-diff-and-regression-strategy.md` — how lighting-channel and motion-lighting regressions are detected.
+- `79-lighting-diff-report-bundle.md` — bundle format for lighting diff review artifacts.
+- `80-duet-routing-comparison-matrix.md` — compares internal, hybrid, and fallback routing under the same duet lighting worlds.
+- `81-duet-routing-reporting-and-handoff.md` — defines how duet routing comparisons should be reported in the handoff bundle.
+- `82-location-lighting-zone-practical-channel-contract.md` — required zone/practical channel assignments for location lighting plans.
+- `83-location-lighting-zone-practical-diff-reporting.md` — diff/reporting rules for zone and practical channel regressions.
+- `84-script-to-beat-lighting-zone-practical-translation.md` — script-driven beat-level translation into zone/practical channel emphasis.
+- `85-beat-lighting-reporting-and-handoff.md` — audit and handoff rules for beat-level lighting plans.
+- `86-beat-lighting-continuity-and-regression-rules.md` — continuity and diff rules for beat-lighting plans.
+- `87-beat-lighting-diff-bundle.md` — bundle format for beat-lighting diff review artifacts.
+- `88-beat-lighting-readiness-scoring.md` — multi-character readiness scoring for beat-lighting plans.
+- `89-beat-lighting-readiness-to-routing.md` — bridge rules from beat-lighting readiness into routing mode.
+- `90-ensemble-beat-lighting-readiness.md` — ensemble-scene readiness scoring for multi-character beat-lighting plans.
+- `91-ensemble-beat-lighting-routing.md` — routing rules for ensemble beat-lighting execution.
+- `92-ensemble-routing-comparison-matrix.md` — compares internal, hybrid, and fallback routing under the same ensemble lighting worlds.
+- `93-ensemble-routing-reporting-and-handoff.md` — reporting expectations for ensemble routing comparisons in the handoff packet.
+- `94-ensemble-routing-diff-and-regression-strategy.md` — rules for catching ensemble routing baseline regressions.
+- `95-ensemble-routing-diff-report-bundle.md` — bundle format for ensemble routing diff review artifacts.
+- `96-ensemble-zone-practical-stress-rules.md` — rules for when ensemble zone/practical complexity should push routing upward.
+- `97-ensemble-zone-practical-stress-reporting.md` — reporting expectations for ensemble zone/practical stress analysis.
+- `98-ensemble-beat-lighting-diff-and-regression-rules.md` — rules for detecting regressions in revised ensemble beat-lighting plans.
+- `99-ensemble-beat-lighting-diff-bundle.md` — bundle format for ensemble beat-lighting diff review artifacts.
+- `100-ensemble-layer-consistency-cross-check.md` — cross-check rules between ensemble readiness, routing baseline, and stress layers.
+- `101-ensemble-layer-consistency-reporting.md` — reporting expectations for ensemble layer-consistency checks.
+- `102-lighting-engine-milestone-map.md` — implementation milestones for turning lighting research into a real engine.
+- `103-lighting-engine-integration-ladder.md` — recommended integration order for absorbing the lighting engine into the app later.
+- `104-mouth-engine-milestone-map.md` — implementation milestones for turning mouth research into a real engine.
+- `105-mouth-engine-integration-ladder.md` — recommended integration order for absorbing the mouth engine into the app later.
+- `106-combined-engine-rollout-matrix.md` — aligned rollout bands spanning body, mouth, and lighting subsystems.
+- `107-combined-engine-integration-program.md` — combined implementation program for the full future animation engine.
+- `108-combined-engine-program-gate.md` — artifact-driven gate for deciding whether a rollout band is ready to begin.
+- `109-combined-engine-program-gate-reporting.md` — reporting expectations for the combined-engine program gate.
+- `110-combined-engine-work-package-map.md` — maps rollout bands into concrete engineering work packages by responsibility.
+- `111-combined-engine-work-package-reporting.md` — reporting expectations for the combined work-package map.
+- `112-combined-engine-staffing-and-ownership-map.md` — maps work packages into practical engineering ownership tracks.
+- `113-combined-engine-staffing-reporting.md` — reporting expectations for staffing and ownership coverage.
+- `114-combined-engine-dependency-graph.md` — execution-graph guidance for sequencing work packages and parallel tracks.
+- `115-combined-engine-dependency-reporting.md` — reporting expectations for the combined dependency graph.
+- `116-combined-engine-critical-path-summary.md` — prioritization guidance distilled from the combined dependency graph.
+- `117-combined-engine-critical-path-reporting.md` — reporting expectations for the combined critical-path summary.
+- `118-combined-engine-risk-register.md` — schedule-risk register tied to the combined engine critical path and ownership tracks.
+- `119-combined-engine-risk-reporting.md` — reporting expectations for the combined-engine risk register.
+- `120-combined-engine-contingency-playbook.md` — fallback execution playbook for slips on the combined-engine critical path.
+- `121-combined-engine-contingency-reporting.md` — reporting expectations for the combined-engine contingency playbook.
+- `122-combined-engine-band-exit-criteria.md` — explicit band-level exit criteria for the combined engine rollout.
+- `123-combined-engine-band-exit-reporting.md` — reporting expectations for the combined-engine band-exit gate.
+- `124-combined-engine-change-impact-matrix.md` — deterministic re-entry rules for schema, runtime, and validation changes in the combined engine.
+- `125-combined-engine-change-impact-reporting.md` — reporting expectations for the combined-engine change-impact matrix.
+- `126-combined-engine-implementation-test-matrix.md` — exact validation artifacts to rerun by band and major change class before re-promotion.
+- `127-combined-engine-implementation-test-matrix-reporting.md` — reporting expectations for the combined-engine implementation test matrix.
+- `128-combined-engine-release-promotion-checklist.md` — final promotion checklist for moving a rollout band into production use.
+- `129-combined-engine-release-promotion-reporting.md` — reporting expectations for the combined-engine release promotion checklist.
+- `130-combined-engine-production-governance-dashboard.md` — one-screen governance summary across gates, risks, contingencies, re-entry, tests, and promotion status.
+- `131-combined-engine-production-governance-reporting.md` — reporting expectations for the combined-engine production governance dashboard.
+- `12-asset-counts-and-cost-model.md` — package asset-count estimates and Nano Banana cost scenarios.
+- `13-ai-qa-and-correction-pipeline.md` — structured AI review, correction, and regeneration loop for generated assets.
+- `14-implementation-backlog.md` — research-sandbox build sequence and module backlog.
+- `15-package-readiness-and-coverage.md` — readiness scoring model for deciding when a package is truly usable.
+
+## Synthesis docs
+- `07-amira-animation-system-blueprint.md` — unified proposed system architecture for body motion, mouth motion, shot routing, AI generation, and package QA.
+- `08-character-package-spec-vnext.md` — proposed next-generation character package spec tailored to Amira Writer.
+- `09-research-roadmap-and-validation.md` — phased roadmap, experiments, and validation criteria for building this safely.
+- `10-source-matrix.md` — primary/official source list for AI, rigging, lip sync, and internal project references.
+- `11-current-code-gap-analysis.md` — what the current Animate implementation already has versus what still needs to be built.
+
+## Working thesis
+- The internal rig engine should own most shots.
+- AI image generation should build and iterate the asset library.
+- AI video should be a selective fallback for hard shots, not the main engine.
+- Mouth / lip sync should be a separate, angle-aware subsystem layered over the body engine.
+- Character packages should be reusable runtime contracts, not loose folders of images.
+
+## Code and schema scaffolding
+- `tools/asset_cost_model.py` — prints package-count and cost estimates.
+- `tools/package_readiness_model.py` — rough readiness scorer for package-like JSON.
+- `tools/asset_review_schema.json` — structured AI review output contract.
+- `tools/review_prompt_template.md` — multimodal review/correction prompt scaffold.
+- `prototypes/` — JSON schemas for package, mouth, and motion-plan contracts.
+
+
+## Examples and scaffolding
+- `examples/sample_hero_package.json` — example vNext package skeleton.
+- `examples/sample_walk_and_sing_motion_plan.json` — example sparse motion plan with mouth overlay.
+- `examples/sample_asset_review.json` — example AI review payload for edit/regenerate decisions.
+- `examples/sample_mouth_profile.json` — example angle-aware mouth profile.
+- `examples/sample_lyric_mouth_plan.json` — example lyric-driven mouth event plan.
+- `examples/character_package_plan_matrix.json` — real-character planning matrix for Luke, Amira, and Yasmin.
+- `examples/sample_luke_multicostume_package.json` — richer Luke multi-costume package example.
+- `examples/sample_amira_multicostume_package.json` — richer Amira multi-costume package example.
+- `examples/sample_pilot_dialogue_shot.json` — first pilot shot definition.
+- `examples/sample_promotion_record.json` — example approved promotion record.
+- `examples/sample_supporting_package.json` — supporting-tier package example.
+- `examples/sample_background_package.json` — background-tier package example.
+- `examples/sample_shot_library.json` — small shot library example.
+- `examples/sample_pilot_packet.json` — first-pilot execution packet example.
+- `examples/sample_schema_upgrade_manifest_v1.json` — older manifest example for upgrade testing.
+- `examples/sample_handoff_packet.json` — engineer handoff packet example.
+- `examples/sample_duet_group_shots.json` — duet/group/transition routing examples.
+- `examples/sample_mouth_emotion_presets.json` — per-character emotion preset example.
+- `examples/sample_hero_ready_package_regressed.json` — intentionally regressed package for diff testing.
+- `examples/sample_angle_mouth_presets.json` — angle/performance mouth preset example.
+- `examples/sample_upgraded_manifest_v2.json` — upgraded manifest example.
+- `examples/sample_action_ensemble_shots.json` — action/ensemble shot cases.
+- `examples/sample_detailed_mouth_presets.json` — richer per-character mouth preset example.
+- `examples/sample_routing_matrix_full.json` — fuller readiness/routing case matrix.
+- `examples/sample_package_diff_bundle.json` — package diff bundle example descriptor.
+- `examples/sample_acceptance_matrix.json` — pilot acceptance matrix example.
+- `examples/sample_lighting_profile.json` — example lighting profile.
+- `examples/sample_lighting_response_profiles.json` — example material-response profile set.
+- `examples/sample_shot_lighting_plan.json` — example shot lighting plan.
+- `examples/sample_lighting_review.json` — example lighting QA result.
+- `examples/sample_script_lighting_cues.json` — example script-level lighting cue payload.
+- `examples/sample_material_response_catalog.json` — example material-response catalog.
+- `examples/sample_lighting_aware_routing_cases.json` — example lighting-aware routing cases.
+- `examples/sample_lighting_profile_library.json` — example reusable lighting profile library.
+- `examples/sample_luke_lighting_ready_package.json` — example hero character package with lighting compatibility.
+- `examples/sample_clinic_location_lighting_set.json` — example location lighting set.
+- `examples/sample_script_lighting_cues_complex.json` — example complex script lighting cue payload.
+- `examples/sample_key_location_lighting_sets.json` — reusable key-location lighting set catalog.
+- `examples/sample_hero_location_usage_matrix.json` — hero location usage weights.
+- `examples/sample_location_profile_presets.json` — default/alternate profile presets by location.
+- `examples/sample_amira_lighting_ready_package.json` — example Amira package with lighting compatibility metadata.
+- `examples/sample_side_by_side_lighting_pilot_bundles.json` — paired Luke/Amira lighting pilot bundles.
+- `examples/sample_hero_lighting_read_comparison.json` — concise Luke/Amira read differences by location.
+- `examples/sample_duet_lighting_pilot_packets.json` — duet-scene lighting pilot packets across the top locations.
+- `examples/sample_duet_lighting_read_matrix.json` — concise duet read matrix for unified-location lighting.
+- `examples/sample_duet_location_lighting_plan_index.json` — index of per-location duet lighting-plan JSON fixtures.
+- `examples/duet-location-lighting-plans/` — individual duet lighting-plan JSON files for the top locations.
+- `examples/sample_hero_location_profile_channels.json` — profile-family channel assignments for the hero locations.
+- `examples/sample_hero_location_profile_channels_regressed.json` — intentionally regressed hero location channel fixture example.
+- `examples/sample_duet_motion_lighting_packets.json` — motion-beat fixtures tied to duet lighting packets.
+- `examples/sample_duet_motion_lighting_packets_regressed.json` — intentionally regressed duet motion-lighting fixture example.
+- `examples/sample_duet_routing_comparisons.json` — route-by-route comparison fixture for the five duet hero locations.
+- `examples/sample_duet_location_lighting_plan_index_regressed.json` — intentionally regressed index for location lighting plan coverage.
+- `examples/duet-location-lighting-plans-regressed/` — intentionally regressed per-location lighting plans for zone/practical diff tests.
+- `examples/sample_script_lighting_beat_cues.json` — beat-level lighting cue fixture for a duet shot.
+- `examples/sample_script_lighting_beat_plan.json` — translated beat-level zone/practical lighting plan.
+- `examples/sample_script_lighting_beat_plan_regressed.json` — intentionally regressed beat-lighting plan for continuity/diff tests.
+- `examples/sample_beat_lighting_readiness_fixture.json` — good duet beat-lighting readiness fixture.
+- `examples/sample_beat_lighting_readiness_fixture_regressed.json` — regressed duet beat-lighting readiness fixture.
+- `examples/sample_ensemble_beat_lighting_readiness_fixture.json` — good ensemble beat-lighting readiness fixture.
+- `examples/sample_ensemble_beat_lighting_readiness_fixture_regressed.json` — regressed ensemble beat-lighting readiness fixture.
+- `examples/sample_ensemble_routing_comparisons.json` — route-by-route comparison fixture for ensemble scenes across the hero locations.
+- `examples/sample_ensemble_routing_comparisons_regressed.json` — intentionally regressed ensemble routing comparison fixture.
+- `examples/sample_ensemble_zone_practical_stress_cases.json` — ensemble stress cases for zone/practical routing pressure.
+- `examples/sample_ensemble_layer_consistency_cases.json` — aligned cross-check cases for ensemble readiness/routing/stress.
+- `examples/sample_ensemble_layer_consistency_cases_regressed.json` — intentionally misaligned cross-check cases.
+- `examples/sample_lighting_engine_milestone_map.json` — machine-readable lighting-engine rollout ladder.
+- `examples/sample_mouth_engine_milestone_map.json` — machine-readable mouth-engine rollout ladder.
+- `examples/sample_combined_engine_rollout_matrix.json` — machine-readable combined rollout matrix for body, mouth, and lighting.
+- `examples/sample_combined_engine_work_packages.json` — machine-readable engineering work-package map for the combined rollout.
+- `examples/sample_combined_engine_staffing_map.json` — machine-readable staffing and ownership map for the combined rollout.
+- `examples/generated-diff-bundle/` — generated sample diff report outputs.
+
+## Additional tooling
+- `tools/package_scaffold_generator.py` — emits a starter vNext package manifest by tier and costume count.
+- `tools/motion_plan_linter.py` — validates basic semantic integrity of motion plans.
+- `tools/asset_review_decision.py` — converts structured AI review results into approve/edit/regenerate decisions.
+- `tools/lyric_viseme_seed.py` — emits a starter lyric-to-viseme event plan from text.
+- `tools/correction_orchestrator.py` — turns review JSON into the next correction action packet.
+- `tools/character_package_planner.py` — estimates total asset counts and 2K costs for real characters.
+- `tools/mouth_timing_validator.py` — validates lyric-driven mouth-event plans.
+- `tools/shot_routing_planner.py` — quick heuristic router for internal/hybrid/AI-video decisions.
+- `tools/promotion_gate_check.py` — decides if a reviewed asset is eligible to become a promoted reference.
+- `tools/pilot_bundle_check.py` — validates the minimum required first-pilot asset bundle shape.
+- `tools/package_tier_audit.py` — audits package examples against tier expectations.
+- `tools/shot_library_report.py` — summarizes routing distribution across shot-library examples.
+- `tools/pilot_packet_check.py` — validates the top-level first-pilot execution packet.
+- `tools/package_diff_report.py` — compares package revisions and reports regressions.
+- `tools/generate_package_diff_bundle.py` — emits JSON/Markdown diff bundles for package revisions.
+- `tools/handoff_fixture_inventory.py` — inventories fixtures inside the handoff packet.
+- `tools/handoff_bundle_audit.py` — checks the handoff packet for missing docs/fixtures.
+- `tools/build_handoff_outputs.py` — builds reusable audit/diff outputs for the handoff packet.
+- `tools/schema_upgrade_check.py` — validates older manifests before upgrade.
+- `tools/schema_upgrade_transform.py` — sketches simple upgrade transforms.
+- `tools/mouth_preset_audit.py` — audits mouth preset coverage.
+- `tools/mouth_preset_report.py` — summarizes mouth preset coverage by character.
+- `tools/shot_case_expectation_check.py` — validates shot-case expectation files.
+- `tools/acceptance_matrix_check.py` — validates pilot acceptance-matrix JSON.
+- `tools/lighting_plan_check.py` — validates shot-lighting-plan JSON.
+- `tools/lighting_profile_report.py` — summarizes lighting-profile fixtures.
+- `tools/lighting_review_gate.py` — decides whether a lighting review is acceptable for promotion/pilot use.
+- `tools/script_lighting_seed.py` — converts script lighting cues into a starter shot-lighting seed.
+- `tools/lighting_material_audit.py` — audits material-response catalogs.
+- `tools/lighting_routing_case_check.py` — validates lighting-aware routing case fixtures.
+- `tools/lighting_profile_library_check.py` — validates reusable lighting profile libraries.
+- `tools/lighting_readiness_report.py` — reports lighting readiness for a character/location pairing.
+- `tools/location_lighting_set_check.py` — validates key-location lighting set fixtures.
+- `tools/hero_location_usage_report.py` — summarizes which locations matter most for hero coverage.
+- `tools/side_by_side_lighting_bundle_check.py` — validates paired Luke/Amira lighting pilot bundles across the top locations.
+- `tools/hero_lighting_read_report.py` — summarizes the expected read differences between Luke and Amira under the same lighting.
+- `tools/duet_lighting_packet_check.py` — validates duet-scene Luke/Amira lighting pilot packets.
+- `tools/duet_lighting_read_report.py` — summarizes duet-scene unified-light read differences.
+- `tools/duet_location_plan_index_check.py` — validates the indexed set of per-location duet lighting-plan JSON files.
+- `tools/hero_location_profile_channel_check.py` — validates profile-family channel assignments for the hero locations.
+- `tools/duet_motion_lighting_packet_check.py` — validates motion-beat fixtures tied to duet lighting packets.
+- `tools/lighting_fixture_diff_report.py` — compares hero lighting channels and duet motion-lighting fixtures for regressions.
+- `tools/generate_lighting_diff_bundle.py` — emits JSON/Markdown lighting diff bundles for handoff review.
+- `tools/duet_routing_comparison_report.py` — validates and summarizes route comparisons under the same duet lighting setups.
+- `tools/location_lighting_zone_practical_check.py` — validates zone/practical channel coverage across location lighting plans.
+- `tools/location_lighting_zone_practical_diff_report.py` — compares location lighting plans for zone/practical regressions.
+- `tools/generate_location_lighting_zone_practical_diff_bundle.py` — emits JSON/Markdown diff bundles for zone/practical lighting-plan changes.
+- `tools/script_lighting_beat_seed.py` — converts beat-level script cues into zone/practical channel emphasis plans.
+- `tools/script_lighting_beat_plan_check.py` — validates beat-level lighting plans.
+- `tools/beat_lighting_continuity_check.py` — validates that a beat-lighting plan preserves shared-light continuity.
+- `tools/beat_lighting_diff_report.py` — compares beat-lighting plans for continuity and protection regressions.
+- `tools/generate_beat_lighting_diff_bundle.py` — emits JSON/Markdown beat-lighting diff bundles.
+- `tools/beat_lighting_readiness_report.py` — scores multi-character beat-lighting readiness and recommends routing.
+- `tools/ensemble_beat_lighting_readiness_report.py` — scores ensemble beat-lighting readiness and recommends routing.
+- `tools/ensemble_routing_comparison_report.py` — validates and summarizes route comparisons for ensemble scenes under shared lighting worlds.
+- `tools/ensemble_routing_diff_report.py` — compares ensemble routing comparison revisions for regressions.
+- `tools/generate_ensemble_routing_diff_bundle.py` — emits JSON/Markdown ensemble routing diff bundles.
+- `tools/ensemble_zone_practical_stress_report.py` — scores ensemble zone/practical stress and recommends the minimum routing level.
+- `tools/ensemble_beat_lighting_diff_report.py` — compares ensemble beat-lighting revisions for protection, continuity, and routing-pressure regressions.
+- `tools/generate_ensemble_beat_lighting_diff_bundle.py` — emits JSON/Markdown ensemble beat-lighting diff bundles.
+- `tools/ensemble_layer_consistency_report.py` — cross-checks ensemble readiness, routing baseline, and stress layers for disagreements.
+- `tools/lighting_engine_milestone_report.py` — validates the lighting-engine milestone/integration ladder.
+- `tools/mouth_engine_milestone_report.py` — validates the mouth-engine milestone/integration ladder.
+- `tools/combined_engine_rollout_report.py` — validates the combined rollout matrix across body, mouth, and lighting subsystems.
+- `tools/combined_engine_program_gate.py` — checks which combined rollout bands are actually ready based on docs, fixtures, outputs, and dependencies.
+- `tools/combined_engine_work_package_report.py` — validates the engineering work-package map across rollout bands and responsibilities.
+- `tools/combined_engine_staffing_report.py` — validates staffing/ownership coverage across combined-engine work packages.
+- `tools/combined_engine_dependency_report.py` — validates the combined-engine dependency graph and exposes parallel-ready layers.
+- `tools/combined_engine_critical_path_report.py` — extracts the critical path and top-priority packages from the combined dependency graph.
+- `tools/combined_engine_risk_report.py` — derives a schedule-risk register from combined work packages, staffing, and the critical path.
+- `tools/combined_engine_contingency_report.py` — turns the combined-engine risk register into per-band and per-track fallback execution plans.
+- `tools/combined_engine_band_exit_gate.py` — verifies per-band exit readiness and the highest contiguous exit-ready band in the combined rollout.
+- `tools/combined_engine_change_impact_report.py` — maps schema/runtime/validation changes to reopened rollout bands, work packages, and outputs.
+- `tools/combined_engine_implementation_test_matrix_report.py` — maps rollout bands and change classes to the exact validation artifacts required for re-promotion.
+- `tools/combined_engine_release_promotion_report.py` — turns the major rollout and re-entry reports into a final promotion checklist per band.
+- `tools/combined_engine_governance_dashboard_report.py` — rolls the major engine-governance reports into one top-level status dashboard.
+
+
+## Concrete template folders
+- `pilot-packet-template/` — real on-disk first-pilot packet template.
+- `engineer-handoff-packet/` — placeholder folder for the future research-to-engineering handoff bundle.
+
+- `engineer-handoff-packet/outputs/` — generated audit and diff outputs for handoff review.

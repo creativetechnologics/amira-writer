@@ -1,0 +1,96 @@
+{
+  "locationId": "family-courtyard",
+  "shotId": "duet-courtyard-001",
+  "lightingProfile": "sunset_warm",
+  "sharedLightWorld": {
+    "timeOfDay": "sunset",
+    "weather": "clear-warm",
+    "keyDirection": "screen-left",
+    "fillMode": "warm-courtyard-bounce",
+    "atmosphere": "soft-domestic-warmth",
+    "paletteClamp": "anime-grounded-drama-domestic"
+  },
+  "lukeReadPriorities": {
+    "primaryGoals": [
+      "softened civilian silhouette",
+      "shirt readability",
+      "stable face warmth"
+    ],
+    "risks": [
+      "shirt contrast loss from stone bounce"
+    ],
+    "protectionFlags": {
+      "faceProtection": true,
+      "mouthVisibilityProtection": true,
+      "silhouetteProtection": true
+    },
+    "fixtureMappings": {
+      "packageFixture": "sample_luke_lighting_ready_package.json",
+      "pilotBundleFixture": "sample_duet_lighting_pilot_packets.json#duet-family-courtyard-001",
+      "comparisonFixture": "sample_duet_lighting_read_matrix.json#family-courtyard"
+    }
+  },
+  "amiraReadPriorities": {
+    "primaryGoals": [
+      "emotional face warmth",
+      "scarf nuance",
+      "soft domestic contour"
+    ],
+    "risks": [
+      "skin/scarf oversaturation in warm bounce"
+    ],
+    "protectionFlags": {
+      "faceProtection": true,
+      "mouthVisibilityProtection": true,
+      "silhouetteProtection": true
+    },
+    "fixtureMappings": {
+      "packageFixture": "sample_amira_lighting_ready_package.json",
+      "pilotBundleFixture": "sample_duet_lighting_pilot_packets.json#duet-family-courtyard-001",
+      "comparisonFixture": "sample_duet_lighting_read_matrix.json#family-courtyard"
+    }
+  },
+  "zoneMetadata": {
+    "zones": [
+      "wall",
+      "entryway",
+      "courtyard-ground",
+      "upper-sky-slice"
+    ],
+    "characterDepthZone": "mid-foreground",
+    "backgroundGradeNotes": [
+      "warm domestic bounce",
+      "restrained saturation to protect emotion"
+    ]
+  },
+  "practicalMetadata": {
+    "practicals": [
+      "door-lamp"
+    ],
+    "usage": "secondary warmth accent only"
+  },
+  "fixtureMappings": {
+    "locationSetFixture": "sample_key_location_lighting_sets.json#family-courtyard",
+    "profilePresetFixture": "sample_location_profile_presets.json#family-courtyard"
+  },
+  "zoneChannelAssignments": {
+    "wall": [
+      "ch02_world_fill",
+      "ch04_background_separation"
+    ],
+    "entryway": [
+      "ch04_background_separation",
+      "ch05_practical_accent"
+    ],
+    "courtyard-ground": [
+      "ch02_world_fill",
+      "ch06_atmosphere_grade"
+    ]
+  },
+  "practicalChannelAssignments": {
+    "door-lamp": [
+      "ch05_practical_accent",
+      "ch02_world_fill"
+    ]
+  }
+}

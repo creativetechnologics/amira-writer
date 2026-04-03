@@ -1,0 +1,88 @@
+{
+  "shotId": "duet-village-night-lyric-001",
+  "locationId": "village-street-night",
+  "lightingProfile": "moonlight_blue",
+  "sharedLightWorld": "warm lantern world with drifting amber fill",
+  "sourceLocationPlan": "duet-village-night-001",
+  "beats": [
+    {
+      "beatId": "b01",
+      "description": "Luke and Amira enter the street in profile and begin a walk-and-talk phrase",
+      "focusCharacter": "both",
+      "activeZoneChannels": {
+        "street-plane": [
+          "ch02_world_fill",
+          "ch05_practical_accent"
+        ],
+        "far-alley": [
+          "ch04_background_separation",
+          "ch06_atmosphere_grade"
+        ]
+      },
+      "activePracticalChannels": {},
+      "activeProtectionChannels": [
+        "ch07_luke_protect",
+        "ch08_amira_protect"
+      ],
+      "mouthOverlayBias": "profile",
+      "continuityNotes": [
+        "shared light world remains unchanged",
+        "zone/practical emphasis only; no new channels introduced"
+      ]
+    },
+    {
+      "beatId": "b02",
+      "description": "They cross the window-lamp spill and Amira takes the line",
+      "focusCharacter": "amira",
+      "activeZoneChannels": {
+        "shopfront": [
+          "ch04_background_separation",
+          "ch05_practical_accent"
+        ],
+        "street-plane": [
+          "ch02_world_fill",
+          "ch05_practical_accent"
+        ]
+      },
+      "activePracticalChannels": {
+        "window-lamp": [
+          "ch05_practical_accent",
+          "ch02_world_fill"
+        ]
+      },
+      "activeProtectionChannels": [],
+      "mouthOverlayBias": "quarterRight",
+      "continuityNotes": [
+        "practical glow becomes dominant"
+      ]
+    },
+    {
+      "beatId": "b03",
+      "description": "They pause near the fire basket and Luke answers in a lower register",
+      "focusCharacter": "luke",
+      "activeZoneChannels": {
+        "shopfront": [
+          "ch04_background_separation",
+          "ch05_practical_accent"
+        ],
+        "far-alley": [
+          "ch04_background_separation",
+          "ch06_atmosphere_grade"
+        ]
+      },
+      "activePracticalChannels": {
+        "fire-basket": [
+          "ch01_world_key"
+        ]
+      },
+      "activeProtectionChannels": [
+        "ch07_luke_protect"
+      ],
+      "mouthOverlayBias": "front",
+      "continuityNotes": [
+        "shared light world remains unchanged",
+        "zone/practical emphasis only; no new channels introduced"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "0.1",
+  "presets": [
+    {
+      "presetId": "extreme_wide_establishing",
+      "shotClass": "establishing",
+      "lensMm": 24,
+      "heightMeters": 12.0,
+      "distanceMeters": 48.0,
+      "pitchDegrees": -8.0,
+      "moveDefaults": ["slow_push", "hold"]
+    },
+    {
+      "presetId": "bridge_medium_tracking",
+      "shotClass": "follow",
+      "lensMm": 50,
+      "heightMeters": 2.1,
+      "distanceMeters": 6.5,
+      "pitchDegrees": -1.5,
+      "moveDefaults": ["track_left_to_right", "track_right_to_left"]
+    },
+    {
+      "presetId": "closeup_face_dialogue",
+      "shotClass": "dialogue_closeup",
+      "lensMm": 85,
+      "heightMeters": 1.7,
+      "distanceMeters": 1.2,
+      "pitchDegrees": 0.0,
+      "moveDefaults": ["hold", "micro_push"]
+    }
+  ]
+}

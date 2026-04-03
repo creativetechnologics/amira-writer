@@ -1,0 +1,28 @@
+{
+  "changeEvents": [
+    {
+      "eventId": "evt-shared-schema-v2",
+      "changeType": "schema-change",
+      "subsystem": "shared",
+      "summary": "Shared package manifest gains a new required compatibility field."
+    },
+    {
+      "eventId": "evt-mouth-runtime-anchors",
+      "changeType": "runtime-contract-change",
+      "subsystem": "mouth",
+      "summary": "Mouth runtime contract changes angle-anchor handoff behavior."
+    },
+    {
+      "eventId": "evt-lighting-validation-protect",
+      "changeType": "validation-rule-change",
+      "subsystem": "lighting",
+      "summary": "Lighting validation now requires explicit protect-lane coverage on dialogue beats."
+    },
+    {
+      "eventId": "evt-body-runtime-blocking",
+      "changeType": "runtime-behavior-change",
+      "subsystem": "body",
+      "summary": "Body runtime blocking interpolation changes for deterministic pilot shots."
+    }
+  ]
+}

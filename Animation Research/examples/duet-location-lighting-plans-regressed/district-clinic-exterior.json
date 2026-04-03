@@ -1,0 +1,101 @@
+{
+  "locationId": "district-clinic-exterior",
+  "shotId": "duet-clinic-ext-001",
+  "lightingProfile": "daylight_soft",
+  "sharedLightWorld": {
+    "timeOfDay": "day",
+    "weather": "dry-dusty",
+    "keyDirection": "screen-left",
+    "fillMode": "wall-bounce-soft",
+    "atmosphere": "low-dust-haze",
+    "paletteClamp": "anime-grounded-drama-day"
+  },
+  "lukeReadPriorities": {
+    "primaryGoals": [
+      "uniform pocket readability",
+      "satchel/strap silhouette",
+      "stable face exposure"
+    ],
+    "risks": [
+      "dust flattening utility fabric"
+    ],
+    "protectionFlags": {
+      "faceProtection": true,
+      "mouthVisibilityProtection": true,
+      "silhouetteProtection": true
+    },
+    "fixtureMappings": {
+      "packageFixture": "sample_luke_lighting_ready_package.json",
+      "pilotBundleFixture": "sample_duet_lighting_pilot_packets.json#duet-district-clinic-exterior-001",
+      "comparisonFixture": "sample_duet_lighting_read_matrix.json#district-clinic-exterior"
+    }
+  },
+  "amiraReadPriorities": {
+    "primaryGoals": [
+      "face-framing softness",
+      "scarf edge separation",
+      "gentle skin readability"
+    ],
+    "risks": [
+      "cool wall bounce flattening facial contour"
+    ],
+    "protectionFlags": {
+      "faceProtection": true,
+      "mouthVisibilityProtection": true,
+      "silhouetteProtection": true
+    },
+    "fixtureMappings": {
+      "packageFixture": "sample_amira_lighting_ready_package.json",
+      "pilotBundleFixture": "sample_duet_lighting_pilot_packets.json#duet-district-clinic-exterior-001",
+      "comparisonFixture": "sample_duet_lighting_read_matrix.json#district-clinic-exterior"
+    }
+  },
+  "zoneMetadata": {
+    "zones": [
+      "sky",
+      "far-background",
+      "mid-background",
+      "ground-plane",
+      "doorway-practical"
+    ],
+    "characterDepthZone": "foreground",
+    "backgroundGradeNotes": [
+      "soft clinic facade bounce",
+      "mild dust haze"
+    ]
+  },
+  "practicalMetadata": {
+    "practicals": [
+      "doorway-bounce"
+    ],
+    "usage": "secondary fill only"
+  },
+  "fixtureMappings": {
+    "locationSetFixture": "sample_key_location_lighting_sets.json#district-clinic-exterior",
+    "profilePresetFixture": "sample_location_profile_presets.json#district-clinic-exterior"
+  },
+  "zoneChannelAssignments": {
+    "sky": [
+      "ch01_world_key",
+      "ch06_atmosphere_grade"
+    ],
+    "far-background": [
+      "ch04_background_separation",
+      "ch06_atmosphere_grade"
+    ],
+    "mid-background": [
+      "ch02_world_fill",
+      "ch04_background_separation"
+    ],
+    "ground-plane": [
+      "ch02_world_fill",
+      "ch06_atmosphere_grade"
+    ]
+  },
+  "practicalChannelAssignments": {
+    "doorway-bounce": [
+      "ch05_practical_accent",
+      "ch02_world_fill"
+    ]
+  }
+}

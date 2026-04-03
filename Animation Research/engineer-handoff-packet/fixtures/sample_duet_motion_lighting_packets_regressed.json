@@ -1,0 +1,207 @@
+{
+  "packets": [
+    {
+      "packetId": "duet-motion-district-clinic-exterior-001",
+      "locationId": "district-clinic-exterior",
+      "duetLightingPacketFixture": "sample_duet_lighting_pilot_packets.json#duet-district-clinic-exterior-001",
+      "routingMode": "internal",
+      "motionBeats": [
+        {
+          "beatId": "b01",
+          "description": "Luke steps in from screen-left while Amira holds front-facing listen pose",
+          "activeChannels": [
+            "ch01_world_key",
+            "ch02_world_fill",
+            "ch07_luke_protect",
+            "ch08_amira_protect"
+          ],
+          "mouthAngles": {
+            "luke": "quarterLeft",
+            "amira": "front"
+          }
+        },
+        {
+          "beatId": "b02",
+          "description": "Amira answers and turns slightly toward key",
+          "activeChannels": [
+            "ch01_world_key",
+            "ch02_world_fill",
+            "ch08_amira_protect"
+          ],
+          "mouthAngles": {
+            "amira": "quarterRight"
+          }
+        },
+        {
+          "beatId": "b03",
+          "description": "Both settle into shared medium two-shot",
+          "activeChannels": [
+            "ch01_world_key",
+            "ch02_world_fill",
+            "ch03_world_rim",
+            "ch07_luke_protect",
+            "ch08_amira_protect"
+          ],
+          "mouthAngles": {
+            "luke": "front",
+            "amira": "front"
+          }
+        }
+      ],
+      "mouthOverlay": {
+        "inheritProtectionChannels": true,
+        "useSharedLightWorld": true
+      },
+      "channelContinuityRules": [
+        "Do not replace the clinic daylight key between beats",
+        "Luke protection rises before adding more fill",
+        "Amira protection rises before cooling her face"
+      ]
+    },
+    {
+      "packetId": "duet-motion-rooftop-sunset-001",
+      "locationId": "rooftop-sunset",
+      "lightingPlanFixture": "duet-location-lighting-plans/rooftop-sunset.json",
+      "duetLightingPacketFixture": "sample_duet_lighting_pilot_packets.json#duet-rooftop-sunset-001",
+      "routingMode": "internal",
+      "motionBeats": [
+        {
+          "beatId": "b01",
+          "description": "Both characters enter silhouette-friendly quarter poses",
+          "activeChannels": [
+            "ch01_world_key",
+            "ch03_world_rim",
+            "ch07_luke_protect",
+            "ch08_amira_protect"
+          ],
+          "mouthAngles": {
+            "luke": "quarterLeft",
+            "amira": "quarterRight"
+          }
+        },
+        {
+          "beatId": "b02",
+          "description": "Luke turns toward Amira for sung line",
+          "activeChannels": [
+            "ch01_world_key",
+            "ch02_world_fill",
+            "ch07_luke_protect"
+          ],
+          "mouthAngles": {
+            "luke": "front"
+          }
+        },
+        {
+          "beatId": "b03",
+          "description": "Amira answers while sky darkens slightly",
+          "activeChannels": [
+            "ch01_world_key",
+            "ch03_world_rim",
+            "ch06_atmosphere_grade",
+            "ch08_amira_protect"
+          ],
+          "mouthAngles": {
+            "amira": "front"
+          }
+        }
+      ],
+      "mouthOverlay": {
+        "inheritProtectionChannels": true,
+        "useSharedLightWorld": true
+      },
+      "channelContinuityRules": [
+        "Keep one sunset horizon key world",
+        "Rim may intensify but not change side",
+        "Amira warmth guard should limit scarf saturation drift"
+      ]
+    },
+    {
+      "packetId": "duet-motion-village-street-night-001",
+      "locationId": "village-street-night",
+      "lightingPlanFixture": "duet-location-lighting-plans/village-street-night.json",
+      "duetLightingPacketFixture": "sample_duet_lighting_pilot_packets.json#duet-village-street-night-001",
+      "routingMode": "ai-video-fallback",
+      "motionBeats": [
+        {
+          "beatId": "b01",
+          "description": "Walk-and-talk starts in profile under moon key",
+          "activeChannels": [
+            "ch01_world_key",
+            "ch03_world_rim",
+            "ch07_luke_protect",
+            "ch08_amira_protect"
+          ],
+          "mouthAngles": {
+            "luke": "profileLeft",
+            "amira": "profileRight"
+          }
+        }
+      ],
+      "mouthOverlay": {
+        "inheritProtectionChannels": true,
+        "useSharedLightWorld": true
+      },
+      "channelContinuityRules": [
+        "Moon key remains the world anchor",
+        "Practical spill can rise/fall without becoming a new global key",
+        "Both mouth overlays require protection-channel inheritance in low-value beats"
+      ]
+    },
+    {
+      "packetId": "duet-motion-clinic-interior-fluorescent-001",
+      "locationId": "clinic-interior-fluorescent",
+      "lightingPlanFixture": "duet-location-lighting-plans/clinic-interior-fluorescent.json",
+      "duetLightingPacketFixture": "sample_duet_lighting_pilot_packets.json#duet-clinic-interior-fluorescent-001",
+      "routingMode": "internal",
+      "motionBeats": [
+        {
+          "beatId": "b01",
+          "description": "Seated two-shot under overhead fluorescents",
+          "activeChannels": [
+            "ch01_world_key",
+            "ch02_world_fill",
+            "ch07_luke_protect",
+            "ch08_amira_protect"
+          ],
+          "mouthAngles": {
+            "luke": "front",
+            "amira": "front"
+          }
+        },
+        {
+          "beatId": "b02",
+          "description": "Luke leans toward medical table",
+          "activeChannels": [
+            "ch01_world_key",
+            "ch04_background_separation",
+            "ch07_luke_protect"
+          ],
+          "mouthAngles": {
+            "luke": "quarterLeft"
+          }
+        },
+        {
+          "beatId": "b03",
+          "description": "Amira turns back into the shared pool",
+          "activeChannels": [
+            "ch01_world_key",
+            "ch02_world_fill",
+            "ch08_amira_protect"
+          ],
+          "mouthAngles": {
+            "amira": "quarterRight"
+          }
+        }
+      ],
+      "mouthOverlay": {
+        "inheritProtectionChannels": true,
+        "useSharedLightWorld": true
+      },
+      "channelContinuityRules": [
+        "Overhead fluorescent pool remains constant",
+        "Local warmth correction should never read as a tungsten source",
+        "Background separation changes before global fill changes"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "locations": [
+    {
+      "locationId": "district-clinic-exterior",
+      "priority": "hero-high",
+      "supportedLightingProfiles": ["daylight_soft", "sunset_warm", "moonlight_blue", "dust_storm_flat"],
+      "zones": ["sky", "far-background", "mid-background", "ground-plane", "doorway-practical"],
+      "practicalLights": ["doorway-bounce"]
+    },
+    {
+      "locationId": "clinic-interior-fluorescent",
+      "priority": "hero-high",
+      "supportedLightingProfiles": ["fluorescent_clinic", "tungsten_interior", "night_practical_mix"],
+      "zones": ["back-wall", "bed-zone", "foreground-floor", "ceiling-light-pool"],
+      "practicalLights": ["fluorescent-overhead", "window-bounce"]
+    },
+    {
+      "locationId": "rooftop-sunset",
+      "priority": "hero-high",
+      "supportedLightingProfiles": ["sunset_warm", "dusk_desaturated", "moonlight_blue"],
+      "zones": ["sky", "roof-plane", "parapet", "far-city"],
+      "practicalLights": []
+    },
+    {
+      "locationId": "village-street-night",
+      "priority": "hero-high",
+      "supportedLightingProfiles": ["moonlight_blue", "night_practical_mix", "firelight_flicker"],
+      "zones": ["sky", "street-plane", "shopfront", "far-alley"],
+      "practicalLights": ["window-lamp", "fire-basket"]
+    },
+    {
+      "locationId": "family-courtyard",
+      "priority": "hero-high",
+      "supportedLightingProfiles": ["daylight_soft", "sunset_warm", "night_practical_mix"],
+      "zones": ["wall", "entryway", "courtyard-ground", "upper-sky-slice"],
+      "practicalLights": ["door-lamp"]
+    }
+  ]
+}

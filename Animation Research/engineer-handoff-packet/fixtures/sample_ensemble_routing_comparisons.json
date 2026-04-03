@@ -1,0 +1,289 @@
+{
+  "comparisons": [
+    {
+      "comparisonId": "ensemble-routing-district-clinic-exterior",
+      "locationId": "district-clinic-exterior",
+      "participantCount": 4,
+      "leadCount": 2,
+      "supportCount": 2,
+      "lightingProfile": "daylight_soft",
+      "sharedLightWorld": "soft clinic daylight with facade bounce and mild dust haze",
+      "baselineRecommendation": "hybrid",
+      "decisionReasons": [
+        "ensemble density is high enough that internal blocking is possible but not the default baseline",
+        "the daylight world remains stable across all route options"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "full internal relight with ensemble protection lanes",
+          "whatStaysInternal": [
+            "group blocking",
+            "mouth overlays",
+            "continuity-safe relight"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "careful crowd spacing required to avoid protection overlap"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight with optional environment polish",
+          "whatStaysInternal": [
+            "principal acting",
+            "protection channels",
+            "continuity control"
+          ],
+          "assistBoundary": [
+            "background atmosphere enhancement"
+          ],
+          "riskNotes": [
+            "best default for moderate ensemble density"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "reference the same daylight world in start/end frames",
+          "whatStaysInternal": [
+            "reference prep only"
+          ],
+          "assistBoundary": [
+            "full motion generation"
+          ],
+          "riskNotes": [
+            "not preferred unless motion/camera complexity spikes"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "ensemble-routing-rooftop-sunset",
+      "locationId": "rooftop-sunset",
+      "participantCount": 4,
+      "leadCount": 2,
+      "supportCount": 2,
+      "lightingProfile": "sunset_warm",
+      "sharedLightWorld": "single warm horizon key with skyline rim and restrained bloom",
+      "baselineRecommendation": "hybrid",
+      "decisionReasons": [
+        "rim direction must stay stable across multiple performers",
+        "the sunset world is unified but ensemble staging adds density risk"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "full internal relight with fixed horizon rim logic",
+          "whatStaysInternal": [
+            "ensemble blocking",
+            "rim/fill balance",
+            "mouth overlays"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "highest risk is rim inconsistency across the line of performers"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus sky band polish",
+          "whatStaysInternal": [
+            "character acting",
+            "protection channels"
+          ],
+          "assistBoundary": [
+            "sky enhancement",
+            "atmosphere polish"
+          ],
+          "riskNotes": [
+            "safest baseline for preserving sunset direction while softening density pressure"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "sunset world referenced by packet and frames",
+          "whatStaysInternal": [
+            "shot intent and reference prep"
+          ],
+          "assistBoundary": [
+            "full movement and lighting reproduction"
+          ],
+          "riskNotes": [
+            "fallback only for unusually complex choreography"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "ensemble-routing-village-street-night",
+      "locationId": "village-street-night",
+      "participantCount": 5,
+      "leadCount": 2,
+      "supportCount": 3,
+      "lightingProfile": "moonlight_blue",
+      "sharedLightWorld": "cool moonlit street with sparse practical spill pools",
+      "baselineRecommendation": "hybrid",
+      "decisionReasons": [
+        "night practicals plus ensemble density make internal-only execution fragile",
+        "the same moonlit world can still anchor all route options"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "internal moonlight plus selective practical accent channels",
+          "whatStaysInternal": [
+            "group blocking",
+            "protection channels",
+            "mouth overlays"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "high risk of readability loss in low-value beats"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus assisted practical spill polish",
+          "whatStaysInternal": [
+            "principal motion",
+            "shared moon key",
+            "protection channels"
+          ],
+          "assistBoundary": [
+            "night atmosphere enhancement",
+            "practical spill polish"
+          ],
+          "riskNotes": [
+            "best compromise for continuity under crowd density"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "moonlit world described through packet plus reference frames",
+          "whatStaysInternal": [
+            "visual target definition"
+          ],
+          "assistBoundary": [
+            "full motion and lighting reproduction"
+          ],
+          "riskNotes": [
+            "acceptable when density and movement exceed hybrid envelope"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "ensemble-routing-clinic-interior-fluorescent",
+      "locationId": "clinic-interior-fluorescent",
+      "participantCount": 4,
+      "leadCount": 2,
+      "supportCount": 2,
+      "lightingProfile": "fluorescent_clinic",
+      "sharedLightWorld": "overhead fluorescent pool with cool room bounce and limited local warmth correction",
+      "baselineRecommendation": "internal",
+      "decisionReasons": [
+        "the clinical overhead world is predictable even for moderate ensemble staging",
+        "density is manageable and practical variation is low"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "full internal clinical relight with ensemble protection coverage",
+          "whatStaysInternal": [
+            "blocking",
+            "mouth overlays",
+            "uniform/scarf protection"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "must avoid introducing a second light source"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus background polish",
+          "whatStaysInternal": [
+            "character motion",
+            "shared overhead world"
+          ],
+          "assistBoundary": [
+            "room polish",
+            "equipment practical enhancement"
+          ],
+          "riskNotes": [
+            "hybrid remains valid but should not alter fluorescent flatness"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "fluorescent world referenced but fully regenerated",
+          "whatStaysInternal": [
+            "reference design only"
+          ],
+          "assistBoundary": [
+            "full shot execution"
+          ],
+          "riskNotes": [
+            "rarely justified because internal control is stronger here"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "ensemble-routing-family-courtyard",
+      "locationId": "family-courtyard",
+      "participantCount": 4,
+      "leadCount": 2,
+      "supportCount": 2,
+      "lightingProfile": "courtyard_day_bounce",
+      "sharedLightWorld": "soft courtyard daylight with warm wall bounce and controlled doorway contrast",
+      "baselineRecommendation": "internal",
+      "decisionReasons": [
+        "the courtyard profile is soft, stable, and package-friendly for a four-person held composition",
+        "there are few unstable practicals and the world key stays coherent"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "full internal relight with support protection lanes",
+          "whatStaysInternal": [
+            "ensemble blocking",
+            "mouth overlays",
+            "continuity-safe relight"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "works well if support protection lanes remain explicit"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus courtyard atmosphere polish",
+          "whatStaysInternal": [
+            "character acting",
+            "protection channels"
+          ],
+          "assistBoundary": [
+            "background atmosphere polish"
+          ],
+          "riskNotes": [
+            "useful if scene blocking widens beyond the pilot envelope"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "courtyard world referenced by packet and frames",
+          "whatStaysInternal": [
+            "visual target definition"
+          ],
+          "assistBoundary": [
+            "full movement generation"
+          ],
+          "riskNotes": [
+            "fallback only for exceptional action or crowd motion"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "locationId": "district-clinic",
+  "supportedLightingProfiles": [
+    "daylight_soft",
+    "sunset_warm",
+    "fluorescent_clinic",
+    "moonlight_blue"
+  ],
+  "zones": [
+    "sky",
+    "far-background",
+    "mid-background",
+    "ground-plane",
+    "interior-practical-pool"
+  ],
+  "practicalLights": [
+    "fluorescent-overhead",
+    "window-bounce"
+  ]
+}

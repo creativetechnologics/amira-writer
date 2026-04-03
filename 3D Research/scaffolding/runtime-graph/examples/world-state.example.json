@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "0.1",
+  "project": "Amira",
+  "worldGraph": {
+    "activeWorldId": "world.valley.main",
+    "loadedAssets": [
+      "terrain_valley_main",
+      "river_main",
+      "bridge_main",
+      "town_cluster_a"
+    ],
+    "placements": [
+      {
+        "assetId": "bridge_main",
+        "transformRef": "world/world-instance.usda#/bridge_main"
+      }
+    ]
+  },
+  "shotGraph": {
+    "activeShotId": "shot_0010",
+    "activeCameraId": "cam_main",
+    "timeOfDayPreset": "sunrise_warm"
+  },
+  "styleGraph": {
+    "styleProfileId": "amira_toon_v001",
+    "lightRigId": "sunrise_soft_directional",
+    "atmosphereProfileId": "light_morning_haze",
+    "outlineProfileId": "clean_ink_medium"
+  },
+  "performanceGraph": {
+    "characters": [],
+    "bodyTracks": [],
+    "faceTracks": [],
+    "mouthTracks": []
+  }
+}

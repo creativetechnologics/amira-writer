@@ -1,0 +1,220 @@
+{
+  "bandCount": 6,
+  "exitReadyBands": [
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6"
+  ],
+  "blockedBands": [],
+  "highestExitReadyBand": "B6",
+  "bandStatuses": [
+    {
+      "bandId": "B1",
+      "bandName": "Contract and adapter foundation",
+      "dependencyReady": true,
+      "missingDocs": [],
+      "missingFixtures": [],
+      "missingOutputs": [],
+      "subsystemChecks": {
+        "body": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "mouth": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "lighting": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        }
+      },
+      "exitCriteria": [
+        "body requires 2 docs, 2 fixtures, and 1 outputs.",
+        "mouth requires 2 docs, 2 fixtures, and 1 outputs.",
+        "lighting requires 2 docs, 2 fixtures, and 1 outputs."
+      ],
+      "exitReady": true
+    },
+    {
+      "bandId": "B2",
+      "bandName": "Single-character deterministic pilot",
+      "dependencyReady": true,
+      "missingDocs": [],
+      "missingFixtures": [],
+      "missingOutputs": [],
+      "subsystemChecks": {
+        "body": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "mouth": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "lighting": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        }
+      },
+      "exitCriteria": [
+        "body requires 2 docs, 1 fixtures, and 1 outputs.",
+        "mouth requires 1 docs, 1 fixtures, and 1 outputs.",
+        "lighting requires 1 docs, 1 fixtures, and 1 outputs."
+      ],
+      "exitReady": true
+    },
+    {
+      "bandId": "B3",
+      "bandName": "Singing and readability",
+      "dependencyReady": true,
+      "missingDocs": [],
+      "missingFixtures": [],
+      "missingOutputs": [],
+      "subsystemChecks": {
+        "body": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "mouth": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "lighting": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        }
+      },
+      "exitCriteria": [
+        "body requires 1 docs, 1 fixtures, and 1 outputs.",
+        "mouth requires 2 docs, 1 fixtures, and 1 outputs.",
+        "lighting requires 1 docs, 1 fixtures, and 1 outputs."
+      ],
+      "exitReady": true
+    },
+    {
+      "bandId": "B4",
+      "bandName": "Routing-aware intelligence",
+      "dependencyReady": true,
+      "missingDocs": [],
+      "missingFixtures": [],
+      "missingOutputs": [],
+      "subsystemChecks": {
+        "body": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "mouth": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "lighting": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        }
+      },
+      "exitCriteria": [
+        "body requires 2 docs, 1 fixtures, and 1 outputs.",
+        "mouth requires 1 docs, 1 fixtures, and 1 outputs.",
+        "lighting requires 1 docs, 1 fixtures, and 1 outputs."
+      ],
+      "exitReady": true
+    },
+    {
+      "bandId": "B5",
+      "bandName": "Ensemble-safe scaling",
+      "dependencyReady": true,
+      "missingDocs": [],
+      "missingFixtures": [],
+      "missingOutputs": [],
+      "subsystemChecks": {
+        "body": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "mouth": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "lighting": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        }
+      },
+      "exitCriteria": [
+        "body requires 1 docs, 1 fixtures, and 1 outputs.",
+        "mouth requires 1 docs, 1 fixtures, and 1 outputs.",
+        "lighting requires 2 docs, 2 fixtures, and 2 outputs."
+      ],
+      "exitReady": true
+    },
+    {
+      "bandId": "B6",
+      "bandName": "Production governance",
+      "dependencyReady": true,
+      "missingDocs": [],
+      "missingFixtures": [],
+      "missingOutputs": [],
+      "subsystemChecks": {
+        "body": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "mouth": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        },
+        "lighting": {
+          "ready": true,
+          "missingDocs": [],
+          "missingFixtures": [],
+          "missingOutputs": []
+        }
+      },
+      "exitCriteria": [
+        "body requires 2 docs, 1 fixtures, and 1 outputs.",
+        "mouth requires 1 docs, 1 fixtures, and 1 outputs.",
+        "lighting requires 1 docs, 1 fixtures, and 1 outputs."
+      ],
+      "exitReady": true
+    }
+  ],
+  "valid": true
+}

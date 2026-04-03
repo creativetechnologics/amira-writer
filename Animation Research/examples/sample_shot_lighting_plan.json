@@ -1,0 +1,35 @@
+{
+  "shotId": "luke-clinic-sunset-001",
+  "profileId": "sunset_warm",
+  "timeOfDay": "sunset",
+  "weather": "clear-dusty",
+  "keyDirection": "screen-right",
+  "cameraFacingBias": "three-quarter-left",
+  "faceProtection": true,
+  "mouthVisibilityProtection": true,
+  "paletteClamp": "anime-grounded-drama",
+  "characterZones": [
+    {
+      "target": "Luke Hart",
+      "depthZone": "foreground",
+      "materialResponses": ["skin-default", "cotton-uniform"],
+      "shadowBias": 0.12,
+      "rimBoost": 0.18
+    }
+  ],
+  "backgroundZones": [
+    {
+      "zone": "far-background",
+      "materialResponses": ["concrete-wall"],
+      "hazeBoost": 0.15,
+      "saturationBias": -0.08
+    },
+    {
+      "zone": "ground-plane",
+      "materialResponses": ["concrete-wall"],
+      "shadowBias": 0.06,
+      "warmthBoost": 0.1
+    }
+  ],
+  "practicalOverrides": []
+}

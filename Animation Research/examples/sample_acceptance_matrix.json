@@ -1,0 +1,39 @@
+{
+  "packetId": "pilot-luke-dialogue-shot-v1",
+  "phases": [
+    {
+      "name": "package",
+      "criteria": [
+        { "id": "head-sheet-approved", "status": "pass" },
+        { "id": "body-sheet-approved", "status": "pass" },
+        { "id": "mouth-profiles-front-quarter-side", "status": "pass" }
+      ]
+    },
+    {
+      "name": "planning",
+      "criteria": [
+        { "id": "motion-plan-valid", "status": "pass" },
+        { "id": "routing-reviewed", "status": "pass" },
+        { "id": "promotion-records-present", "status": "pass" }
+      ]
+    },
+    {
+      "name": "runtime-adapter",
+      "criteria": [
+        { "id": "body-adapter-renders", "status": "pass" },
+        { "id": "mouth-adapter-renders", "status": "pass" },
+        { "id": "lighting-adapter-renders", "status": "pass" },
+        { "id": "face-mouth-readable-under-grade", "status": "pass" },
+        { "id": "shot-export-check", "status": "todo" }
+      ]
+    },
+    {
+      "name": "lighting",
+      "criteria": [
+        { "id": "lighting-profile-valid", "status": "pass" },
+        { "id": "shot-lighting-plan-valid", "status": "pass" },
+        { "id": "lighting-review-clears-relight", "status": "pass" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "shots": [
+    {
+      "shotId": "ensemble_dialogue_01",
+      "category": "ensemble_dialogue",
+      "defaultRouting": "hybrid"
+    },
+    {
+      "shotId": "group_walk_01",
+      "category": "group_walk",
+      "defaultRouting": "hybrid"
+    },
+    {
+      "shotId": "action_insert_01",
+      "category": "action_insert",
+      "defaultRouting": "hybrid"
+    },
+    {
+      "shotId": "chase_wide_01",
+      "category": "chase_wide",
+      "defaultRouting": "ai-video-fallback"
+    },
+    {
+      "shotId": "crowd_leads_01",
+      "category": "crowd_leads",
+      "defaultRouting": "hybrid"
+    }
+  ]
+}

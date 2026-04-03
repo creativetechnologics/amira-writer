@@ -1,0 +1,200 @@
+{
+  "comparisons": [
+    {
+      "comparisonId": "ensemble-routing-district-clinic-exterior",
+      "locationId": "district-clinic-exterior",
+      "participantCount": 3,
+      "leadCount": 2,
+      "supportCount": 1,
+      "lightingProfile": "daylight_soft",
+      "sharedLightWorld": "soft clinic daylight with facade bounce and mild dust haze",
+      "baselineRecommendation": "ai-video-fallback",
+      "decisionReasons": [
+        "less confidence in ensemble continuity"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "full internal relight with ensemble protection lanes",
+          "whatStaysInternal": [
+            "group blocking"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "coverage feels weaker than before"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight with optional environment polish",
+          "whatStaysInternal": [
+            "principal acting"
+          ],
+          "assistBoundary": [
+            "background atmosphere enhancement"
+          ],
+          "riskNotes": [
+            "usable but not preferred"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "reference the same daylight world in start/end frames",
+          "whatStaysInternal": [
+            "reference prep only"
+          ],
+          "assistBoundary": [
+            "full motion generation"
+          ],
+          "riskNotes": [
+            "now treated as the default"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "ensemble-routing-rooftop-sunset",
+      "locationId": "rooftop-sunset",
+      "participantCount": 4,
+      "leadCount": 2,
+      "supportCount": 2,
+      "lightingProfile": "sunset_warm",
+      "sharedLightWorld": "single warm horizon key with skyline rim and restrained bloom",
+      "baselineRecommendation": "hybrid",
+      "decisionReasons": [
+        "rim direction stays difficult"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "full internal relight with fixed horizon rim logic",
+          "whatStaysInternal": [
+            "ensemble blocking"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "still possible"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus sky band polish",
+          "whatStaysInternal": [
+            "character acting"
+          ],
+          "assistBoundary": [
+            "sky enhancement"
+          ],
+          "riskNotes": [
+            "best baseline"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "sunset world referenced by packet and frames",
+          "whatStaysInternal": [
+            "shot intent and reference prep"
+          ],
+          "assistBoundary": [
+            "full movement and lighting reproduction"
+          ],
+          "riskNotes": [
+            "fallback only for complexity"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "ensemble-routing-village-street-night",
+      "locationId": "village-street-night",
+      "participantCount": 5,
+      "leadCount": 2,
+      "supportCount": 3,
+      "lightingProfile": "moonlight_blue",
+      "sharedLightWorld": "cool moonlit street with sparse practical spill pools",
+      "baselineRecommendation": "internal",
+      "decisionReasons": [
+        "trying to keep everything internal"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "internal moonlight plus selective practical accent channels",
+          "whatStaysInternal": [
+            "group blocking",
+            "protection channels"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "aggressive internal target"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus assisted practical spill polish",
+          "whatStaysInternal": [
+            "principal motion"
+          ],
+          "assistBoundary": [
+            "night atmosphere enhancement"
+          ],
+          "riskNotes": [
+            "available but not preferred"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "moonlit world described through packet plus reference frames",
+          "whatStaysInternal": [
+            "visual target definition"
+          ],
+          "assistBoundary": [
+            "full motion and lighting reproduction"
+          ],
+          "riskNotes": [
+            "fallback kept as last resort"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "ensemble-routing-clinic-interior-fluorescent",
+      "locationId": "clinic-interior-fluorescent",
+      "participantCount": 4,
+      "leadCount": 2,
+      "supportCount": 2,
+      "lightingProfile": "fluorescent_clinic",
+      "sharedLightWorld": "overhead fluorescent pool with cool room bounce and limited local warmth correction",
+      "baselineRecommendation": "internal",
+      "decisionReasons": [
+        "still predictable"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "full internal clinical relight with ensemble protection coverage",
+          "whatStaysInternal": [
+            "blocking"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "predictable"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus background polish",
+          "whatStaysInternal": [
+            "character motion"
+          ],
+          "assistBoundary": [
+            "room polish"
+          ],
+          "riskNotes": [
+            "valid alternate"
+          ]
+        }
+      ]
+    }
+  ]
+}

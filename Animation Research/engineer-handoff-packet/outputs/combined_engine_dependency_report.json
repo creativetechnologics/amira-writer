@@ -1,0 +1,67 @@
+{
+  "workPackageCount": 18,
+  "rootPackages": [
+    "B1-adapter-contract-loaders"
+  ],
+  "leafPackages": [
+    "B1-validation-contract-gate",
+    "B2-validation-pilot-gate",
+    "B6-validation-production-governance"
+  ],
+  "parallelReadyLayers": {
+    "layer_0": [
+      "B1-adapter-contract-loaders"
+    ],
+    "layer_1": [
+      "B1-runtime-fixture-harness",
+      "B1-validation-contract-gate"
+    ],
+    "layer_2": [
+      "B2-adapter-pilot-binding"
+    ],
+    "layer_3": [
+      "B2-runtime-single-character-pilot"
+    ],
+    "layer_4": [
+      "B2-validation-pilot-gate",
+      "B3-adapter-singing-layer"
+    ],
+    "layer_5": [
+      "B3-runtime-singing-readability"
+    ],
+    "layer_6": [
+      "B3-validation-singing-gate"
+    ],
+    "layer_7": [
+      "B4-adapter-routing-contracts"
+    ],
+    "layer_8": [
+      "B4-runtime-routing-handshake"
+    ],
+    "layer_9": [
+      "B4-validation-routing-cross-check"
+    ],
+    "layer_10": [
+      "B5-adapter-ensemble-coverage"
+    ],
+    "layer_11": [
+      "B5-runtime-ensemble-execution"
+    ],
+    "layer_12": [
+      "B5-validation-ensemble-governance"
+    ],
+    "layer_13": [
+      "B6-adapter-upgrade-and-schema-policy"
+    ],
+    "layer_14": [
+      "B6-runtime-governed-engine-path"
+    ],
+    "layer_15": [
+      "B6-validation-production-governance"
+    ]
+  },
+  "longestDependencyChain": 16,
+  "invalidPackages": [],
+  "hasCycle": false,
+  "valid": true
+}

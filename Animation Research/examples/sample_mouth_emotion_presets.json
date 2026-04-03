@@ -1,0 +1,45 @@
+{
+  "characters": {
+    "Luke Hart": {
+      "calm": {
+        "opennessBias": 0.0,
+        "releaseSoftness": 0.25,
+        "smileTendency": 0.05,
+        "strainAllowance": 0.1,
+        "asymmetryTolerance": 0.05
+      },
+      "resolute-sing": {
+        "opennessBias": 0.25,
+        "releaseSoftness": 0.2,
+        "smileTendency": 0.04,
+        "strainAllowance": 0.3,
+        "asymmetryTolerance": 0.06
+      }
+    },
+    "Amira Nazari": {
+      "calm": {
+        "opennessBias": 0.02,
+        "releaseSoftness": 0.45,
+        "smileTendency": 0.12,
+        "strainAllowance": 0.08,
+        "asymmetryTolerance": 0.06
+      },
+      "lyrical-strong": {
+        "opennessBias": 0.22,
+        "releaseSoftness": 0.32,
+        "smileTendency": 0.1,
+        "strainAllowance": 0.2,
+        "asymmetryTolerance": 0.07
+      }
+    },
+    "Yasmin Nazari": {
+      "calm": {
+        "opennessBias": -0.03,
+        "releaseSoftness": 0.4,
+        "smileTendency": 0.08,
+        "strainAllowance": 0.05,
+        "asymmetryTolerance": 0.05
+      }
+    }
+  }
+}

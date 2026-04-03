@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "profileId": "mouth-front-luke",
+  "characterId": "luke-hart",
+  "angleFamily": "front",
+  "anchor": {
+    "x": 0.5,
+    "y": 0.63,
+    "width": 0.18,
+    "height": 0.08,
+    "rotation": 0
+  },
+  "shapes": [
+    {
+      "id": "rest",
+      "asset": "mouth/rest.png"
+    },
+    {
+      "id": "mbp",
+      "asset": "mouth/mbp.png"
+    },
+    {
+      "id": "ee_tight",
+      "asset": "mouth/ee_tight.png"
+    },
+    {
+      "id": "eh_mid",
+      "asset": "mouth/eh_mid.png"
+    },
+    {
+      "id": "aa_wide",
+      "asset": "mouth/aa_wide.png"
+    },
+    {
+      "id": "oh_round",
+      "asset": "mouth/oh_round.png"
+    },
+    {
+      "id": "oo_pucker",
+      "asset": "mouth/oo_pucker.png"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "packetId": "engineer-handoff-001",
+  "targets": [
+    "PackageManifestAdapter",
+    "MotionPlanAdapter",
+    "MouthOverlayAdapter",
+    "AssetReviewAdapter",
+    "ReadinessAdapter"
+  ],
+  "fixtures": [
+    "sample_hero_ready_package.json",
+    "sample_pilot_packet.json",
+    "sample_mouth_profile.json",
+    "sample_walk_and_sing_motion_plan.json",
+    "sample_asset_review.json"
+  ],
+  "notes": "Research-only engineer handoff packet example"
+}

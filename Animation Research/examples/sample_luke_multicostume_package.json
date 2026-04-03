@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "packageId": "luke-hart-vnext-multicostume",
+  "characterIdentity": {
+    "characterId": "luke-hart",
+    "displayName": "Luke Hart",
+    "masterSheetAssetID": "sheet_master_luke_default",
+    "headSheetAssetID": "sheet_head_luke_default"
+  },
+  "costumePacks": [
+    {
+      "id": "costume_medic_desert",
+      "label": "Medic Desert",
+      "sheetAssetID": "sheet_body_luke_medic_desert",
+      "accessorySetIDs": ["acc_satchel_default", "acc_scarf_default"]
+    },
+    {
+      "id": "costume_plain_clothes",
+      "label": "Plain Clothes",
+      "sheetAssetID": "sheet_body_luke_plain_clothes",
+      "accessorySetIDs": []
+    }
+  ],
+  "mouthProfiles": [
+    {"id": "mouth_front_luke", "angleFamily": "front"},
+    {"id": "mouth_quarter_left_luke", "angleFamily": "quarterLeft"},
+    {"id": "mouth_quarter_right_luke", "angleFamily": "quarterRight"},
+    {"id": "mouth_profile_left_luke", "angleFamily": "profileLeft"},
+    {"id": "mouth_profile_right_luke", "angleFamily": "profileRight"}
+  ],
+  "motionPrimitives": [
+    {"id": "idle_front", "name": "idle_front"},
+    {"id": "walk_lr", "name": "walk_left_to_right"},
+    {"id": "turn_front_qleft", "name": "turn_front_to_quarter_left"},
+    {"id": "reach_satchel", "name": "reach_satchel"},
+    {"id": "react_worried", "name": "react_worried"},
+    {"id": "sit_clinic", "name": "sit_clinic"}
+  ],
+  "qa": {"status": "performance-ready"}
+}

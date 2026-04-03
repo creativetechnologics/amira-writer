@@ -1,0 +1,14 @@
+{
+  "phaseCount": 4,
+  "criterionCount": 14,
+  "passedCount": 13,
+  "failingCount": 1,
+  "ready": false,
+  "failing": [
+    {
+      "phase": "runtime-adapter",
+      "criterion": "shot-export-check",
+      "status": "todo"
+    }
+  ]
+}

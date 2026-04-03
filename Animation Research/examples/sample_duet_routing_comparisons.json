@@ -1,0 +1,275 @@
+{
+  "comparisons": [
+    {
+      "comparisonId": "duet-routing-district-clinic-exterior",
+      "locationId": "district-clinic-exterior",
+      "lightingProfile": "daylight_soft",
+      "sharedLightWorld": "soft clinic daylight with facade bounce and mild dust haze",
+      "baselineRecommendation": "internal",
+      "decisionReasons": [
+        "stable daylight key and fill are easy to preserve internally",
+        "Luke and Amira both have strong readable protection under the same day profile"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "full 8-channel relight inside engine",
+          "whatStaysInternal": [
+            "body blocking",
+            "mouth overlays",
+            "lighting continuity"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "low risk if wall-bounce and dust haze remain stable"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal base relight plus optional AI environment polish",
+          "whatStaysInternal": [
+            "character blocking",
+            "mouth overlays",
+            "protection channels"
+          ],
+          "assistBoundary": [
+            "background atmosphere enhancement"
+          ],
+          "riskNotes": [
+            "must not re-key characters differently from clinic daylight world"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "reference the same daylight world in start/end frames",
+          "whatStaysInternal": [
+            "reference prep only"
+          ],
+          "assistBoundary": [
+            "full motion generation"
+          ],
+          "riskNotes": [
+            "continuity loss is unjustified unless camera/action spikes unusually high"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "duet-routing-rooftop-sunset",
+      "locationId": "rooftop-sunset",
+      "lightingProfile": "sunset_warm",
+      "sharedLightWorld": "single warm horizon key with skyline rim and restrained bloom",
+      "baselineRecommendation": "internal",
+      "decisionReasons": [
+        "the dramatic read depends on a stable sunset direction more than on complex motion",
+        "Luke/Amira protection channels can preserve different facial priorities inside one sunset world"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "full internal relight with rim continuity",
+          "whatStaysInternal": [
+            "duet blocking",
+            "mouth overlays",
+            "rim/fill balance"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "sunset rim side must remain fixed across all beats"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus optional sky enhancement",
+          "whatStaysInternal": [
+            "character acting",
+            "protection channels"
+          ],
+          "assistBoundary": [
+            "sky band polish",
+            "atmosphere enhancement"
+          ],
+          "riskNotes": [
+            "hybrid pass must not oversaturate Amira scarf or flatten Luke shirt values"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "sunset world referenced by frames and packet notes",
+          "whatStaysInternal": [
+            "visual target definition"
+          ],
+          "assistBoundary": [
+            "full movement + lighting reproduction"
+          ],
+          "riskNotes": [
+            "fallback is only warranted for unusually complex camera choreography"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "duet-routing-village-street-night",
+      "locationId": "village-street-night",
+      "lightingProfile": "moonlight_blue",
+      "sharedLightWorld": "cool moonlit street with sparse practical spill pools",
+      "baselineRecommendation": "hybrid",
+      "decisionReasons": [
+        "night mouth readability and practical pools add complexity beyond a default internal pilot",
+        "the same moonlit world can still anchor all routes"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "internal moonlight plus selective practical accent channels",
+          "whatStaysInternal": [
+            "blocking",
+            "protection channels",
+            "mouth overlays"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "highest risk is losing mouth readability in low-value beats"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus assisted practical spill polish",
+          "whatStaysInternal": [
+            "character motion",
+            "shared moon key",
+            "protection channels"
+          ],
+          "assistBoundary": [
+            "practical spill enhancement",
+            "night atmosphere enhancement"
+          ],
+          "riskNotes": [
+            "best compromise for preserving continuity while handling difficult practicals"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "moonlit world described through packet plus reference frames",
+          "whatStaysInternal": [
+            "shot intent and reference images"
+          ],
+          "assistBoundary": [
+            "full motion and lighting reproduction"
+          ],
+          "riskNotes": [
+            "acceptable only if movement, crowding, or camera motion exceed hybrid envelope"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "duet-routing-clinic-interior-fluorescent",
+      "locationId": "clinic-interior-fluorescent",
+      "lightingProfile": "fluorescent_clinic",
+      "sharedLightWorld": "overhead fluorescent pool with cool room bounce and limited local warmth correction",
+      "baselineRecommendation": "internal",
+      "decisionReasons": [
+        "the flat clinical world is predictable and package-friendly",
+        "the main challenge is protection-channel tuning, not spectacle"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "full internal clinical relight",
+          "whatStaysInternal": [
+            "blocking",
+            "mouth overlays",
+            "uniform/scarf protection"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "must avoid tungsten-looking local corrections"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus light compositing polish",
+          "whatStaysInternal": [
+            "character motion",
+            "shared overhead world"
+          ],
+          "assistBoundary": [
+            "background polish",
+            "equipment practical enhancement"
+          ],
+          "riskNotes": [
+            "hybrid should not create a second light source"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "fluorescent world referenced but fully regenerated",
+          "whatStaysInternal": [
+            "reference design only"
+          ],
+          "assistBoundary": [
+            "full shot execution"
+          ],
+          "riskNotes": [
+            "fallback is rarely justified because internal control is more valuable here"
+          ]
+        }
+      ]
+    },
+    {
+      "comparisonId": "duet-routing-family-courtyard",
+      "locationId": "family-courtyard",
+      "lightingProfile": "sunset_warm",
+      "sharedLightWorld": "soft domestic courtyard warmth with wall bounce and optional evening practicals",
+      "baselineRecommendation": "internal",
+      "decisionReasons": [
+        "domestic warmth is stable and favors internal continuity",
+        "the main work is preserving different emotional facial priorities, not solving spectacle"
+      ],
+      "routeOptions": [
+        {
+          "mode": "internal",
+          "lightingHandling": "internal warm-key and practical-aware relight",
+          "whatStaysInternal": [
+            "blocking",
+            "mouth overlays",
+            "soft domestic protection"
+          ],
+          "assistBoundary": [],
+          "riskNotes": [
+            "practical rise must not erase shared courtyard light"
+          ]
+        },
+        {
+          "mode": "hybrid",
+          "lightingHandling": "internal character relight plus soft background/practical enhancement",
+          "whatStaysInternal": [
+            "character acting",
+            "protection channels"
+          ],
+          "assistBoundary": [
+            "background softness polish",
+            "practical glow"
+          ],
+          "riskNotes": [
+            "hybrid pass should remain subordinate to the domestic sunset world"
+          ]
+        },
+        {
+          "mode": "ai-video-fallback",
+          "lightingHandling": "courtyard warmth reproduced from packet references",
+          "whatStaysInternal": [
+            "look target"
+          ],
+          "assistBoundary": [
+            "full shot execution"
+          ],
+          "riskNotes": [
+            "fallback should be reserved for unusually complex ensemble blocking or camera work"
+          ]
+        }
+      ]
+    }
+  ]
+}

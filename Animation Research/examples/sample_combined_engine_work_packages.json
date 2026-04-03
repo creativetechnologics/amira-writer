@@ -1,0 +1,316 @@
+{
+  "workPackages": [
+    {
+      "bandId": "B1",
+      "workPackageId": "B1-adapter-contract-loaders",
+      "responsibility": "adapter",
+      "subsystem": "shared",
+      "goal": "Load package, motion, mouth, and lighting contracts safely behind adapters.",
+      "dependsOn": [],
+      "requiredArtifacts": [
+        "sample_combined_engine_rollout_matrix.json",
+        "sample_hero_package.json",
+        "sample_mouth_profile.json",
+        "sample_lighting_profile_library.json"
+      ],
+      "deliverables": [
+        "PackageManifestAdapter",
+        "MouthProfileAdapter",
+        "LightingProfileAdapter"
+      ]
+    },
+    {
+      "bandId": "B1",
+      "workPackageId": "B1-runtime-fixture-harness",
+      "responsibility": "runtime",
+      "subsystem": "shared",
+      "goal": "Create a research-only harness that loads combined fixtures without changing production paths.",
+      "dependsOn": [
+        "B1-adapter-contract-loaders"
+      ],
+      "requiredArtifacts": [
+        "sample_pilot_packet.json"
+      ],
+      "deliverables": [
+        "research fixture harness"
+      ]
+    },
+    {
+      "bandId": "B1",
+      "workPackageId": "B1-validation-contract-gate",
+      "responsibility": "validation",
+      "subsystem": "shared",
+      "goal": "Validate contract presence, schema readiness, and additive persistence assumptions.",
+      "dependsOn": [
+        "B1-adapter-contract-loaders"
+      ],
+      "requiredArtifacts": [
+        "build_manifest.json",
+        "combined_engine_rollout_report.json"
+      ],
+      "deliverables": [
+        "contract validation gate"
+      ]
+    },
+
+    {
+      "bandId": "B2",
+      "workPackageId": "B2-adapter-pilot-binding",
+      "responsibility": "adapter",
+      "subsystem": "body",
+      "goal": "Bind one-character pilot packet data into runtime-safe structures.",
+      "dependsOn": [
+        "B1-runtime-fixture-harness"
+      ],
+      "requiredArtifacts": [
+        "sample_pilot_packet.json"
+      ],
+      "deliverables": [
+        "pilot packet adapter"
+      ]
+    },
+    {
+      "bandId": "B2",
+      "workPackageId": "B2-runtime-single-character-pilot",
+      "responsibility": "runtime",
+      "subsystem": "body",
+      "goal": "Run a deterministic single-character dialogue pilot with body, mouth, and lighting hooks.",
+      "dependsOn": [
+        "B2-adapter-pilot-binding"
+      ],
+      "requiredArtifacts": [
+        "pilot_packet_check.json",
+        "lighting_plan_check.json"
+      ],
+      "deliverables": [
+        "single-character pilot harness"
+      ]
+    },
+    {
+      "bandId": "B2",
+      "workPackageId": "B2-validation-pilot-gate",
+      "responsibility": "validation",
+      "subsystem": "shared",
+      "goal": "Verify the one-character pilot is fully fixture-complete before broader runtime wiring.",
+      "dependsOn": [
+        "B2-runtime-single-character-pilot"
+      ],
+      "requiredArtifacts": [
+        "pilot_packet_check.json"
+      ],
+      "deliverables": [
+        "pilot fixture gate"
+      ]
+    },
+
+    {
+      "bandId": "B3",
+      "workPackageId": "B3-adapter-singing-layer",
+      "responsibility": "adapter",
+      "subsystem": "mouth",
+      "goal": "Load lyric timing, singing modifiers, and angle presets into the mouth subsystem.",
+      "dependsOn": [
+        "B2-runtime-single-character-pilot"
+      ],
+      "requiredArtifacts": [
+        "sample_lyric_mouth_plan.json",
+        "sample_angle_mouth_presets.json"
+      ],
+      "deliverables": [
+        "singing timing adapter"
+      ]
+    },
+    {
+      "bandId": "B3",
+      "workPackageId": "B3-runtime-singing-readability",
+      "responsibility": "runtime",
+      "subsystem": "mouth",
+      "goal": "Apply singing timing and keep mouth readability stable under active lighting.",
+      "dependsOn": [
+        "B3-adapter-singing-layer"
+      ],
+      "requiredArtifacts": [
+        "mouth_timing_validator.json",
+        "beat_lighting_readiness_report.json"
+      ],
+      "deliverables": [
+        "singing mouth runtime pass"
+      ]
+    },
+    {
+      "bandId": "B3",
+      "workPackageId": "B3-validation-singing-gate",
+      "responsibility": "validation",
+      "subsystem": "mouth",
+      "goal": "Validate lyric timing, angle presets, and lighting-aware mouth readability outputs.",
+      "dependsOn": [
+        "B3-runtime-singing-readability"
+      ],
+      "requiredArtifacts": [
+        "mouth_timing_validator.json",
+        "mouth_preset_report.json"
+      ],
+      "deliverables": [
+        "singing/readability validation gate"
+      ]
+    },
+
+    {
+      "bandId": "B4",
+      "workPackageId": "B4-adapter-routing-contracts",
+      "responsibility": "adapter",
+      "subsystem": "shared",
+      "goal": "Expose readiness, routing, and stress signals through one shared routing contract.",
+      "dependsOn": [
+        "B3-validation-singing-gate"
+      ],
+      "requiredArtifacts": [
+        "sample_routing_matrix_full.json",
+        "sample_ensemble_layer_consistency_cases.json"
+      ],
+      "deliverables": [
+        "routing contract adapter"
+      ]
+    },
+    {
+      "bandId": "B4",
+      "workPackageId": "B4-runtime-routing-handshake",
+      "responsibility": "runtime",
+      "subsystem": "shared",
+      "goal": "Apply route decisions only when body, mouth, and lighting minima agree.",
+      "dependsOn": [
+        "B4-adapter-routing-contracts"
+      ],
+      "requiredArtifacts": [
+        "readiness_routing_bridge.json",
+        "ensemble_layer_consistency_report.json"
+      ],
+      "deliverables": [
+        "routing handshake runtime"
+      ]
+    },
+    {
+      "bandId": "B4",
+      "workPackageId": "B4-validation-routing-cross-check",
+      "responsibility": "validation",
+      "subsystem": "shared",
+      "goal": "Block integration when routing, readiness, and stress disagree.",
+      "dependsOn": [
+        "B4-runtime-routing-handshake"
+      ],
+      "requiredArtifacts": [
+        "ensemble_layer_consistency_report.json",
+        "duet_routing_comparison_report.json",
+        "ensemble_routing_comparison_report.json"
+      ],
+      "deliverables": [
+        "routing cross-check gate"
+      ]
+    },
+
+    {
+      "bandId": "B5",
+      "workPackageId": "B5-adapter-ensemble-coverage",
+      "responsibility": "adapter",
+      "subsystem": "shared",
+      "goal": "Load multi-character blocking, mouth coverage, and lighting protection for ensemble scenes.",
+      "dependsOn": [
+        "B4-validation-routing-cross-check"
+      ],
+      "requiredArtifacts": [
+        "sample_action_ensemble_shots.json",
+        "sample_ensemble_beat_lighting_readiness_fixture.json"
+      ],
+      "deliverables": [
+        "ensemble coverage adapter"
+      ]
+    },
+    {
+      "bandId": "B5",
+      "workPackageId": "B5-runtime-ensemble-execution",
+      "responsibility": "runtime",
+      "subsystem": "shared",
+      "goal": "Execute controlled ensemble scenes with routing floors and lighting-safe mouth coverage.",
+      "dependsOn": [
+        "B5-adapter-ensemble-coverage"
+      ],
+      "requiredArtifacts": [
+        "ensemble_beat_lighting_readiness_report.json",
+        "ensemble_zone_practical_stress_report.json"
+      ],
+      "deliverables": [
+        "ensemble runtime pilot"
+      ]
+    },
+    {
+      "bandId": "B5",
+      "workPackageId": "B5-validation-ensemble-governance",
+      "responsibility": "validation",
+      "subsystem": "shared",
+      "goal": "Guard ensemble routing floors, stress minima, and diff outputs.",
+      "dependsOn": [
+        "B5-runtime-ensemble-execution"
+      ],
+      "requiredArtifacts": [
+        "ensemble-routing-diff-regressed/ensemble_routing_diff_report.json",
+        "ensemble-beat-lighting-diff-regressed/ensemble_beat_lighting_diff_report.json"
+      ],
+      "deliverables": [
+        "ensemble governance gate"
+      ]
+    },
+
+    {
+      "bandId": "B6",
+      "workPackageId": "B6-adapter-upgrade-and-schema-policy",
+      "responsibility": "adapter",
+      "subsystem": "shared",
+      "goal": "Stabilize schema evolution and upgrade policy for long-term engine adoption.",
+      "dependsOn": [
+        "B5-validation-ensemble-governance"
+      ],
+      "requiredArtifacts": [
+        "sample_schema_upgrade_manifest_v1.json",
+        "sample_upgraded_manifest_v2.json"
+      ],
+      "deliverables": [
+        "upgrade policy adapter notes"
+      ]
+    },
+    {
+      "bandId": "B6",
+      "workPackageId": "B6-runtime-governed-engine-path",
+      "responsibility": "runtime",
+      "subsystem": "shared",
+      "goal": "Run the integrated engine path behind acceptance gates and feature flags.",
+      "dependsOn": [
+        "B6-adapter-upgrade-and-schema-policy"
+      ],
+      "requiredArtifacts": [
+        "combined_engine_program_gate.json",
+        "build_manifest.json"
+      ],
+      "deliverables": [
+        "governed integrated runtime path"
+      ]
+    },
+    {
+      "bandId": "B6",
+      "workPackageId": "B6-validation-production-governance",
+      "responsibility": "validation",
+      "subsystem": "shared",
+      "goal": "Enforce acceptance, audit, and regression outputs as the final gate for rollout.",
+      "dependsOn": [
+        "B6-runtime-governed-engine-path"
+      ],
+      "requiredArtifacts": [
+        "acceptance_matrix_check.json",
+        "handoff_audit.json",
+        "combined_engine_program_gate.json"
+      ],
+      "deliverables": [
+        "production governance gate"
+      ]
+    }
+  ]
+}

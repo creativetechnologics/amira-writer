@@ -1,0 +1,37 @@
+{
+  "cases": [
+    {
+      "locationId": "district-clinic-exterior",
+      "readinessRecommendedRouting": "internal",
+      "comparisonBaselineRouting": "hybrid",
+      "stressMinimumRouting": "internal",
+      "notes": [
+        "baseline stays conservative because of moderate ensemble density"
+      ]
+    },
+    {
+      "locationId": "rooftop-sunset",
+      "readinessRecommendedRouting": "hybrid",
+      "comparisonBaselineRouting": "hybrid",
+      "stressMinimumRouting": "hybrid"
+    },
+    {
+      "locationId": "village-street-night",
+      "readinessRecommendedRouting": "ai-video-fallback",
+      "comparisonBaselineRouting": "ai-video-fallback",
+      "stressMinimumRouting": "ai-video-fallback"
+    },
+    {
+      "locationId": "clinic-interior-fluorescent",
+      "readinessRecommendedRouting": "internal",
+      "comparisonBaselineRouting": "internal",
+      "stressMinimumRouting": "internal"
+    },
+    {
+      "locationId": "family-courtyard",
+      "readinessRecommendedRouting": "hybrid",
+      "comparisonBaselineRouting": "hybrid",
+      "stressMinimumRouting": "hybrid"
+    }
+  ]
+}

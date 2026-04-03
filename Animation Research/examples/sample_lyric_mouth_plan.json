@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "characterId": "amira-nazari",
+  "mouthProfileId": "mouth-front-amira-default",
+  "mode": "singing",
+  "sourceText": "I will carry this song through the fire",
+  "events": [
+    {"frame": 0, "shape": "rest"},
+    {"frame": 4, "shape": "aa_wide", "lyric": "I"},
+    {"frame": 10, "shape": "oo_pucker", "lyric": "will"},
+    {"frame": 16, "shape": "aa_wide", "lyric": "car"},
+    {"frame": 24, "shape": "eh_mid", "lyric": "ry"},
+    {"frame": 32, "shape": "rest"},
+    {"frame": 36, "shape": "oh_round", "lyric": "song"},
+    {"frame": 46, "shape": "oo_pucker", "lyric": "through"},
+    {"frame": 58, "shape": "aa_wide", "lyric": "fire", "variant": "belt"}
+  ]
+}

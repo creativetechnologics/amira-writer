@@ -1,0 +1,127 @@
+{
+  "milestones": [
+    {
+      "id": "M1",
+      "name": "Data and adapter foundation",
+      "dependsOn": [],
+      "requiredDocs": [
+        "57-lighting-runtime-contracts.md",
+        "59-lighting-engine-handoff.md",
+        "102-lighting-engine-milestone-map.md",
+        "103-lighting-engine-integration-ladder.md"
+      ],
+      "requiredFixtures": [
+        "sample_lighting_profile_library.json",
+        "sample_material_response_catalog.json",
+        "sample_shot_lighting_plan.json"
+      ],
+      "requiredOutputs": [
+        "lighting_profile_library_check.json",
+        "lighting_plan_check.json"
+      ]
+    },
+    {
+      "id": "M2",
+      "name": "Single-shot deterministic relight harness",
+      "dependsOn": [
+        "M1"
+      ],
+      "requiredDocs": [
+        "56-lighting-and-recolor-engine.md",
+        "58-background-lighting-and-scene-grade.md"
+      ],
+      "requiredFixtures": [
+        "sample_shot_lighting_plan.json",
+        "sample_luke_lighting_ready_package.json",
+        "sample_clinic_location_lighting_set.json"
+      ],
+      "requiredOutputs": [
+        "lighting_readiness_report.json",
+        "lighting_review_gate.json"
+      ]
+    },
+    {
+      "id": "M3",
+      "name": "Mouth-aware lighting protection",
+      "dependsOn": [
+        "M2"
+      ],
+      "requiredDocs": [
+        "18-mouth-profile-catalog-and-lyric-engine.md",
+        "33-mouth-emotion-modifier-matrix.md",
+        "47-angle-and-performance-mouth-presets.md"
+      ],
+      "requiredFixtures": [
+        "sample_script_lighting_beat_plan.json",
+        "sample_beat_lighting_readiness_fixture.json"
+      ],
+      "requiredOutputs": [
+        "script_lighting_beat_plan_check.json",
+        "beat_lighting_readiness_report.json"
+      ]
+    },
+    {
+      "id": "M4",
+      "name": "Routing-aware lighting decisions",
+      "dependsOn": [
+        "M3"
+      ],
+      "requiredDocs": [
+        "80-duet-routing-comparison-matrix.md",
+        "92-ensemble-routing-comparison-matrix.md",
+        "100-ensemble-layer-consistency-cross-check.md"
+      ],
+      "requiredFixtures": [
+        "sample_duet_routing_comparisons.json",
+        "sample_ensemble_routing_comparisons.json",
+        "sample_ensemble_layer_consistency_cases.json"
+      ],
+      "requiredOutputs": [
+        "duet_routing_comparison_report.json",
+        "ensemble_routing_comparison_report.json",
+        "ensemble_layer_consistency_report.json"
+      ]
+    },
+    {
+      "id": "M5",
+      "name": "Ensemble-safe lighting",
+      "dependsOn": [
+        "M4"
+      ],
+      "requiredDocs": [
+        "90-ensemble-beat-lighting-readiness.md",
+        "96-ensemble-zone-practical-stress-rules.md",
+        "98-ensemble-beat-lighting-diff-and-regression-rules.md"
+      ],
+      "requiredFixtures": [
+        "sample_ensemble_beat_lighting_readiness_fixture.json",
+        "sample_ensemble_zone_practical_stress_cases.json"
+      ],
+      "requiredOutputs": [
+        "ensemble_beat_lighting_readiness_report.json",
+        "ensemble_zone_practical_stress_report.json"
+      ]
+    },
+    {
+      "id": "M6",
+      "name": "Production-grade governance",
+      "dependsOn": [
+        "M5"
+      ],
+      "requiredDocs": [
+        "54-handoff-output-bundle-notes.md",
+        "55-pilot-integration-acceptance-matrix.md",
+        "68-lighting-promotion-and-readiness-reporting.md"
+      ],
+      "requiredFixtures": [
+        "sample_acceptance_matrix.json",
+        "sample_ensemble_layer_consistency_cases_regressed.json"
+      ],
+      "requiredOutputs": [
+        "handoff_audit.json",
+        "build_manifest.json",
+        "ensemble_layer_consistency_report_regressed.json"
+      ]
+    }
+  ]
+}

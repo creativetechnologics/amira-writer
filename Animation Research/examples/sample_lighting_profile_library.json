@@ -1,0 +1,12 @@
+{
+  "libraryId": "amira-lighting-profiles-v1",
+  "profiles": [
+    {"id": "daylight_soft", "category": "day", "faceProtectionDefault": false},
+    {"id": "daylight_hard", "category": "day", "faceProtectionDefault": false},
+    {"id": "dust_storm_flat", "category": "day", "faceProtectionDefault": true},
+    {"id": "sunset_warm", "category": "sunset", "faceProtectionDefault": true},
+    {"id": "moonlight_blue", "category": "night", "faceProtectionDefault": true},
+    {"id": "fluorescent_clinic", "category": "interior", "faceProtectionDefault": true},
+    {"id": "firelight_flicker", "category": "special", "faceProtectionDefault": true}
+  ]
+}

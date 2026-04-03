@@ -1,0 +1,38 @@
+{
+  "pilotId": "luke-dialogue-pilot-001",
+  "character": "Luke Hart",
+  "costume": "medic_desert",
+  "shotType": "torso_up_dialogue",
+  "angles": ["front", "quarterLeft", "quarterRight"],
+  "routing": "internal",
+  "requiredAssets": {
+    "sheets": [
+      "sheet_master_luke_default",
+      "sheet_head_luke_default",
+      "sheet_body_luke_medic_desert"
+    ],
+    "bodyPrimitives": [
+      "idle_front",
+      "idle_concerned",
+      "turn_front_qleft",
+      "turn_front_qright",
+      "reach_small",
+      "react_worried"
+    ],
+    "mouthShapes": [
+      "rest",
+      "mbp",
+      "ee_tight",
+      "eh_mid",
+      "aa_wide",
+      "oh_round",
+      "oo_pucker"
+    ]
+  },
+  "successCriteria": [
+    "stable identity",
+    "correct costume",
+    "predictable sparse plan playback",
+    "acceptable mouth overlay quality"
+  ]
+}

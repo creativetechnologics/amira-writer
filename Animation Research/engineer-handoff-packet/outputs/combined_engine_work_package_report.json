@@ -1,0 +1,24 @@
+{
+  "workPackageCount": 18,
+  "bandCount": 6,
+  "packagesByBand": {
+    "B1": 3,
+    "B2": 3,
+    "B3": 3,
+    "B4": 3,
+    "B5": 3,
+    "B6": 3
+  },
+  "packagesByResponsibility": {
+    "adapter": 6,
+    "runtime": 6,
+    "validation": 6
+  },
+  "packagesBySubsystem": {
+    "shared": 13,
+    "body": 2,
+    "mouth": 3
+  },
+  "invalidPackages": [],
+  "valid": true
+}

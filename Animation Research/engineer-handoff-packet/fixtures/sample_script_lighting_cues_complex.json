@@ -1,0 +1,12 @@
+{
+  "sceneId": "scene-18",
+  "shotId": "scene-18-shot-07",
+  "scriptCues": {
+    "timeOfDay": "night",
+    "location": "clinic courtyard",
+    "weather": "dust and smoke",
+    "practicals": ["fire", "fluorescent spill"],
+    "performance": "sung close-up",
+    "camera": "close-up profile"
+  }
+}

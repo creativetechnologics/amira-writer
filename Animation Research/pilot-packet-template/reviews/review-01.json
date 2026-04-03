@@ -1,0 +1,10 @@
+{
+  "asset_id": "sheet_head_luke_default_v05",
+  "overall_decision": "approve",
+  "overall_confidence": 0.94,
+  "issues": [],
+  "edit_recommendation": {
+    "use_edit": false,
+    "edit_prompt": ""
+  }
+}

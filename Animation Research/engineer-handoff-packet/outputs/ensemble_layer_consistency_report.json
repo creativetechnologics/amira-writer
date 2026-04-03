@@ -1,0 +1,58 @@
+{
+  "caseCount": 5,
+  "blockingLocations": [],
+  "warningLocations": [
+    "district-clinic-exterior"
+  ],
+  "caseSummaries": [
+    {
+      "locationId": "district-clinic-exterior",
+      "readinessRecommendedRouting": "internal",
+      "comparisonBaselineRouting": "hybrid",
+      "stressMinimumRouting": "internal",
+      "consensusMinimumRouting": "hybrid",
+      "blockingIssues": [],
+      "warnings": [
+        "readiness and baseline routes disagree",
+        "baseline is more conservative than readiness"
+      ]
+    },
+    {
+      "locationId": "rooftop-sunset",
+      "readinessRecommendedRouting": "hybrid",
+      "comparisonBaselineRouting": "hybrid",
+      "stressMinimumRouting": "hybrid",
+      "consensusMinimumRouting": "hybrid",
+      "blockingIssues": [],
+      "warnings": []
+    },
+    {
+      "locationId": "village-street-night",
+      "readinessRecommendedRouting": "ai-video-fallback",
+      "comparisonBaselineRouting": "ai-video-fallback",
+      "stressMinimumRouting": "ai-video-fallback",
+      "consensusMinimumRouting": "ai-video-fallback",
+      "blockingIssues": [],
+      "warnings": []
+    },
+    {
+      "locationId": "clinic-interior-fluorescent",
+      "readinessRecommendedRouting": "internal",
+      "comparisonBaselineRouting": "internal",
+      "stressMinimumRouting": "internal",
+      "consensusMinimumRouting": "internal",
+      "blockingIssues": [],
+      "warnings": []
+    },
+    {
+      "locationId": "family-courtyard",
+      "readinessRecommendedRouting": "hybrid",
+      "comparisonBaselineRouting": "hybrid",
+      "stressMinimumRouting": "hybrid",
+      "consensusMinimumRouting": "hybrid",
+      "blockingIssues": [],
+      "warnings": []
+    }
+  ],
+  "valid": true
+}

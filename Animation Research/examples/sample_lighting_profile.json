@@ -1,0 +1,19 @@
+{
+  "id": "sunset_warm",
+  "category": "sunset",
+  "globalTint": "#F3C07A",
+  "shadowTint": "#7C5B86",
+  "highlightTint": "#FFD6A1",
+  "contrastBias": 0.18,
+  "saturationBias": -0.04,
+  "rimLight": {
+    "enabled": true,
+    "tint": "#FFB36B",
+    "intensity": 0.42
+  },
+  "atmosphere": {
+    "hazeTint": "#E5A36E",
+    "density": 0.22
+  },
+  "practicalSources": []
+}

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "planId": "luke-dialogue-pilot-001",
+  "sceneName": "Luke dialogue pilot",
+  "shotRouting": {
+    "mode": "internal",
+    "reason": "pilot dialogue shot",
+    "confidence": 0.93
+  },
+  "characterStates": [
+    {
+      "characterId": "luke-hart",
+      "costumePackId": "costume_medic_desert",
+      "mouthProfileId": "mouth_front_luke",
+      "position": {
+        "x": 0.5,
+        "y": 0.7
+      },
+      "headAngle": "front",
+      "bodyAngle": "front"
+    }
+  ],
+  "motionPrimitives": [
+    {
+      "primitiveId": "idle_front",
+      "characterId": "luke-hart",
+      "startFrame": 0,
+      "durationFrames": 48,
+      "loop": true,
+      "speedScale": 1.0,
+      "parameters": {}
+    }
+  ],
+  "mouthPlans": [
+    {
+      "characterId": "luke-hart",
+      "mouthProfileId": "mouth_front_luke",
+      "mode": "speech",
+      "source": "dialogue",
+      "timingStrategy": "speech-default"
+    }
+  ]
+}

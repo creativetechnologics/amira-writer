@@ -1,0 +1,24 @@
+{
+  "shotId": "ensemble-courtyard-lyric-001",
+  "locationId": "family-courtyard",
+  "participantCount": 4,
+  "continuityScore": 1.0,
+  "focusProtectionScore": 1.0,
+  "ensembleProtectionScore": 1.0,
+  "practicalScore": 1.0,
+  "packageScore": 0.75,
+  "packageFloor": 0.65,
+  "ensembleDensityScore": 0.8,
+  "weightedScore": 0.93,
+  "readinessTier": "internal-ready",
+  "recommendedRouting": "internal",
+  "perParticipantCoverage": {
+    "luke-hart": 1.0,
+    "amira-nazari": 1.0,
+    "yasmin-nazari": 1.0,
+    "johnny-ward": 1.0
+  },
+  "blockingIssues": [],
+  "warnings": [],
+  "valid": true
+}

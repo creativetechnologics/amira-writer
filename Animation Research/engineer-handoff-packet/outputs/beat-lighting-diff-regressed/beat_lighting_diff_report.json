@@ -1,0 +1,70 @@
+{
+  "summary": {
+    "oldBeatCount": 3,
+    "newBeatCount": 3,
+    "removedBeats": []
+  },
+  "regressions": [
+    {
+      "severity": "BLOCK",
+      "description": "Shared light world changed",
+      "details": {
+        "from": "cool moonlit street with sparse practical spill pools",
+        "to": "warm lantern world with drifting amber fill"
+      }
+    },
+    {
+      "severity": "BLOCK",
+      "description": "b02 lost protection channels",
+      "details": {
+        "from": [
+          "ch08_amira_protect"
+        ],
+        "to": []
+      }
+    },
+    {
+      "severity": "BLOCK",
+      "description": "b02 lost shared-world continuity note",
+      "details": {}
+    },
+    {
+      "severity": "BLOCK",
+      "description": "b03 practical channel hijacks world key",
+      "details": {
+        "practical": "fire-basket",
+        "channels": [
+          "ch01_world_key"
+        ]
+      }
+    }
+  ],
+  "warnings": [
+    {
+      "severity": "WARN",
+      "description": "b03 changed mouth overlay bias",
+      "details": {
+        "from": "quarterLeft",
+        "to": "front"
+      }
+    },
+    {
+      "severity": "WARN",
+      "description": "b03 changed practical emphasis",
+      "details": {
+        "from": {
+          "fire-basket": [
+            "ch05_practical_accent",
+            "ch06_atmosphere_grade"
+          ]
+        },
+        "to": {
+          "fire-basket": [
+            "ch01_world_key"
+          ]
+        }
+      }
+    }
+  ],
+  "hasRegression": true
+}

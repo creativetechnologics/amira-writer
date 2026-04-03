@@ -1,0 +1,153 @@
+{
+  "targetBandCount": 6,
+  "promotionReadyBands": [
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "B5",
+    "B6"
+  ],
+  "blockedBands": [],
+  "promotionChecklist": [
+    {
+      "bandId": "B1",
+      "promotionReady": true,
+      "exitReady": true,
+      "programGateReady": true,
+      "riskReviewed": true,
+      "contingencyReady": true,
+      "changeImpactReady": true,
+      "implementationTestReady": true,
+      "requiredReports": [
+        "combined_engine_program_gate.json",
+        "combined_engine_band_exit_report.json",
+        "combined_engine_risk_report.json",
+        "combined_engine_contingency_report.json",
+        "combined_engine_change_impact_report.json",
+        "combined_engine_implementation_test_matrix_report.json"
+      ],
+      "blockers": [],
+      "warnings": [
+        "2 high-severity risk entries remain documented for this band.",
+        "Band is sensitive to at least one current re-entry scenario and should be re-promoted carefully after changes."
+      ]
+    },
+    {
+      "bandId": "B2",
+      "promotionReady": true,
+      "exitReady": true,
+      "programGateReady": true,
+      "riskReviewed": true,
+      "contingencyReady": true,
+      "changeImpactReady": true,
+      "implementationTestReady": true,
+      "requiredReports": [
+        "combined_engine_program_gate.json",
+        "combined_engine_band_exit_report.json",
+        "combined_engine_risk_report.json",
+        "combined_engine_contingency_report.json",
+        "combined_engine_change_impact_report.json",
+        "combined_engine_implementation_test_matrix_report.json"
+      ],
+      "blockers": [],
+      "warnings": [
+        "2 high-severity risk entries remain documented for this band.",
+        "Band is sensitive to at least one current re-entry scenario and should be re-promoted carefully after changes."
+      ]
+    },
+    {
+      "bandId": "B3",
+      "promotionReady": true,
+      "exitReady": true,
+      "programGateReady": true,
+      "riskReviewed": true,
+      "contingencyReady": true,
+      "changeImpactReady": true,
+      "implementationTestReady": true,
+      "requiredReports": [
+        "combined_engine_program_gate.json",
+        "combined_engine_band_exit_report.json",
+        "combined_engine_risk_report.json",
+        "combined_engine_contingency_report.json",
+        "combined_engine_change_impact_report.json",
+        "combined_engine_implementation_test_matrix_report.json"
+      ],
+      "blockers": [],
+      "warnings": [
+        "3 high-severity risk entries remain documented for this band.",
+        "Band is sensitive to at least one current re-entry scenario and should be re-promoted carefully after changes."
+      ]
+    },
+    {
+      "bandId": "B4",
+      "promotionReady": true,
+      "exitReady": true,
+      "programGateReady": true,
+      "riskReviewed": true,
+      "contingencyReady": true,
+      "changeImpactReady": true,
+      "implementationTestReady": true,
+      "requiredReports": [
+        "combined_engine_program_gate.json",
+        "combined_engine_band_exit_report.json",
+        "combined_engine_risk_report.json",
+        "combined_engine_contingency_report.json",
+        "combined_engine_change_impact_report.json",
+        "combined_engine_implementation_test_matrix_report.json"
+      ],
+      "blockers": [],
+      "warnings": [
+        "3 high-severity risk entries remain documented for this band.",
+        "Band is sensitive to at least one current re-entry scenario and should be re-promoted carefully after changes."
+      ]
+    },
+    {
+      "bandId": "B5",
+      "promotionReady": true,
+      "exitReady": true,
+      "programGateReady": true,
+      "riskReviewed": true,
+      "contingencyReady": true,
+      "changeImpactReady": true,
+      "implementationTestReady": true,
+      "requiredReports": [
+        "combined_engine_program_gate.json",
+        "combined_engine_band_exit_report.json",
+        "combined_engine_risk_report.json",
+        "combined_engine_contingency_report.json",
+        "combined_engine_change_impact_report.json",
+        "combined_engine_implementation_test_matrix_report.json"
+      ],
+      "blockers": [],
+      "warnings": [
+        "1 high-severity risk entries remain documented for this band.",
+        "Band is sensitive to at least one current re-entry scenario and should be re-promoted carefully after changes."
+      ]
+    },
+    {
+      "bandId": "B6",
+      "promotionReady": true,
+      "exitReady": true,
+      "programGateReady": true,
+      "riskReviewed": true,
+      "contingencyReady": true,
+      "changeImpactReady": true,
+      "implementationTestReady": true,
+      "requiredReports": [
+        "combined_engine_program_gate.json",
+        "combined_engine_band_exit_report.json",
+        "combined_engine_risk_report.json",
+        "combined_engine_contingency_report.json",
+        "combined_engine_change_impact_report.json",
+        "combined_engine_implementation_test_matrix_report.json"
+      ],
+      "blockers": [],
+      "warnings": [
+        "Band is sensitive to at least one current re-entry scenario and should be re-promoted carefully after changes.",
+        "This is currently the highest contiguous ready band and carries full-program promotion responsibility."
+      ]
+    }
+  ],
+  "valid": true
+}

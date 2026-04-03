@@ -1,0 +1,160 @@
+{
+  "shotId": "ensemble-courtyard-lyric-001",
+  "locationId": "family-courtyard",
+  "lightingProfile": "courtyard_day_bounce",
+  "sharedLightWorld": "soft courtyard daylight with warm wall bounce and controlled doorway contrast",
+  "revisionSensitivity": 8,
+  "performanceMode": "ensemble singing",
+  "participants": [
+    {
+      "participantId": "luke-hart",
+      "role": "lead",
+      "packageReadiness": "performance-ready",
+      "protectChannel": "ch07_luke_protect"
+    },
+    {
+      "participantId": "amira-nazari",
+      "role": "lead",
+      "packageReadiness": "performance-ready",
+      "protectChannel": "ch08_amira_protect"
+    },
+    {
+      "participantId": "yasmin-nazari",
+      "role": "support",
+      "packageReadiness": "dialogue-ready",
+      "protectChannel": "ch09_support_protect_a"
+    },
+    {
+      "participantId": "johnny-ward",
+      "role": "support",
+      "packageReadiness": "dialogue-ready",
+      "protectChannel": "ch10_support_protect_b"
+    }
+  ],
+  "beats": [
+    {
+      "beatId": "b01",
+      "description": "The group gathers in the courtyard and settles into a shared phrase",
+      "focusParticipants": [
+        "luke-hart",
+        "amira-nazari"
+      ],
+      "visibleParticipants": [
+        "luke-hart",
+        "amira-nazari",
+        "yasmin-nazari",
+        "johnny-ward"
+      ],
+      "requiredProtectedParticipants": [
+        "luke-hart",
+        "amira-nazari"
+      ],
+      "activeZoneChannels": {
+        "courtyard-center": [
+          "ch01_world_key",
+          "ch02_world_fill"
+        ],
+        "back-wall": [
+          "ch04_background_separation",
+          "ch06_atmosphere_grade"
+        ]
+      },
+      "activePracticalChannels": {},
+      "activeProtectionChannels": [
+        "ch07_luke_protect",
+        "ch08_amira_protect"
+      ],
+      "continuityNotes": [
+        "shared light world remains unchanged",
+        "zone/practical emphasis only; no new channels introduced"
+      ]
+    },
+    {
+      "beatId": "b02",
+      "description": "Yasmin and Johnny move forward while Luke and Amira hold the frame edges",
+      "focusParticipants": [
+        "yasmin-nazari",
+        "johnny-ward"
+      ],
+      "visibleParticipants": [
+        "luke-hart",
+        "amira-nazari",
+        "yasmin-nazari",
+        "johnny-ward"
+      ],
+      "requiredProtectedParticipants": [
+        "yasmin-nazari",
+        "johnny-ward"
+      ],
+      "activeZoneChannels": {
+        "courtyard-center": [
+          "ch01_world_key",
+          "ch02_world_fill"
+        ],
+        "doorway-shadow": [
+          "ch04_background_separation",
+          "ch06_atmosphere_grade"
+        ]
+      },
+      "activePracticalChannels": {
+        "door-reflect": [
+          "ch05_practical_accent"
+        ]
+      },
+      "activeProtectionChannels": [
+        "ch09_support_protect_a",
+        "ch10_support_protect_b"
+      ],
+      "continuityNotes": [
+        "shared light world remains unchanged",
+        "zone/practical emphasis only; no new channels introduced"
+      ]
+    },
+    {
+      "beatId": "b03",
+      "description": "The phrase resolves as all four performers share the frame in a held composition",
+      "focusParticipants": [
+        "luke-hart",
+        "amira-nazari",
+        "yasmin-nazari",
+        "johnny-ward"
+      ],
+      "visibleParticipants": [
+        "luke-hart",
+        "amira-nazari",
+        "yasmin-nazari",
+        "johnny-ward"
+      ],
+      "requiredProtectedParticipants": [
+        "luke-hart",
+        "amira-nazari",
+        "yasmin-nazari",
+        "johnny-ward"
+      ],
+      "activeZoneChannels": {
+        "courtyard-center": [
+          "ch01_world_key",
+          "ch02_world_fill"
+        ],
+        "back-wall": [
+          "ch04_background_separation"
+        ]
+      },
+      "activePracticalChannels": {
+        "water-basin-glint": [
+          "ch05_practical_accent"
+        ]
+      },
+      "activeProtectionChannels": [
+        "ch07_luke_protect",
+        "ch08_amira_protect",
+        "ch09_support_protect_a",
+        "ch10_support_protect_b"
+      ],
+      "continuityNotes": [
+        "shared light world remains unchanged",
+        "zone/practical emphasis only; no new channels introduced"
+      ]
+    }
+  ]
+}

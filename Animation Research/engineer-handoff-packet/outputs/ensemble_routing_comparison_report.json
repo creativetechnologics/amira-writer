@@ -1,0 +1,24 @@
+{
+  "comparisonCount": 5,
+  "missingLocations": [],
+  "baselineCounts": {
+    "internal": 2,
+    "hybrid": 3,
+    "ai-video-fallback": 0
+  },
+  "internalCapableLocations": [
+    "clinic-interior-fluorescent",
+    "district-clinic-exterior",
+    "family-courtyard",
+    "rooftop-sunset",
+    "village-street-night"
+  ],
+  "hybridBiasedLocations": [
+    "district-clinic-exterior",
+    "rooftop-sunset",
+    "village-street-night"
+  ],
+  "fallbackBaselines": [],
+  "valid": true,
+  "invalidComparisons": []
+}

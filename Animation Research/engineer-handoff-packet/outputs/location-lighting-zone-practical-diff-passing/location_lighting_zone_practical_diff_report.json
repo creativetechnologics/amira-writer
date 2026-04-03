@@ -1,0 +1,10 @@
+{
+  "summary": {
+    "removedLocations": [],
+    "oldLocationCount": 5,
+    "newLocationCount": 5
+  },
+  "regressions": [],
+  "warnings": [],
+  "hasRegression": false
+}

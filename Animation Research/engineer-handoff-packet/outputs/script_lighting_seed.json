@@ -1,0 +1,13 @@
+{
+  "shotId": "scene-12-shot-04",
+  "profileId": "sunset_warm",
+  "timeOfDay": "sunset",
+  "faceProtection": true,
+  "mouthVisibilityProtection": true,
+  "cameraBias": "frontal",
+  "weatherModifiers": [
+    "contrast-down",
+    "haze-up"
+  ],
+  "practicalSummary": []
+}

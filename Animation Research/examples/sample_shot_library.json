@@ -1,0 +1,25 @@
+{
+  "shots": [
+    {
+      "shotId": "dialogue_closeup_01",
+      "label": "Dialogue Close-up",
+      "category": "dialogue_closeup",
+      "defaultRouting": "internal",
+      "exampleParameters": {"camera": 2, "action": 1, "fx": 0, "revision": 9}
+    },
+    {
+      "shotId": "walk_talk_01",
+      "label": "Walk and Talk",
+      "category": "walk_talk",
+      "defaultRouting": "internal",
+      "exampleParameters": {"camera": 3, "action": 3, "fx": 1, "revision": 8}
+    },
+    {
+      "shotId": "battlefield_wide_01",
+      "label": "Battlefield Wide",
+      "category": "spectacle_wide",
+      "defaultRouting": "ai-video-fallback",
+      "exampleParameters": {"camera": 5, "action": 5, "fx": 4, "revision": 4}
+    }
+  ]
+}

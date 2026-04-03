@@ -1,0 +1,29 @@
+{
+  "shotId": "duet-village-night-lyric-001",
+  "locationId": "village-street-night",
+  "characterCount": 2,
+  "continuityScore": 1.0,
+  "protectionScore": 0.667,
+  "practicalScore": 0.667,
+  "focusCharacterScore": 0.75,
+  "packageScore": 0.6,
+  "packageFloor": 0.35,
+  "weightedScore": 0.77,
+  "readinessTier": "fallback-only",
+  "recommendedRouting": "ai-video-fallback",
+  "characterProtectChannels": {
+    "luke-hart": "ch07_luke_protect",
+    "amira-nazari": "ch08_amira_protect"
+  },
+  "perCharacterFocusCoverage": {
+    "luke-hart": 1.0,
+    "amira-nazari": 0.5
+  },
+  "blockingIssues": [
+    "missing-shared-light-world",
+    "b02:missing-protection:ch08_amira_protect",
+    "b03:practical-uses-world-key:fire-basket"
+  ],
+  "warnings": [],
+  "valid": false
+}

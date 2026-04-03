@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://amira.writer/schemas/character-package-vnext.json",
+  "title": "Amira Writer Character Package vNext Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "slug", "displayName", "characterIdentity", "assetFamilies", "qa"],
+  "properties": {
+    "schemaVersion": {"type": "integer", "minimum": 1},
+    "id": {"type": "string"},
+    "slug": {"type": "string", "minLength": 1},
+    "displayName": {"type": "string", "minLength": 1},
+    "characterIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "styleProfile"],
+      "properties": {
+        "name": {"type": "string"},
+        "characterType": {"type": "string", "enum": ["hero", "supporting", "background"]},
+        "ageBand": {"type": "string"},
+        "genderPresentation": {"type": "string"},
+        "styleProfile": {"type": "string"},
+        "identityReferences": {"type": "array", "items": {"type": "string"}},
+        "masterSheetAssetID": {"type": "string"},
+        "headSheetAssetID": {"type": "string"}
+      }
+    },
+    "assetFamilies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "references": {"type": "array", "items": {"$ref": "#/$defs/AssetRecord"}},
+        "sheets": {"type": "array", "items": {"$ref": "#/$defs/AssetRecord"}},
+        "rigParts": {"type": "array", "items": {"$ref": "#/$defs/AssetRecord"}},
+        "expressions": {"type": "array", "items": {"$ref": "#/$defs/AssetRecord"}},
+        "hands": {"type": "array", "items": {"$ref": "#/$defs/AssetRecord"}},
+        "poses": {"type": "array", "items": {"$ref": "#/$defs/AssetRecord"}},
+        "props": {"type": "array", "items": {"$ref": "#/$defs/AssetRecord"}},
+        "heroFrames": {"type": "array", "items": {"$ref": "#/$defs/AssetRecord"}}
+      }
+    },
+    "costumePacks": {"type": "array", "items": {"$ref": "#/$defs/CostumePack"}},
+    "accessoryPacks": {"type": "array", "items": {"$ref": "#/$defs/AccessoryPack"}},
+    "mouthProfiles": {"type": "array", "items": {"$ref": "#/$defs/MouthProfile"}},
+    "motionPrimitives": {"type": "array", "items": {"$ref": "#/$defs/MotionPrimitive"}},
+    "placementMaps": {"type": "array", "items": {"type": "object"}},
+    "generationBlueprints": {"type": "array", "items": {"type": "object"}},
+    "qa": {"$ref": "#/$defs/QA"}
+  },
+  "$defs": {
+    "AssetRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "name", "relativePath"],
+      "properties": {
+        "id": {"type": "string"},
+        "role": {"type": "string"},
+        "name": {"type": "string"},
+        "partType": {"type": "string"},
+        "angle": {"type": "string"},
+        "pose": {"type": "string"},
+        "relativePath": {"type": "string"},
+        "approved": {"type": "boolean"}
+      }
+    },
+    "CostumePack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "sheetAssetID": {"type": "string"},
+        "overlayAssetIDs": {"type": "array", "items": {"type": "string"}},
+        "propDefaults": {"type": "array", "items": {"type": "string"}},
+        "mouthProfileIds": {"type": "array", "items": {"type": "string"}},
+        "qa": {"$ref": "#/$defs/QA"}
+      }
+    },
+    "AccessoryPack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "attachmentPoint": {"type": "string"},
+        "assetIDs": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "MouthProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "angleFamily", "visemeAssetMap"],
+      "properties": {
+        "id": {"type": "string"},
+        "angleFamily": {"type": "string"},
+        "visemeAssetMap": {"type": "object", "additionalProperties": {"type": "string"}},
+        "registration": {"type": "object"},
+        "fallbackAngleFamilies": {"type": "array", "items": {"type": "string"}},
+        "speechTimingProfile": {"type": "string"},
+        "singingTimingProfile": {"type": "string"}
+      }
+    },
+    "MotionPrimitive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "kind": {"type": "string"},
+        "requiredAngles": {"type": "array", "items": {"type": "string"}},
+        "requiredAssetIDs": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "QA": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {"type": "string", "enum": ["draft", "needsReview", "approved", "approvedWithNotes", "rejected"]},
+        "coverage": {"type": "object"},
+        "knownGaps": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

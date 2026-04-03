@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://amira.writer/schemas/mouth-profile.json",
+  "title": "Amira Writer Mouth Profile Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "angleFamily", "visemeAssetMap", "registration"],
+  "properties": {
+    "schemaVersion": {"type": "integer", "minimum": 1},
+    "id": {"type": "string"},
+    "name": {"type": "string"},
+    "angleFamily": {"type": "string", "enum": ["front", "quarterLeft", "quarterRight", "profileLeft", "profileRight", "back", "fallback"]},
+    "visemeAssetMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rest", "ai", "e", "o", "u", "consonant", "fv", "l", "mbp", "wq"],
+      "properties": {
+        "rest": {"type": "string"},
+        "ai": {"type": "string"},
+        "e": {"type": "string"},
+        "o": {"type": "string"},
+        "u": {"type": "string"},
+        "consonant": {"type": "string"},
+        "fv": {"type": "string"},
+        "l": {"type": "string"},
+        "mbp": {"type": "string"},
+        "wq": {"type": "string"}
+      }
+    },
+    "registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchorPoint", "safeBounds"],
+      "properties": {
+        "anchorPoint": {"type": "object", "required": ["x", "y"], "properties": {"x": {"type": "number"}, "y": {"type": "number"}}},
+        "safeBounds": {"type": "object", "required": ["width", "height"], "properties": {"width": {"type": "number"}, "height": {"type": "number"}}}
+      }
+    },
+    "fallbackAngleFamilies": {"type": "array", "items": {"type": "string"}},
+    "speechTimingProfile": {"type": "string"},
+    "singingTimingProfile": {"type": "string"},
+    "blendStrategy": {"type": "string", "enum": ["swap", "crossfade", "meshDeform", "layerBlend"]}
+  }
+}

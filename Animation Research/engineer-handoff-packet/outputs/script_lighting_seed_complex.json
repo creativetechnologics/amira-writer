@@ -1,0 +1,20 @@
+{
+  "shotId": "scene-18-shot-07",
+  "profileId": "firelight_flicker",
+  "timeOfDay": "night",
+  "faceProtection": true,
+  "mouthVisibilityProtection": true,
+  "cameraBias": "profile",
+  "weatherModifiers": [
+    "contrast-down",
+    "cool-fill",
+    "depth-haze-up",
+    "flicker-practical",
+    "haze-up",
+    "rim-preferred"
+  ],
+  "practicalSummary": [
+    "fire",
+    "fluorescent spill"
+  ]
+}

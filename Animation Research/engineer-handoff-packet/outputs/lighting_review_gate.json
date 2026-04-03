@@ -1,0 +1,8 @@
+{
+  "approved": true,
+  "requiresRegeneration": false,
+  "suggestedCorrections": [
+    "Reduce ground-plane warmth by 0.03",
+    "Increase face fill by 0.05"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "0.1",
+  "motions": [
+    {
+      "motionId": "walk_basic_v001",
+      "title": "Basic Walk",
+      "sourceType": "retargeted_clip",
+      "skeletonProfileId": "humanoid_main_v001",
+      "loopable": true,
+      "rootMotion": true,
+      "tags": ["walk", "neutral", "travel"]
+    },
+    {
+      "motionId": "idle_dialogue_v001",
+      "title": "Dialogue Idle",
+      "sourceType": "hand_authored_or_cleaned",
+      "skeletonProfileId": "humanoid_main_v001",
+      "loopable": true,
+      "rootMotion": false,
+      "tags": ["idle", "dialogue", "subtle"]
+    }
+  ]
+}

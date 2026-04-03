@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "0.1",
+  "project": "Amira",
+  "sequenceId": "seq_valley_intro",
+  "shotId": "shot_0010",
+  "title": "Valley wide establishing",
+  "world": {
+    "worldId": "amira_valley_v001",
+    "environmentAssetIds": [
+      "terrain_valley_main",
+      "river_main",
+      "bridge_main",
+      "town_cluster_a"
+    ],
+    "placementLayer": "world/world-instance.usda",
+    "timeOfDay": "sunrise",
+    "weather": "clear"
+  },
+  "camera": {
+    "cameraId": "cam_main",
+    "rigType": "crane_or_dolly",
+    "lensMm": 35,
+    "moveType": "slow_push",
+    "durationSeconds": 6.0,
+    "cameraLayer": "cameras/camera-main.usda"
+  },
+  "performance": {
+    "characters": [],
+    "bodyAnimationRefs": [],
+    "faceAnimationRefs": [],
+    "mouthAnimationRefs": []
+  },
+  "style": {
+    "styleProfileId": "amira_toon_v001",
+    "outlineProfile": "clean_ink_medium",
+    "gradeProfile": "sunrise_warm",
+    "renderMode": "cel_shaded"
+  },
+  "outputs": {
+    "previewRuntime": "amira-native-realitykit",
+    "finalRenderTarget": "amira-native-realitykit"
+  }
+}

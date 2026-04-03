@@ -1,0 +1,357 @@
+{
+  "channelFamilies": [
+    {
+      "profileId": "daylight_soft",
+      "channels": [
+        {
+          "channelId": "ch01_world_key",
+          "fixtureRole": "sky-soft-key",
+          "defaultIntensity": 0.82
+        },
+        {
+          "channelId": "ch02_world_fill",
+          "fixtureRole": "wall-bounce-fill",
+          "defaultIntensity": 0.58
+        },
+        {
+          "channelId": "ch03_world_rim",
+          "fixtureRole": "sky-edge-rim",
+          "defaultIntensity": 0.22
+        },
+        {
+          "channelId": "ch04_background_separation",
+          "fixtureRole": "facade-depth-separation",
+          "defaultIntensity": 0.44
+        },
+        {
+          "channelId": "ch05_practical_accent",
+          "fixtureRole": "doorway-bounce",
+          "defaultIntensity": 0.12
+        },
+        {
+          "channelId": "ch06_atmosphere_grade",
+          "fixtureRole": "dust-haze-grade",
+          "defaultIntensity": 0.28
+        },
+        {
+          "channelId": "ch07_luke_protect",
+          "fixtureRole": "utility-face-guard",
+          "defaultIntensity": 0.26
+        },
+        {
+          "channelId": "ch08_amira_protect",
+          "fixtureRole": "face-frame-guard",
+          "defaultIntensity": 0.3
+        }
+      ]
+    },
+    {
+      "profileId": "sunset_warm",
+      "channels": [
+        {
+          "channelId": "ch01_world_key",
+          "fixtureRole": "horizon-sunset-key",
+          "defaultIntensity": 0.88
+        },
+        {
+          "channelId": "ch02_world_fill",
+          "fixtureRole": "warm-wall-bounce",
+          "defaultIntensity": 0.42
+        },
+        {
+          "channelId": "ch03_world_rim",
+          "fixtureRole": "skyline-rim",
+          "defaultIntensity": 0.51
+        },
+        {
+          "channelId": "ch04_background_separation",
+          "fixtureRole": "horizon-band-separation",
+          "defaultIntensity": 0.49
+        },
+        {
+          "channelId": "ch05_practical_accent",
+          "fixtureRole": "late-practical",
+          "defaultIntensity": 0.09
+        },
+        {
+          "channelId": "ch06_atmosphere_grade",
+          "fixtureRole": "warm-bloom-clamp",
+          "defaultIntensity": 0.37
+        },
+        {
+          "channelId": "ch07_luke_protect",
+          "fixtureRole": "jaw-shirt-guard",
+          "defaultIntensity": 0.24
+        },
+        {
+          "channelId": "ch08_amira_protect",
+          "fixtureRole": "skin-scarf-guard",
+          "defaultIntensity": 0.32
+        }
+      ]
+    },
+    {
+      "profileId": "moonlight_blue",
+      "channels": [
+        {
+          "channelId": "ch01_world_key",
+          "fixtureRole": "moon-top-key",
+          "defaultIntensity": 0.62
+        },
+        {
+          "channelId": "ch02_world_fill",
+          "fixtureRole": "night-ambient-fill",
+          "defaultIntensity": 0.18
+        },
+        {
+          "channelId": "ch03_world_rim",
+          "fixtureRole": "cool-silhouette-rim",
+          "defaultIntensity": 0.46
+        },
+        {
+          "channelId": "ch04_background_separation",
+          "fixtureRole": "alley-depth-separation",
+          "defaultIntensity": 0.36
+        },
+        {
+          "channelId": "ch05_practical_accent",
+          "fixtureRole": "window-lantern-spill",
+          "defaultIntensity": 0.24
+        },
+        {
+          "channelId": "ch06_atmosphere_grade",
+          "fixtureRole": "blue-night-compression",
+          "defaultIntensity": 0.43
+        },
+        {
+          "channelId": "ch07_luke_protect",
+          "fixtureRole": "strap-mouth-guard",
+          "defaultIntensity": 0.29
+        },
+        {
+          "channelId": "ch08_amira_protect",
+          "fixtureRole": "eye-mouth-scarf-guard",
+          "defaultIntensity": 0.35
+        }
+      ]
+    },
+    {
+      "profileId": "fluorescent_clinic",
+      "channels": [
+        {
+          "channelId": "ch01_world_key",
+          "fixtureRole": "overhead-fluorescent-key",
+          "defaultIntensity": 0.78
+        },
+        {
+          "channelId": "ch02_world_fill",
+          "fixtureRole": "ceiling-wall-return",
+          "defaultIntensity": 0.52
+        },
+        {
+          "channelId": "ch03_world_rim",
+          "fixtureRole": "cabinet-edge-rim",
+          "defaultIntensity": 0.12
+        },
+        {
+          "channelId": "ch04_background_separation",
+          "fixtureRole": "curtain-bed-separation",
+          "defaultIntensity": 0.38
+        },
+        {
+          "channelId": "ch05_practical_accent",
+          "fixtureRole": "task-lamp-or-door-spill",
+          "defaultIntensity": 0.15
+        },
+        {
+          "channelId": "ch06_atmosphere_grade",
+          "fixtureRole": "clinical-cool-clamp",
+          "defaultIntensity": 0.34
+        },
+        {
+          "channelId": "ch07_luke_protect",
+          "fixtureRole": "uniform-warmth-guard",
+          "defaultIntensity": 0.31
+        },
+        {
+          "channelId": "ch08_amira_protect",
+          "fixtureRole": "skin-scarf-separation-guard",
+          "defaultIntensity": 0.33
+        }
+      ]
+    },
+    {
+      "profileId": "night_practical_mix",
+      "channels": [
+        {
+          "channelId": "ch01_world_key",
+          "fixtureRole": "residual-night-key",
+          "defaultIntensity": 0.41
+        },
+        {
+          "channelId": "ch02_world_fill",
+          "fixtureRole": "mixed-warm-cool-fill",
+          "defaultIntensity": 0.27
+        },
+        {
+          "channelId": "ch03_world_rim",
+          "fixtureRole": "practical-opposed-rim",
+          "defaultIntensity": 0.34
+        },
+        {
+          "channelId": "ch04_background_separation",
+          "fixtureRole": "door-and-wall-depth-split",
+          "defaultIntensity": 0.39
+        },
+        {
+          "channelId": "ch05_practical_accent",
+          "fixtureRole": "lantern-window-lamp-pool",
+          "defaultIntensity": 0.47
+        },
+        {
+          "channelId": "ch06_atmosphere_grade",
+          "fixtureRole": "warm-cool-balance-clamp",
+          "defaultIntensity": 0.36
+        },
+        {
+          "channelId": "ch07_luke_protect",
+          "fixtureRole": "mixed-value-silhouette-guard",
+          "defaultIntensity": 0.28
+        },
+        {
+          "channelId": "ch08_amira_protect",
+          "fixtureRole": "mixed-practical-face-guard",
+          "defaultIntensity": 0.34
+        }
+      ]
+    }
+  ],
+  "locationBindings": [
+    {
+      "locationId": "district-clinic-exterior",
+      "defaultProfile": "daylight_soft",
+      "supportedProfiles": [
+        "daylight_soft",
+        "sunset_warm",
+        "moonlight_blue"
+      ],
+      "characterFixtures": {
+        "luke": {
+          "primaryProtectChannel": "ch07_luke_protect",
+          "focus": [
+            "pockets",
+            "satchel",
+            "jawline"
+          ]
+        },
+        "amira": {
+          "primaryProtectChannel": "ch08_amira_protect",
+          "focus": [
+            "brow-line",
+            "scarf-edge",
+            "mouth"
+          ]
+        }
+      }
+    },
+    {
+      "locationId": "rooftop-sunset",
+      "defaultProfile": "sunset_warm",
+      "supportedProfiles": [
+        "sunset_warm",
+        "moonlight_blue"
+      ],
+      "characterFixtures": {
+        "luke": {
+          "primaryProtectChannel": "ch07_luke_protect",
+          "focus": [
+            "jaw-rim",
+            "shirt-values"
+          ]
+        },
+        "amira": {
+          "primaryProtectChannel": "ch08_amira_protect",
+          "focus": [
+            "face-contour",
+            "scarf-contour"
+          ]
+        }
+      }
+    },
+    {
+      "locationId": "village-street-night",
+      "defaultProfile": "moonlight_blue",
+      "supportedProfiles": [
+        "moonlight_blue",
+        "night_practical_mix"
+      ],
+      "characterFixtures": {
+        "luke": {
+          "primaryProtectChannel": "ch07_luke_protect",
+          "focus": [
+            "strap-read",
+            "profile-mouth",
+            "shoulder-edge"
+          ]
+        },
+        "amira": {
+          "primaryProtectChannel": "ch08_amira_protect",
+          "focus": [
+            "eyes",
+            "mouth",
+            "scarf-edge"
+          ]
+        }
+      }
+    },
+    {
+      "locationId": "clinic-interior-fluorescent",
+      "defaultProfile": "fluorescent_clinic",
+      "supportedProfiles": [
+        "fluorescent_clinic",
+        "night_practical_mix"
+      ],
+      "characterFixtures": {
+        "luke": {
+          "primaryProtectChannel": "ch07_luke_protect",
+          "focus": [
+            "uniform-hierarchy",
+            "face-warmth"
+          ]
+        },
+        "amira": {
+          "primaryProtectChannel": "ch08_amira_protect",
+          "focus": [
+            "skin-scarf-split",
+            "mouth-read"
+          ]
+        }
+      }
+    },
+    {
+      "locationId": "family-courtyard",
+      "defaultProfile": "sunset_warm",
+      "supportedProfiles": [
+        "daylight_soft",
+        "sunset_warm",
+        "night_practical_mix"
+      ],
+      "characterFixtures": {
+        "luke": {
+          "primaryProtectChannel": "ch07_luke_protect",
+          "focus": [
+            "silhouette",
+            "shirt-contrast"
+          ]
+        },
+        "amira": {
+          "primaryProtectChannel": "ch08_amira_protect",
+          "focus": [
+            "face-framing",
+            "soft-scarf-read"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "changeClasses": [
+    {
+      "changeClassId": "cc-shared-schema",
+      "changeType": "schema-change",
+      "subsystem": "shared",
+      "summary": "Shared package/schema compatibility changes."
+    },
+    {
+      "changeClassId": "cc-shared-adapter",
+      "changeType": "adapter-contract-change",
+      "subsystem": "shared",
+      "summary": "Shared adapter contract changes."
+    },
+    {
+      "changeClassId": "cc-body-runtime",
+      "changeType": "runtime-behavior-change",
+      "subsystem": "body",
+      "summary": "Body runtime and blocking behavior changes."
+    },
+    {
+      "changeClassId": "cc-mouth-runtime",
+      "changeType": "runtime-contract-change",
+      "subsystem": "mouth",
+      "summary": "Mouth runtime contract and timing changes."
+    },
+    {
+      "changeClassId": "cc-lighting-runtime",
+      "changeType": "runtime-contract-change",
+      "subsystem": "lighting",
+      "summary": "Lighting runtime and relight behavior changes."
+    },
+    {
+      "changeClassId": "cc-shared-governance",
+      "changeType": "governance-rule-change",
+      "subsystem": "shared",
+      "summary": "Shared governance and validation policy changes."
+    },
+    {
+      "changeClassId": "cc-mouth-validation",
+      "changeType": "validation-rule-change",
+      "subsystem": "mouth",
+      "summary": "Mouth validation or readability rule changes."
+    },
+    {
+      "changeClassId": "cc-lighting-validation",
+      "changeType": "validation-rule-change",
+      "subsystem": "lighting",
+      "summary": "Lighting validation or protect-lane rule changes."
+    }
+  ]
+}

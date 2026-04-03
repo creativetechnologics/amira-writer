@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "packageId": "luke-hart-vnext-pilot",
+  "characterIdentity": {
+    "characterId": "luke-hart",
+    "displayName": "Luke Hart",
+    "masterSheetAssetID": "sheet_master_luke_default",
+    "headSheetAssetID": "sheet_head_luke_default"
+  },
+  "costumePacks": [
+    {
+      "id": "costume_medic_desert",
+      "label": "Medic Desert",
+      "sheetAssetID": "sheet_body_luke_medic_desert",
+      "accessorySetIDs": [
+        "acc_satchel_default"
+      ]
+    }
+  ],
+  "mouthProfiles": [
+    {
+      "id": "mouth_front_luke",
+      "angleFamily": "front"
+    }
+  ],
+  "motionPrimitives": [
+    {
+      "id": "idle_front",
+      "name": "idle_front"
+    },
+    {
+      "id": "turn_front_qleft",
+      "name": "turn_front_qleft"
+    },
+    {
+      "id": "turn_front_qright",
+      "name": "turn_front_qright"
+    },
+    {
+      "id": "react_worried",
+      "name": "react_worried"
+    },
+    {
+      "id": "reach_small",
+      "name": "reach_small"
+    }
+  ],
+  "qa": {
+    "status": "dialogue-ready"
+  }
+}

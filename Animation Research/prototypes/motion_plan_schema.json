@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://amira.writer/schemas/motion-plan-v1.json",
+  "title": "Amira Writer Motion Plan Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sceneName", "shotRouting", "motionPrimitives"],
+  "properties": {
+    "schemaVersion": {"type": "integer", "minimum": 1},
+    "planId": {"type": "string"},
+    "sceneName": {"type": "string", "minLength": 1},
+    "shotRouting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {"type": "string", "enum": ["internal", "hybrid", "aiVideoFallback", "aiVideoFirst", "manual"]},
+        "reason": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "characterStates": {"type": "array", "items": {"$ref": "#/$defs/CharacterState"}},
+    "motionPrimitives": {"type": "array", "items": {"$ref": "#/$defs/MotionPrimitivePlan"}},
+    "overlays": {"type": "array", "items": {"$ref": "#/$defs/OverlayPlan"}},
+    "mouthPlans": {"type": "array", "items": {"$ref": "#/$defs/MouthPlan"}},
+    "qa": {"$ref": "#/$defs/QAReview"}
+  },
+  "$defs": {
+    "Vec2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {"x": {"type": "number"}, "y": {"type": "number"}}
+    },
+    "CharacterState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["characterId"],
+      "properties": {
+        "characterId": {"type": "string"},
+        "characterName": {"type": "string"},
+        "costumePackId": {"type": "string"},
+        "mouthProfileId": {"type": "string"},
+        "position": {"$ref": "#/$defs/Vec2"},
+        "facing": {"type": "string"},
+        "headAngle": {"type": "string"},
+        "bodyAngle": {"type": "string"}
+      }
+    },
+    "MotionPrimitivePlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primitiveId"],
+      "properties": {
+        "primitiveId": {"type": "string"},
+        "characterId": {"type": "string"},
+        "startFrame": {"type": "integer", "minimum": 0},
+        "durationFrames": {"type": "integer", "minimum": 1},
+        "loop": {"type": "boolean"},
+        "speedScale": {"type": "number", "minimum": 0},
+        "parameters": {"type": "object", "additionalProperties": true}
+      }
+    },
+    "OverlayPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["blink", "gaze", "breath", "cloth", "hair", "prop", "mouth", "handOffset", "cameraAssist"]},
+        "targetCharacterId": {"type": "string"},
+        "startFrame": {"type": "integer", "minimum": 0},
+        "endFrame": {"type": "integer", "minimum": 0},
+        "parameters": {"type": "object", "additionalProperties": true}
+      }
+    },
+    "MouthPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["characterId", "mouthProfileId", "mode"],
+      "properties": {
+        "characterId": {"type": "string"},
+        "mouthProfileId": {"type": "string"},
+        "mode": {"type": "string", "enum": ["speech", "singing"]},
+        "source": {"type": "string", "enum": ["lyrics", "dialogue", "audio", "manual"]},
+        "timingStrategy": {"type": "string"}
+      }
+    },
+    "QAReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {"type": "string", "enum": ["draft", "needsReview", "approved", "approvedWithNotes", "rejected"]},
+        "issues": {"type": "array", "items": {"type": "object"}}
+      }
+    }
+  }
+}

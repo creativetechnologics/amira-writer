@@ -1,0 +1,36 @@
+{
+  "packageId": "amira-nazari-lighting-ready-v1",
+  "characterId": "amira-nazari",
+  "supportedLightingProfiles": [
+    "daylight_soft",
+    "sunset_warm",
+    "moonlight_blue",
+    "fluorescent_clinic",
+    "night_practical_mix"
+  ],
+  "materialResponseIds": [
+    "skin-default",
+    "hair-dark",
+    "cotton-uniform",
+    "concrete-wall"
+  ],
+  "costumeLightingNotes": [
+    {
+      "costumeId": "costume_civilian_default",
+      "protectPalette": true,
+      "allowWarmShift": true,
+      "faceFramingProtection": true
+    },
+    {
+      "costumeId": "costume_ceremony",
+      "protectPalette": true,
+      "allowWarmShift": false,
+      "faceFramingProtection": true
+    }
+  ],
+  "lightingDefaults": {
+    "faceProtection": true,
+    "mouthVisibilityProtection": true,
+    "silhouetteProtection": true
+  }
+}
