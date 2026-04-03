@@ -17,6 +17,7 @@ final class GeminiImageService {
         case noImageInResponse
         case imageDecodingFailed
         case cancelled
+        case rateLimitExceeded
 
         var errorDescription: String? {
             switch self {
@@ -26,6 +27,7 @@ final class GeminiImageService {
             case .noImageInResponse: "No image was returned in the response."
             case .imageDecodingFailed: "Failed to decode the generated image."
             case .cancelled: "Generation was cancelled."
+            case .rateLimitExceeded: "Too many API calls in a short period. Wait a moment and try again."
             }
         }
     }
@@ -61,6 +63,14 @@ final class GeminiImageService {
         }
     }
 
+    // MARK: - Rate Limiting
+
+    /// Maximum number of `generate()` calls allowed per 60-second window.
+    static var rateLimitPerMinute: Int = 5
+
+    private static var callCount: Int = 0
+    private static var callCountResetTime: Date = Date()
+
     // MARK: - Properties
 
     private let session: URLSession
@@ -88,6 +98,19 @@ final class GeminiImageService {
     /// Generate a single image from a text prompt with optional reference images.
     func generate(request: GenerationRequest, apiKey: String) async throws -> GenerationResult {
         guard !apiKey.isEmpty else { throw ServiceError.noAPIKey }
+
+        // Rate limiting: reset the window counter if more than 60 seconds have elapsed.
+        let now = Date()
+        if now.timeIntervalSince(Self.callCountResetTime) > 60 {
+            Self.callCount = 0
+            Self.callCountResetTime = now
+        }
+        Self.callCount += 1
+        print("[GeminiImageService] API call #\(Self.callCount) at \(now) — model: \(request.model.rawValue)")
+        if Self.callCount > Self.rateLimitPerMinute {
+            print("[GeminiImageService] ⚠️ RATE LIMIT: More than \(Self.rateLimitPerMinute) API calls in 60 seconds. Blocking call.")
+            throw ServiceError.rateLimitExceeded
+        }
 
         guard let url = URL(string: "\(baseURL)/\(request.model.rawValue):generateContent") else {
             throw ServiceError.invalidResponse

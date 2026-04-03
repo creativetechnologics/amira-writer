@@ -212,9 +212,11 @@ final class Animate3DProductionCoordinator: ObservableObject {
         plan = compiledPlan
         status = makeStatus(for: compiledPlan, scene: scene, store: store, renderer: renderer, pendingMotionRequestCount: motionRequests.count)
 
-        if !motionRequests.isEmpty {
-            Task { await dispatchPendingMotionRequests() }
-        }
+        // Motion dispatch is manual-only. User must click "Dispatch Motions" in the inspector.
+        // Previously auto-dispatched here, which could spam external APIs without user consent.
+        // if !motionRequests.isEmpty {
+        //     Task { await dispatchPendingMotionRequests() }
+        // }
     }
 
     func render(frame: Int) {

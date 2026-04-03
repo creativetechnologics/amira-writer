@@ -386,6 +386,7 @@ struct GeminiGenerationView: View {
                 imageSize: draft.imageSize
             )
 
+            store.logGeminiAPICall(endpoint: "image-generation", source: "GeminiGenerationView.generate()")
             let result = try await service.generate(request: request, apiKey: apiKey)
 
             generatedImages.append(GeneratedImageEntry(

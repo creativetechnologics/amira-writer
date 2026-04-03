@@ -1543,6 +1543,7 @@ struct CharacterReferenceWorkflowSheet: View {
                         imageSize: pair.1.imageSize
                     )
 
+                    store.logGeminiAPICall(endpoint: "image-generation", source: "CharacterReferenceWorkflowSheet.run()")
                     let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
 
                     switch pair.0 {

@@ -1518,6 +1518,7 @@ struct CharactersPageView: View {
                         imageSize: draft.imageSize
                     )
 
+                    store.logGeminiAPICall(endpoint: "image-generation", source: "CharactersPageView.generateInspirationImages()")
                     let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
 
                     try store.storeGeneratedInspirationImage(

@@ -149,6 +149,7 @@ final class BackgroundGenerationService {
             imageSize: "1K"
         )
         do {
+            print("[BackgroundGenerationService] Gemini API call — image-generation for location: \(location.slug)")
             let result = try await service.generate(request: request, apiKey: apiKey)
             try result.imageData.write(to: outputURL)
             return true

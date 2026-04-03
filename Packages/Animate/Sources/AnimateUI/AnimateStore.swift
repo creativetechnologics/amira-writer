@@ -106,6 +106,22 @@ final class AnimateStore {
 
     // MARK: - Gemini
 
+    /// Running total of all Gemini API calls made in this session.
+    var geminiAPICallCount: Int = 0
+    /// Rolling log of the last 100 Gemini API calls (date, endpoint, source).
+    var geminiAPICallLog: [(date: Date, endpoint: String, source: String)] = []
+
+    /// Record a Gemini API call for auditing and display.
+    func logGeminiAPICall(endpoint: String, source: String) {
+        geminiAPICallCount += 1
+        geminiAPICallLog.append((date: Date(), endpoint: endpoint, source: source))
+        // Keep only the last 100 entries to bound memory usage.
+        if geminiAPICallLog.count > 100 {
+            geminiAPICallLog.removeFirst(geminiAPICallLog.count - 100)
+        }
+        print("[AnimateStore] Gemini API call #\(geminiAPICallCount): \(source) → \(endpoint)")
+    }
+
     var geminiAPIKey: String = "" {
         didSet {
             guard !isHydratingGeminiSettings else { return }
@@ -7857,6 +7873,7 @@ final class AnimateStore {
                 stageWidth: 10.0,
                 stageDepth: 10.0
             )
+            logGeminiAPICall(endpoint: "text-generation", source: "generateAnimationPlanFromLLM")
             let result = try await LLMAnimationPlanGenerator.generate(
                 context: context,
                 apiKey: geminiAPIKey
@@ -8156,6 +8173,12 @@ final class AnimateStore {
     /// One-click "Animate Scene" macro: chains LLM plan generation, choreography,
     /// TTS dialogue audio, and lip sync in sequence for the given scene.
     func runAnimateSceneMacro(for scene: AnimationScene) async {
+        guard !geminiAPIKey.isEmpty else {
+            animateMacroStatus = "No Gemini API key — cannot generate plan"
+            isRunningAnimateMacro = false
+            return
+        }
+
         isRunningAnimateMacro = true
         animateMacroStatus = ""
 
@@ -8165,6 +8188,7 @@ final class AnimateStore {
         selectedSceneID = scene.id
 
         // Step 1 — Generate animation plan
+        logGeminiAPICall(endpoint: "text-generation", source: "runAnimateSceneMacro")
         animateMacroStatus = "Generating animation plan..."
         await generateAnimationPlanFromLLM()
 

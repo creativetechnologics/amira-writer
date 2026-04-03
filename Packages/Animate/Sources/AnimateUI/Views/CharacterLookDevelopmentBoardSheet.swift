@@ -397,6 +397,7 @@ struct CharacterLookDevelopmentBoardSheet: View {
 
         Task {
             do {
+                store.logGeminiAPICall(endpoint: "image-generation", source: "CharacterLookDevelopmentBoardSheet.generateSlot()")
                 let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
                 try store.storeLookDevelopmentVariant(
                     result.imageData,

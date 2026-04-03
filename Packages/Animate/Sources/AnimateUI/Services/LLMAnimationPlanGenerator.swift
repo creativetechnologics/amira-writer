@@ -47,6 +47,7 @@ struct LLMAnimationPlanGenerator: Sendable {
         case httpError(Int, String)
         case noTextInResponse
         case jsonExtractionFailed
+        case rateLimitExceeded
 
         var errorDescription: String? {
             switch self {
@@ -60,9 +61,19 @@ struct LLMAnimationPlanGenerator: Sendable {
                 return "No text content in LLM response."
             case .jsonExtractionFailed:
                 return "Could not extract JSON from LLM response."
+            case .rateLimitExceeded:
+                return "Too many API calls in a short period. Wait a moment and try again."
             }
         }
     }
+
+    // MARK: - Rate Limiting
+
+    /// Maximum number of `generate()` calls allowed per 60-second window.
+    nonisolated(unsafe) static var rateLimitPerMinute: Int = 5
+
+    nonisolated(unsafe) private static var callCount: Int = 0
+    nonisolated(unsafe) private static var callCountResetTime: Date = Date()
 
     // MARK: - Prompt Building
 
@@ -249,6 +260,19 @@ struct LLMAnimationPlanGenerator: Sendable {
         model: String = "gemini-2.0-flash"
     ) async throws -> GenerationResult {
         guard !apiKey.isEmpty else { throw GeneratorError.noAPIKey }
+
+        // Rate limiting: reset the window counter if more than 60 seconds have elapsed.
+        let now = Date()
+        if now.timeIntervalSince(callCountResetTime) > 60 {
+            callCount = 0
+            callCountResetTime = now
+        }
+        callCount += 1
+        print("[LLMAnimationPlanGenerator] API call #\(callCount) at \(now) — model: \(model), scene: \(context.sceneName)")
+        if callCount > rateLimitPerMinute {
+            print("[LLMAnimationPlanGenerator] ⚠️ RATE LIMIT: More than \(rateLimitPerMinute) API calls in 60 seconds. Blocking call.")
+            throw GeneratorError.rateLimitExceeded
+        }
 
         let prompt = buildPrompt(context: context)
 
