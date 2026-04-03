@@ -429,6 +429,10 @@ struct LLMAnimationPlanCompiler: Sendable {
             maxFrame = max(maxFrame, stateCue.frame)
         }
 
+        for presetApplication in plan.shotPresetApplications {
+            maxFrame = max(maxFrame, presetApplication.frame)
+        }
+
         for cameraMove in plan.cameraMoves.sorted(by: { $0.startFrame < $1.startFrame }) {
             let startZoom = cameraMove.fromShot?.zoomLevel ?? 1.0
             let endZoom = cameraMove.toShot?.zoomLevel ?? startZoom
@@ -480,6 +484,90 @@ struct LLMAnimationPlanCompiler: Sendable {
 
         compiled.totalFrames = maxFrame
         return compiled
+    }
+
+    /// Returns a copy of `plan` with audio paths that are placeholder strings or that do not
+    /// resolve to real files on disk replaced with `nil` / empty strings to prevent downstream
+    /// audio-loading failures.
+    ///
+    /// - Parameters:
+    ///   - plan: The plan to sanitize.
+    ///   - projectRoot: The directory used to resolve relative paths. Pass `nil` to skip
+    ///     file-existence checks and only strip known placeholder strings.
+    /// - Returns: A sanitized copy of the plan.
+    func sanitizingAudioPaths(
+        _ plan: LLMAnimationPlan,
+        projectRoot: URL?
+    ) -> LLMAnimationPlan {
+        var sanitized = plan
+
+        // Sanitize top-level sceneAudioPath.
+        sanitized.sceneAudioPath = sanitizedAudioPath(plan.sceneAudioPath, projectRoot: projectRoot)
+
+        // Sanitize dialogueBeat audioPath values.  Because LLMDialogueBeat.audioPath is
+        // a non-optional String we cannot set individual beats to nil; instead we filter
+        // out beats whose audio path is a placeholder or is not present on disk.  The
+        // beat's transcript and expression data would be lost, so we only remove the beat
+        // when the path is clearly a non-resolvable placeholder — real-but-missing paths
+        // are left in place so that validation can surface a proper error message.
+        sanitized.dialogueBeats = plan.dialogueBeats.map { beat in
+            guard isPlaceholderAudioPath(beat.audioPath) else { return beat }
+            // Replace placeholder with empty string; downstream audio loading will skip it
+            // cleanly while transcript / expression data is preserved.
+            return LLMDialogueBeat(
+                characterName: beat.characterName,
+                startFrame: beat.startFrame,
+                shotID: beat.shotID,
+                shotName: beat.shotName,
+                frameOffset: beat.frameOffset,
+                audioPath: "",
+                transcript: beat.transcript,
+                expression: beat.expression,
+                action: beat.action
+            )
+        }
+
+        return sanitized
+    }
+
+    /// Returns `nil` if `path` is a known placeholder string or if it does not resolve to
+    /// an existing file on disk; otherwise returns the original value.
+    private func sanitizedAudioPath(_ path: String?, projectRoot: URL?) -> String? {
+        guard let path = path?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty else {
+            return nil
+        }
+
+        if isPlaceholderAudioPath(path) {
+            return nil
+        }
+
+        guard let root = projectRoot else {
+            // No project root — cannot check file existence; keep the path as-is.
+            return path
+        }
+
+        let resolvedURL: URL
+        if path.hasPrefix("/") {
+            resolvedURL = URL(fileURLWithPath: path)
+        } else {
+            resolvedURL = root.appendingPathComponent(path)
+        }
+
+        return FileManager.default.fileExists(atPath: resolvedURL.path) ? path : nil
+    }
+
+    /// Returns `true` for well-known placeholder strings the LLM uses when no real audio
+    /// file has been assigned yet.
+    private func isPlaceholderAudioPath(_ path: String) -> Bool {
+        let lower = path.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower.isEmpty { return true }
+        if lower == "placeholder" { return true }
+        if lower == "null" { return true }
+        // Common LLM-generated fake path patterns, e.g. "audio/dialogue/scene1_luke.mp3"
+        // that don't point to a real file hierarchy the app manages.
+        let fakePrefixes = ["audio/dialogue/", "audio/scene/", "audio/placeholder"]
+        return fakePrefixes.contains { lower.hasPrefix($0) }
     }
 
     private func validateCharacterName(

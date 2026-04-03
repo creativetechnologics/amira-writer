@@ -26,17 +26,63 @@ public struct PropsWorkspace: View {
 }
 
 @available(macOS 26.0, *)
+private struct PropCardView: View {
+    let prop: PropItem
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(spacing: 6) {
+                Image(systemName: "cube.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                Text(prop.filename)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(OperaChromeTheme.textPrimary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                Text(prop.ext.uppercased())
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(OperaChromeTheme.textTertiary)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(OperaChromeTheme.raisedBackground.opacity(0.6))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(OperaChromeTheme.textTertiary.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Add \(prop.filename) to selected scene")
+    }
+}
+
+@available(macOS 26.0, *)
+private struct PropItem: Identifiable {
+    var id: URL { fileURL }
+    let fileURL: URL
+    let filename: String
+    let ext: String
+}
+
+@available(macOS 26.0, *)
 private struct PropsWorkspaceContent: View {
     @Bindable var store: AnimateStore
     @State private var animateWorkspaceState = AnimateWorkspaceState()
     @State private var importConfirmation: String?
+    @State private var scannedProps: [PropItem] = []
 
     @AppStorage("novotro.props.sidebarVisible") private var sidebarVisible = true
     @AppStorage("novotro.props.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
     @AppStorage("novotro.props.inspector.visible") private var inspectorVisible = true
     @AppStorage("novotro.props.inspector.width") private var inspectorWidth: Double = 320
 
-    private static let supportedExtensions: Set<String> = ["usdz", "glb", "obj", "png", "jpg", "jpeg"]
+    private static let supportedExtensions: Set<String> = ["usdz", "glb", "obj", "fbx", "dae", "png", "jpg", "jpeg"]
+    private static let prop3DExtensions: Set<String> = ["obj", "fbx", "dae", "usdz", "glb"]
 
     var body: some View {
         Group {
@@ -54,6 +100,12 @@ private struct PropsWorkspaceContent: View {
             if let message = importConfirmation {
                 importConfirmationOverlay(message: message)
             }
+        }
+        .onAppear {
+            scanPropsDirectory()
+        }
+        .onChange(of: store.owpURL) { _, _ in
+            scanPropsDirectory()
         }
     }
 
@@ -152,23 +204,142 @@ private struct PropsWorkspaceContent: View {
 
     private var propsSidebar: some View {
         VStack(spacing: 0) {
-            Spacer()
-            VStack(spacing: 8) {
-                Image(systemName: "shippingbox")
-                    .font(.system(size: 28))
-                    .foregroundStyle(OperaChromeTheme.textTertiary)
-                Text("Props will appear here")
-                    .font(.system(size: 12))
-                    .foregroundStyle(OperaChromeTheme.textSecondary)
-                Text("Import models or wait for the libretto extraction agent to discover props in the script.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(OperaChromeTheme.textTertiary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 16)
+            // Import Prop button at the top
+            Button {
+                Task { @MainActor in
+                    let service = PropBatchImportService(store: store)
+                    let result = await service.importPropsWithPanel()
+                    if result.importedCount > 0 {
+                        importConfirmation = "Imported \(result.importedCount) prop(s)"
+                        Task {
+                            try? await Task.sleep(for: .seconds(2.5))
+                            await MainActor.run { importConfirmation = nil }
+                        }
+                        scanPropsDirectory()
+                    }
+                }
+            } label: {
+                Label("Import Prop…", systemImage: "plus.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer()
+            .buttonStyle(.plain)
+            .foregroundStyle(Color(red: 0.78, green: 0.62, blue: 0.38))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            if scannedProps.isEmpty {
+                Spacer()
+                VStack(spacing: 8) {
+                    Image(systemName: "shippingbox")
+                        .font(.system(size: 28))
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                    Text("No props found")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                    Text("Import .obj, .fbx, .dae, or .usdz files to populate the prop library.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 16)
+                }
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 8),
+                            GridItem(.flexible(), spacing: 8)
+                        ],
+                        spacing: 8
+                    ) {
+                        ForEach(scannedProps) { prop in
+                            PropCardView(prop: prop) {
+                                addPropToScene(prop)
+                            }
+                        }
+                    }
+                    .padding(10)
+                }
+            }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Prop Scanning
+
+    private func scanPropsDirectory() {
+        guard let projectURL = store.owpURL else {
+            scannedProps = []
+            return
+        }
+        let objectsDir = projectURL.appendingPathComponent("Animate/objects", isDirectory: true)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: objectsDir.path) else {
+            scannedProps = []
+            return
+        }
+        do {
+            let contents = try fm.contentsOfDirectory(
+                at: objectsDir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+            scannedProps = contents
+                .filter { url in
+                    let ext = url.pathExtension.lowercased()
+                    return Self.prop3DExtensions.contains(ext)
+                }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+                .map { url in
+                    PropItem(
+                        fileURL: url,
+                        filename: url.deletingPathExtension().lastPathComponent,
+                        ext: url.pathExtension.lowercased()
+                    )
+                }
+        } catch {
+            scannedProps = []
+        }
+    }
+
+    private func addPropToScene(_ prop: PropItem) {
+        guard let sceneID = store.selectedSceneID,
+              let sceneIndex = store.scenes.firstIndex(where: { $0.id == sceneID }) else {
+            importConfirmation = "Select a scene first to add this prop."
+            Task {
+                try? await Task.sleep(for: .seconds(2.5))
+                await MainActor.run { importConfirmation = nil }
+            }
+            return
+        }
+        let objectName = prop.filename
+        // Avoid duplicates
+        guard !store.scenes[sceneIndex].objectSetups.contains(where: {
+            $0.objectName.caseInsensitiveCompare(objectName) == .orderedSame
+        }) else {
+            importConfirmation = "\(objectName) is already in this scene."
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                await MainActor.run { importConfirmation = nil }
+            }
+            return
+        }
+        let setup = ObjectSetup(
+            objectName: objectName,
+            initialX: 0.5,
+            initialY: 0.62,
+            initialState: "default",
+            enterFrame: 0
+        )
+        store.scenes[sceneIndex].objectSetups.append(setup)
+        importConfirmation = "Added \(objectName) to scene."
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            await MainActor.run { importConfirmation = nil }
+        }
     }
 
     // MARK: - Center Panel

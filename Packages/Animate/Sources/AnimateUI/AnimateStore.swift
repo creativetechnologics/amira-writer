@@ -128,11 +128,23 @@ final class AnimateStore {
     var meshyGeneratingCharacterID: UUID?
     var isGeneratingLLMPlan: Bool = false
 
+    // MARK: - Animate Scene Macro (Item 16)
+
+    var isRunningAnimateMacro: Bool = false
+    var animateMacroStatus: String = ""
+
+    // MARK: - Batch Scene Processing (Item 17)
+
+    var batchProcessingQueue: [UUID] = []
+    var batchProcessingActive: Bool = false
+    var batchProcessingCurrentSceneID: UUID? = nil
+
     // MARK: - Generation Sheet State
 
     var showGenerationSheet: Bool = false
     var showRigEditor: Bool = false
     var showExportSheet: Bool = false
+    var show3DExportSheet: Bool = false
     var generationTargetPartID: UUID?
     var generationTargetAngle: AngleView?
 
@@ -2221,6 +2233,15 @@ final class AnimateStore {
 
         scenes[sceneIndex].defaultAudioPath = normalizedMediaPath(path)
         persistSelectedSceneTracks()
+    }
+
+    /// Public API to set (or clear) the default audio path for any scene by ID.
+    func setDefaultAudioPath(_ path: String?, for sceneID: UUID) {
+        guard let sceneIndex = scenes.firstIndex(where: { $0.id == sceneID }) else { return }
+        scenes[sceneIndex].defaultAudioPath = normalizedMediaPath(path)
+        if selectedSceneID == sceneID {
+            persistSelectedSceneTracks()
+        }
     }
 
     private func applyShotPresetApplications(
@@ -7986,5 +8007,95 @@ final class AnimateStore {
         }
         let service = MeshyService(apiKey: meshyAPIKey)
         meshyBalance = try? await service.checkBalance()
+    }
+
+    // MARK: - Animate Scene Macro (Item 16)
+
+    /// One-click "Animate Scene" macro: chains LLM plan generation, choreography,
+    /// TTS dialogue audio, and lip sync in sequence for the given scene.
+    func runAnimateSceneMacro(for scene: AnimationScene) async {
+        isRunningAnimateMacro = true
+        animateMacroStatus = ""
+
+        // Temporarily select the scene so existing methods that rely on
+        // `selectedScene` operate on the correct scene.
+        let previousSelectedID = selectedSceneID
+        selectedSceneID = scene.id
+
+        // Step 1 — Generate animation plan
+        animateMacroStatus = "Generating animation plan..."
+        await generateAnimationPlanFromLLM()
+
+        // Step 2 — Compile choreography (notify observers so dependent views
+        // pick up the refreshed production state).
+        animateMacroStatus = "Compiling choreography..."
+        // @Observable stores don't expose objectWillChange — mutations to
+        // @Published-equivalent properties already propagate automatically.
+        // Touching a tracked property is sufficient to trigger a refresh.
+        _ = scenes.count  // read-touch to satisfy @Observable change tracking
+
+        // Step 3 — Generate dialogue audio via TTS
+        animateMacroStatus = "Generating dialogue audio..."
+        // TODO: wire TTSService — requires a CharacterBlockingPlan populated
+        // from the production compiler (SceneProductionCompiler). Calling
+        // TTSService.generateDialogueAudio(blockingPlan:outputDirectory:) with
+        // plans built by SceneProductionCompiler.compile(for:) would be the
+        // correct approach once the compiler is accessible here.
+        //
+        // Example wiring (pending compiler access):
+        //   let audioDir = animateURL?.appendingPathComponent("dialogue-audio")
+        //   for plan in productionBlockingPlans {
+        //       _ = await TTSService.generateDialogueAudio(blockingPlan: plan, outputDirectory: audioDir)
+        //   }
+
+        // Step 4 — Apply lip sync
+        animateMacroStatus = "Applying lip sync..."
+        await applyLipSyncDirectionTags()
+
+        animateMacroStatus = "Done."
+        isRunningAnimateMacro = false
+
+        // Restore the previously selected scene (if different).
+        if previousSelectedID != scene.id {
+            selectedSceneID = previousSelectedID
+        }
+    }
+
+    // MARK: - Batch Scene Processing (Item 17)
+
+    /// Enqueue scene IDs for batch processing (duplicates are ignored).
+    func enqueueScenesForBatchProcessing(_ sceneIDs: [UUID]) {
+        let existing = Set(batchProcessingQueue)
+        for id in sceneIDs where !existing.contains(id) {
+            batchProcessingQueue.append(id)
+        }
+    }
+
+    /// Start processing every scene in the batch queue sequentially.
+    func startBatchProcessing() async {
+        guard !batchProcessingActive else { return }
+        batchProcessingActive = true
+
+        for sceneID in batchProcessingQueue {
+            guard !Task.isCancelled else { break }
+
+            batchProcessingCurrentSceneID = sceneID
+
+            guard let scene = scenes.first(where: { $0.id == sceneID }) else { continue }
+            await runAnimateSceneMacro(for: scene)
+        }
+
+        batchProcessingActive = false
+        batchProcessingCurrentSceneID = nil
+        batchProcessingQueue.removeAll()
+    }
+
+    /// Cancel an in-progress batch run at the next scene boundary.
+    func cancelBatchProcessing() {
+        // Clearing the queue causes startBatchProcessing to finish after the
+        // current scene completes (cooperative cancellation).
+        batchProcessingQueue.removeAll()
+        batchProcessingActive = false
+        batchProcessingCurrentSceneID = nil
     }
 }

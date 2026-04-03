@@ -35,6 +35,12 @@ final class ScenePreviewRenderer {
     private var characterHoldMultipliers: [String: Int] = [:]
     private var cameraHoldMultiplier: Int = 1
 
+    /// Variable frame rate engine built from the plan's `frameRateProfile`.
+    /// When available, used instead of the plain multiplier maps for per-element
+    /// quantization. Falls back to multiplier maps when nil (e.g. in unit tests
+    /// that provide partial plan data).
+    private var variableFrameRateEngine: VariableFrameRateEngine?
+
     private struct MotionContext {
         var actionCue: String?
         var poseCue: String?
@@ -182,6 +188,15 @@ extension ScenePreviewRenderer {
         }
         // Camera defaults to on-ones (multiplier 1)
         cameraHoldMultiplier = 1
+
+        // Build VariableFrameRateEngine from the plan's frame rate profile.
+        // This replaces the per-element multiplier maps with a single engine that
+        // handles per-character, camera, and background hold styles (Spider-Verse style).
+        variableFrameRateEngine = nil
+        variableFrameRateEngine = VariableFrameRateEngine(
+            profile: plan.frameRateProfile,
+            baseFPS: plan.baseFPS
+        )
 
         // Clear existing scene elements
         characterNodes.values.forEach { $0.removeFromParentNode() }
@@ -336,8 +351,13 @@ extension ScenePreviewRenderer {
     func renderFrame(_ rawFrame: Int) {
         guard let plan = currentPlan else { return }
 
-        // Camera is always smooth (on ones)
-        let cameraFrame = quantize(rawFrame, holdMultiplier: cameraHoldMultiplier)
+        // Camera: use VariableFrameRateEngine when available, else fall back to multiplier
+        let cameraFrame: Int
+        if let engine = variableFrameRateEngine {
+            cameraFrame = engine.cameraFrame(rawFrame: rawFrame)
+        } else {
+            cameraFrame = quantize(rawFrame, holdMultiplier: cameraHoldMultiplier)
+        }
         updateCamera(plan: plan, frame: cameraFrame)
 
         // Characters at their individual hold rates
@@ -347,7 +367,24 @@ extension ScenePreviewRenderer {
                 for: blocking,
                 motionContext: motionContext
             )
-            let charFrame = quantize(rawFrame, holdMultiplier: holdResolution.multiplier)
+            // Use VariableFrameRateEngine for base quantization when available.
+            // resolveHoldMultiplier may still override for motion-driven adjustments.
+            let charFrame: Int
+            if let engine = variableFrameRateEngine {
+                // Engine gives the hold-quantized frame; if resolveHoldMultiplier
+                // applied a motion-driven override, use that multiplier instead.
+                let engineFrame = engine.characterFrame(name: blocking.characterName, rawFrame: rawFrame)
+                let engineHold = engine.profile.characterHoldStyles[blocking.characterName]?.holdFrames
+                    ?? engine.profile.defaultCharacterHold.holdFrames
+                if holdResolution.multiplier != engineHold {
+                    // Motion override: quantize with the adjusted multiplier
+                    charFrame = quantize(rawFrame, holdMultiplier: holdResolution.multiplier)
+                } else {
+                    charFrame = engineFrame
+                }
+            } else {
+                charFrame = quantize(rawFrame, holdMultiplier: holdResolution.multiplier)
+            }
             updateCharacter(
                 blocking: blocking,
                 frame: charFrame,

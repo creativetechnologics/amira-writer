@@ -57,6 +57,7 @@ private struct Animate3DWorkspaceContent: View {
     @AppStorage("novotro.animate3d.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
     @AppStorage("novotro.animate3d.showInspector") private var inspectorVisible = true
     @AppStorage("novotro.animate3d.inspector.width") private var inspectorWidth: Double = 320
+    @AppStorage("novotro.animate3d.showDirectionEditor") private var showDirectionEditor = false
 
     private var projectTitle: String {
         store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
@@ -131,21 +132,48 @@ private struct Animate3DWorkspaceContent: View {
                 store.audioPlayer.pause()
             }
         }
+        .sheet(isPresented: $store.show3DExportSheet) {
+            Scene3DExportSheet(
+                renderer: productionCoordinator.renderer,
+                scenario: threeDScenario
+            )
+        }
     }
 
     private var workspaceBody: some View {
         HStack(spacing: 0) {
             if sidebarVisible {
-                OperaChromeFlatPane(
-                    headerPadding: OperaChromeSidebarMetrics.headerPadding
-                ) {
-                    OperaChromePaneHeader(
-                        eyebrow: "3D ANIMATE",
-                        title: "Scenes",
-                        subtitle: "\(store.scenes.count) staged"
-                    ) { EmptyView() }
-                } content: {
-                    SidebarView(store: store)
+                VStack(spacing: 0) {
+                    OperaChromeFlatPane(
+                        headerPadding: OperaChromeSidebarMetrics.headerPadding
+                    ) {
+                        OperaChromePaneHeader(
+                            eyebrow: "3D ANIMATE",
+                            title: "Scenes",
+                            subtitle: "\(store.scenes.count) staged"
+                        ) {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showDirectionEditor.toggle()
+                                }
+                            } label: {
+                                Image(systemName: showDirectionEditor ? "chevron.down.circle.fill" : "square.text.square")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(showDirectionEditor ? OperaChromeTheme.textPrimary : OperaChromeTheme.textTertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .help(showDirectionEditor ? "Hide Direction Editor" : "Show Direction Editor")
+                        }
+                    } content: {
+                        SidebarView(store: store)
+                    }
+                    .frame(maxHeight: showDirectionEditor ? .infinity : .infinity)
+
+                    if showDirectionEditor {
+                        Divider()
+                        SceneDirectionEditorView(store: store)
+                            .frame(minHeight: 320)
+                    }
                 }
                 .frame(width: sidebarWidth)
 

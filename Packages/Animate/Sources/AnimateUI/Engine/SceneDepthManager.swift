@@ -1,5 +1,6 @@
 import Foundation
 import simd
+import AppKit
 
 // MARK: - Scene Depth Layer
 
@@ -169,5 +170,48 @@ struct SceneDepthManager: Sendable {
     /// Returns layers sorted from nearest to furthest (front-to-back).
     var frontToBack: [SceneDepthLayer] {
         layers.sorted { $0.zDepth < $1.zDepth }
+    }
+}
+
+// MARK: - Depth Estimation Cache
+
+/// Actor-isolated cache of depth maps keyed by background image URL.
+///
+/// Used by the production preview view to run `DepthEstimationService` once per background
+/// and expose the cached result for parallax compositing.
+@available(macOS 26.0, *)
+actor SceneDepthCache {
+
+    // MARK: - Singleton
+
+    static let shared = SceneDepthCache()
+
+    // MARK: - Storage
+
+    private var cache: [URL: DepthEstimationService.DepthMap] = [:]
+
+    // MARK: - Public API
+
+    /// Returns the cached depth map for a URL without triggering estimation.
+    func depthMap(for url: URL) -> DepthEstimationService.DepthMap? {
+        cache[url]
+    }
+
+    /// Runs `DepthEstimationService.estimateDepth(imageURL:)` if no cached result exists,
+    /// stores the result, and returns it.
+    ///
+    /// Safe to call concurrently — the actor serialises access so each URL is estimated
+    /// at most once even if multiple callers request it simultaneously.
+    func estimateAndCacheDepth(for backgroundURL: URL) async {
+        guard cache[backgroundURL] == nil else { return }
+        guard let map = try? await DepthEstimationService.estimateDepth(imageURL: backgroundURL) else {
+            return
+        }
+        cache[backgroundURL] = map
+    }
+
+    /// Clears all cached depth maps. Call when switching projects.
+    func clearAll() {
+        cache.removeAll()
     }
 }

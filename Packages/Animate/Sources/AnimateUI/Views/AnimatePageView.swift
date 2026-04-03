@@ -1,6 +1,7 @@
 import AppKit
 import ProjectKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @available(macOS 26.0, *)
 struct AnimatePageView: View {
@@ -213,7 +214,7 @@ struct AnimatePageView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     labeledValue("Scene", scene.name)
                     labeledValue("Background", background?.name ?? "Not assigned")
-                    labeledValue("Audio", scene.defaultAudioPath ?? scene.owpSongPath)
+                    sceneAudioPickerRow(for: scene)
                     labeledValue("Resolution", resolutionLabel)
                 }
 
@@ -3780,6 +3781,68 @@ struct AnimatePageView: View {
                 .font(.caption)
                 .foregroundStyle(OperaChromeTheme.textPrimary)
                 .lineLimit(2)
+        }
+    }
+
+    /// A labeled row for picking or clearing the scene's default audio path.
+    @ViewBuilder
+    private func sceneAudioPickerRow(for scene: AnimationScene) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("SCENE AUDIO")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(OperaChromeTheme.textTertiary)
+
+            HStack(spacing: 6) {
+                let displayName: String = {
+                    if let path = scene.defaultAudioPath, !path.isEmpty {
+                        return URL(fileURLWithPath: path).lastPathComponent
+                    }
+                    return "None"
+                }()
+
+                Text(displayName)
+                    .font(.caption)
+                    .foregroundStyle(
+                        scene.defaultAudioPath != nil
+                            ? OperaChromeTheme.textPrimary
+                            : OperaChromeTheme.textSecondary
+                    )
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button("Choose…") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseFiles = true
+                    panel.canChooseDirectories = false
+                    panel.allowsMultipleSelection = false
+                    panel.allowedContentTypes = [
+                        UTType.mp3,
+                        UTType.wav,
+                        UTType.mpeg4Audio,
+                        UTType.aiff,
+                        UTType(filenameExtension: "caf") ?? .audio
+                    ]
+                    panel.begin { response in
+                        guard response == .OK, let url = panel.url else { return }
+                        store.setDefaultAudioPath(url.path, for: scene.id)
+                    }
+                }
+                .font(.caption)
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+
+                if scene.defaultAudioPath != nil {
+                    Button {
+                        store.setDefaultAudioPath(nil, for: scene.id)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                }
+            }
         }
     }
 

@@ -57,6 +57,9 @@ final class Scene3DVideoExporter {
     /// Progress callback: receives (currentFrame, totalFrames).
     var onProgress: ((Int, Int) -> Void)?
 
+    /// Whether to apply cel shading during export (mirrors preview appearance).
+    var applyCelShading: Bool = true
+
     /// Export the renderer's current scene to a video file.
     func export(
         renderer: ScenePreviewRenderer,
@@ -71,6 +74,22 @@ final class Scene3DVideoExporter {
         scnRenderer.scene = renderer.sceneKitScene
         scnRenderer.pointOfView = renderer.pointOfView
         scnRenderer.autoenablesDefaultLighting = false
+
+        // Apply cel shading technique to the offscreen renderer so the export
+        // matches the in-app preview appearance.
+        if applyCelShading {
+            let celSettings = renderer.celShadingSettings
+            if let technique = CelShadingTechnique.makeTechnique(settings: celSettings) {
+                scnRenderer.technique = technique
+            } else {
+                // Metal technique unavailable — apply per-material toon fallback.
+                print("[Scene3DVideoExporter] Cel shading unavailable, using flat render")
+                CelShadingTechnique.applyPerMaterialFallback(
+                    to: renderer.sceneKitScene,
+                    settings: celSettings
+                )
+            }
+        }
 
         // Set up AVAssetWriter
         let writer = try AVAssetWriter(outputURL: settings.outputURL, fileType: settings.format.avFileType)
@@ -153,10 +172,19 @@ final class Scene3DVideoExporter {
 
         videoInput.markAsFinished()
 
-        // Add audio track if provided
+        // Add audio track if provided — mux after all video frames are written.
         if let audioURL = settings.audioURL,
            FileManager.default.fileExists(atPath: audioURL.path) {
-            await addAudioTrack(writer: writer, audioURL: audioURL, fps: settings.fps, startFrame: settings.startFrame, endFrame: settings.endFrame)
+            let totalFrames = settings.endFrame - settings.startFrame + 1
+            let videoDuration = CMTime(
+                value: CMTimeValue(totalFrames),
+                timescale: CMTimeScale(settings.fps)
+            )
+            await addAudioTrack(
+                writer: writer,
+                audioURL: audioURL,
+                videoDuration: videoDuration
+            )
         }
 
         await writer.finishWriting()
@@ -189,15 +217,84 @@ final class Scene3DVideoExporter {
         return buffer
     }
 
+    /// Muxes audio from `audioURL` into the already-started `AVAssetWriter`,
+    /// trimmed to `videoDuration`.  Silently returns on any error so a missing
+    /// or malformed audio file never aborts the video export.
     private func addAudioTrack(
         writer: AVAssetWriter,
         audioURL: URL,
-        fps: Int,
-        startFrame: Int,
-        endFrame: Int
+        videoDuration: CMTime
     ) async {
-        // Audio mixing for 3D export deferred — use the existing 2D VideoExporter.addAudioTrack
-        // as the reference implementation when ready.
-        _ = writer; _ = audioURL; _ = fps; _ = startFrame; _ = endFrame
+        // Load source audio asset.
+        let sourceAsset = AVURLAsset(url: audioURL)
+
+        // Retrieve the first audio track (async, non-deprecated).
+        guard let sourceTrack = try? await sourceAsset.loadTracks(withMediaType: .audio).first else {
+            return
+        }
+
+        // Build a passthrough audio input so we avoid unnecessary re-encoding.
+        let audioOutputSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 44100,
+            AVNumberOfChannelsKey: 2,
+            AVEncoderBitRateKey: 128_000
+        ]
+        let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioOutputSettings)
+        audioInput.expectsMediaDataInRealTime = false
+
+        guard writer.canAdd(audioInput) else { return }
+        writer.add(audioInput)
+
+        // Set up reader over the trimmed range [0, videoDuration).
+        let timeRange = CMTimeRange(start: .zero, duration: videoDuration)
+        guard let reader = try? AVAssetReader(asset: sourceAsset) else { return }
+        reader.timeRange = timeRange
+
+        let readerOutput = AVAssetReaderTrackOutput(
+            track: sourceTrack,
+            outputSettings: nil  // nil = passthrough compressed samples
+        )
+        readerOutput.alwaysCopiesSampleData = false
+        guard reader.canAdd(readerOutput) else { return }
+        reader.add(readerOutput)
+        guard reader.startReading() else { return }
+
+        // Pump samples from reader → writer.
+        while audioInput.isReadyForMoreMediaData {
+            guard reader.status == .reading else { break }
+            if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
+                audioInput.append(sampleBuffer)
+            } else {
+                // No more samples.
+                break
+            }
+        }
+
+        // Drain any remaining samples once the input is ready again.
+        if reader.status == .reading {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                audioInput.requestMediaDataWhenReady(on: .global(qos: .utility)) {
+                    while audioInput.isReadyForMoreMediaData {
+                        guard reader.status == .reading else {
+                            audioInput.markAsFinished()
+                            continuation.resume()
+                            return
+                        }
+                        if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
+                            audioInput.append(sampleBuffer)
+                        } else {
+                            audioInput.markAsFinished()
+                            continuation.resume()
+                            return
+                        }
+                    }
+                }
+            }
+        } else {
+            audioInput.markAsFinished()
+        }
+
+        reader.cancelReading()
     }
 }

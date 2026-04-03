@@ -211,10 +211,81 @@ final class Animate3DProductionCoordinator: ObservableObject {
         loadedSignature = signature
         plan = compiledPlan
         status = makeStatus(for: compiledPlan, scene: scene, store: store, renderer: renderer, pendingMotionRequestCount: motionRequests.count)
+
+        if !motionRequests.isEmpty {
+            Task { await dispatchPendingMotionRequests() }
+        }
     }
 
     func render(frame: Int) {
         renderer.renderFrame(frame)
+    }
+
+    // MARK: - Item 5: Dispatch pending motion requests
+
+    @available(macOS 26.0, *)
+    func dispatchPendingMotionRequests() async {
+        guard let store else { return }
+
+        // Capture project URL and requests on MainActor before entering async work.
+        let projectURL = store.workingOWPURL ?? store.owpURL
+        guard let projectURL else {
+            print("[Animate3DProductionCoordinator] dispatchPendingMotionRequests: no project URL — skipping.")
+            return
+        }
+        let requests = pendingMotionRequests
+        guard !requests.isEmpty else { return }
+
+        let destinationDirectory = projectURL.appendingPathComponent("Animate/motions")
+        let service = HunyuanMotionService()
+        var remainingCount = requests.count
+
+        for plannedMotion in requests {
+            do {
+                let _ = try await service.generateAndDownload(
+                    request: plannedMotion.request,
+                    destinationDirectory: destinationDirectory,
+                    onProgress: { message in
+                        print("[HunyuanMotionService] \(plannedMotion.characterSlug): \(message)")
+                    }
+                )
+                remainingCount -= 1
+                status.pendingMotionRequestCount = remainingCount
+
+                // Item 9: auto-populate motion registry from downloaded FBX
+                await refreshMotionRegistry(motionsDirectory: destinationDirectory, projectURL: projectURL)
+            } catch {
+                print("[Animate3DProductionCoordinator] Motion generation failed for '\(plannedMotion.characterSlug)' (\(plannedMotion.actingBeat.action)): \(error.localizedDescription)")
+                remainingCount -= 1
+                status.pendingMotionRequestCount = remainingCount
+            }
+        }
+    }
+
+    // MARK: - Item 9: Auto-populate motion registry from downloaded FBX
+
+    @available(macOS 26.0, *)
+    private func refreshMotionRegistry(motionsDirectory: URL, projectURL: URL) async {
+        let scanResult = await FBXMotionRegistryScanner.scan(
+            directory: motionsDirectory,
+            relativeToProjectURL: projectURL
+        )
+        guard !scanResult.descriptors.isEmpty else { return }
+
+        // Load existing registry, merge (new motions by motionID win), and save.
+        let existing = ProjectDatabaseBridge.loadAnimate3DMotionRegistryFromDisk(projectURL: projectURL)
+            ?? Animate3DMotionRegistry()
+        let existingIDs = Set(existing.motions.map(\.motionID))
+        let newDescriptors = scanResult.descriptors.filter { !existingIDs.contains($0.motionID) }
+        guard !newDescriptors.isEmpty else { return }
+
+        let merged = Animate3DMotionRegistry(motions: existing.motions + newDescriptors)
+        do {
+            try ProjectDatabaseBridge.saveAnimate3DMotionRegistryToDisk(merged, projectURL: projectURL)
+            print("[Animate3DProductionCoordinator] Motion registry updated: added \(newDescriptors.count) descriptor(s).")
+        } catch {
+            print("[Animate3DProductionCoordinator] Failed to save motion registry: \(error.localizedDescription)")
+        }
     }
 }
 

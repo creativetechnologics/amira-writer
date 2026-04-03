@@ -19,6 +19,10 @@ struct Animate3DInspectorView: View {
     @State private var preflightOwner: PreflightOwner?
     @State private var showPreflight = false
     @State private var registryEditorContext: Animate3DRegistryEditorContext?
+    @State private var isGeneratingBackgrounds = false
+    @State private var backgroundGenerationStatus = ""
+    @State private var isGeneratingCharacterModel = false
+    @State private var characterModelGenerationStatus = ""
 
     var body: some View {
         ScrollView {
@@ -35,6 +39,8 @@ struct Animate3DInspectorView: View {
                 castSection
                 objectSection
                 shotSection
+                backgroundsSection
+                characterModelSection
             }
             .padding(16)
         }
@@ -459,7 +465,34 @@ struct Animate3DInspectorView: View {
                         .controlSize(.small)
                         .disabled(store.isGeneratingLLMPlan || store.geminiAPIKey.isEmpty)
                     }
+                    dialogueAudioRow
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dialogueAudioRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if store.isRunningAnimateMacro {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Button {
+                    guard let scene = selectedScene else { return }
+                    Task { await store.runAnimateSceneMacro(for: scene) }
+                } label: {
+                    Label("Generate Dialogue Audio", systemImage: "waveform.and.mic")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(store.isRunningAnimateMacro || selectedScene == nil || productionStatus == nil)
+            }
+            if store.isRunningAnimateMacro, !store.animateMacroStatus.isEmpty {
+                Text(store.animateMacroStatus)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -514,7 +547,7 @@ struct Animate3DInspectorView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button {
-                    store.showExportSheet = true
+                    store.show3DExportSheet = true
                 } label: {
                     Label("Export 3D Video...", systemImage: "film.stack")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -806,6 +839,129 @@ struct Animate3DInspectorView: View {
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
                                 .fill(Color(nsColor: .controlBackgroundColor))
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Backgrounds Section (Item 14)
+
+    private var backgroundsSection: some View {
+        sectionCard(title: "Backgrounds") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Generate background plates for all locations in the world catalog.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if isGeneratingBackgrounds {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(backgroundGenerationStatus.isEmpty ? "Generating…" : backgroundGenerationStatus)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button {
+                        guard let owpURL = store.workingOWPURL ?? store.owpURL else { return }
+                        isGeneratingBackgrounds = true
+                        backgroundGenerationStatus = "Starting…"
+                        Task {
+                            let service = BackgroundGenerationService()
+                            do {
+                                let results = try await service.generateAll(
+                                    owpURL: owpURL,
+                                    geminiAPIKey: store.geminiAPIKey
+                                ) { completed, total in
+                                    backgroundGenerationStatus = "\(completed) / \(total) locations"
+                                }
+                                backgroundGenerationStatus = "Done — \(results.count) background(s) ready."
+                            } catch {
+                                backgroundGenerationStatus = "Error: \(error.localizedDescription)"
+                            }
+                            isGeneratingBackgrounds = false
+                        }
+                    } label: {
+                        Label("Generate All Backgrounds", systemImage: "photo.on.rectangle.angled")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(store.owpURL == nil)
+
+                    if !backgroundGenerationStatus.isEmpty {
+                        Text(backgroundGenerationStatus)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Character 3D Model Section (Item 20)
+
+    private var characterModelSection: some View {
+        sectionCard(title: "Character 3D Model") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Generate a 3D model from the selected character's reference sheet images using Meshy image-to-3D.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if isGeneratingCharacterModel {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(characterModelGenerationStatus.isEmpty ? "Generating 3D model…" : characterModelGenerationStatus)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button {
+                        guard let owpURL = store.workingOWPURL ?? store.owpURL else { return }
+                        let candidates = store.characters.filter { !$0.masterReferenceSheetVariants.isEmpty || !$0.referenceImagePaths.isEmpty }
+                        guard let character = candidates.first else {
+                            characterModelGenerationStatus = "No characters with reference images found."
+                            return
+                        }
+                        isGeneratingCharacterModel = true
+                        characterModelGenerationStatus = "Queuing Meshy job for \(character.name)…"
+                        Task {
+                            let service = MeshyCharacterGenerationService(store: store)
+                            do {
+                                let result = try await service.generateModel(
+                                    for: character,
+                                    owpURL: owpURL
+                                ) { status in
+                                    characterModelGenerationStatus = status
+                                }
+                                characterModelGenerationStatus = "Done — \(result.downloadedFormats.joined(separator: ", ")) saved."
+                            } catch {
+                                characterModelGenerationStatus = "Error: \(error.localizedDescription)"
+                            }
+                            isGeneratingCharacterModel = false
+                        }
+                    } label: {
+                        Label("Generate 3D Model…", systemImage: "rotate.3d")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(store.owpURL == nil || store.meshyAPIKey.isEmpty)
+
+                    if store.meshyAPIKey.isEmpty {
+                        Text("Set a Meshy API key in Settings to enable model generation.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.orange.opacity(0.9))
+                    }
+
+                    if !characterModelGenerationStatus.isEmpty {
+                        Text(characterModelGenerationStatus)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
                     }
                 }
             }

@@ -212,6 +212,34 @@ struct Animate3DProductionPreviewView: View {
                 )
             }
         }
+        .task(id: activeBackgroundDepthKey) {
+            await runBackgroundDepthEstimation()
+        }
+    }
+
+    // MARK: - Depth Estimation (Item 19)
+
+    private var activeBackgroundDepthKey: String {
+        guard let owpURL = projectURL,
+              let bg = store.selectedScene.flatMap({ s in
+                  store.backgrounds.first(where: { $0.id == s.backgroundID })
+              }),
+              let approved = bg.approvedImagePath ?? bg.imagePaths.first else {
+            return ""
+        }
+        return owpURL.appendingPathComponent(approved).path
+    }
+
+    private func runBackgroundDepthEstimation() async {
+        guard let owpURL = projectURL,
+              let bg = store.selectedScene.flatMap({ s in
+                  store.backgrounds.first(where: { $0.id == s.backgroundID })
+              }),
+              let approved = bg.approvedImagePath ?? bg.imagePaths.first else {
+            return
+        }
+        let bgURL = owpURL.appendingPathComponent(approved)
+        await SceneDepthCache.shared.estimateAndCacheDepth(for: bgURL)
     }
 
     private var previewHeader: some View {
@@ -246,6 +274,37 @@ struct Animate3DProductionPreviewView: View {
         }
     }
 
+    /// Thin horizontal scrub slider spanning the full transport area.
+    /// Dragging pauses playback and seeks to the chosen frame.
+    private var scrubBar: some View {
+        HStack(spacing: 8) {
+            // Use a local binding so we can pause-on-drag without triggering
+            // reentrant state changes.
+            Slider(
+                value: Binding(
+                    get: { Double(displayFrame) },
+                    set: { newValue in
+                        // Pause playback while the user is scrubbing.
+                        if harnessState.isPlaying {
+                            harnessState.stopPlayback(syncing: store)
+                        }
+                        let frame = Int(newValue.rounded())
+                        harnessState.seek(to: frame, scenario: scenario, store: store)
+                    }
+                ),
+                in: 0...Double(max(1, status.totalFrames - 1)),
+                step: 1
+            )
+            .controlSize(.small)
+
+            Text("\(displayFrame + 1) / \(max(status.totalFrames, 1))")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+                .monospacedDigit()
+                .frame(minWidth: 72, alignment: .trailing)
+        }
+    }
+
     private var shotStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -276,6 +335,9 @@ struct Animate3DProductionPreviewView: View {
 
     private var footerControls: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Scrub bar — drag to seek, pauses playback while dragging
+            scrubBar
+
             HStack(spacing: 10) {
                 Button {
                     harnessState.step(by: -1, scenario: scenario, store: store)

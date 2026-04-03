@@ -146,7 +146,7 @@ struct LLMAnimationPlanGenerator: Sendable {
               "characterName": "Luke",
               "startFrame": 72,
               "audioPath": "placeholder",
-              "transcript": "the actual dialogue text",
+              "transcript": "the actual dialogue text — include the exact spoken words here",
               "action": "speak",
               "expression": "determined"
             }
@@ -211,7 +211,10 @@ struct LLMAnimationPlanGenerator: Sendable {
         "sit", "react", "present", "turn", "bow", "dance"
 
         ### dialogueBeats audioPath
-        Set to "placeholder" when no audio file is available yet.
+        Always set to "placeholder" — do NOT invent file paths like "audio/dialogue/..."
+        or any path that looks like a real file. Audio paths are populated separately by
+        the application after generation. The value "placeholder" is the only accepted
+        sentinel and will be ignored by the audio loader.
 
         ## Timing Reference
         - 1 second = \(context.fps) frames
@@ -223,7 +226,7 @@ struct LLMAnimationPlanGenerator: Sendable {
         - Characters face each other when conversing (one "right", one "left")
         - Use motions for entrances, exits, and dramatic crosses
         - Match expressions to emotional beats in the text
-        - Generate a dialogueBeat for every spoken or sung line (audioPath = "placeholder")
+        - Generate a dialogueBeat for every spoken or sung line (always use audioPath = "placeholder", never invent file paths)
         - Include at least one cameraMove covering the full scene duration
         - Use camera cuts (new cameraMoves) to emphasise dramatic moments
         - Add expression cues as mood shifts happen
