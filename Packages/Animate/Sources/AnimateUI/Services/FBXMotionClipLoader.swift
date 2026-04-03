@@ -140,8 +140,10 @@ struct FBXMotionClipLoader: Sendable {
 
         for i in 0..<frameCount {
             let time = Double(i) / fps
-            // Advance SceneKit's animation clock so joint transforms update
-            renderer.render(atTime: time)
+            // Advance SceneKit's animation clock so joint transforms update.
+            // snapshot(atTime:) takes the correct viewport-aware code path on Metal-backed
+            // SCNRenderer (unlike render(atTime:) which requires a viewport to be set).
+            _ = renderer.snapshot(atTime: time, with: CGSize(width: 1, height: 1), antialiasingMode: .none)
             let frame = sampleScene(scnScene.rootNode, at: time, frameIndex: i)
             discoveredJoints.formUnion(frame.jointRotations.keys)
             frames.append(frame)

@@ -70,16 +70,18 @@ final class DirectionTemplateCompilerTests: XCTestCase {
     // MARK: - Test 2: Entrance event generates a camera instruction
 
     func testEntranceEventGeneratesCameraInstruction() {
-        // Scene: 10 seconds at 24 fps = 240 frames.
-        // Alice enters at frame 96 (4 seconds in, past the establish window).
+        // Scene: 20 seconds at 24 fps = 480 frames.
+        // establishDuration = min(fps*4, 480/4) = min(96, 120) = 96 frames.
+        // lastCutFrame starts at establishDuration (96). minimumCutInterval = 48.
+        // Alice enters at frame 144 (fps*6): 144 - 96 = 48 >= 48 → accepted.
         let fps = 24
         let plan = makePlan(
             name: "Alice",
             slug: "alice",
-            entranceFrame: fps * 4,  // frame 96
+            entranceFrame: fps * 6,  // frame 144 — comfortably past establish + min interval
             keyPositions: [
                 BlockingKeyframe(
-                    frame: fps * 4,
+                    frame: fps * 6,
                     position: SIMD3<Double>(0, 0, -3),
                     facing: .camera,
                     pose: "standing",
@@ -95,7 +97,7 @@ final class DirectionTemplateCompilerTests: XCTestCase {
         )
         // Should have at least the establishing shot + the entrance cut.
         XCTAssertGreaterThanOrEqual(result.count, 2)
-        let entranceCut = result.first { $0.frame == fps * 4 }
+        let entranceCut = result.first { $0.frame == fps * 6 }
         XCTAssertNotNil(entranceCut, "Expected a camera cut at the entrance frame")
         XCTAssertEqual(entranceCut?.shotType, .medium)
         XCTAssertEqual(entranceCut?.focusCharacterSlug, "alice")
@@ -106,10 +108,11 @@ final class DirectionTemplateCompilerTests: XCTestCase {
 
     func testHighIntensitySpeakingBeatGeneratesCloseUp() {
         let fps = 24
-        // Speak beat at frame 120 (5 s) with intensity 0.9 — should yield .close
+        // establishDuration = min(fps*4, 480/4) = 96. lastCutFrame starts at 96.
+        // minimumCutInterval = 48. Beat at fps*7 = 168: 168 - 96 = 72 >= 48 → accepted.
         let highBeat = ActingBeat(
-            startFrame: fps * 5,
-            endFrame: fps * 7,
+            startFrame: fps * 7,
+            endFrame: fps * 9,
             action: "speak",
             intensity: 0.9
         )
@@ -122,7 +125,7 @@ final class DirectionTemplateCompilerTests: XCTestCase {
             sceneDurationFrames: fps * 20,
             fps: fps
         )
-        let speakCut = result.first { $0.frame == fps * 5 }
+        let speakCut = result.first { $0.frame == fps * 7 }
         XCTAssertNotNil(speakCut, "Expected a cut at the high-intensity speak beat")
         XCTAssertEqual(speakCut?.shotType, .close,
             "High-intensity speech (intensity 0.9) should yield a close-up")
@@ -130,10 +133,11 @@ final class DirectionTemplateCompilerTests: XCTestCase {
 
     func testLowIntensitySpeakingBeatGeneratesMediumShot() {
         let fps = 24
-        // Speak beat at frame 120 (5 s) with intensity 0.4 — should yield .medium
+        // establishDuration = min(fps*4, 480/4) = 96. lastCutFrame starts at 96.
+        // minimumCutInterval = 48. Beat at fps*7 = 168: 168 - 96 = 72 >= 48 → accepted.
         let lowBeat = ActingBeat(
-            startFrame: fps * 5,
-            endFrame: fps * 7,
+            startFrame: fps * 7,
+            endFrame: fps * 9,
             action: "speak",
             intensity: 0.4
         )
@@ -146,7 +150,7 @@ final class DirectionTemplateCompilerTests: XCTestCase {
             sceneDurationFrames: fps * 20,
             fps: fps
         )
-        let speakCut = result.first { $0.frame == fps * 5 }
+        let speakCut = result.first { $0.frame == fps * 7 }
         XCTAssertNotNil(speakCut, "Expected a cut at the low-intensity speak beat")
         XCTAssertEqual(speakCut?.shotType, .medium,
             "Low-intensity speech (intensity 0.4) should yield a medium shot")
@@ -325,10 +329,12 @@ final class DirectionTemplateCompilerTests: XCTestCase {
 
     func testStrongEmotionGeneratesCloseUp() {
         let fps = 24
+        // establishDuration = min(fps*4, 480/4) = 96. lastCutFrame starts at 96.
+        // minimumCutInterval = 48. Emotion at fps*7 = 168: 168 - 96 = 72 >= 48 → accepted.
         let keyPositions: [BlockingKeyframe] = [
             BlockingKeyframe(frame: 0,       position: SIMD3<Double>(0, 0, -3), facing: .camera,
                              pose: "standing", emotion: "neutral", easing: .linear),
-            BlockingKeyframe(frame: fps * 5, position: SIMD3<Double>(0, 0, -3), facing: .camera,
+            BlockingKeyframe(frame: fps * 7, position: SIMD3<Double>(0, 0, -3), facing: .camera,
                              pose: "standing", emotion: "angry",   easing: .linear),
         ]
         let plan = makePlan(entranceFrame: 0, keyPositions: keyPositions)
@@ -337,7 +343,7 @@ final class DirectionTemplateCompilerTests: XCTestCase {
             sceneDurationFrames: fps * 20,
             fps: fps
         )
-        let emotionCut = result.first { $0.frame == fps * 5 }
+        let emotionCut = result.first { $0.frame == fps * 7 }
         XCTAssertNotNil(emotionCut, "Expected a cut when emotion changes to 'angry'")
         XCTAssertEqual(emotionCut?.shotType, .close,
             "Strong emotion 'angry' should trigger a close-up")

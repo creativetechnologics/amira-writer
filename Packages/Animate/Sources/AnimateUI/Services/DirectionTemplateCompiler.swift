@@ -64,7 +64,9 @@ struct DirectionTemplateCompiler: Sendable {
         events.sort { $0.frame < $1.frame }
 
         // 3. Generate camera cuts for each dramatic event.
-        var lastCutFrame = 0
+        // Initialise to establishDuration so the minimum cut interval is measured
+        // from the *end* of the establishing shot, not its start.
+        var lastCutFrame = establishDuration
         let minimumCutInterval = fps * 2  // Never cut faster than every 2 seconds.
 
         for event in events {

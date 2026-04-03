@@ -104,12 +104,14 @@ final class AnimationAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDeleg
 
     private func startPlaybackTimer() {
         stopPlaybackTimer()
-        playbackTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let player = self.audioPlayer, self.isPlaying else { return }
                 self.currentTime = player.currentTime
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.playbackTimer = timer
     }
 
     private func stopPlaybackTimer() {

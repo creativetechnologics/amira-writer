@@ -121,7 +121,11 @@ final class RhubarbLipSync {
         process.standardError = errorPipe
 
         try process.run()
-        process.waitUntilExit()
+
+        // Await termination without blocking the main thread.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            process.terminationHandler = { _ in continuation.resume() }
+        }
 
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
