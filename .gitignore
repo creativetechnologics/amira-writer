@@ -5,4 +5,7 @@
 DerivedData/
 *.xcuserstate
 xcuserdata/
-Packages/NovotroProjectKit/.tmp-tests/
+__pycache__/
+*.pyc
+tmp/
+.playwright-mcp/
