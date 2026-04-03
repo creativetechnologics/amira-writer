@@ -1,0 +1,56 @@
+3D Model Licenses & Attribution
+================================
+
+All models in this directory are used as placeholder/prototype assets
+for the Amira Writer animation system.
+
+
+CC0 1.0 Universal (Public Domain) - No attribution required
+------------------------------------------------------------
+
+kenney_chair.glb         - Simple chair
+kenney_chairDesk.glb     - Office/desk chair
+kenney_desk.glb          - Desk
+kenney_table.glb         - Table
+kenney_books.glb         - Stack of books
+kenney_bookcase.glb      - Open bookcase
+kenney_computerScreen.glb - Computer monitor
+kenney_character.glb     - Blocky humanoid character (low-poly, ~111KB)
+
+  Source: Kenney.nl Furniture Kit 2.0 / Blocky Characters 2.0
+  License: Creative Commons Zero (CC0)
+  URL: https://kenney.nl/assets/furniture-kit
+  URL: https://opengameart.org/content/blocky-characters
+  "Free to use in personal, educational and commercial projects."
+
+Book.glb      - Book prop (~356KB)
+Seat.glb      - Chair/seat (~305KB)
+Pencil.glb    - Pencil (~55KB)
+
+  Source: Polygonal Mind - Avatar Show Collection
+  License: Creative Commons Zero (CC0)
+  URL: https://github.com/ToxSam/open-source-3D-assets
+  Registry of 991+ CC0 GLB models. No attribution needed.
+
+
+CC-BY 4.0 International - Attribution required
+-----------------------------------------------
+
+CesiumMan.glb - Animated walking humanoid figure (~428KB, skinned mesh)
+
+  Source: Khronos Group glTF Sample Assets
+  License: CC-BY 4.0 International (with Trademark Limitations)
+  Attribution: Cesium (2017)
+  URL: https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CesiumMan
+  Note: The Cesium logo/trademark is separately protected.
+        The character model itself is usable with attribution.
+
+
+Format Notes
+------------
+All models are in GLB (binary glTF) format. SceneKit can load these
+via ModelIO (MDLAsset) or by converting to SCN at build time.
+
+For native USDZ models, Apple provides samples at:
+  https://developer.apple.com/augmented-reality/quick-look/
+  (Note: Apple's models are 4-14MB each, photorealistic quality)
