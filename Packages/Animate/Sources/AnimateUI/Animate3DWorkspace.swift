@@ -366,6 +366,7 @@ private struct Animate3DWorkspaceContent: View {
             scene.name,
             threeDHarnessState.scenarioMode.rawValue,
             String(store.fps),
+            scene.backgroundID?.uuidString ?? "no-bg",
             characterSignature,
             objectSignature,
             trackSignature,

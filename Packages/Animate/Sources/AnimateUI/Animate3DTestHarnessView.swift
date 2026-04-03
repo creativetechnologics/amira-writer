@@ -1224,7 +1224,9 @@ private final class Animate3DSceneView: SCNView {
         if loadedScenarioID != scenario.id {
             rebuildScene(for: scenario)
             loadedScenarioID = scenario.id
-            loadedBackgroundURL = nil
+            // Use a sentinel so updateBackground's equality guard doesn't
+            // short-circuit when the new scene also has no background (nil != sentinel → runs clear).
+            loadedBackgroundURL = URL(string: "scene-changed:invalidate")!
             lastDebugOrbitRecenterSeed = nil
             hoveredShotAnchorID = nil
             hoveredDebugGuideID = nil
