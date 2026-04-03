@@ -5942,9 +5942,10 @@ final class AnimateStore {
             ordered.append(path)
         }
 
+        // Master sheet first — strongest identity anchor for head pose generation
+        append(character.approvedMasterReferenceSheetVariant?.imagePath)
         append(character.inspirationReferenceImagePath)
         character.curatedInspirationImagePaths.forEach { append($0) }
-        append(character.approvedMasterReferenceSheetVariant?.imagePath)
         character.headTurnaroundSlots.forEach { append($0.approvedVariant?.imagePath) }
 
         return Array(ordered.prefix(limit))
@@ -5962,9 +5963,10 @@ final class AnimateStore {
             ordered.append(path)
         }
 
+        // Master sheet first — most of the time the only reference needed for head close-up generation
+        append(character.approvedMasterReferenceSheetVariant?.imagePath)
         append(character.inspirationReferenceImagePath)
         character.curatedInspirationImagePaths.forEach { append($0) }
-        append(character.approvedMasterReferenceSheetVariant?.imagePath)
         return Array(ordered.prefix(limit))
     }
 
