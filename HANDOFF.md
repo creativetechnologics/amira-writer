@@ -1,145 +1,89 @@
-# Amira Writer — Code Review Handoff
-**Date:** 2026-03-22 06:04 UTC
-**Performed by:** Claude Opus 4.6 (review) + Claude Sonnet 4.6 (implementation)
-**Prior session:** Anti-Gravity UI cleanup pass
+# Amira Writer — Session Handoff
+**Date:** 2026-04-03 09:15 PDT
+**Performed by:** Claude Opus 4.6 (1M context) + Claude Sonnet 4.6 (subagents)
+**Prior session:** Pipeline wave 2, crop tool, safety, quality pass
 
 ---
 
-## What Was Done
+## Summary
 
-A full code audit was performed across all four packages:
-- `Sources/WriteUI`
-- `Sources/Opera`
-- `Packages/Score`
-- `Packages/Animate`
-- `Packages/ProjectKit`
-
-The following bugs were found and fixed.
+12 commits across pipeline automation, crop tooling, layout, keyboard focus, API safety, quality improvements, code review, and circuit breaker.
 
 ---
 
-## Fixes Applied
+## Commits This Session
 
-### Fix 1 — Database sync polling silently dies on error
-**Severity:** Critical
-**Files changed:**
-- `Sources/WriteUI/ScriptStore.swift` — `pollDatabaseChanges()` and `applyDatabaseChange(_:)` (5 Task blocks)
-- `Packages/Score/Sources/ScoreUI/ScoreStore.swift` — `pollDatabaseChanges()` and `applyDatabaseChange(_:)` (2 Task blocks)
-- `Packages/Animate/Sources/AnimateUI/AnimateStore.swift` — `pollDatabaseChanges()` and `applyDatabaseChange(_:)` (7 Task blocks)
-
-**Problem:** Every `Task { try await ... }` block in the database polling and change-application code had bare `try` with no error handling. Any thrown error (DB locked, file missing, connection dropped) would silently kill the task — permanently stopping sync for that session with no log entry and no recovery.
-
-**Fix:** Wrapped every `try` inside `do { } catch { NSLog("[StoreN] ...", error.localizedDescription) }`.
-
----
-
-### Fix 2 — `.novtro` directory typo
-**Severity:** Critical
-**File:** `Packages/ProjectKit/Sources/ProjectKit/NovotroProjectDatabase.swift` line 14
-
-**Problem:** The default database directory was `.novtro` (missing the second `o`). If callers relied on the default `databaseDirectoryURL`, the SQLite index would be created in the wrong folder.
-
-**Fix:** Changed `.novtro` → `.novotro`. The SQLite database is a rebuilable index; any existing `.novtro` databases will be transparently recreated from the `.ows` files on next open.
+| Hash | Description |
+|------|-------------|
+| `4f22b3c` | 20 pipeline automation items (wave 2) — video export, scrub slider, props sidebar, direction editor, etc. |
+| `c0aacdc` | Master sheet reference ordering — first in headSheetReferencePaths |
+| `cebc146` | Source-aware variant crop tool with 8 resize handles |
+| `dc2164a` | Crop tool fixes — eoFill, pixel dimensions, 1:1 lock |
+| `634147a` | Character page layout compaction for small screens |
+| `15e22a5` | Spacebar-in-TextEditor fix — .focusable() scoped to gallery |
+| `f3c0aaf` | Gemini API safeguards — rate limiting, logging, manual-only dispatch |
+| `57ed27f` | 20 quality improvements — TTS, error surfacing, tests, performance |
+| `f7d3cd6` | 5 code review bug fixes — main thread, timer, renderer, race, cut interval |
+| `0931065` | Diagnostic logging for headSheetReferencePaths |
+| `89ef14a` | Circuit breaker — 10 consecutive failures → block all API calls |
 
 ---
 
-### Fix 3 — AgentProcessManager: readability handler nulling races with main thread
-**Severity:** High
-**File:** `Sources/WriteUI/Services/AgentProcessManager.swift`
+## Critical Open Issues
 
-**Problem:** `process.terminationHandler` fired on a background thread and set `stdoutHandle.readabilityHandler = nil` and `stderrHandle.readabilityHandler = nil` before dispatching to the main queue. This raced with the GCD readability dispatch on the main thread.
+### 1. Gemini API spam — root cause unknown
+The app made 1000+ unauthorized Gemini API image generation requests overnight. All were the head turnaround sheet prompt ("Use the supplied references..."), all returned 503. **The circuit breaker prevents this from happening again** (blocks after 10 consecutive failures), but the code path that triggered the loop was never identified. All explicit call sites require user confirmation through GeminiGenerationPreflightSheet.
 
-**Fix:** Moved both `readabilityHandler = nil` assignments inside the `DispatchQueue.main.async` block, ordered before the `onComplete` call.
-
----
-
-### Fix 4 — ConsoleProjectSync: redundant FD tracking array
-**Severity:** Low (dead code / clarity)
-**File:** `Sources/WriteUI/Services/ConsoleProjectSync.swift`
-
-**Problem:** `watcherFileDescriptors: [Int32]` was populated in `startWatching()` and then immediately cleared in `stopWatching()` — before the DispatchSource cancel handlers had a chance to fire and close the FDs. The array was redundant because each cancel handler already captures and closes its own `fd` by value. The array served no purpose.
-
-**Fix:** Removed the `watcherFileDescriptors` property entirely. FD lifecycle is handled correctly by the cancel handlers.
+### 2. Luke's master sheet missing from head turnaround preflight
+User reports the approved master sheet is not appearing as a reference image when generating the head turnaround sheet for Luke Hart. Code analysis shows `headSheetReferencePaths` correctly includes `approvedMasterReferenceSheetVariant?.imagePath` in first position. Diagnostic logging has been added (commit `0931065`) — next step is to check Console.app output when clicking "Generate Sheet" on Luke's head turnaround section. The log lines are prefixed `[headSheetReferencePaths]`.
 
 ---
 
-### Fix 5 — Gemini API key exposed in URL query parameter
-**Severity:** High (security)
-**File:** `Packages/Animate/Sources/AnimateUI/Services/GeminiImageService.swift`
+## Architecture Changes
 
-**Problem:** The Gemini API key was appended to the URL as `?key=<apiKey>`. This exposes the key in URLSession debug logs, crash reports, and proxy traffic. The URL construction also used a force-unwrap `URL(...)!`.
+### Circuit Breaker (GeminiImageService)
+- `consecutiveFailures` counter increments on every HTTP error or network error
+- After 10 consecutive failures → `circuitBreakerTripped = true` → ALL generate() calls immediately throw
+- Counter resets to 0 on any successful response
+- Only clears on app restart
 
-**Fix:**
-1. Removed `?key=\(apiKey)` from the URL string.
-2. Changed `URL(string:)!` to `guard let url = URL(string:) else { throw ServiceError.invalidResponse }`.
-3. Added `urlRequest.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")` — the standard Gemini header.
+### Source-Aware Crop Tool
+- `CharacterLookDevelopmentVariant` now has `sourceSheetPath: String?` and `sourceCropRect: CropRect?`
+- `cropApprovedHeadTurnaroundSheet` and `cropApprovedCostumeSheet` stamp these fields
+- `CharacterVariantCropSheet` shows source sheet with 8 drag handles
+- `AnimateStore.applyCropToVariant()` overwrites variant file in-place
 
----
-
-### Fix 6 — MFCCSimilarity crashes on zero-length audio
-**Severity:** High
-**File:** `Packages/Score/Sources/ScoreUI/Services/MFCCSimilarity.swift`
-
-**Problem:** `fftMagnitude(_:)` used `baseAddress!` on `UnsafeMutableBufferPointer` initialized from arrays of length `n/2`. If `n == 0`, those arrays are empty and `baseAddress` is `nil`, causing a crash.
-
-**Fix:** Added `guard n > 0 else { return [] }` at the top of the function.
+### Keyboard Focus
+- `.focusable()` + `.onKeyPress()` moved from page-level ScrollView to `ImageGallerySection.galleryGrid`
+- Rule: NEVER scope keyboard handlers wider than the view that needs them
 
 ---
 
-### Fix 7 — NovotroProjectAsyncTimeout: zero-second timeout fires immediately
-**Severity:** High
-**File:** `Packages/ProjectKit/Sources/ProjectKit/NovotroProjectAsyncTimeout.swift`
-
-**Problem:** When `seconds == 0`, `timeoutNanoseconds` was `0`, so `Task.sleep` was skipped and the timeout task threw `operationTimedOut` before the operation task could even execute. Any call with `seconds: 0` would always fail.
-
-**Fix:** Added `guard seconds > 0 else { return try await operation() }` at the top. Zero or negative seconds now runs the operation directly with no timeout racing against it. Also simplified the internal logic by removing the now-unnecessary `if timeoutNanoseconds > 0` branch.
+## Test Suite
+- **263 tests, 0 failures, 4 skipped**
+- New test files: `TTSServiceTests.swift`, `DepthEstimationTests.swift`, `CropRectTests.swift`
+- `SilverSceneSmokeTests` now skip gracefully when test data is unavailable
 
 ---
 
-### Fix 8 — OperaChromeDivider `opacity` parameter never applied
-**Severity:** Medium
-**File:** `Packages/ProjectKit/Sources/ProjectKit/OperaChrome.swift`
-
-**Problem:** `OperaChromeDivider` accepted an `opacity: Double` parameter and stored it, but the `body` property never applied `.opacity(opacity)` to either divider variant. Passing any opacity value had no effect.
-
-**Fix:** Added `.opacity(opacity)` to both the vertical (`Divider().frame(width: 1)`) and horizontal (`Divider()`) variants in `body`.
-
----
-
-### Fix 9 — `toTitleCase()` mangles Roman numerals and acronyms
-**Severity:** Medium
-**File:** `Sources/WriteUI/ScriptStore.swift`
-
-**Problem:** The `toTitleCase()` extension always lowercased everything after the first character. `"Act II"` → `"Act Ii"`, `"Part III"` → `"Part Iii"`.
-
-**Fix:** Added a guard before the capitalize-then-lowercase step: if a word is all letters, all uppercase, and longer than one character, it's preserved as-is. Single uppercase letters (e.g. `"A"`) still get title-cased normally.
-
----
-
-## Intentionally Not Changed
-
-The following were flagged during review but confirmed to be intentional design:
-
-| Item | Reason left as-is |
-|------|-------------------|
-| `autoSaveEnabled` always writes `false` to UserDefaults; `scheduleAutoSaveIfNeeded()` is a no-op | **Intentional.** Auto-save is permanently disabled to prevent the app from overwriting files that LLM agents are actively editing. |
-| `NovotroProjectDatabase` `deinit` calls `sqlite3_close` nonisolated | Safe in Swift 6: `deinit` runs only after ref count reaches zero, so no concurrent actor-isolated calls can be in flight. |
-| `AgentProcessManager.resolveExecutablePath()` calls `waitUntilExit()` on MainActor | Caching in `fullShellPath()` means the blocking call only fires once. `resolveExecutablePath()` checks `FileManager.isExecutableFile` (fast) first; shell fallbacks only occur on the very first miss. Refactoring risks breaking agent process launching. |
-| `ScriptStore.save()` silently no-ops if a save is already in-flight | Intentional: `dirtySongPaths` is cleared before the Task at line 1006; new edits during save re-dirty by adding to the set directly; `isSaving = false` unblocks the next manual Cmd+S. |
-| `NovotroProjectMirrorSession` has no `shutdown()` | Mirror/remote mode is disabled — the Novotro Project Server is abandoned and never used. |
-
----
-
-## Build Verification Needed
-
-Before deploying, run:
+## Deploy Process
 ```bash
 cd "/Volumes/Storage VIII/Programming/Amira Writer"
-swift build -c release 2>&1 | tail -20
+xcodebuild -scheme "Opera" -configuration Debug -destination 'platform=macOS' \
+  -derivedDataPath build CONFIGURATION_BUILD_DIR="$(pwd)/build/app" build
+
+cp build/app/Opera "/Volumes/Storage VIII/Programming/\!Applications/Amira Writer.app/Contents/MacOS/Opera"
+for b in build/app/*.bundle; do
+  cp -R "$b" "/Volumes/Storage VIII/Programming/\!Applications/Amira Writer.app/Contents/Resources/$(basename $b)"
+done
+codesign --force --sign - "/Volumes/Storage VIII/Programming/\!Applications/Amira Writer.app"
 ```
 
-Key areas to manually test:
-- Open any project → switch between Write / Score / Animate (Cmd+1/2/3)
-- Have an external agent edit a `.ows` file → verify the glow update and reload
-- Use the Console agent panel → verify agent runs and output streams correctly
-- In Animate, trigger image generation → verify it doesn't crash and the API call succeeds
+---
+
+## Next Session Priorities
+1. **Diagnose Luke's master sheet issue** — check Console output from diagnostic logging
+2. **Remove diagnostic logging** once master sheet issue is resolved
+3. **Find the Gemini API auto-trigger** — add more aggressive logging or a breakpoint to trace what calls `GeminiImageService.generate()` when no preflight sheet is open
+4. **Test the crop tool** — verify source sheet display and resize handles work correctly
+5. **Test the deployed app** — verify circuit breaker, rate limiting, keyboard focus fix all work in production
