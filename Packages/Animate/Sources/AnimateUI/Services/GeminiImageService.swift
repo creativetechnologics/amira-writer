@@ -63,13 +63,19 @@ final class GeminiImageService {
         }
     }
 
-    // MARK: - Rate Limiting
+    // MARK: - Rate Limiting & Circuit Breaker
 
     /// Maximum number of `generate()` calls allowed per 60-second window.
     static var rateLimitPerMinute: Int = 5
 
+    /// Circuit breaker: after this many consecutive failures, all calls are blocked
+    /// until the app is restarted. Prevents runaway retry loops from burning API quota.
+    static let circuitBreakerThreshold: Int = 10
+
     private static var callCount: Int = 0
     private static var callCountResetTime: Date = Date()
+    private static var consecutiveFailures: Int = 0
+    private static var circuitBreakerTripped: Bool = false
 
     // MARK: - Properties
 
@@ -98,6 +104,13 @@ final class GeminiImageService {
     /// Generate a single image from a text prompt with optional reference images.
     func generate(request: GenerationRequest, apiKey: String) async throws -> GenerationResult {
         guard !apiKey.isEmpty else { throw ServiceError.noAPIKey }
+
+        // Circuit breaker: if too many consecutive failures, refuse ALL calls
+        // until the app is restarted. This prevents runaway retry loops.
+        if Self.circuitBreakerTripped {
+            print("[GeminiImageService] 🛑 CIRCUIT BREAKER TRIPPED — all API calls blocked. Restart the app to reset.")
+            throw ServiceError.rateLimitExceeded
+        }
 
         // Rate limiting: reset the window counter if more than 60 seconds have elapsed.
         let now = Date()
@@ -150,16 +163,38 @@ final class GeminiImageService {
         urlRequest.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            Self.consecutiveFailures += 1
+            print("[GeminiImageService] Network error (\(Self.consecutiveFailures) consecutive failures): \(error.localizedDescription)")
+            if Self.consecutiveFailures >= Self.circuitBreakerThreshold {
+                Self.circuitBreakerTripped = true
+                print("[GeminiImageService] 🛑 CIRCUIT BREAKER TRIPPED after \(Self.consecutiveFailures) consecutive failures. All API calls blocked until app restart.")
+            }
+            throw error
+        }
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            Self.consecutiveFailures += 1
             throw ServiceError.invalidResponse
         }
 
         if httpResponse.statusCode != 200 {
+            Self.consecutiveFailures += 1
             let body = String(data: data, encoding: .utf8) ?? "No body"
+            print("[GeminiImageService] HTTP \(httpResponse.statusCode) (\(Self.consecutiveFailures) consecutive failures)")
+            if Self.consecutiveFailures >= Self.circuitBreakerThreshold {
+                Self.circuitBreakerTripped = true
+                print("[GeminiImageService] 🛑 CIRCUIT BREAKER TRIPPED after \(Self.consecutiveFailures) consecutive failures. All API calls blocked until app restart.")
+            }
             throw ServiceError.httpError(httpResponse.statusCode, body)
         }
+
+        // Success — reset the failure counter
+        Self.consecutiveFailures = 0
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let candidates = json["candidates"] as? [[String: Any]],
