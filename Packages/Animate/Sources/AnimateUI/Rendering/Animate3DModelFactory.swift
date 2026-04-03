@@ -279,13 +279,15 @@ enum Animate3DModelFactory {
     /// Attempts to load a bundled GLB model by filename (without extension) from the
     /// AnimateUI module's Resources/Models3D directory.
     static func loadBundledModel(named name: String) -> SCNNode? {
-        guard let url = Bundle.module.url(
+        guard let bundle = SafeBundle.module,
+              let url = bundle.url(
             forResource: name,
             withExtension: "glb",
             subdirectory: "Resources/Models3D"
         ) else {
             // Try without subdirectory (depends on how SPM copies resources).
-            guard let url = Bundle.module.url(forResource: name, withExtension: "glb") else {
+            guard let bundle = SafeBundle.module,
+                  let url = bundle.url(forResource: name, withExtension: "glb") else {
                 NSLog("[Animate3DModelFactory] Bundled model '\(name).glb' not found in bundle.")
                 return nil
             }

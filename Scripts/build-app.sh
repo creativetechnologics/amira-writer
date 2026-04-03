@@ -126,6 +126,16 @@ if [[ -f "$PROJECT_DIR/Resources/AppIcon.icns" ]]; then
     cp "$PROJECT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 fi
 
+# Copy SPM resource bundles (Metal shaders, 3D models, etc.)
+BUILD_DIR="$PROJECT_DIR/.build/$BUILD_CONFIG"
+for bundle in "$BUILD_DIR"/*.bundle; do
+    if [[ -d "$bundle" ]]; then
+        BUNDLE_NAME="$(basename "$bundle")"
+        echo "Embedding resource bundle: $BUNDLE_NAME"
+        cp -R "$bundle" "$RESOURCES_DIR/$BUNDLE_NAME"
+    fi
+done
+
 # Copy helper scripts used by the installed app.
 if [[ -f "$PROJECT_DIR/Scripts/gemini_inspiration_batch.py" ]]; then
     cp "$PROJECT_DIR/Scripts/gemini_inspiration_batch.py" "$RESOURCES_DIR/gemini_inspiration_batch.py"

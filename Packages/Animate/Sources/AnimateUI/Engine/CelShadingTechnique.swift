@@ -152,9 +152,9 @@ enum CelShadingTechnique {
 
     /// Loads the Metal library compiled from .metal files in this SPM target.
     private static func loadMetalLibrary() -> (any MTLLibrary)? {
-        guard let device = MTLCreateSystemDefaultDevice() else { return nil }
-        // SPM compiles .metal sources into default.metallib inside Bundle.module.
-        return try? device.makeDefaultLibrary(bundle: Bundle.module)
+        guard let device = MTLCreateSystemDefaultDevice(),
+              let bundle = SafeBundle.module else { return nil }
+        return try? device.makeDefaultLibrary(bundle: bundle)
     }
 
     /// Builds the technique definition dictionary that SceneKit parses.
