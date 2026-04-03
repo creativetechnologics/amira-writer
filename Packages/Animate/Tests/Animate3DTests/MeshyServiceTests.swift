@@ -130,8 +130,11 @@ final class MeshyServiceTests: XCTestCase {
         XCTAssertEqual(oldModel.estimatedCredits, 15)
     }
 
-    func testCredentialStoreRoundTrip() {
+    func testCredentialStoreRoundTrip() throws {
         let store = MeshyCredentialStore()
+        // Keychain may not be available in sandboxed test runners
+        store.saveAPIKey("msy_probe")
+        try XCTSkipUnless(store.loadAPIKey() == "msy_probe", "Keychain not accessible in this environment")
         store.clearAPIKey()
 
         XCTAssertEqual(store.loadAPIKey(), "")

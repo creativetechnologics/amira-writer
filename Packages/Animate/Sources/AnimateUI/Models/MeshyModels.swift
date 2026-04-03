@@ -15,6 +15,20 @@ struct MeshyMultiImageRequest: Encodable, Sendable {
     var textureImageURL: String?
     var targetFormats: [String] = ["glb", "usdz"]
     var symmetryMode: String = "auto"
+
+    enum CodingKeys: String, CodingKey {
+        case imageURLs = "image_urls"
+        case aiModel = "ai_model"
+        case topology
+        case targetPolycount = "target_polycount"
+        case shouldRemesh = "should_remesh"
+        case shouldTexture = "should_texture"
+        case enablePBR = "enable_pbr"
+        case removeLighting = "remove_lighting"
+        case textureImageURL = "texture_image_url"
+        case targetFormats = "target_formats"
+        case symmetryMode = "symmetry_mode"
+    }
 }
 
 @available(macOS 26.0, *)
@@ -29,6 +43,19 @@ struct MeshyImageRequest: Encodable, Sendable {
     var removeLighting: Bool = true
     var textureImageURL: String?
     var targetFormats: [String] = ["glb", "usdz"]
+
+    enum CodingKeys: String, CodingKey {
+        case imageURL = "image_url"
+        case aiModel = "ai_model"
+        case topology
+        case targetPolycount = "target_polycount"
+        case shouldRemesh = "should_remesh"
+        case shouldTexture = "should_texture"
+        case enablePBR = "enable_pbr"
+        case removeLighting = "remove_lighting"
+        case textureImageURL = "texture_image_url"
+        case targetFormats = "target_formats"
+    }
 }
 
 // MARK: - Response Types

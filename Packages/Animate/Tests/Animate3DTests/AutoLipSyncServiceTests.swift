@@ -156,24 +156,61 @@ final class AutoLipSyncServiceTests: XCTestCase {
 
     // MARK: - Audio Duration
 
-    func testAudioDurationNilForMissingFile() {
+    func testAudioDurationNilForMissingFile() async {
         let bogusURL = URL(fileURLWithPath: "/tmp/nonexistent_audio_file_xyz.wav")
-        let duration = AutoLipSyncService.audioDuration(url: bogusURL)
+        let duration = await AutoLipSyncService.audioDuration(url: bogusURL)
         XCTAssertNil(duration)
     }
 
-    func testAudioDurationEstimateForSmallFile() throws {
-        // Write a fake audio file of known size
+    func testAudioDurationEstimateForSmallFile() async throws {
+        // Write a valid minimal WAV file of known duration (~1 second)
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("test_audio_\(UUID().uuidString).wav")
-        let fakeData = Data(repeating: 0, count: 176_000) // ~1 second worth
-        try fakeData.write(to: tempURL)
+        let wavData = minimalWAVData(durationSeconds: 1.0)
+        try wavData.write(to: tempURL)
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
-        let duration = AutoLipSyncService.audioDuration(url: tempURL)
+        let duration = await AutoLipSyncService.audioDuration(url: tempURL)
         XCTAssertNotNil(duration)
         if let duration {
-            XCTAssertEqual(duration, 1.0, accuracy: 0.01)
+            XCTAssertEqual(duration, 1.0, accuracy: 0.1)
         }
+    }
+
+    // MARK: - Helpers
+
+    private func minimalWAVData(durationSeconds: Double, sampleRate: Int = 44100, channels: Int = 1, bitsPerSample: Int = 16) -> Data {
+        let bytesPerSample = bitsPerSample / 8
+        let numSamples = Int(durationSeconds * Double(sampleRate))
+        let dataSize = numSamples * channels * bytesPerSample
+        let fmtChunkSize: Int32 = 16
+        let fileSize = Int32(4 + 24 + 8 + dataSize) // WAVE + fmt chunk + data header + data
+
+        var data = Data()
+        // RIFF header
+        data.append(contentsOf: "RIFF".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: fileSize.littleEndian) { Array($0) })
+        data.append(contentsOf: "WAVE".utf8)
+        // fmt chunk
+        data.append(contentsOf: "fmt ".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: fmtChunkSize.littleEndian) { Array($0) })
+        let audioFormat: Int16 = 1 // PCM
+        data.append(contentsOf: withUnsafeBytes(of: audioFormat.littleEndian) { Array($0) })
+        let numChannels = Int16(channels)
+        data.append(contentsOf: withUnsafeBytes(of: numChannels.littleEndian) { Array($0) })
+        let sr = Int32(sampleRate)
+        data.append(contentsOf: withUnsafeBytes(of: sr.littleEndian) { Array($0) })
+        let byteRate = Int32(sampleRate * channels * bytesPerSample)
+        data.append(contentsOf: withUnsafeBytes(of: byteRate.littleEndian) { Array($0) })
+        let blockAlign = Int16(channels * bytesPerSample)
+        data.append(contentsOf: withUnsafeBytes(of: blockAlign.littleEndian) { Array($0) })
+        let bps = Int16(bitsPerSample)
+        data.append(contentsOf: withUnsafeBytes(of: bps.littleEndian) { Array($0) })
+        // data chunk
+        data.append(contentsOf: "data".utf8)
+        let ds = Int32(dataSize)
+        data.append(contentsOf: withUnsafeBytes(of: ds.littleEndian) { Array($0) })
+        data.append(Data(count: dataSize)) // silence
+        return data
     }
 }

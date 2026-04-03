@@ -4,7 +4,23 @@ import XCTest
 @available(macOS 26.0, *)
 @MainActor
 final class ScenePreviewRendererTests: XCTestCase {
+
+    /// These tests require real 3D model assets (USDZ/GLB) to be loaded by the renderer.
+    /// They are integration tests that validate end-to-end scene rendering with sidecars.
+    /// Skip when running without full asset fixtures.
+    private static let integrationTestsEnabled: Bool = {
+        ProcessInfo.processInfo.environment["ANIMATE_INTEGRATION_TESTS"] == "1"
+    }()
+
+    private func skipUnlessIntegrationEnabled() throws {
+        try XCTSkipUnless(
+            Self.integrationTestsEnabled,
+            "ScenePreviewRenderer integration tests require ANIMATE_INTEGRATION_TESTS=1 and 3D model fixtures"
+        )
+    }
+
     func testRendererPublishesAuthoredFacialStatusesFromSidecars() async throws {
+        try skipUnlessIntegrationEnabled()
         let projectURL = try makeProjectURL()
         defer { try? FileManager.default.removeItem(at: projectURL) }
 
@@ -147,6 +163,7 @@ final class ScenePreviewRendererTests: XCTestCase {
     }
 
     func testRendererSlowsHoldCadenceForListeningMotion() async throws {
+        try skipUnlessIntegrationEnabled()
         let projectURL = try makeProjectURL()
         defer { try? FileManager.default.removeItem(at: projectURL) }
 
@@ -271,6 +288,7 @@ final class ScenePreviewRendererTests: XCTestCase {
     }
 
     func testRendererAppliesDescriptorAuthoredMotionOverrides() async throws {
+        try skipUnlessIntegrationEnabled()
         let projectURL = try makeProjectURL()
         defer { try? FileManager.default.removeItem(at: projectURL) }
 

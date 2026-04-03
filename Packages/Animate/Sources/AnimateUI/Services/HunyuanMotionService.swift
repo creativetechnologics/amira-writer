@@ -114,7 +114,7 @@ final class HunyuanMotionService: Sendable {
         switch intensity {
         case 0..<0.3: intensityWord = "subtly"
         case 0.3..<0.6: intensityWord = ""
-        case 0.6..<0.8: intensityWord = "energetically"
+        case 0.6...0.8: intensityWord = "energetically"
         default: intensityWord = "dramatically"
         }
 
