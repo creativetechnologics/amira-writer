@@ -21,6 +21,7 @@ struct CharacterVariantCropSheet: View {
     @State private var activeHandle: CropHandle? = nil
     @State private var dragStartCropRect: CGRect = .zero
     @State private var loadedImage: NSImage? = nil
+    @State private var pixelSize: CGSize = .zero  // actual pixel dimensions from CGImage
     @State private var isDraggingInterior: Bool = false
     @State private var dragStartOriginInCrop: CGPoint = .zero
 
@@ -39,8 +40,14 @@ struct CharacterVariantCropSheet: View {
         .frame(minWidth: 800, minHeight: 700)
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
-            if let url = store.resolvedCharacterAssetURL(for: sourceImagePath) {
-                loadedImage = NSImage(contentsOf: url)
+            if let url = store.resolvedCharacterAssetURL(for: sourceImagePath),
+               let image = NSImage(contentsOf: url) {
+                loadedImage = image
+                if let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                    pixelSize = CGSize(width: cg.width, height: cg.height)
+                } else {
+                    pixelSize = image.size
+                }
             }
             if let initial = initialCropRect {
                 cropRect = initial
@@ -87,9 +94,9 @@ struct CharacterVariantCropSheet: View {
                     .frame(width: displaySize.width, height: displaySize.height)
                     .position(x: imgRect.midX, y: imgRect.midY)
 
-                // Dark overlay outside crop
+                // Dark overlay outside crop (even-odd to punch out the crop hole)
                 CropOverlayShape(cropRect: screenCropRect(from: cropRect, imgRect: imgRect), containerSize: geo.size)
-                    .fill(Color.black.opacity(0.55))
+                    .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
                     .allowsHitTesting(false)
 
                 // Rule-of-thirds grid inside crop
@@ -138,12 +145,10 @@ struct CharacterVariantCropSheet: View {
 
     private var controlBar: some View {
         HStack(spacing: 16) {
-            // Pixel readout
-            if let image = loadedImage {
-                let pw = image.size.width
-                let ph = image.size.height
-                let pixW = Int(cropRect.width * pw)
-                let pixH = Int(cropRect.height * ph)
+            // Pixel readout using actual CGImage pixel dimensions
+            if loadedImage != nil {
+                let pixW = Int(cropRect.width * pixelSize.width)
+                let pixH = Int(cropRect.height * pixelSize.height)
                 Text("W: \(pixW)px  H: \(pixH)px")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -155,18 +160,23 @@ struct CharacterVariantCropSheet: View {
             HStack(spacing: 4) {
                 Button {
                     aspectRatioLocked = true
-                    if let image = loadedImage {
-                        let size = image.size
-                        let imgAR = size.width / size.height
-                        // Lock to 1:1 in image space
-                        let side = min(cropRect.width, cropRect.height / imgAR)
-                        cropRect = CGRect(
-                            x: min(cropRect.midX - side / 2, 1 - side),
-                            y: min(cropRect.midY - (side * imgAR) / 2, 1 - side * imgAR),
-                            width: side,
-                            height: side * imgAR
-                        ).clamped(to: CGRect(x: 0, y: 0, width: 1, height: 1))
-                    }
+                    guard pixelSize.width > 0, pixelSize.height > 0 else { return }
+                    // For 1:1 pixel output: width_px == height_px
+                    // width_px = cropRect.width * pixelSize.width
+                    // height_px = cropRect.height * pixelSize.height
+                    // Set cropRect.height = cropRect.width * (pixelSize.width / pixelSize.height)
+                    let imgAR = pixelSize.width / pixelSize.height
+                    let currentPixW = cropRect.width * pixelSize.width
+                    let currentPixH = cropRect.height * pixelSize.height
+                    let side = min(currentPixW, currentPixH) // target pixel side length
+                    let normW = side / pixelSize.width
+                    let normH = side / pixelSize.height
+                    cropRect = CGRect(
+                        x: max(0, min(cropRect.midX - normW / 2, 1 - normW)),
+                        y: max(0, min(cropRect.midY - normH / 2, 1 - normH)),
+                        width: normW,
+                        height: normH
+                    ).clamped(to: CGRect(x: 0, y: 0, width: 1, height: 1))
                 } label: {
                     Text("1:1")
                         .font(.caption)
@@ -302,16 +312,24 @@ struct CharacterVariantCropSheet: View {
                     r.size.width = dragStartCropRect.maxX - r.origin.x
                 }
 
-                if aspectRatioLocked, let image = loadedImage {
-                    let imgAR = image.size.height > 0 ? image.size.width / image.size.height : 1
-                    // For 1:1, constrain to square in normalized coords scaled by image aspect ratio
-                    // Maintain square pixel output: width_norm * imgW == height_norm * imgH
-                    // => height_norm = width_norm * imgAR
+                if aspectRatioLocked, pixelSize.width > 0, pixelSize.height > 0 {
+                    // Maintain square pixel output: width_norm * pixelW == height_norm * pixelH
+                    // => height_norm = width_norm * (pixelW / pixelH)
+                    let imgAR = pixelSize.width / pixelSize.height
+                    r.size.height = r.size.width * imgAR
+                    // For top/left handles, anchor bottom-right edge
                     switch handle {
-                    case .topLeft, .bottomLeft, .left:
-                        r.size.height = r.size.width * imgAR
+                    case .topLeft:
+                        r.origin.x = dragStartCropRect.maxX - r.size.width
+                        r.origin.y = dragStartCropRect.maxY - r.size.height
+                    case .top:
+                        r.origin.y = dragStartCropRect.maxY - r.size.height
+                    case .left:
+                        r.origin.x = dragStartCropRect.maxX - r.size.width
+                    case .bottomLeft:
+                        r.origin.x = dragStartCropRect.maxX - r.size.width
                     default:
-                        r.size.height = r.size.width * imgAR
+                        break
                     }
                 }
 
