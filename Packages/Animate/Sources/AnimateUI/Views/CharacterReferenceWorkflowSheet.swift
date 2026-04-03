@@ -550,7 +550,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 }
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 14)], spacing: 14) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)], spacing: 12) {
                 ForEach(character.headTurnaroundSlots) { slot in
                     poseSlotCard(
                         title: slot.title,
@@ -769,7 +769,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 }
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 260), spacing: 14)], spacing: 14) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)], spacing: 12) {
                 ForEach(costume.fullBodySlots) { slot in
                     poseSlotCard(
                         title: slot.title,
@@ -944,41 +944,35 @@ struct CharacterReferenceWorkflowSheet: View {
             )
             .onTapGesture(count: 2, perform: onQuickLookApproved)
 
-            HStack {
+            HStack(spacing: 6) {
                 Text("\(variants.count) variant\(variants.count == 1 ? "" : "s")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Spacer()
+                Spacer(minLength: 4)
                 if approvedVariant != nil {
-                    Button {
-                        onShowPromptApproved()
-                    } label: {
+                    Button(action: onShowPromptApproved) {
                         Image(systemName: "eye.circle")
                     }
                     .buttonStyle(.borderless)
                     .help("View Prompt")
-                    Button {
-                        onEditApproved()
-                    } label: {
-                        Label("Edit", systemImage: "slider.horizontal.3")
+                    Button(action: onEditApproved) {
+                        Image(systemName: "slider.horizontal.3")
                     }
                     .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .controlSize(.mini)
+                    .help("Edit")
                 }
-                Button {
-                    onImport()
-                } label: {
-                    Label("Upload", systemImage: "arrow.down.doc")
+                Button(action: onImport) {
+                    Image(systemName: "arrow.down.doc")
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.small)
-                Button {
-                    onGenerate()
-                } label: {
+                .controlSize(.mini)
+                .help("Upload")
+                Button(action: onGenerate) {
                     Label("Generate", systemImage: "sparkles")
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .controlSize(.mini)
             }
 
             if variants.isEmpty {
@@ -1029,7 +1023,7 @@ struct CharacterReferenceWorkflowSheet: View {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(height: 180)
+                .frame(height: 150)
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .contextMenu {
@@ -1061,7 +1055,7 @@ struct CharacterReferenceWorkflowSheet: View {
         } else {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.quaternary.opacity(0.22))
-                .frame(height: 180)
+                .frame(height: 150)
                 .overlay {
                     if isGenerating {
                         generationOverlay(statusText: statusText)
@@ -2103,70 +2097,92 @@ private struct MiniVariantChip: View {
     let onAdjustCrop: () -> Void
 
     var body: some View {
-        VStack(spacing: 6) {
-            if let image = store.thumbnailImage(for: variant.imagePath, maxSize: 72) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 72, height: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .onTapGesture(count: 2, perform: onQuickLook)
-                    .contextMenu {
-                        Button("View Prompt", systemImage: "eye.circle") {
-                            onShowPrompt()
-                        }
-                        Button("Edit", systemImage: "slider.horizontal.3") {
-                            onEdit()
-                        }
-                        Button("Show in Finder", systemImage: "folder") {
-                            if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
-                                NSWorkspace.shared.activateFileViewerSelecting([url])
+        VStack(spacing: 4) {
+            ZStack(alignment: .bottomTrailing) {
+                if let image = store.thumbnailImage(for: variant.imagePath, maxSize: 72) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 72, height: 72)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .onTapGesture(count: 2, perform: onQuickLook)
+                        .contextMenu {
+                            Button("View Prompt", systemImage: "eye.circle") {
+                                onShowPrompt()
+                            }
+                            Button("Edit", systemImage: "slider.horizontal.3") {
+                                onEdit()
+                            }
+                            Button("Show in Finder", systemImage: "folder") {
+                                if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
+                                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                                }
+                            }
+                            Button("Copy Image", systemImage: "doc.on.doc") {
+                                onCopy()
+                            }
+                            Divider()
+                            Button("Adjust Crop", systemImage: "crop") {
+                                onAdjustCrop()
+                            }
+                            Button("Quick Look", systemImage: "eye") {
+                                onQuickLook()
+                            }
+                            Divider()
+                            if !isApproved {
+                                Button("Use This Variant", systemImage: "checkmark.circle") {
+                                    onApprove()
+                                }
+                            }
+                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                onDelete()
                             }
                         }
-                        Button("Copy Image", systemImage: "doc.on.doc") {
-                            onCopy()
-                        }
-                        Divider()
-                        Button("Adjust Crop", systemImage: "crop") {
-                            onAdjustCrop()
-                        }
-                        Button("Quick Look", systemImage: "eye") {
-                            onQuickLook()
-                        }
-                    }
-            } else {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(.quaternary.opacity(0.2))
-                    .frame(width: 72, height: 72)
+                } else {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(.quaternary.opacity(0.2))
+                        .frame(width: 72, height: 72)
+                }
+                if isApproved {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.green)
+                        .background(Circle().fill(.black.opacity(0.5)).padding(-2))
+                        .padding(4)
+                }
             }
 
-            Button(isApproved ? "Approved" : "Use") {
-                onApprove()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-            .disabled(isApproved)
+            HStack(spacing: 3) {
+                Button(action: onApprove) {
+                    Image(systemName: "checkmark")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(isApproved)
+                .help(isApproved ? "Approved" : "Use")
 
-            Button("Edit") {
-                onEdit()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
+                Button(action: onEdit) {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("Edit")
 
-            Button {
-                onShowPrompt()
-            } label: {
-                Image(systemName: "eye.circle")
-            }
-            .buttonStyle(.borderless)
-            .help("View Prompt")
+                Button(action: onShowPrompt) {
+                    Image(systemName: "eye")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.mini)
+                .help("View Prompt")
 
-            Button(role: .destructive, action: onDelete) {
-                Image(systemName: "trash")
+                Button(role: .destructive, action: onDelete) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.mini)
             }
-            .buttonStyle(.borderless)
         }
-        .padding(8)
+        .padding(6)
         .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
