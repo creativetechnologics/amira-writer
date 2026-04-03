@@ -556,71 +556,6 @@ struct CharactersPageView: View {
                 .padding()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .focusable()
-            .focusEffectDisabled()
-            .onKeyPress(.space) {
-                guard let character = store.selectedCharacter,
-                      let focusPath = lastClickedGalleryImagePath,
-                      let index = character.inspirationImagePaths.firstIndex(of: focusPath) else {
-                    if QuickLookPreviewController.shared.isVisible {
-                        QuickLookPreviewController.shared.dismiss()
-                        return .handled
-                    }
-                    return .ignored
-                }
-                let urls = character.inspirationImagePaths.compactMap { store.resolvedCharacterAssetURL(for: $0) }
-                let qlIndex = min(index, max(urls.count - 1, 0))
-                QuickLookPreviewController.shared.toggle(urls: urls, startAt: qlIndex)
-                return .handled
-            }
-            .onKeyPress(.leftArrow) {
-                guard let character = store.selectedCharacter,
-                      let focusPath = lastClickedGalleryImagePath,
-                      let currentIndex = character.inspirationImagePaths.firstIndex(of: focusPath),
-                      currentIndex > 0 else {
-                    return .ignored
-                }
-                let newIndex = currentIndex - 1
-                let newPath = character.inspirationImagePaths[newIndex]
-                selectedGalleryImagePaths = [newPath]
-                lastClickedGalleryImagePath = newPath
-                if QuickLookPreviewController.shared.isVisible {
-                    QuickLookPreviewController.shared.navigateTo(index: newIndex)
-                }
-                return .handled
-            }
-            .onKeyPress(.rightArrow) {
-                guard let character = store.selectedCharacter,
-                      let focusPath = lastClickedGalleryImagePath,
-                      let currentIndex = character.inspirationImagePaths.firstIndex(of: focusPath),
-                      currentIndex < character.inspirationImagePaths.count - 1 else {
-                    return .ignored
-                }
-                let newIndex = currentIndex + 1
-                let newPath = character.inspirationImagePaths[newIndex]
-                selectedGalleryImagePaths = [newPath]
-                lastClickedGalleryImagePath = newPath
-                if QuickLookPreviewController.shared.isVisible {
-                    QuickLookPreviewController.shared.navigateTo(index: newIndex)
-                }
-                return .handled
-            }
-            .onKeyPress(.escape) {
-                if QuickLookPreviewController.shared.isVisible {
-                    QuickLookPreviewController.shared.dismiss()
-                    return .handled
-                }
-                return .ignored
-            }
-            .onKeyPress(characters: CharacterSet(charactersIn: "p")) { _ in
-                guard let character = store.selectedCharacter,
-                      let focusPath = lastClickedGalleryImagePath,
-                      character.inspirationImagePaths.contains(focusPath) else {
-                    return .ignored
-                }
-                store.toggleCuratedInspirationImage(focusPath, for: character.id)
-                return .handled
-            }
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "person.2")
@@ -1996,6 +1931,72 @@ struct ImageGallerySection: View {
                 emptyStateView
             } else {
                 galleryGrid
+                    .focusable()
+                    .focusEffectDisabled()
+                    .onKeyPress(.space) {
+                        guard let focusPath = lastClickedPath,
+                              let index = paths.firstIndex(of: focusPath) else {
+                            if QuickLookPreviewController.shared.isVisible {
+                                QuickLookPreviewController.shared.dismiss()
+                                return .handled
+                            }
+                            return .ignored
+                        }
+                        let urls = paths.compactMap { store.resolvedCharacterAssetURL(for: $0) }
+                        let qlIndex = min(index, max(urls.count - 1, 0))
+                        QuickLookPreviewController.shared.toggle(urls: urls, startAt: qlIndex)
+                        return .handled
+                    }
+                    .onKeyPress(.leftArrow) {
+                        guard let focusPath = lastClickedPath,
+                              let currentIndex = paths.firstIndex(of: focusPath),
+                              currentIndex > 0 else {
+                            return .ignored
+                        }
+                        let newIndex = currentIndex - 1
+                        let newPath = paths[newIndex]
+                        selectedPaths = [newPath]
+                        lastClickedPath = newPath
+                        if QuickLookPreviewController.shared.isVisible {
+                            QuickLookPreviewController.shared.navigateTo(index: newIndex)
+                        }
+                        return .handled
+                    }
+                    .onKeyPress(.rightArrow) {
+                        guard let focusPath = lastClickedPath,
+                              let currentIndex = paths.firstIndex(of: focusPath),
+                              currentIndex < paths.count - 1 else {
+                            return .ignored
+                        }
+                        let newIndex = currentIndex + 1
+                        let newPath = paths[newIndex]
+                        selectedPaths = [newPath]
+                        lastClickedPath = newPath
+                        if QuickLookPreviewController.shared.isVisible {
+                            QuickLookPreviewController.shared.navigateTo(index: newIndex)
+                        }
+                        return .handled
+                    }
+                    .onKeyPress(.escape) {
+                        if QuickLookPreviewController.shared.isVisible {
+                            QuickLookPreviewController.shared.dismiss()
+                            return .handled
+                        }
+                        if !selectedPaths.isEmpty {
+                            selectedPaths.removeAll()
+                            lastClickedPath = nil
+                            return .handled
+                        }
+                        return .ignored
+                    }
+                    .onKeyPress(characters: CharacterSet(charactersIn: "p")) { _ in
+                        guard let focusPath = lastClickedPath,
+                              let onToggleCurated else {
+                            return .ignored
+                        }
+                        onToggleCurated(focusPath)
+                        return .handled
+                    }
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
@@ -2012,6 +2013,15 @@ struct ImageGallerySection: View {
                 .foregroundStyle(.secondary)
 
             Spacer()
+
+            if !selectedPaths.isEmpty {
+                Button("Deselect All") {
+                    selectedPaths.removeAll()
+                    lastClickedPath = nil
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
 
             if selectedPaths.count > 1, let onRemoveMultiple {
                 Button("Delete \(selectedPaths.count) Selected", systemImage: "trash", role: .destructive) {
