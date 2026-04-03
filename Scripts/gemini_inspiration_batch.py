@@ -176,6 +176,8 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--metadata", type=Path, required=True)
     watch.add_argument("--api-key", default=None)
     watch.add_argument("--poll-seconds", type=int, default=120)
+    watch.add_argument("--timeout-hours", type=float, default=2.0,
+                       help="Auto-cancel the batch if still running after this many hours (default: 2)")
 
     return parser
 
@@ -552,6 +554,8 @@ def check_status(args: argparse.Namespace) -> int:
 
 def watch_batch(args: argparse.Namespace) -> int:
     metadata_path = args.metadata.expanduser().resolve()
+    timeout_seconds = args.timeout_hours * 3600
+    start_time = time.monotonic()
     while True:
         status_args = argparse.Namespace(
             metadata=metadata_path,
@@ -569,6 +573,25 @@ def watch_batch(args: argparse.Namespace) -> int:
                 status_args.download_results = True
                 check_status(status_args)
             return 0
+
+        # Safety timeout: auto-cancel if the batch has been running too long.
+        elapsed = time.monotonic() - start_time
+        if elapsed > timeout_seconds:
+            batch_name = metadata["batch_name"]
+            print(
+                f"[watchdog] ⚠️ TIMEOUT after {elapsed / 3600:.1f} hours. "
+                f"Auto-cancelling batch {batch_name} to prevent runaway API costs."
+            )
+            try:
+                client.batches.cancel(name=batch_name)
+                print(f"[watchdog] Batch {batch_name} cancelled successfully.")
+            except Exception as e:
+                print(f"[watchdog] Failed to cancel batch: {e}")
+            # Update the local metadata so the app knows it was cancelled
+            payload["state"] = "JOB_STATE_CANCELLED"
+            payload["cancel_reason"] = f"Watchdog timeout after {elapsed / 3600:.1f} hours"
+            _save_status(metadata_path, payload)
+            return 1
 
         time.sleep(max(30, args.poll_seconds))
 

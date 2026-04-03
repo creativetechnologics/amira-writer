@@ -478,7 +478,7 @@ final class GeminiBatchService {
         }
     }
 
-    func launchWatchdog(metadataPath: URL, apiKey: String, pollSeconds: Int = 120) throws {
+    func launchWatchdog(metadataPath: URL, apiKey: String, pollSeconds: Int = 120, timeoutHours: Double = 2.0) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw BatchError.missingAPIKey
         }
@@ -501,6 +501,7 @@ final class GeminiBatchService {
             "watch",
             "--metadata", metadataPath.path,
             "--poll-seconds", String(max(30, pollSeconds)),
+            "--timeout-hours", String(timeoutHours),
         ]
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
