@@ -72,7 +72,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 .padding()
             }
         }
-        .frame(minWidth: 1300, idealWidth: 1600, minHeight: 860)
+        .frame(minWidth: 900, idealWidth: 1400, minHeight: 700)
         .task {
             store.seedCharacterReferenceWorkflowIfNeeded(for: characterID)
         }
@@ -2057,6 +2057,7 @@ private struct ReferenceVariantCard: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(.borderless)
+                .help("Delete")
             }
         }
         .frame(width: 220)
@@ -2181,6 +2182,7 @@ private struct MiniVariantChip: View {
                 }
                 .buttonStyle(.borderless)
                 .controlSize(.mini)
+                .help("Delete")
             }
         }
         .padding(6)

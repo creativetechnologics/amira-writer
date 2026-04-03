@@ -207,8 +207,19 @@ actor SceneDepthCache {
         guard let map = try? await DepthEstimationService.estimateDepth(imageURL: backgroundURL) else {
             return
         }
+        if map.source == .linearFallback {
+            if !SceneDepthCache.hasWarnedLinearFallback {
+                SceneDepthCache.hasWarnedLinearFallback = true
+                print("[SceneDepthManager] ⚠️ Using linear depth fallback — CoreML model not bundled. Parallax quality will be degraded.")
+            }
+        }
         cache[backgroundURL] = map
     }
+
+    // MARK: - Warning State
+
+    /// Static flag to suppress repeated linear-fallback log spam.
+    nonisolated(unsafe) static var hasWarnedLinearFallback: Bool = false
 
     /// Clears all cached depth maps. Call when switching projects.
     func clearAll() {

@@ -260,39 +260,21 @@ final class Scene3DVideoExporter {
         reader.add(readerOutput)
         guard reader.startReading() else { return }
 
-        // Pump samples from reader → writer.
-        while audioInput.isReadyForMoreMediaData {
-            guard reader.status == .reading else { break }
-            if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
-                audioInput.append(sampleBuffer)
-            } else {
-                // No more samples.
-                break
-            }
-        }
-
-        // Drain any remaining samples once the input is ready again.
-        if reader.status == .reading {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                audioInput.requestMediaDataWhenReady(on: .global(qos: .utility)) {
-                    while audioInput.isReadyForMoreMediaData {
-                        guard reader.status == .reading else {
-                            audioInput.markAsFinished()
-                            continuation.resume()
-                            return
-                        }
-                        if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
-                            audioInput.append(sampleBuffer)
-                        } else {
-                            audioInput.markAsFinished()
-                            continuation.resume()
-                            return
-                        }
+        // Drain all samples via a single requestMediaDataWhenReady to avoid
+        // the gap between a synchronous pump phase and an async drain phase,
+        // which can lose samples when the input stalls between the two phases.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            audioInput.requestMediaDataWhenReady(on: DispatchQueue(label: "audio-mux")) {
+                while audioInput.isReadyForMoreMediaData {
+                    if let sampleBuffer = readerOutput.copyNextSampleBuffer() {
+                        audioInput.append(sampleBuffer)
+                    } else {
+                        audioInput.markAsFinished()
+                        continuation.resume()
+                        return
                     }
                 }
             }
-        } else {
-            audioInput.markAsFinished()
         }
 
         reader.cancelReading()

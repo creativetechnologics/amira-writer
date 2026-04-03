@@ -269,7 +269,7 @@ final class AnimateStore {
     private let sceneAutomationPlanner = SceneAutomationPlanner()
     let audioPlayer = AnimationAudioPlayer()
     private var backgroundIndexRefreshTask: Task<Void, Never>?
-    private var externalFileWatchWorkItem: DispatchWorkItem?
+    private var fileWatchTask: Task<Void, Never>?
     private var lastKnownExternalSnapshots: [String: AnimateExternalFileSnapshot] = [:]
     @ObservationIgnored private var lastSavedPersistenceFingerprint: String?
     @ObservationIgnored private var isReconcilingPersistenceState = false
@@ -2811,18 +2811,17 @@ final class AnimateStore {
         stopExternalFileWatch()
         guard fileOWPURL != nil else { return }
 
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.checkForExternalProjectChanges()
-            self.startExternalFileWatch()
+        fileWatchTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.checkForExternalProjectChanges()
+                try? await Task.sleep(for: .seconds(Self.externalWatchInterval))
+            }
         }
-        externalFileWatchWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.externalWatchInterval, execute: workItem)
     }
 
     private func stopExternalFileWatch() {
-        externalFileWatchWorkItem?.cancel()
-        externalFileWatchWorkItem = nil
+        fileWatchTask?.cancel()
+        fileWatchTask = nil
         // Note: intentionally NOT clearing lastKnownExternalSnapshots here.
         // Clearing them causes the next startExternalFileWatch() to detect
         // ALL files as "changed", spawning massive concurrent reload Tasks.
@@ -4151,9 +4150,13 @@ final class AnimateStore {
                 .appendingPathComponent(character.assetFolderSlug)
                 .appendingPathComponent("parts")
 
-            try? FileManager.default.createDirectory(at: partsDir, withIntermediateDirectories: true)
-            let dest = partsDir.appendingPathComponent(url.lastPathComponent)
-            try? FileManager.default.copyItem(at: url, to: dest)
+            do {
+                try FileManager.default.createDirectory(at: partsDir, withIntermediateDirectories: true)
+                let dest = partsDir.appendingPathComponent(url.lastPathComponent)
+                try FileManager.default.copyItem(at: url, to: dest)
+            } catch {
+                statusMessage = "Failed to save drawing: \(error.localizedDescription)"
+            }
         }
 
         let variant = DrawingVariant(
@@ -5452,7 +5455,11 @@ final class AnimateStore {
         characters[index].approvedHeadTurnaroundSheetVariantID = variantID
         save()
         if variantID != nil {
-            try? cropApprovedHeadTurnaroundSheet(for: characterID)
+            do {
+                try cropApprovedHeadTurnaroundSheet(for: characterID)
+            } catch {
+                statusMessage = "Failed to auto-crop head sheet: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -5733,7 +5740,11 @@ final class AnimateStore {
         characters[charIndex].costumeReferenceSets[costumeIndex].approvedSheetVariantID = variantID
         save()
         if variantID != nil {
-            try? cropApprovedCostumeSheet(for: characterID, costumeID: costumeID)
+            do {
+                try cropApprovedCostumeSheet(for: characterID, costumeID: costumeID)
+            } catch {
+                statusMessage = "Failed to auto-crop costume sheet: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -8085,8 +8096,11 @@ final class AnimateStore {
             "modelURLs": modelURLs,
             "downloadedAt": ISO8601DateFormatter().string(from: Date())
         ]
-        if let data = try? JSONSerialization.data(withJSONObject: metadata, options: .prettyPrinted) {
-            try? data.write(to: metadataURL)
+        do {
+            let metadataData = try JSONSerialization.data(withJSONObject: metadata, options: .prettyPrinted)
+            try metadataData.write(to: metadataURL)
+        } catch {
+            statusMessage = "Failed to save model metadata: \(error.localizedDescription)"
         }
     }
 
@@ -8202,17 +8216,51 @@ final class AnimateStore {
 
         // Step 3 — Generate dialogue audio via TTS
         animateMacroStatus = "Generating dialogue audio..."
-        // TODO: wire TTSService — requires a CharacterBlockingPlan populated
-        // from the production compiler (SceneProductionCompiler). Calling
-        // TTSService.generateDialogueAudio(blockingPlan:outputDirectory:) with
-        // plans built by SceneProductionCompiler.compile(for:) would be the
-        // correct approach once the compiler is accessible here.
-        //
-        // Example wiring (pending compiler access):
-        //   let audioDir = animateURL?.appendingPathComponent("dialogue-audio")
-        //   for plan in productionBlockingPlans {
-        //       _ = await TTSService.generateDialogueAudio(blockingPlan: plan, outputDirectory: audioDir)
-        //   }
+        if let audioBaseDir = animateURL?.appendingPathComponent("dialogue-audio/\(scene.name)") {
+            let lyrics = currentSongData?.extractLyrics() ?? ""
+            let bpm = currentSongData?.tempoEvents.sorted(by: { $0.tick < $1.tick }).first?.bpm ?? 120
+            let totalBeats: Int = {
+                guard let songData = currentSongData else { return 16 }
+                return max(4, Int(ceil(Double(songData.lengthTicks) / Double(max(songData.ticksPerQuarter, 1)))))
+            }()
+            let characterCast = scene.characterIDs.compactMap { id -> SceneProductionCharacterInput? in
+                guard let character = characters.first(where: { $0.id == id }) else { return nil }
+                return SceneProductionCharacterInput(
+                    name: character.name,
+                    slug: character.assetFolderSlug,
+                    preferredCostumeName: character.costumeReferenceSets.first?.name
+                )
+            }
+            let characterSlugs = scene.characterIDs.compactMap { id in
+                characters.first(where: { $0.id == id })?.assetFolderSlug
+            }
+            let productionInput = SceneProductionInput(
+                sceneName: scene.name,
+                sceneID: scene.id,
+                lyrics: lyrics,
+                directions: (lyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil : SceneDirectionParser.parse(lyrics))?.directions ?? [],
+                shots: scene.shots,
+                characterSlugs: characterSlugs,
+                characterCast: characterCast,
+                objectSetups: scene.objectSetups,
+                backgroundName: scene.backgroundID.flatMap { id in
+                    backgrounds.first(where: { $0.id == id })?.name
+                },
+                baseFPS: max(fps, 1),
+                totalBeats: totalBeats,
+                bpm: bpm
+            )
+            let plan = SceneProductionCompiler.compile(productionInput)
+            try? FileManager.default.createDirectory(at: audioBaseDir, withIntermediateDirectories: true)
+            for blocking in plan.characterBlocking {
+                let charAudioDir = audioBaseDir.appendingPathComponent(blocking.characterSlug)
+                _ = await TTSService.generateDialogueAudio(
+                    blockingPlan: blocking,
+                    outputDirectory: charAudioDir
+                )
+            }
+        }
 
         // Step 4 — Apply lip sync
         animateMacroStatus = "Applying lip sync..."

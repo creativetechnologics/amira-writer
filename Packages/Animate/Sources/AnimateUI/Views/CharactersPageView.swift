@@ -36,6 +36,7 @@ struct CharactersPageView: View {
     @State private var generatingInspirationCharacterID: UUID?
     @State private var isSubmittingInspirationBatch: Bool = false
     @State private var submittingInspirationBatchCharacterID: UUID?
+    @State private var characterSearchText: String = ""
     var showSidebar: Bool = true
 
     private static let batchTimestampFormatter: DateFormatter = {
@@ -239,7 +240,12 @@ struct CharactersPageView: View {
         }
         .task(id: store.workingOWPURL?.path) {
             while !Task.isCancelled {
-                store.refreshInspirationBatchJobs()
+                let hasActiveBatchJobs = store.characters.contains { character in
+                    character.inspirationBatchJobs.contains { !$0.isTerminal }
+                }
+                if hasActiveBatchJobs {
+                    store.refreshInspirationBatchJobs()
+                }
                 try? await Task.sleep(for: .seconds(20))
             }
         }
@@ -270,6 +276,24 @@ struct CharactersPageView: View {
 
             Divider()
 
+            HStack(spacing: 4) {
+                TextField("Search characters…", text: $characterSearchText)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                if !characterSearchText.isEmpty {
+                    Button {
+                        characterSearchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear Search")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+
             if store.characters.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "person.2")
@@ -282,8 +306,11 @@ struct CharactersPageView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                let filteredCharacters = store.characters.filter {
+                    characterSearchText.isEmpty || $0.name.localizedCaseInsensitiveContains(characterSearchText)
+                }
                 List(selection: $store.selectedCharacterID) {
-                    ForEach(store.characters) { character in
+                    ForEach(filteredCharacters) { character in
                         characterRow(character)
                             .tag(character.id)
                             .draggable(character.id.uuidString)
@@ -308,6 +335,9 @@ struct CharactersPageView: View {
                             }
                     }
                     .onMove { from, to in
+                        // Only allow reorder when search is inactive so indices
+                        // into filteredCharacters match store.characters.
+                        guard characterSearchText.isEmpty else { return }
                         store.moveCharacter(from: from, to: to)
                     }
                 }
@@ -509,6 +539,7 @@ struct CharactersPageView: View {
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
                                 .disabled(store.animateURL == nil)
+                                .help("Import Character Package")
                             }
                         }
                     ) {
@@ -1246,6 +1277,7 @@ struct CharactersPageView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .help("Remove 3D Model")
                 }
                 .padding(10)
                 .background(
@@ -2058,6 +2090,7 @@ struct ImageGallerySection: View {
             }
             .buttonStyle(.plain)
             .disabled(thumbnailBaseSize <= minThumbnailSize)
+            .help("Zoom Out")
 
             Slider(value: $thumbnailBaseSize, in: minThumbnailSize...maxThumbnailSize, step: 20)
                 .frame(width: 80)
@@ -2070,6 +2103,7 @@ struct ImageGallerySection: View {
             }
             .buttonStyle(.plain)
             .disabled(thumbnailBaseSize >= maxThumbnailSize)
+            .help("Zoom In")
         }
     }
 

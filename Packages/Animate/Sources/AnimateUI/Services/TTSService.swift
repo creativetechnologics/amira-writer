@@ -1,6 +1,18 @@
 import AppKit
 import Foundation
 
+// MARK: - Speech Delegate
+
+/// Delegate that bridges NSSpeechSynthesizer completion to a Swift concurrency continuation.
+private final class SpeechDelegate: NSObject, NSSpeechSynthesizerDelegate, @unchecked Sendable {
+    var continuation: CheckedContinuation<Void, Never>?
+
+    func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 /// Generates speech audio for dialogue beats using macOS NSSpeechSynthesizer.
 ///
 /// Produces AIFF files at the project's audio folder. These files can then be
@@ -34,22 +46,21 @@ struct TTSService: Sendable {
         let text = request.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw TTSError.invalidText }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let voiceName = request.voiceIdentifier.map { NSSpeechSynthesizer.VoiceName(rawValue: $0) }
-                let synth = NSSpeechSynthesizer(voice: voiceName)
-                synth?.rate = request.rate > 0 ? request.rate : 175
-                guard synth?.startSpeaking(text, to: request.outputURL) == true else {
-                    continuation.resume(throwing: TTSError.synthesisFailed)
-                    return
-                }
-                // NSSpeechSynthesizer is synchronous when writing to file —
-                // poll until isSpeaking becomes false.
-                while synth?.isSpeaking == true {
-                    Thread.sleep(forTimeInterval: 0.05)
-                }
-                continuation.resume()
-            }
+        let voiceName = request.voiceIdentifier.map { NSSpeechSynthesizer.VoiceName(rawValue: $0) }
+        guard let synth = NSSpeechSynthesizer(voice: voiceName) else {
+            throw TTSError.synthesisFailed
+        }
+        synth.rate = request.rate > 0 ? request.rate : 175
+
+        let delegate = SpeechDelegate()
+        synth.delegate = delegate
+
+        guard synth.startSpeaking(text, to: request.outputURL) else {
+            throw TTSError.synthesisFailed
+        }
+
+        await withCheckedContinuation { continuation in
+            delegate.continuation = continuation
         }
     }
 
@@ -68,8 +79,6 @@ struct TTSService: Sendable {
         for (index, beat) in blockingPlan.actingBeats.enumerated() {
             let text = beat.action.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
-            // Only synthesise beats that look like spoken dialogue
-            guard isSpeechAction(text) else { continue }
 
             let fileName = "tts-\(blockingPlan.characterSlug)-beat\(index).aiff"
             let outputURL = outputDirectory.appendingPathComponent(fileName)
@@ -89,14 +98,4 @@ struct TTSService: Sendable {
         NSSpeechSynthesizer.availableVoices.map { $0.rawValue }
     }
 
-    // MARK: - Private helpers
-
-    /// Determines if an action string looks like spoken dialogue rather than movement.
-    private static func isSpeechAction(_ action: String) -> Bool {
-        let speechKeywords = ["say", "speak", "ask", "reply", "shout", "whisper", "tell",
-                              "exclaim", "announce", "call", "yell", "mumble", "mutter",
-                              "dialogue", "monologue", "narrate", "talk"]
-        let lower = action.lowercased()
-        return speechKeywords.contains(where: { lower.contains($0) })
-    }
 }

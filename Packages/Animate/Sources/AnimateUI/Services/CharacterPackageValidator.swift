@@ -67,7 +67,13 @@ struct CharacterPackageValidator: Sendable {
     func validate(_ manifest: CharacterPackageManifest) -> CharacterPackageValidationReport {
         var issues: [CharacterPackageValidationIssue] = []
 
-        if manifest.schemaVersion > CharacterPackageManifest.currentSchemaVersion {
+        if manifest.schemaVersion < 1 {
+            issues.append(.init(
+                severity: .warning,
+                code: .unsupportedSchemaVersion,
+                message: "Package has no schema version — may be corrupt or hand-crafted."
+            ))
+        } else if manifest.schemaVersion > CharacterPackageManifest.currentSchemaVersion {
             issues.append(.init(
                 severity: .error,
                 code: .unsupportedSchemaVersion,

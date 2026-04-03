@@ -7,6 +7,10 @@ import simd
 @MainActor
 final class SilverSceneSmokeTests: XCTestCase {
     func testSilverLoadsRenderableSceneFromDisk() async throws {
+        try XCTSkipIf(
+            !FileManager.default.fileExists(atPath: "/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera"),
+            "Test data not available"
+        )
         let projectURL = URL(fileURLWithPath: "/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera")
         let store = AnimateStore()
         store.disableExternalFileWatch = true
@@ -48,6 +52,10 @@ final class SilverSceneSmokeTests: XCTestCase {
     }
 
     func testSilverProductionCompileAndRender() async throws {
+        try XCTSkipIf(
+            !FileManager.default.fileExists(atPath: "/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera"),
+            "Test data not available"
+        )
         let projectURL = URL(fileURLWithPath: "/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera")
         let store = AnimateStore()
         store.disableExternalFileWatch = true

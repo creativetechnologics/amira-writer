@@ -7,10 +7,14 @@ struct BackgroundPlaceholderService {
 
     /// Generate placeholder background PNGs for a list of location names.
     /// Skips any file that already exists on disk.
+    /// Callers must pass the `locations` array explicitly — passing an empty
+    /// array is a no-op. Do not rely on `amiraLocations` as a default; the
+    /// list of locations is project-specific and should come from the caller.
     static func generatePlaceholders(
         locations: [(name: String, fileName: String, tintColor: NSColor)],
         outputDirectory: URL
     ) {
+        guard !locations.isEmpty else { return }
         try? FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
         for location in locations {
             let url = outputDirectory.appendingPathComponent(location.fileName)
@@ -53,7 +57,11 @@ struct BackgroundPlaceholderService {
         return image
     }
 
-    /// Default Amira locations to pre-populate.
+    /// Amira-specific locations used during initial project scaffolding.
+    /// NOTE: This array is Amira-specific and should be passed by callers that
+    /// need it — do not reference it from generic code or use it as a default
+    /// parameter in `generatePlaceholders`. Callers should pass location names
+    /// explicitly so this service remains project-agnostic.
     static let amiraLocations: [(name: String, fileName: String, tintColor: NSColor)] = [
         ("Palace Courtyard", "palace-courtyard.png", .systemBlue),
         ("Grand Hall", "grand-hall.png", .systemPurple),

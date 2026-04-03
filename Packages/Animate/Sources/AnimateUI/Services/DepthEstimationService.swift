@@ -137,24 +137,6 @@ struct DepthEstimationService: Sendable {
         return DepthMap(width: w, height: h, values: raw, source: .coreML)
     }
 
-    private static func pixelBufferToDepthMap(_ buffer: CVPixelBuffer) -> DepthMap {
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        let w = CVPixelBufferGetWidth(buffer)
-        let h = CVPixelBufferGetHeight(buffer)
-        guard let baseAddr = CVPixelBufferGetBaseAddress(buffer) else {
-            return linearFallback(width: w, height: h)
-        }
-        let floatPtr = baseAddr.assumingMemoryBound(to: Float.self)
-        var raw = Array(UnsafeBufferPointer(start: floatPtr, count: w * h))
-        // Normalize to 0…1
-        let minV = raw.min() ?? 0
-        let maxV = raw.max() ?? 1
-        let range = max(maxV - minV, 1e-6)
-        raw = raw.map { ($0 - minV) / range }
-        return DepthMap(width: w, height: h, values: raw, source: .coreML)
-    }
-
     // MARK: - Fallback
 
     private static func linearFallback(width: Int, height: Int) -> DepthMap {

@@ -167,9 +167,7 @@ enum AnimateLLMAgent {
 
     static func parseActions(from response: String) -> [AnimateLLMAction] {
         let pattern = #"\[ACTION\s+([^\]]*)\](.*?)\[/ACTION\]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .dotMatchesLineSeparators) else {
-            return []
-        }
+        let regex = try! NSRegularExpression(pattern: pattern, options: .dotMatchesLineSeparators)
 
         let nsString = response as NSString
         let matches = regex.matches(in: response, range: NSRange(location: 0, length: nsString.length))
@@ -348,6 +346,7 @@ enum AnimateLLMAgent {
 
     private static func extractAttribute(_ name: String, from attributes: String) -> String? {
         let pattern = #"\b"# + NSRegularExpression.escapedPattern(for: name) + #"="([^"]*)""#
+        // escapedPattern output is always valid — only fail path is malformed pattern, which cannot happen here.
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: attributes, range: NSRange(location: 0, length: (attributes as NSString).length)),
               match.numberOfRanges >= 2 else {

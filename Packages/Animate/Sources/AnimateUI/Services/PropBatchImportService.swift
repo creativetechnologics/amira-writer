@@ -33,7 +33,10 @@ final class PropBatchImportService {
         panel.canChooseDirectories = false
         panel.allowedFileTypes = ["usdz", "glb", "obj", "scn"]
 
-        let response = await panel.beginSheetModal(for: NSApp.keyWindow ?? NSApp.mainWindow!)
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first else {
+            return ImportResult(importedCount: 0, skippedCount: 0, errorCount: 0, errors: [], importedPropNames: [])
+        }
+        let response = await panel.beginSheetModal(for: window)
         guard response == .OK else {
             return ImportResult(importedCount: 0, skippedCount: 0, errorCount: 0, errors: [], importedPropNames: [])
         }

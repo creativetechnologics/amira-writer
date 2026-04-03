@@ -72,8 +72,10 @@ struct LLMAnimationPlanGenerator: Sendable {
     /// Maximum number of `generate()` calls allowed per 60-second window.
     nonisolated(unsafe) static var rateLimitPerMinute: Int = 5
 
-    nonisolated(unsafe) private static var callCount: Int = 0
-    nonisolated(unsafe) private static var callCountResetTime: Date = Date()
+    private static let rateLimitLock = NSLock()
+    // Access to _callCount and _callCountResetTime is serialized via rateLimitLock.
+    nonisolated(unsafe) private static var _callCount: Int = 0
+    nonisolated(unsafe) private static var _callCountResetTime: Date = Date()
 
     // MARK: - Prompt Building
 
@@ -244,6 +246,19 @@ struct LLMAnimationPlanGenerator: Sendable {
         """
     }
 
+    /// Increments the rate-limit counter under the lock and returns (count, limit).
+    /// This is a synchronous function so NSLock is safe to call.
+    private static func incrementCallCount(now: Date) -> (count: Int, limit: Int) {
+        rateLimitLock.lock()
+        defer { rateLimitLock.unlock() }
+        if now.timeIntervalSince(_callCountResetTime) > 60 {
+            _callCount = 0
+            _callCountResetTime = now
+        }
+        _callCount += 1
+        return (_callCount, rateLimitPerMinute)
+    }
+
     // MARK: - Generation
 
     /// Generate an animation plan from scene context by calling the Gemini API.
@@ -263,14 +278,10 @@ struct LLMAnimationPlanGenerator: Sendable {
 
         // Rate limiting: reset the window counter if more than 60 seconds have elapsed.
         let now = Date()
-        if now.timeIntervalSince(callCountResetTime) > 60 {
-            callCount = 0
-            callCountResetTime = now
-        }
-        callCount += 1
-        print("[LLMAnimationPlanGenerator] API call #\(callCount) at \(now) — model: \(model), scene: \(context.sceneName)")
-        if callCount > rateLimitPerMinute {
-            print("[LLMAnimationPlanGenerator] ⚠️ RATE LIMIT: More than \(rateLimitPerMinute) API calls in 60 seconds. Blocking call.")
+        let (currentCount, limitPerMinute) = incrementCallCount(now: now)
+        print("[LLMAnimationPlanGenerator] API call #\(currentCount) at \(now) — model: \(model), scene: \(context.sceneName)")
+        if currentCount > limitPerMinute {
+            print("[LLMAnimationPlanGenerator] RATE LIMIT: More than \(limitPerMinute) API calls in 60 seconds. Blocking call.")
             throw GeneratorError.rateLimitExceeded
         }
 

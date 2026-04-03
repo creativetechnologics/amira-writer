@@ -231,9 +231,13 @@ enum ProjectDatabaseBridge {
         }
 
         let indexURL = projectURL.appendingPathComponent(animate3DRegistryIndexPath)
-        if !FileManager.default.fileExists(atPath: indexURL.path),
-           let data = try? configuredEncoder().encode(index) {
-            try? data.write(to: indexURL)
+        if !FileManager.default.fileExists(atPath: indexURL.path) {
+            do {
+                let data = try configuredEncoder().encode(index)
+                try data.write(to: indexURL)
+            } catch {
+                print("[ProjectDatabaseBridge] ⚠️ Failed to save manifest: \(error.localizedDescription)")
+            }
         }
 
         ensure3DManifest(
@@ -284,15 +288,17 @@ enum ProjectDatabaseBridge {
         projectURL: URL
     ) {
         let fileURL = projectURL.appendingPathComponent(relativePath)
-        guard !FileManager.default.fileExists(atPath: fileURL.path),
-              let data = try? configuredEncoder().encode(manifest) else {
-            return
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        do {
+            let data = try configuredEncoder().encode(manifest)
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: fileURL)
+        } catch {
+            print("[ProjectDatabaseBridge] ⚠️ Failed to save manifest: \(error.localizedDescription)")
         }
-        try? FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try? data.write(to: fileURL)
     }
 
     private static func load3DManifest<T: Decodable>(
