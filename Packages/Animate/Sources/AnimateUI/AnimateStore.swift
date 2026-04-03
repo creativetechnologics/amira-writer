@@ -6094,21 +6094,36 @@ final class AnimateStore {
     }
 
     func headSheetReferencePaths(for characterID: UUID, limit: Int = 8) -> [String] {
-        guard let character = characters.first(where: { $0.id == characterID }) else { return [] }
+        guard let character = characters.first(where: { $0.id == characterID }) else {
+            print("[headSheetReferencePaths] Character \(characterID) not found")
+            return []
+        }
 
         var ordered: [String] = []
         var seen: Set<String> = []
 
-        func append(_ path: String?) {
-            guard let path = normalizedCharacterAssetPath(path),
-                  seen.insert(path).inserted else { return }
-            ordered.append(path)
+        func append(_ path: String?, label: String = "") {
+            guard let rawPath = path else {
+                print("[headSheetReferencePaths] \(label): nil input")
+                return
+            }
+            guard let normalized = normalizedCharacterAssetPath(rawPath) else {
+                print("[headSheetReferencePaths] \(label): normalizedCharacterAssetPath returned nil for '\(rawPath)'")
+                return
+            }
+            if seen.insert(normalized).inserted {
+                ordered.append(normalized)
+            }
         }
 
         // Master sheet first — most of the time the only reference needed for head close-up generation
-        append(character.approvedMasterReferenceSheetVariant?.imagePath)
-        append(character.inspirationReferenceImagePath)
-        character.curatedInspirationImagePaths.forEach { append($0) }
+        let masterVariant = character.approvedMasterReferenceSheetVariant
+        print("[headSheetReferencePaths] \(character.name): approvedMasterReferenceSheetVariant = \(masterVariant?.id.uuidString ?? "nil"), imagePath = \(masterVariant?.imagePath ?? "nil")")
+        print("[headSheetReferencePaths] \(character.name): masterReferenceSheetVariants count = \(character.masterReferenceSheetVariants.count), approvedID = \(character.approvedMasterReferenceSheetVariantID?.uuidString ?? "nil")")
+        append(masterVariant?.imagePath, label: "masterSheet")
+        append(character.inspirationReferenceImagePath, label: "inspirationRef")
+        character.curatedInspirationImagePaths.forEach { append($0, label: "curated") }
+        print("[headSheetReferencePaths] \(character.name): returning \(ordered.count) paths: \(ordered)")
         return Array(ordered.prefix(limit))
     }
 
