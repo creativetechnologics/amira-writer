@@ -292,12 +292,23 @@ struct PlacesPageView: View {
 
                 Spacer()
 
-                Button {
-                    store.importPlacesFromPicker()
-                } label: {
-                    Label("Import Place", systemImage: "plus")
+                HStack(spacing: 8) {
+                    Button {
+                        generatePlaceholders()
+                    } label: {
+                        Label("Stubs", systemImage: "photo.badge.plus")
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    Button {
+                        store.importPlacesFromPicker()
+                    } label: {
+                        Label("Import Place", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderedProminent)
             }
 
             HStack(spacing: 10) {
@@ -323,6 +334,25 @@ struct PlacesPageView: View {
         guard !store.backgrounds.isEmpty else { return "N/A" }
         let ratio = Double(placesWithImages) / Double(store.backgrounds.count)
         return "\(Int(ratio * 100))%"
+    }
+
+    private func generatePlaceholders() {
+        guard let projectURL = store.workingOWPURL ?? store.owpURL else { return }
+        let outputDirectory = projectURL
+            .appendingPathComponent("Animate")
+            .appendingPathComponent("backgrounds")
+        let existingNames = Set(store.backgrounds.map { $0.filename })
+        BackgroundPlaceholderService.generatePlaceholders(
+            locations: BackgroundPlaceholderService.amiraLocations,
+            outputDirectory: outputDirectory
+        )
+        for location in BackgroundPlaceholderService.amiraLocations {
+            guard !existingNames.contains(location.fileName) else { continue }
+            let url = outputDirectory.appendingPathComponent(location.fileName)
+            if FileManager.default.fileExists(atPath: url.path) {
+                store.importBackground(from: url)
+            }
+        }
     }
 
     private func overviewPill(title: String, value: String, systemImage: String) -> some View {

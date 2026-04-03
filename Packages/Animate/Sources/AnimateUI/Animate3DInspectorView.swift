@@ -111,6 +111,9 @@ struct Animate3DInspectorView: View {
                         inspectorRow(label: "Atmosphere", value: atmospherePresetTitle)
                     }
                     inspectorRow(label: "Camera Presets", value: "\(productionStatus.cameraPresetCount)")
+                    if productionStatus.pendingMotionRequestCount > 0 {
+                        inspectorRow(label: "Pending Motions", value: "\(productionStatus.pendingMotionRequestCount)")
+                    }
                     inspectorRow(label: "Characters", value: "\(productionStatus.characterCount)")
                     inspectorRow(label: "Props", value: "\(productionStatus.propCount)")
                     inspectorRow(
@@ -442,6 +445,20 @@ struct Animate3DInspectorView: View {
                             }
                         }
                     }
+                    HStack(spacing: 8) {
+                        if store.isGeneratingLLMPlan {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Button {
+                            Task { await store.generateAnimationPlanFromLLM() }
+                        } label: {
+                            Label("Generate Plan from Scene", systemImage: "sparkles")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(store.isGeneratingLLMPlan || store.geminiAPIKey.isEmpty)
+                    }
                 }
             }
         }
@@ -496,6 +513,15 @@ struct Animate3DInspectorView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    store.showExportSheet = true
+                } label: {
+                    Label("Export 3D Video...", systemImage: "film.stack")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.cyan.opacity(0.8))
+                .font(.system(size: 12))
             }
         }
     }

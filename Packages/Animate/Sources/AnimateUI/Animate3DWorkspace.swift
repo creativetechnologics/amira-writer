@@ -124,6 +124,13 @@ private struct Animate3DWorkspaceContent: View {
             guard let scene = store.selectedScene else { return }
             await prepareSelectedSceneFor3D(scene)
         }
+        .onChange(of: threeDHarnessState.isPlaying) { _, isPlaying in
+            if isPlaying {
+                store.audioPlayer.play()
+            } else {
+                store.audioPlayer.pause()
+            }
+        }
     }
 
     private var workspaceBody: some View {
@@ -257,6 +264,7 @@ private struct Animate3DWorkspaceContent: View {
     }
 
     private func refreshRenderPacket() {
+        store.syncAudioToCurrentFrame()
         if usesProductionPreview {
             productionCoordinator.render(frame: renderFrame)
         }
@@ -306,6 +314,7 @@ private struct Animate3DWorkspaceContent: View {
 
     private func prepareSelectedSceneFor3D(_ scene: AnimationScene) async {
         await store.loadSongData(for: scene)
+        store.loadSceneAudio()
         autoSeedShotsIfNeeded(for: scene)
         refreshScenarioIfNeeded()
     }

@@ -90,6 +90,7 @@ struct Animate3DProductionStatus: Hashable, Sendable {
     var runtimeCharacters: [Animate3DCharacterPerformanceStatus]
     var bundleReadiness: [Animate3DCharacterBundleReadinessStatus]
     var generationQueueItems: [Animate3DGenerationQueueItem]
+    var pendingMotionRequestCount: Int
     var warnings: [String]
 
     static let empty = Animate3DProductionStatus(
@@ -111,6 +112,7 @@ struct Animate3DProductionStatus: Hashable, Sendable {
         runtimeCharacters: [],
         bundleReadiness: [],
         generationQueueItems: [],
+        pendingMotionRequestCount: 0,
         warnings: []
     )
 }
@@ -120,6 +122,7 @@ struct Animate3DProductionStatus: Hashable, Sendable {
 final class Animate3DProductionCoordinator: ObservableObject {
     @Published private(set) var status: Animate3DProductionStatus = .empty
     @Published private(set) var plan: SceneProductionPlan?
+    @Published private(set) var pendingMotionRequests: [ActingBeatMotionPlanner.PlannedMotion] = []
 
     let renderer: ScenePreviewRenderer
 
@@ -155,9 +158,59 @@ final class Animate3DProductionCoordinator: ObservableObject {
         await renderer.loadPlan(compiledPlan)
         renderer.renderFrame(min(max(0, store.currentFrame), max(0, compiledPlan.totalFrames - 1)))
 
+        // Plan motion requests for all acting beats in each blocking plan.
+        let fps = max(compiledPlan.baseFPS, 1)
+        let motionRequests = compiledPlan.characterBlocking.flatMap { blocking in
+            ActingBeatMotionPlanner.plan(from: blocking, fps: fps)
+        }
+        pendingMotionRequests = motionRequests
+
+        // Supplemental camera pass: if the compiled plan has sparse camera coverage
+        // (fewer than 3 keyframes), run DirectionTemplateCompiler to fill the gaps.
+        if compiledPlan.cameraChoreography.keyframes.count < 3 {
+            let supplementalInstructions = DirectionTemplateCompiler.compileCameraChoreography(
+                blockingPlans: compiledPlan.characterBlocking,
+                sceneDurationFrames: compiledPlan.totalFrames,
+                fps: fps
+            )
+            if !supplementalInstructions.isEmpty {
+                let supplementalPlan = DirectionTemplateCompiler.toCameraChoreographyPlan(
+                    instructions: supplementalInstructions,
+                    blockingPlans: compiledPlan.characterBlocking
+                )
+                // Merge: keep any existing authored keyframes and append non-overlapping supplemental ones.
+                let existingFrames = Set(compiledPlan.cameraChoreography.keyframes.map(\.frame))
+                let merged = compiledPlan.cameraChoreography.keyframes
+                    + supplementalPlan.keyframes.filter { !existingFrames.contains($0.frame) }
+                let sortedMerged = merged.sorted { $0.frame < $1.frame }
+                // Rebuild the plan with the merged choreography.
+                // (SceneProductionPlan is a value type — we reassemble a new copy)
+                let mergedChoreography = CameraChoreographyPlan(keyframes: sortedMerged)
+                await renderer.loadPlan(SceneProductionPlan(
+                    sceneID: compiledPlan.sceneID,
+                    sceneName: compiledPlan.sceneName,
+                    backgroundName: compiledPlan.backgroundName,
+                    totalFrames: compiledPlan.totalFrames,
+                    baseFPS: compiledPlan.baseFPS,
+                    worldChunk: compiledPlan.worldChunk,
+                    styleProfile: compiledPlan.styleProfile,
+                    availableCameraPresetCount: compiledPlan.availableCameraPresetCount,
+                    lightRig: compiledPlan.lightRig,
+                    atmospherePreset: compiledPlan.atmospherePreset,
+                    characterBlocking: compiledPlan.characterBlocking,
+                    cameraChoreography: mergedChoreography,
+                    objectPlacements: compiledPlan.objectPlacements,
+                    depthAssignments: compiledPlan.depthAssignments,
+                    frameRateProfile: compiledPlan.frameRateProfile
+                ))
+                // Re-render to repopulate character performance statuses cleared by loadPlan.
+                renderer.renderFrame(min(max(0, store.currentFrame), max(0, compiledPlan.totalFrames - 1)))
+            }
+        }
+
         loadedSignature = signature
         plan = compiledPlan
-        status = makeStatus(for: compiledPlan, scene: scene, store: store, renderer: renderer)
+        status = makeStatus(for: compiledPlan, scene: scene, store: store, renderer: renderer, pendingMotionRequestCount: motionRequests.count)
     }
 
     func render(frame: Int) {
@@ -280,7 +333,8 @@ private extension Animate3DProductionCoordinator {
         for plan: SceneProductionPlan,
         scene: AnimationScene,
         store: AnimateStore,
-        renderer: ScenePreviewRenderer
+        renderer: ScenePreviewRenderer,
+        pendingMotionRequestCount: Int = 0
     ) -> Animate3DProductionStatus {
         let registryBundleService = Animate3DRegistryBundleService(store: store)
         let preferredCostumeBySlug = Dictionary(
@@ -386,6 +440,7 @@ private extension Animate3DProductionCoordinator {
             runtimeCharacters: renderer.characterPerformanceStatuses,
             bundleReadiness: bundleReadiness,
             generationQueueItems: generationQueueItems,
+            pendingMotionRequestCount: pendingMotionRequestCount,
             warnings: warnings
         )
     }

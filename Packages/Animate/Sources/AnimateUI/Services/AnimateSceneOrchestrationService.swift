@@ -54,14 +54,33 @@ struct AnimateSceneOrchestrationService {
         for scene: AnimationScene,
         shot: AnimationSceneShot
     ) -> LLMAnimationValidationReport? {
-        let report = LLMAnimationValidationReport(issues: [
-            .init(
-                severity: .warning,
-                code: .invalidJSON,
-                message: "Shot-slice apply is not enabled yet. Use Review Shot to inspect shot-scoped effects, then apply the full scene plan."
-            )
-        ])
-        store.statusMessage = "Shot-slice apply is not enabled yet"
+        guard let parsedPlan else {
+            let report = LLMAnimationValidationReport(issues: [
+                .init(
+                    severity: .error,
+                    code: .invalidJSON,
+                    message: "No plan available for shot-slice apply — run 'Generate Plan' first."
+                )
+            ])
+            store.statusMessage = "No plan available for shot-slice apply — run 'Generate Plan' first"
+            return report
+        }
+
+        let slice = shotScopedPlanSlice(from: parsedPlan, shot: shot)
+        let report = store.applyLLMAnimationPlan(slice.plan)
+
+        let errorCount = report.issues.filter { $0.severity == .error }.count
+        let warnCount = report.issues.filter { $0.severity == .warning }.count
+        let shotTitle = resolvedShotTitle(for: shot)
+
+        if errorCount > 0 {
+            store.statusMessage = "Shot '\(shotTitle)' slice applied with \(errorCount) errors, \(warnCount) warnings"
+        } else if warnCount > 0 {
+            store.statusMessage = "Shot '\(shotTitle)' slice applied with \(warnCount) warnings"
+        } else {
+            store.statusMessage = "Shot '\(shotTitle)' slice applied successfully"
+        }
+
         return report
     }
 

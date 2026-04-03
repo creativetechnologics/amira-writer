@@ -53,6 +53,10 @@ final class ScenePreviewRenderer {
     private let stageNode = SCNNode()
     private var characterNodes: [String: SCNNode] = [:]
     private var characterPerformanceDrivers: [String: CharacterPerformanceDriver] = [:]
+    /// Cached loaded FBX motion clips, keyed by motionID string.
+    private var loadedMotionClips: [String: FBXMotionClipLoader.MotionClip] = [:]
+    /// Pre-built node caches for FBX retargeting, keyed by character node name.
+    private var motionNodeCaches: [String: FBXMotionClipLoader.NodeCache] = [:]
     private var propNodes: [String: SCNNode] = [:]
     private var worldNode: SCNNode?
     private var backgroundNode: SCNNode?
@@ -186,6 +190,8 @@ extension ScenePreviewRenderer {
         backgroundNode?.removeFromParentNode()
         characterNodes.removeAll()
         characterPerformanceDrivers.removeAll()
+        loadedMotionClips.removeAll()
+        motionNodeCaches.removeAll()
         characterPerformanceStatusesByName.removeAll()
         characterPerformanceProfilesByName.removeAll()
         propNodes.removeAll()
@@ -668,6 +674,32 @@ extension ScenePreviewRenderer {
     ) {
         guard let motion else { return }
 
+        // FBX clip path: if we have a loaded clip for this motion, apply joint rotations
+        // and skip the procedural fallback.
+        if let clip = getOrLoadClip(
+            motionID: motion.descriptor.motionID,
+            relativePath: motion.descriptor.relativePath
+        ), !clip.frames.isEmpty {
+            let clipFrame = frame % clip.frameCount
+            let motionFrame = clip.frames[min(clipFrame, clip.frames.count - 1)]
+            let cacheKey = node.name ?? motion.descriptor.motionID
+            let nodeCache: FBXMotionClipLoader.NodeCache
+            if let existing = motionNodeCaches[cacheKey] {
+                nodeCache = existing
+            } else {
+                let retargetMap = FBXMotionClipLoader.buildRetargetMap(targetRoot: node)
+                let newCache = FBXMotionClipLoader.buildNodeCache(targetRoot: node, retargetMap: retargetMap)
+                motionNodeCaches[cacheKey] = newCache
+                nodeCache = newCache
+            }
+            FBXMotionClipLoader.apply(frame: motionFrame, nodeCache: nodeCache, rootPositionScale: 0.01)
+            // Apply position from blocking and any descriptor offsets; skip procedural bob/sway.
+            node.position = scnPosition(basePosition + SIMD3<Double>(0, motion.descriptor.bodyVerticalOffset ?? 0, 0))
+            if let roll = motion.descriptor.bodyRollOffset { node.eulerAngles.z = CGFloat(roll) }
+            if let pitch = motion.descriptor.bodyPitchOffset { node.eulerAngles.x = CGFloat(pitch) }
+            return
+        }
+
         let tags = ([motion.descriptor.motionID, motion.descriptor.title] + motion.descriptor.tags)
             .map { $0.lowercased() }
         let cycle = Double(frame) / Double(max(currentPlan?.baseFPS ?? 24, 1))
@@ -719,6 +751,20 @@ extension ScenePreviewRenderer {
         node.position = scnPosition(basePosition + SIMD3<Double>(0, verticalOffset, 0))
         node.eulerAngles.x = CGFloat(pitch)
         node.eulerAngles.z = CGFloat(roll)
+    }
+
+    /// Returns a cached `MotionClip` for the given motionID, loading it lazily on first access.
+    /// Returns `nil` if the file does not exist or fails to load.
+    private func getOrLoadClip(motionID: String, relativePath: String) -> FBXMotionClipLoader.MotionClip? {
+        if let cached = loadedMotionClips[motionID] { return cached }
+        guard let projectURL = store?.workingOWPURL ?? store?.owpURL else { return nil }
+        let fileURL = projectURL.appendingPathComponent(relativePath)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        if let clip = try? FBXMotionClipLoader.load(from: fileURL) {
+            loadedMotionClips[motionID] = clip
+            return clip
+        }
+        return nil
     }
 
     private func motionContext(

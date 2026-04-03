@@ -126,6 +126,7 @@ final class AnimateStore {
     var meshyGenerationError: String?
     var isGeneratingMeshy3D: Bool = false
     var meshyGeneratingCharacterID: UUID?
+    var isGeneratingLLMPlan: Bool = false
 
     // MARK: - Generation Sheet State
 
@@ -7592,6 +7593,124 @@ final class AnimateStore {
         }
 
         statusMessage = "Generated \(instructions.count) camera cues — \(DirectionTemplateCompiler.summary(for: instructions))"
+    }
+
+    // MARK: - Lipsync Direction Tag Processing
+
+    /// Parse [lipsync: "character" | mode=speech/singing | bars=N-M] tags from
+    /// the selected scene's lyrics and trigger AutoLipSyncService for each.
+    func applyLipSyncDirectionTags() async {
+        guard let scene = selectedScene else {
+            statusMessage = "No scene selected for lipsync"
+            return
+        }
+
+        let lyrics = currentSongData?.extractLyrics() ?? ""
+        guard !lyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            statusMessage = "No scene lyrics available for lipsync"
+            return
+        }
+
+        let parseResult = SceneDirectionParser.parse(lyrics)
+        let lipSyncDirections = parseResult.directions.filter { $0.tag == .lipsync }
+
+        guard !lipSyncDirections.isEmpty else {
+            statusMessage = "No [lipsync:] tags found in scene directions"
+            return
+        }
+
+        guard let audioURL = suggestedExportAudioURL(for: scene) else {
+            statusMessage = "No audio file found for scene '\(scene.name)'"
+            return
+        }
+
+        var successCount = 0
+        for direction in lipSyncDirections {
+            let characterName = direction.primaryValue.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+            guard let character = characters.first(where: {
+                $0.name.caseInsensitiveCompare(characterName) == .orderedSame ||
+                $0.assetFolderSlug.caseInsensitiveCompare(characterName) == .orderedSame
+            }) else { continue }
+
+            let mode = direction.parameters["mode"] ?? "speech"
+            let dialogueText = lyrics
+
+            do {
+                let result = try await AutoLipSyncService.generateFromAudio(
+                    audioURL: audioURL,
+                    dialogueText: dialogueText,
+                    fps: fps,
+                    startFrame: 0
+                )
+                applyLipSyncVisemes(result.visemeKeyframes, for: character.name)
+                successCount += 1
+            } catch {
+                // Continue to next character
+            }
+        }
+
+        statusMessage = successCount > 0
+            ? "Applied lipsync for \(successCount) character\(successCount == 1 ? "" : "s")"
+            : "Lipsync generation failed — check audio file and API setup"
+    }
+
+    // MARK: - LLM Animation Plan Generation
+
+    /// Generate an animation plan for the selected scene using Gemini LLM.
+    /// Calls LLMAnimationPlanGenerator.generate(), then applies the JSON plan.
+    func generateAnimationPlanFromLLM() async {
+        guard let scene = selectedScene else {
+            statusMessage = "Select a scene before generating a plan"
+            return
+        }
+        guard !geminiAPIKey.isEmpty else {
+            statusMessage = "No Gemini API key configured — open Settings to add one"
+            return
+        }
+
+        let lyrics = currentSongData?.extractLyrics() ?? ""
+        guard !lyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            statusMessage = "Scene has no lyrics/script text — load song data first"
+            return
+        }
+
+        isGeneratingLLMPlan = true
+        statusMessage = "Generating animation plan with Gemini..."
+
+        do {
+            let characterInfos = characters.map {
+                LLMAnimationPlanGenerator.SceneContext.CharacterInfo(
+                    name: $0.name,
+                    slug: $0.assetFolderSlug,
+                    description: $0.description.isEmpty ? $0.name : $0.description
+                )
+            }
+            let context = LLMAnimationPlanGenerator.SceneContext(
+                sceneText: lyrics,
+                characters: characterInfos,
+                sceneName: scene.name,
+                durationBars: nil,
+                fps: fps,
+                stageWidth: 10.0,
+                stageDepth: 10.0
+            )
+            let result = try await LLMAnimationPlanGenerator.generate(
+                context: context,
+                apiKey: geminiAPIKey
+            )
+            let report = applyLLMAnimationPlanJSON(result.rawJSON)
+            let errorCount = report.issues.filter { $0.severity == .error }.count
+            let warnCount = report.issues.filter { $0.severity == .warning }.count
+            if errorCount > 0 {
+                statusMessage = "Plan applied with \(errorCount) errors, \(warnCount) warnings"
+            } else {
+                statusMessage = "Plan applied — \(warnCount > 0 ? "\(warnCount) warnings" : "success")"
+            }
+        } catch {
+            statusMessage = "Plan generation failed: \(error.localizedDescription)"
+        }
+
+        isGeneratingLLMPlan = false
     }
 
     // MARK: - Track Resolution Cache Types & Helpers
