@@ -74,6 +74,15 @@ final class AnimateStore {
     var pendingCropCharacterID: UUID?
     var showImageCropper: Bool = false
 
+    // MARK: - Variant Crop State
+
+    var pendingVariantCropCharacterID: UUID? = nil
+    var pendingVariantCropSlotKey: String? = nil
+    var pendingVariantCropVariantID: UUID? = nil
+    var pendingVariantCropSourceSheetPath: String? = nil
+    var pendingVariantCropInitialRect: CropRect? = nil
+    var showVariantCropper: Bool = false
+
     // MARK: - Song Data Cache
 
     /// Cached song data for the currently selected scene.
@@ -4320,6 +4329,112 @@ final class AnimateStore {
         showImageCropper = false
     }
 
+    // MARK: - Variant Crop
+
+    func openVariantCropTool(
+        characterID: UUID,
+        slotKey: String,
+        variantID: UUID,
+        sourceSheetPath: String?,
+        initialCropRect: CropRect?
+    ) {
+        pendingVariantCropCharacterID = characterID
+        pendingVariantCropSlotKey = slotKey
+        pendingVariantCropVariantID = variantID
+        pendingVariantCropSourceSheetPath = sourceSheetPath
+        pendingVariantCropInitialRect = initialCropRect
+        showVariantCropper = true
+    }
+
+    func cancelVariantCrop() {
+        pendingVariantCropCharacterID = nil
+        pendingVariantCropSlotKey = nil
+        pendingVariantCropVariantID = nil
+        pendingVariantCropSourceSheetPath = nil
+        pendingVariantCropInitialRect = nil
+        showVariantCropper = false
+    }
+
+    func applyCropToVariant(
+        cropRect: CGRect,
+        characterID: UUID,
+        slotKey: String,
+        variantID: UUID,
+        sourceSheetPath: String
+    ) throws {
+        guard let url = resolvedCharacterAssetURL(for: sourceSheetPath),
+              let image = NSImage(contentsOf: url),
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            statusMessage = "Cannot load source image for crop"
+            return
+        }
+
+        let pixelWidth = CGFloat(cgImage.width)
+        let pixelHeight = CGFloat(cgImage.height)
+        let pixelRect = CGRect(
+            x: cropRect.origin.x * pixelWidth,
+            y: cropRect.origin.y * pixelHeight,
+            width: cropRect.width * pixelWidth,
+            height: cropRect.height * pixelHeight
+        ).integral
+
+        guard let croppedCG = cgImage.cropping(to: pixelRect) else {
+            statusMessage = "Failed to crop image"
+            return
+        }
+
+        let croppedImage = NSImage(cgImage: croppedCG, size: pixelRect.size)
+        guard let tiffData = croppedImage.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            statusMessage = "Failed to encode cropped image"
+            return
+        }
+
+        // Find the variant's existing imagePath and overwrite it
+        var targetImagePath: String? = nil
+
+        // Search head turnaround slots
+        if let charIdx = characters.firstIndex(where: { $0.id == characterID }) {
+            for slotIdx in characters[charIdx].headTurnaroundSlots.indices {
+                let slot = characters[charIdx].headTurnaroundSlots[slotIdx]
+                if slot.key == slotKey,
+                   let variantIdx = slot.variants.firstIndex(where: { $0.id == variantID }) {
+                    targetImagePath = slot.variants[variantIdx].imagePath
+                    if let path = targetImagePath,
+                       let existingURL = resolvedCharacterAssetURL(for: path) {
+                        try pngData.write(to: existingURL)
+                    }
+                    characters[charIdx].headTurnaroundSlots[slotIdx].variants[variantIdx].sourceCropRect = CropRect.from(cropRect)
+                    characters[charIdx].headTurnaroundSlots[slotIdx].variants[variantIdx].sourceSheetPath = sourceSheetPath
+                    save()
+                    return
+                }
+            }
+
+            // Search costume full-body slots
+            for costumeIdx in characters[charIdx].costumeReferenceSets.indices {
+                for slotIdx in characters[charIdx].costumeReferenceSets[costumeIdx].fullBodySlots.indices {
+                    let slot = characters[charIdx].costumeReferenceSets[costumeIdx].fullBodySlots[slotIdx]
+                    if slot.key == slotKey,
+                       let variantIdx = slot.variants.firstIndex(where: { $0.id == variantID }) {
+                        targetImagePath = slot.variants[variantIdx].imagePath
+                        if let path = targetImagePath,
+                           let existingURL = resolvedCharacterAssetURL(for: path) {
+                            try pngData.write(to: existingURL)
+                        }
+                        characters[charIdx].costumeReferenceSets[costumeIdx].fullBodySlots[slotIdx].variants[variantIdx].sourceCropRect = CropRect.from(cropRect)
+                        characters[charIdx].costumeReferenceSets[costumeIdx].fullBodySlots[slotIdx].variants[variantIdx].sourceSheetPath = sourceSheetPath
+                        save()
+                        return
+                    }
+                }
+            }
+        }
+
+        statusMessage = "Variant not found for crop"
+    }
+
     // MARK: - Character Text Fields
 
     func addCharacter(named preferredName: String? = nil) {
@@ -6133,7 +6248,7 @@ final class AnimateStore {
             guard let slotIndex = characters[charIndex].headTurnaroundSlots.firstIndex(where: { $0.pose == pose }),
                   let pngData = cropReferenceSheetImageData(image: image, pose: pose, kind: .head) else { continue }
 
-            let variant = try persistReferenceWorkflowVariant(
+            var variant = try persistReferenceWorkflowVariant(
                 pngData,
                 prompt: "[Auto-cropped from approved head sheet]\n\(sheet.prompt)",
                 model: GeminiModel(rawValue: sheet.model) ?? selectedGeminiModel,
@@ -6143,6 +6258,8 @@ final class AnimateStore {
                 aspectRatio: "1:1",
                 imageSize: sheet.imageSize
             )
+            variant.sourceSheetPath = sheet.imagePath
+            variant.sourceCropRect = normalizedCropRect(for: pose, kind: .head)
             characters[charIndex].headTurnaroundSlots[slotIndex].variants.append(variant)
             characters[charIndex].headTurnaroundSlots[slotIndex].approvedVariantID = variant.id
         }
@@ -6162,7 +6279,7 @@ final class AnimateStore {
                   let pngData = cropReferenceSheetImageData(image: image, pose: pose, kind: .fullBody) else { continue }
 
             let slot = characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex]
-            let variant = try persistReferenceWorkflowVariant(
+            var variant = try persistReferenceWorkflowVariant(
                 pngData,
                 prompt: "[Auto-cropped from approved costume sheet]\n\(sheet.prompt)",
                 model: GeminiModel(rawValue: sheet.model) ?? selectedGeminiModel,
@@ -6172,6 +6289,8 @@ final class AnimateStore {
                 aspectRatio: "1:1",
                 imageSize: sheet.imageSize
             )
+            variant.sourceSheetPath = sheet.imagePath
+            variant.sourceCropRect = normalizedCropRect(for: pose, kind: .fullBody)
             characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].variants.append(variant)
             characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].approvedVariantID = variant.id
         }
@@ -6182,6 +6301,27 @@ final class AnimateStore {
     private enum ReferenceSheetCropKind {
         case head
         case fullBody
+    }
+
+    private func normalizedCropRect(for pose: CharacterReferencePose, kind: ReferenceSheetCropKind) -> CropRect {
+        let cols = 3.0
+        let rows = 2.0
+        let (row, col): (Double, Double) = switch pose {
+        case .frontNeutral: (0, 0)
+        case .quarterLeft: (0, 1)
+        case .quarterRight: (0, 2)
+        case .back: (1, 0)
+        case .leftProfile: (1, 1)
+        case .rightProfile: (1, 2)
+        }
+        let insetX = (kind == .head ? 0.02 : 0.02) / cols
+        let insetY = (kind == .head ? 0.02 : 0.02) / rows
+        return CropRect(
+            x: col / cols + insetX,
+            y: row / rows + insetY,
+            width: 1.0 / cols - insetX * 2,
+            height: 1.0 / rows - insetY * 2
+        )
     }
 
     private func cropReferenceSheetImageData(

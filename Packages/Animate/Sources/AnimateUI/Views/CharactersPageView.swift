@@ -192,6 +192,51 @@ struct CharactersPageView: View {
                 )
             }
         }
+        .sheet(isPresented: $store.showVariantCropper) {
+            if let characterID = store.pendingVariantCropCharacterID,
+               let slotKey = store.pendingVariantCropSlotKey,
+               let variantID = store.pendingVariantCropVariantID {
+                let effectiveSourcePath: String? = {
+                    if let sp = store.pendingVariantCropSourceSheetPath { return sp }
+                    // Fallback: use variant's own imagePath
+                    let chars = store.characters
+                    if let char = chars.first(where: { $0.id == characterID }) {
+                        if let slot = char.headTurnaroundSlots.first(where: { $0.key == slotKey }),
+                           let variant = slot.variants.first(where: { $0.id == variantID }) {
+                            return variant.imagePath
+                        }
+                        for costume in char.costumeReferenceSets {
+                            if let slot = costume.fullBodySlots.first(where: { $0.key == slotKey }),
+                               let variant = slot.variants.first(where: { $0.id == variantID }) {
+                                return variant.imagePath
+                            }
+                        }
+                    }
+                    return nil
+                }()
+                if let imagePath = effectiveSourcePath {
+                    CharacterVariantCropSheet(
+                        store: store,
+                        sourceImagePath: imagePath,
+                        initialCropRect: store.pendingVariantCropInitialRect?.cgRect,
+                        aspectRatioHint: nil,
+                        onCrop: { cropRect in
+                            try? store.applyCropToVariant(
+                                cropRect: cropRect,
+                                characterID: characterID,
+                                slotKey: slotKey,
+                                variantID: variantID,
+                                sourceSheetPath: imagePath
+                            )
+                            store.cancelVariantCrop()
+                        },
+                        onCancel: {
+                            store.cancelVariantCrop()
+                        }
+                    )
+                }
+            }
+        }
         .task(id: store.workingOWPURL?.path) {
             while !Task.isCancelled {
                 store.refreshInspirationBatchJobs()

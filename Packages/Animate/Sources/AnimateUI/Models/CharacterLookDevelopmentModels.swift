@@ -1,4 +1,18 @@
 import Foundation
+import CoreGraphics
+
+struct CropRect: Codable, Sendable, Hashable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+
+    var cgRect: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+
+    static func from(_ rect: CGRect) -> CropRect {
+        CropRect(x: rect.origin.x, y: rect.origin.y, width: rect.size.width, height: rect.size.height)
+    }
+}
 
 enum CharacterLookDevelopmentCategory: String, Codable, Sendable, CaseIterable, Hashable {
     case identityAnchor
@@ -62,6 +76,8 @@ struct CharacterLookDevelopmentVariant: Identifiable, Codable, Sendable, Hashabl
     var aspectRatio: String
     var imageSize: String
     var model: String
+    var sourceSheetPath: String?
+    var sourceCropRect: CropRect?
 
     init(
         id: UUID = UUID(),
@@ -70,7 +86,9 @@ struct CharacterLookDevelopmentVariant: Identifiable, Codable, Sendable, Hashabl
         createdAt: Date = Date(),
         aspectRatio: String = "1:1",
         imageSize: String = "2K",
-        model: String
+        model: String,
+        sourceSheetPath: String? = nil,
+        sourceCropRect: CropRect? = nil
     ) {
         self.id = id
         self.imagePath = imagePath
@@ -79,6 +97,8 @@ struct CharacterLookDevelopmentVariant: Identifiable, Codable, Sendable, Hashabl
         self.aspectRatio = aspectRatio
         self.imageSize = imageSize
         self.model = model
+        self.sourceSheetPath = sourceSheetPath
+        self.sourceCropRect = sourceCropRect
     }
 
     init(from decoder: Decoder) throws {
@@ -90,6 +110,8 @@ struct CharacterLookDevelopmentVariant: Identifiable, Codable, Sendable, Hashabl
         aspectRatio = try c.decodeIfPresent(String.self, forKey: .aspectRatio) ?? "1:1"
         imageSize = try c.decodeIfPresent(String.self, forKey: .imageSize) ?? "2K"
         model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""
+        sourceSheetPath = try c.decodeIfPresent(String.self, forKey: .sourceSheetPath)
+        sourceCropRect = try c.decodeIfPresent(CropRect.self, forKey: .sourceCropRect)
     }
 }
 

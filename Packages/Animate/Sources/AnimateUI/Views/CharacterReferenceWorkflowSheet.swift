@@ -588,6 +588,26 @@ struct CharacterReferenceWorkflowSheet: View {
                         },
                         onDelete: { variantID in
                             store.removeHeadTurnaroundVariant(variantID, slotID: slot.id, for: characterID)
+                        },
+                        onAdjustCrop: {
+                            guard let approvedVariant = slot.approvedVariant else { return }
+                            store.openVariantCropTool(
+                                characterID: characterID,
+                                slotKey: slot.key,
+                                variantID: approvedVariant.id,
+                                sourceSheetPath: approvedVariant.sourceSheetPath ?? character.approvedHeadTurnaroundSheetVariant?.imagePath,
+                                initialCropRect: approvedVariant.sourceCropRect
+                            )
+                        },
+                        onAdjustCropVariant: { variantID in
+                            guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                            store.openVariantCropTool(
+                                characterID: characterID,
+                                slotKey: slot.key,
+                                variantID: variantID,
+                                sourceSheetPath: variant.sourceSheetPath ?? character.approvedHeadTurnaroundSheetVariant?.imagePath,
+                                initialCropRect: variant.sourceCropRect
+                            )
                         }
                     )
                 }
@@ -787,6 +807,26 @@ struct CharacterReferenceWorkflowSheet: View {
                         },
                         onDelete: { variantID in
                             store.removeCostumePoseVariant(variantID, costumeID: costume.id, slotID: slot.id, for: characterID)
+                        },
+                        onAdjustCrop: {
+                            guard let approvedVariant = slot.approvedVariant else { return }
+                            store.openVariantCropTool(
+                                characterID: characterID,
+                                slotKey: slot.key,
+                                variantID: approvedVariant.id,
+                                sourceSheetPath: approvedVariant.sourceSheetPath ?? costume.approvedSheetVariant?.imagePath,
+                                initialCropRect: approvedVariant.sourceCropRect
+                            )
+                        },
+                        onAdjustCropVariant: { variantID in
+                            guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                            store.openVariantCropTool(
+                                characterID: characterID,
+                                slotKey: slot.key,
+                                variantID: variantID,
+                                sourceSheetPath: variant.sourceSheetPath ?? costume.approvedSheetVariant?.imagePath,
+                                initialCropRect: variant.sourceCropRect
+                            )
                         }
                     )
                 }
@@ -870,7 +910,9 @@ struct CharacterReferenceWorkflowSheet: View {
         onShowPromptVariant: @escaping (UUID) -> Void,
         onQuickLookVariant: @escaping (UUID) -> Void,
         onApprove: @escaping (UUID) -> Void,
-        onDelete: @escaping (UUID) -> Void
+        onDelete: @escaping (UUID) -> Void,
+        onAdjustCrop: @escaping () -> Void = {},
+        onAdjustCropVariant: @escaping (UUID) -> Void = { _ in }
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
@@ -898,14 +940,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 statusText: generationStatus ?? "Generating…",
                 onEdit: onEditApproved,
                 onShowPrompt: onShowPromptApproved,
-                onAdjustCrop: {
-                    if let variant = approvedVariant,
-                       let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
-                        store.pendingCropImagePath = url.path
-                        store.pendingCropCharacterID = characterID
-                        store.showImageCropper = true
-                    }
-                }
+                onAdjustCrop: onAdjustCrop
             )
             .onTapGesture(count: 2, perform: onQuickLookApproved)
 
@@ -964,13 +999,7 @@ struct CharacterReferenceWorkflowSheet: View {
                                 onShowPrompt: { onShowPromptVariant(variant.id) },
                                 onApprove: { onApprove(variant.id) },
                                 onDelete: { onDelete(variant.id) },
-                                onAdjustCrop: {
-                                    if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
-                                        store.pendingCropImagePath = url.path
-                                        store.pendingCropCharacterID = characterID
-                                        store.showImageCropper = true
-                                    }
-                                }
+                                onAdjustCrop: { onAdjustCropVariant(variant.id) }
                             )
                         }
                     }
