@@ -5160,6 +5160,7 @@ final class AnimateStore {
             guard response == .OK else { return }
             Task { @MainActor in
                 guard let self else { return }
+                guard let index = self.characters.firstIndex(where: { $0.id == characterID }) else { return }
                 let slug = self.characters[index].assetFolderSlug
                 let animateURL = self.animateURL
                 var importedCount = 0
@@ -5425,11 +5426,13 @@ final class AnimateStore {
             guard response == .OK else { return }
             Task { @MainActor in
                 guard let self, let animateURL = self.animateURL else { return }
+                guard let index = self.characters.firstIndex(where: { $0.id == characterID }) else { return }
+                let slug = self.characters[index].assetFolderSlug
                 for url in panel.urls {
                     do {
                         let storedURL = try self.assetManager.importCharacterImageURL(
                             from: url,
-                            characterSlug: self.characters[index].assetFolderSlug,
+                            characterSlug: slug,
                             category: "reference",
                             animateURL: animateURL
                         )
@@ -5590,6 +5593,7 @@ final class AnimateStore {
             guard response == .OK, let sourceURL = panel.url else { return }
             Task { @MainActor in
                 guard let self else { return }
+                guard let index = self.characters.firstIndex(where: { $0.id == characterID }) else { return }
                 let slug = self.characters[index].assetFolderSlug
                 let modelsDir = animateURL
                     .appendingPathComponent("characters")
@@ -5659,32 +5663,39 @@ final class AnimateStore {
     func seedCharacterReferenceWorkflowIfNeeded(for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
 
+        var didMutate = false
+
         if characters[index].masterReferenceSheetPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             characters[index].masterReferenceSheetPrompt = CharacterReferenceWorkflowCatalog.defaultMasterSheetPrompt(
                 for: characters[index].name
             )
+            didMutate = true
         }
 
         if characters[index].masterReferenceSourceImagePaths.isEmpty {
             characters[index].masterReferenceSourceImagePaths = defaultMasterReferenceSourcePaths(for: characters[index])
+            didMutate = true
         }
 
         if characters[index].headTurnaroundSheetPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             characters[index].headTurnaroundSheetPrompt = CharacterReferenceWorkflowCatalog.defaultHeadSheetPrompt(
                 for: characters[index].name
             )
+            didMutate = true
         }
 
         if characters[index].headTurnaroundSlots.isEmpty {
             characters[index].headTurnaroundSlots = CharacterReferenceWorkflowCatalog.defaultHeadSlots(
                 for: characters[index].name
             )
+            didMutate = true
         }
 
         if characters[index].costumeReferenceSets.isEmpty {
             characters[index].costumeReferenceSets = CharacterReferenceWorkflowCatalog.defaultCostumeSets(
                 for: characters[index].name
             )
+            didMutate = true
         }
 
         for costumeIndex in characters[index].costumeReferenceSets.indices {
@@ -5698,10 +5709,11 @@ final class AnimateStore {
                         costumeName: costume.name,
                         costumeNotes: costume.notes
                     )
+                didMutate = true
             }
         }
 
-        save()
+        if didMutate { save() }
     }
 
     func resetCharacterReferenceWorkflow(for characterID: UUID) {
@@ -6036,7 +6048,7 @@ final class AnimateStore {
             accessorySlots: oldSet.accessorySlots.map { slot in
                 CharacterAccessorySlot(
                     id: slot.id,
-                    key: "\(CharacterReferenceWorkflowCatalog.slug(from: trimmedName))-accessory-\(slot.key.split(separator: "-").last ?? "item")",
+                    key: "\(CharacterReferenceWorkflowCatalog.slug(from: trimmedName))-accessory-\(String(slot.id.uuidString.prefix(8)).lowercased())",
                     title: slot.title,
                     prompt: slot.prompt,
                     notes: slot.notes,
@@ -8546,6 +8558,7 @@ final class AnimateStore {
             return
         }
         guard !isGeneratingMeshy3D else { return }
+        guard !imageURLs.isEmpty else { meshyGenerationError = "No reference images available."; isGeneratingMeshy3D = false; return }
 
         isGeneratingMeshy3D = true
         meshyGeneratingCharacterID = characterID
@@ -8608,10 +8621,12 @@ final class AnimateStore {
             )
 
             meshyGenerationStatus = .succeeded
+            meshyGeneratingCharacterID = nil
 
         } catch {
             meshyGenerationError = error.localizedDescription
             meshyGenerationStatus = .failed
+            meshyGeneratingCharacterID = nil
         }
 
         isGeneratingMeshy3D = false
@@ -8627,9 +8642,9 @@ final class AnimateStore {
         guard let character = characters.first(where: { $0.id == characterID }),
               let animateURL = animateURL else { return }
 
-        let slug = character.owpSlug.isEmpty ? character.id.uuidString : character.owpSlug
+        let slug = character.assetFolderSlug
         let assetDir = animateURL
-            .appendingPathComponent("Characters")
+            .appendingPathComponent("characters")
             .appendingPathComponent(slug)
             .appendingPathComponent("3d-models")
             .appendingPathComponent(taskID)
@@ -8673,6 +8688,7 @@ final class AnimateStore {
     private func addModel3D(_ model: Character3DModel, to characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[index].models3D.append(model)
+        save()
     }
 
     // MARK: - Meshy Bridge (auto-trigger from batch completion)
@@ -8686,6 +8702,7 @@ final class AnimateStore {
         costumeName: String?,
         generatedImagePaths: [String]
     ) async {
+        guard !isGeneratingMeshy3D else { statusMessage = "Meshy generation in progress — queued."; return }
         let route = Animate3DGenerationProviderRoute.defaultRoute(for: kind)
         guard route == .meshy,
               !meshyAPIKey.isEmpty,
