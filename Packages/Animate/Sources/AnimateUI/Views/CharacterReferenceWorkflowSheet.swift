@@ -644,7 +644,7 @@ struct CharacterReferenceWorkflowSheet: View {
     }
 
 
-    private func poseSlotCard(
+    func poseSlotCard(
         title: String,
         badge: String,
         notes: String,
@@ -846,7 +846,7 @@ struct CharacterReferenceWorkflowSheet: View {
         .padding(.vertical, 12)
     }
 
-    private func loadingReferenceVariantCard(title: String, subtitle: String) -> some View {
+    func loadingReferenceVariantCard(title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.quaternary.opacity(0.18))
@@ -877,7 +877,7 @@ struct CharacterReferenceWorkflowSheet: View {
         }
     }
 
-    private func approvedVariantIndex(in variants: [CharacterLookDevelopmentVariant], selected selectedID: UUID?) -> Int {
+    func approvedVariantIndex(in variants: [CharacterLookDevelopmentVariant], selected selectedID: UUID?) -> Int {
         guard !variants.isEmpty else { return 0 }
         if let selectedID, let index = variants.firstIndex(where: { $0.id == selectedID }) {
             return index
@@ -1057,7 +1057,7 @@ struct CharacterReferenceWorkflowSheet: View {
         )
     }
 
-    private func prepareCostumeBatchPlan(_ costume: CharacterCostumeReferenceSet) {
+    func prepareCostumeBatchPlan(_ costume: CharacterCostumeReferenceSet) {
         guard let character else { return }
         let references = referenceDrafts(from: store.fullBodyReferencePaths(for: character.id, costumeID: costume.id, limit: 8))
         let slots = costume.fullBodySlots.filter { $0.approvedVariant == nil }
@@ -1084,7 +1084,7 @@ struct CharacterReferenceWorkflowSheet: View {
         )
     }
 
-    private func prepareCostumeSheetPlan(_ costume: CharacterCostumeReferenceSet) {
+    func prepareCostumeSheetPlan(_ costume: CharacterCostumeReferenceSet) {
         guard let character else { return }
         let allPaths = store.fullBodySheetReferencePaths(for: character.id, costumeID: costume.id, limit: 8)
         let masterPath = store.normalizedMasterSheetPath(for: character.id)
@@ -1107,7 +1107,7 @@ struct CharacterReferenceWorkflowSheet: View {
         )
     }
 
-    private func prepareCostumeSlotPlan(costumeID: UUID, slot: CharacterPoseSlot) {
+    func prepareCostumeSlotPlan(costumeID: UUID, slot: CharacterPoseSlot) {
         guard let character else { return }
         preflightDrafts = [
             GeminiGenerationDraft(
@@ -1127,7 +1127,7 @@ struct CharacterReferenceWorkflowSheet: View {
         )
     }
 
-    private func prepareCostumeSlotEditPlan(
+    func prepareCostumeSlotEditPlan(
         costumeID: UUID,
         slot: CharacterPoseSlot,
         variant: CharacterLookDevelopmentVariant
@@ -1187,7 +1187,7 @@ struct CharacterReferenceWorkflowSheet: View {
         )
     }
 
-    private func prepareAccessoryBatchPlan(_ costume: CharacterCostumeReferenceSet) {
+    func prepareAccessoryBatchPlan(_ costume: CharacterCostumeReferenceSet) {
         guard let character else { return }
         let references = referenceDrafts(from: store.accessoryReferencePaths(for: character.id, costumeID: costume.id, limit: 8))
         preflightDrafts = costume.accessorySlots.map { slot in
@@ -1208,7 +1208,7 @@ struct CharacterReferenceWorkflowSheet: View {
         )
     }
 
-    private func prepareAccessoryPlan(costumeID: UUID, slot: CharacterAccessorySlot) {
+    func prepareAccessoryPlan(costumeID: UUID, slot: CharacterAccessorySlot) {
         guard let character else { return }
         preflightDrafts = [
             GeminiGenerationDraft(
@@ -1228,7 +1228,7 @@ struct CharacterReferenceWorkflowSheet: View {
         )
     }
 
-    private func prepareAccessoryEditPlan(
+    func prepareAccessoryEditPlan(
         costumeID: UUID,
         slot: CharacterAccessorySlot,
         variant: CharacterLookDevelopmentVariant
@@ -1603,7 +1603,7 @@ struct CharacterReferenceWorkflowSheet: View {
         }
     }
 
-    private func importCostumePoseVariant(costumeID: UUID, slot: CharacterPoseSlot) {
+    func importCostumePoseVariant(costumeID: UUID, slot: CharacterPoseSlot) {
         guard let url = chooseWorkflowVariantImage(title: "Upload \(slot.title) Full-Body Variant") else { return }
         do {
             try store.importCostumePoseVariant(from: url, costumeID: costumeID, slotID: slot.id, for: characterID)
@@ -1613,7 +1613,7 @@ struct CharacterReferenceWorkflowSheet: View {
         }
     }
 
-    private func importCostumeSheet(costumeID: UUID, costumeName: String) {
+    func importCostumeSheet(costumeID: UUID, costumeName: String) {
         guard let url = chooseWorkflowVariantImage(title: "Attach \(costumeName) Sheet") else { return }
         do {
             try store.importCostumeSheetVariant(from: url, costumeID: costumeID, for: characterID)
@@ -1623,7 +1623,7 @@ struct CharacterReferenceWorkflowSheet: View {
         }
     }
 
-    private func importAccessoryVariant(costumeID: UUID, slot: CharacterAccessorySlot) {
+    func importAccessoryVariant(costumeID: UUID, slot: CharacterAccessorySlot) {
         guard let url = chooseWorkflowVariantImage(title: "Upload \(slot.title) Accessory Variant") else { return }
         do {
             try store.importAccessoryVariant(from: url, costumeID: costumeID, accessoryID: slot.id, for: characterID)

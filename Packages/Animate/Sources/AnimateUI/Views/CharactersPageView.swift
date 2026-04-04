@@ -459,6 +459,7 @@ struct CharactersPageView: View {
                     collapsiblePane(
                         title: "Look Development",
                         icon: "paintpalette",
+                        counterText: nil,
                         isExpanded: $showLookDevelopmentPane
                     ) {
                         lookDevelopmentSection(character)
