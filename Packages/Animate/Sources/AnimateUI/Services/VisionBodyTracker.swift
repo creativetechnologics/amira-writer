@@ -10,9 +10,13 @@ final class VisionBodyTracker: Sendable {
 
     private let _isBusy = MocapAtomicState(false)
     nonisolated(unsafe) private let request = VNDetectHumanBodyPose3DRequest()
+    nonisolated(unsafe) private let faceTracker: any FaceTracker
+    nonisolated(unsafe) private let faceSmootherFilter = FaceTrackingSmootherFilter()
 
-    init(onPoseFrame: @escaping @Sendable (UnifiedPoseFrame) -> Void) {
+    init(onPoseFrame: @escaping @Sendable (UnifiedPoseFrame) -> Void,
+         faceTracker: any FaceTracker = VisionFaceTracker()) {
         self.onPoseFrame = onPoseFrame
+        self.faceTracker = faceTracker
     }
 
     func processFrame(_ pixelBuffer: CVPixelBuffer, timestamp: TimeInterval) {
@@ -35,7 +39,25 @@ final class VisionBodyTracker: Sendable {
         }
 
         let frame = Self.mapObservation(observation, timestamp: timestamp)
-        onPoseFrame(frame)
+
+        let rawFace = faceTracker.trackSync(pixelBuffer: pixelBuffer, timestamp: timestamp)
+        var smoothedFace: [BlendShapeName: Float]?
+        if let face = rawFace, face.faceDetected {
+            smoothedFace = faceSmootherFilter.smooth(face.blendShapes, timestamp: timestamp)
+        }
+
+        let faceFrame = UnifiedPoseFrame(
+            timestamp: timestamp,
+            source: .appleVision,
+            bodyJoints: frame.bodyJoints,
+            bodyConfidences: frame.bodyConfidences,
+            leftHandJoints: frame.leftHandJoints,
+            rightHandJoints: frame.rightHandJoints,
+            faceBlendShapes: smoothedFace,
+            faceLandmarks: frame.faceLandmarks
+        )
+
+        onPoseFrame(faceFrame)
     }
 
     private static let jointMapping: [(VNHumanBodyPose3DObservation.JointName, JointName)] = [
