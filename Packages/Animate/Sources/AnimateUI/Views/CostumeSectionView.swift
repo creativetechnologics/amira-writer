@@ -596,7 +596,7 @@ struct CostumeSectionView: View {
             if let variant, let image = store.thumbnailImage(for: variant.imagePath, maxSize: 360) {
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .aspectRatio(contentMode: .fit)
                     .frame(height: 150)
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

@@ -772,7 +772,7 @@ struct CharacterReferenceWorkflowSheet: View {
            let image = store.thumbnailImage(for: variant.imagePath, maxSize: 360) {
             Image(nsImage: image)
                 .resizable()
-                .aspectRatio(contentMode: .fill)
+                .aspectRatio(contentMode: .fit)
                 .frame(height: 150)
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -1660,7 +1660,7 @@ struct CharacterReferenceWorkflowSheet: View {
             if let image = store.thumbnailImage(for: path, maxSize: 132) {
                 Image(nsImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .aspectRatio(contentMode: .fit)
                     .frame(width: 132, height: 132)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .onTapGesture(count: 2) {
@@ -1833,7 +1833,7 @@ struct ReferenceVariantCard: View {
         if let image = store.thumbnailImage(for: variant.imagePath, maxSize: 196) {
             Image(nsImage: image)
                 .resizable()
-                .aspectRatio(contentMode: .fill)
+                .aspectRatio(contentMode: .fit)
                 .frame(width: 196, height: 196)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         } else {
@@ -1863,7 +1863,7 @@ struct MiniVariantChip: View {
                 if let image = store.thumbnailImage(for: variant.imagePath, maxSize: 72) {
                     Image(nsImage: image)
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
+                        .aspectRatio(contentMode: .fit)
                         .frame(width: 72, height: 72)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .onTapGesture(count: 2, perform: onQuickLook)
