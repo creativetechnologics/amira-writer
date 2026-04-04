@@ -30,6 +30,10 @@ struct AnimatePageView: View {
     @AppStorage("animate.workspace.timelinePaneHeight") private var timelinePaneHeight = 360.0
     @State private var selectedTimelineShotID: UUID?
     @State private var activeTimelineShotBoundaryDrag: TimelineShotBoundaryDrag?
+    @State private var pendingDeleteShotID: UUID?
+    @State private var isApplyingPlan = false
+    @State private var lastAppliedPlanJSONText = ""
+    @State private var hoveredTimelineShotID: UUID?
 
     private var executionService: AnimateSceneExecutionService {
         AnimateSceneExecutionService(
@@ -696,6 +700,7 @@ struct AnimatePageView: View {
                 }
                 .contentShape(Rectangle())
                 .simultaneousGesture(scrubGesture)
+                .help("Drag to scrub timeline — click anywhere to jump to frame")
             }
             .frame(height: 88)
 
@@ -708,10 +713,27 @@ struct AnimatePageView: View {
             }
 
             if authoredShots.isEmpty {
-                issueCard(
-                    title: "Shot timing is currently inferred",
-                    detail: "Adopt authored shots in the Shots workspace to make clip in/out points directly editable on this timeline.",
-                    color: .orange
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(Color.orange)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Shot timing is currently inferred")
+                            .font(.caption.weight(.semibold))
+                        Text("Adopt authored shots in the Shots workspace to make clip in/out points directly editable on this timeline.")
+                            .font(.caption2)
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Go to Shots Tab") {
+                            workspaceState.selectedDockTab = .shots
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.orange.opacity(0.08))
                 )
             } else if let selectedShot = selectedTimelineShot(in: scene) {
                 timelineClipInspector(
@@ -761,6 +783,7 @@ struct AnimatePageView: View {
                         .foregroundStyle(OperaChromeTheme.textSecondary)
                 }
                 .disabled(shot.lockedBoundaries)
+                .help(shot.lockedBoundaries ? "Boundaries are locked — unlock this shot to edit the in point" : "")
 
                 Stepper(value: shotBinding(for: shot.id, defaultValue: shot.endFrame, keyPath: \.endFrame), in: max(shot.startFrame, 0)...max(shot.startFrame, shotSegmentationService.sceneFrameCount(for: scene))) {
                     Text("Out \(sceneLocalTimecode(for: shot.endFrame)) · F\(shot.endFrame)")
@@ -768,6 +791,7 @@ struct AnimatePageView: View {
                         .foregroundStyle(OperaChromeTheme.textSecondary)
                 }
                 .disabled(shot.lockedBoundaries)
+                .help(shot.lockedBoundaries ? "Boundaries are locked — unlock this shot to edit the out point" : "")
             }
 
             HStack(spacing: 8) {
@@ -781,6 +805,7 @@ struct AnimatePageView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(shot.lockedBoundaries)
+                .help(shot.lockedBoundaries ? "Boundaries are locked — unlock to set in point from playhead" : "Set shot in point to current playhead position (F\(store.currentFrame))")
 
                 Button("Use Playhead As Out") {
                     store.updateSelectedSceneShots { shots in
@@ -792,6 +817,7 @@ struct AnimatePageView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(shot.lockedBoundaries)
+                .help(shot.lockedBoundaries ? "Boundaries are locked — unlock to set out point from playhead" : "Set shot out point to current playhead position (F\(store.currentFrame))")
 
                 Spacer()
 
@@ -903,10 +929,12 @@ struct AnimatePageView: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(OperaChromeTheme.textPrimary)
                         .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Text("\(shot.startFrame)–\(shot.endFrame)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                    if width >= 90 {
+                        Spacer(minLength: 4)
+                        Text("\(shot.startFrame)–\(shot.endFrame)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                    }
                 }
 
                 if let cameraShot = shot.cameraShot {
@@ -969,6 +997,9 @@ struct AnimatePageView: View {
             selectedTimelineShotID = shot.id
             store.currentFrame = shot.startFrame
         }
+        .onHover { isHovered in hoveredTimelineShotID = isHovered ? shot.id : nil }
+        .brightness(hoveredTimelineShotID == shot.id && !isSelected ? 0.08 : 0)
+        .animation(.easeOut(duration: 0.1), value: hoveredTimelineShotID == shot.id)
         .help(shot.lockedBoundaries ? "Shot boundaries are locked." : "Drag the clip to move it, or drag the left/right edges to trim it.")
     }
 
@@ -1007,6 +1038,7 @@ struct AnimatePageView: View {
                     }
             )
             .padding(edge == .start ? .leading : .trailing, 4)
+            .help(edge == .start ? "Drag to trim shot start frame" : "Drag to trim shot end frame")
     }
 
     private func updateTimelineShotBoundaryDrag(
@@ -1196,20 +1228,31 @@ struct AnimatePageView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(AnimateWorkspaceDockTab.allCases) { tab in
+                            let hasPlanChanges = tab == .plan
+                                && !workspaceState.planJSONText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                && workspaceState.planJSONText != lastAppliedPlanJSONText
                             Button {
                                 workspaceState.selectedDockTab = tab
                             } label: {
-                                Text(tab.title)
-                                    .font(.caption.weight(workspaceState.selectedDockTab == tab ? .semibold : .regular))
-                                    .foregroundStyle(workspaceState.selectedDockTab == tab ? Color.white : OperaChromeTheme.textSecondary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 7)
-                                    .background(
-                                        Capsule(style: .continuous)
-                                            .fill(workspaceState.selectedDockTab == tab ? Color.accentColor : OperaChromeTheme.raisedBackground.opacity(0.72))
-                                    )
+                                HStack(spacing: 4) {
+                                    Text(tab.title)
+                                        .font(.caption.weight(workspaceState.selectedDockTab == tab ? .semibold : .regular))
+                                        .foregroundStyle(workspaceState.selectedDockTab == tab ? Color.white : OperaChromeTheme.textSecondary)
+                                    if hasPlanChanges {
+                                        Circle()
+                                            .fill(Color.orange)
+                                            .frame(width: 6, height: 6)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(workspaceState.selectedDockTab == tab ? Color.accentColor : OperaChromeTheme.raisedBackground.opacity(0.72))
+                                )
                             }
                             .buttonStyle(.plain)
+                            .help(hasPlanChanges ? "Plan JSON has unapplied changes" : "")
                         }
                     }
                 }
@@ -1240,6 +1283,8 @@ struct AnimatePageView: View {
                     sceneGraph(for: scene)
                 case .handoff:
                     handoffDeck(for: scene)
+                case .motion:
+                    MotionCaptureDeck(store: store)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -1249,6 +1294,26 @@ struct AnimatePageView: View {
         .padding(.trailing, 16)
         .padding(.bottom, 16)
         .padding(.top, 16)
+        .confirmationDialog(
+            "Delete Shot?",
+            isPresented: Binding(
+                get: { pendingDeleteShotID != nil },
+                set: { if !$0 { pendingDeleteShotID = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Shot", role: .destructive) {
+                if let id = pendingDeleteShotID {
+                    removeShot(id)
+                    pendingDeleteShotID = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteShotID = nil
+            }
+        } message: {
+            Text("This cannot be undone.")
+        }
     }
 
     private func planComposer(for scene: AnimationScene) -> some View {
@@ -1265,6 +1330,17 @@ struct AnimatePageView: View {
             HStack {
                 Text("LLM animation JSON")
                     .font(.headline)
+                if parsedPlanResult != nil {
+                    Image(systemName: parseError == nil ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .foregroundStyle(parseError == nil ? .green : .red)
+                        .font(.caption)
+                        .help(parseError == nil ? "JSON is valid" : "JSON parse error: \(parseError?.localizedDescription ?? "unknown error")")
+                } else if !workspaceState.planJSONText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                        .help("JSON is invalid or empty")
+                }
                 Spacer()
 
                 Button("Load Template") {
@@ -1279,19 +1355,34 @@ struct AnimatePageView: View {
             .padding(.top, 14)
 
             HStack(spacing: 8) {
-                Button("Apply") {
-                    applyPlan(generateDialogue: false)
+                HStack(spacing: 6) {
+                    if isApplyingPlan {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .controlSize(.small)
+                    }
+                    Button(isApplyingPlan ? "Applying…" : "Apply") {
+                        applyPlan(generateDialogue: false)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(parsedValue == nil || isApplyingPlan || workspaceState.isApplyingDialoguePlan)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(parsedValue == nil)
 
-                Button(workspaceState.isApplyingDialoguePlan ? "Applying…" : "Apply + Visemes") {
-                    applyPlan(generateDialogue: true)
+                HStack(spacing: 6) {
+                    if workspaceState.isApplyingDialoguePlan {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .controlSize(.small)
+                    }
+                    Button(workspaceState.isApplyingDialoguePlan ? "Applying…" : "Apply + Visemes") {
+                        applyPlan(generateDialogue: true)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(parsedValue == nil || workspaceState.isApplyingDialoguePlan)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(parsedValue == nil || workspaceState.isApplyingDialoguePlan)
 
                 Spacer()
 
@@ -1300,6 +1391,7 @@ struct AnimatePageView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+                .keyboardShortcut("c", modifiers: [.command, .shift])
             }
             .padding(.horizontal, 14)
 
@@ -1332,6 +1424,16 @@ struct AnimatePageView: View {
 
                         if let shotAnchorSummary, shotAnchorSummary.referenceCount > 0 || !shotAnchorSummary.warnings.isEmpty {
                             workspaceMiniCard(title: "Shot anchors") {
+                                HStack(spacing: 6) {
+                                    Text("What are shot anchors?")
+                                        .font(.caption2)
+                                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                                    Image(systemName: "questionmark.circle")
+                                        .font(.caption2)
+                                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                                }
+                                .help("Shot anchors let the JSON plan target specific shots by label (e.g. \"SHOT_03\"). Warnings appear when the plan references a shot label that doesn't exist in the scene. Go to the Shots tab to create or rename shots.")
+
                                 metricGrid([
                                     ("Anchors", "\(shotAnchorSummary.referenceCount)"),
                                     ("Resolved shots", "\(shotAnchorSummary.uniqueShotLabels.count)"),
@@ -1648,12 +1750,19 @@ struct AnimatePageView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(hasApplyBlockers || parsedPlanResult?.plan == nil)
-                Button(workspaceState.isApplyingDialoguePlan ? "Applying…" : "Apply + Visemes") {
-                    applyPlan(generateDialogue: true)
+                HStack(spacing: 6) {
+                    if workspaceState.isApplyingDialoguePlan {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .controlSize(.small)
+                    }
+                    Button(workspaceState.isApplyingDialoguePlan ? "Applying…" : "Apply + Visemes") {
+                        applyPlan(generateDialogue: true)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(hasApplyBlockers || parsedPlanResult?.plan == nil || workspaceState.isApplyingDialoguePlan)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(hasApplyBlockers || parsedPlanResult?.plan == nil || workspaceState.isApplyingDialoguePlan)
                 Button("Copy Apply Preview JSON") {
                     copyToPasteboard(applyPreviewJSON)
                 }
@@ -4174,6 +4283,13 @@ struct AnimatePageView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(OperaChromeTheme.raisedBackground.opacity(0.55))
         )
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Color.orange.opacity(0.8))
+                .frame(width: 3)
+                .padding(.vertical, 4)
+                .offset(x: -1)
+        }
     }
 
     private func authoredShotRow(
@@ -4245,12 +4361,13 @@ struct AnimatePageView: View {
                         .controlSize(.mini)
 
                         Button(role: .destructive) {
-                            removeShot(shot.id)
+                            pendingDeleteShotID = shot.id
                         } label: {
                             Image(systemName: "trash")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
+                        .help("Delete shot")
                     }
 
                     Button(isReviewFocused ? "Review Focused" : "Review Shot") {
@@ -4306,6 +4423,13 @@ struct AnimatePageView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(OperaChromeTheme.raisedBackground.opacity(0.55))
         )
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Color.blue.opacity(0.8))
+                .frame(width: 3)
+                .padding(.vertical, 4)
+                .offset(x: -1)
+        }
     }
 
     private func cameraShotPicker(shot: AnimationSceneShot) -> some View {
@@ -4767,6 +4891,7 @@ struct AnimatePageView: View {
         subtitle: String
     ) -> some View {
         let tickCount = max(8, min(24, max(frameCount / max(store.fps, 1), 8)))
+        let isPending = title.contains("pending")
 
         return ZStack {
             LinearGradient(
@@ -4789,9 +4914,17 @@ struct AnimatePageView: View {
             .padding(.vertical, 10)
 
             VStack(spacing: 4) {
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(OperaChromeTheme.textPrimary)
+                HStack(spacing: 6) {
+                    if isPending {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .controlSize(.mini)
+                            .tint(OperaChromeTheme.textSecondary)
+                    }
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(OperaChromeTheme.textPrimary)
+                }
                 Text(subtitle)
                     .font(.caption2)
                     .foregroundStyle(OperaChromeTheme.textSecondary)
@@ -4946,10 +5079,16 @@ struct AnimatePageView: View {
                 await MainActor.run {
                     workspaceState.lastAppliedReport = report
                     workspaceState.isApplyingDialoguePlan = false
+                    lastAppliedPlanJSONText = workspaceState.planJSONText
                 }
             }
         } else {
-            workspaceState.lastAppliedReport = store.applyLLMAnimationPlan(plan)
+            isApplyingPlan = true
+            Task { @MainActor in
+                workspaceState.lastAppliedReport = store.applyLLMAnimationPlan(plan)
+                isApplyingPlan = false
+                lastAppliedPlanJSONText = workspaceState.planJSONText
+            }
         }
     }
 
@@ -5241,6 +5380,7 @@ private struct AnimationPreviewImageView: View {
 
     @State private var renderedImage: NSImage?
     @State private var lastRenderedKey = ""
+    @State private var isRendering: Bool = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -5253,6 +5393,16 @@ private struct AnimationPreviewImageView: View {
                         .interpolation(.high)
                         .scaledToFit()
                         .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+
+                if isRendering {
+                    Color.black.opacity(0.25)
+                        .allowsHitTesting(false)
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .controlSize(.regular)
+                        .tint(.white.opacity(0.7))
+                        .allowsHitTesting(false)
                 }
             }
             .task(id: renderKey(for: proxy.size)) {
@@ -5284,6 +5434,7 @@ private struct AnimationPreviewImageView: View {
         let renderSize = renderSize(for: size)
 
         lastRenderedKey = renderKey
+        isRendering = true
         renderedImage = AnimationPreviewSnapshotExporter.renderImage(
             store: store,
             scene: scene,
@@ -5291,6 +5442,7 @@ private struct AnimationPreviewImageView: View {
             mode: previewMode == .live ? .live : .placeholder,
             size: renderSize
         )
+        isRendering = false
     }
 
     private func renderSize(for size: CGSize) -> CGSize {

@@ -13,6 +13,7 @@ enum AnimateWorkspaceDockTab: String, CaseIterable, Identifiable {
     case lighting
     case graph
     case handoff
+    case motion
 
     var id: String { rawValue }
 
@@ -28,6 +29,7 @@ enum AnimateWorkspaceDockTab: String, CaseIterable, Identifiable {
         case .lighting: "Lighting"
         case .graph: "Scene Graph"
         case .handoff: "LLM Handoff"
+        case .motion: "Motion"
         }
     }
 }
