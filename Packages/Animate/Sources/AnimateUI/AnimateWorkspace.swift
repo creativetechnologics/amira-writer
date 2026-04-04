@@ -138,23 +138,20 @@ public final class AnimateWorkspaceController: ObservableObject {
     }
 }
 
+// MARK: - Public Workspace (consumed by OperaShellView)
+
 @available(macOS 26.0, *)
 public struct AnimateWorkspace: View {
     @ObservedObject private var controller: AnimateWorkspaceController
 
-    public init(
-        controller: AnimateWorkspaceController
-    ) {
+    public init(controller: AnimateWorkspaceController) {
         _controller = ObservedObject(wrappedValue: controller)
     }
 
     public var body: some View {
         ZStack {
-            ContentView(
-                store: controller.store,
-                appName: "Amira Writer"
-            )
-            .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
+            AnimateWorkspaceContent(store: controller.store)
+                .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
             if controller.isLoadingProject || controller.isSelectionRestorePending {
                 AnimateWorkspaceLoadOverlay(
@@ -162,6 +159,287 @@ public struct AnimateWorkspace: View {
                     message: controller.loadStatusMessage
                 )
             }
+        }
+    }
+}
+
+// MARK: - Three-Panel Content
+
+@available(macOS 26.0, *)
+private struct AnimateWorkspaceContent: View {
+    @Bindable var store: AnimateStore
+    @State private var selectedShotIndex: Int?
+
+    @AppStorage("novotro.animate.sidebarVisible") private var sidebarVisible = true
+    @AppStorage("novotro.animate.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("novotro.animate.showInspector") private var inspectorVisible = true
+    @AppStorage("novotro.animate.inspector.width") private var inspectorWidth: Double = 320
+
+    private var projectTitle: String {
+        store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
+    }
+
+    private var selectedShot: AnimationSceneShot? {
+        guard let scene = store.selectedScene,
+              let idx = selectedShotIndex,
+              idx < scene.shots.count else { return nil }
+        return scene.shots[idx]
+    }
+
+    var body: some View {
+        Group {
+            if store.owpURL == nil {
+                OperaChromeEmptyState(
+                    systemImage: "sparkles.tv",
+                    title: "Open A Project",
+                    message: "Use File > Open Project to pick a local Amira project folder from disk."
+                )
+            } else {
+                workspaceBody
+            }
+        }
+    }
+
+    private var workspaceBody: some View {
+        HStack(spacing: 0) {
+            // MARK: Left Sidebar
+            if sidebarVisible {
+                OperaChromeFlatPane(
+                    headerPadding: OperaChromeSidebarMetrics.headerPadding
+                ) {
+                    OperaChromePaneHeader(
+                        eyebrow: "ANIMATE",
+                        title: "Scenes",
+                        subtitle: "\(store.scenes.count) staged"
+                    ) {
+                        OperaChromeActionButton(systemImage: "sidebar.left") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                sidebarVisible = false
+                            }
+                        }
+                    }
+                } content: {
+                    SidebarView(store: store)
+                }
+                .frame(width: sidebarWidth)
+
+                OperaChromeSplitHandle(
+                    onDragChanged: resizeSidebar,
+                    onDragEnded: { }
+                )
+            }
+
+            // MARK: Main Content
+            OperaChromeFlatPane {
+                HStack(alignment: .center, spacing: 12) {
+                    if !sidebarVisible {
+                        OperaChromeActionButton(systemImage: "sidebar.left") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                sidebarVisible = true
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("ANIMATE")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .tracking(1.2)
+                            .foregroundStyle(OperaChromeTheme.textTertiary)
+                        Text(projectTitle)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(OperaChromeTheme.textPrimary)
+                            .lineLimit(1)
+                        Text(store.selectedScene?.name ?? "Vidu animation workspace")
+                            .font(.system(size: 11))
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 10)
+
+                    if !inspectorVisible {
+                        OperaChromeActionButton(systemImage: "sidebar.right") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                inspectorVisible = true
+                            }
+                        }
+                    }
+                }
+            } content: {
+                VStack(spacing: 0) {
+                    // Video player area — 16:9 placeholder (TODO: AVPlayer integration)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.black)
+                        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                        .overlay {
+                            if let shot = selectedShot,
+                               let videoPath = shot.shotFrameGeneration?.viduOutputPath {
+                                // TODO: AVPlayer integration
+                                Text("Video: \(videoPath)")
+                                    .foregroundStyle(.white)
+                                    .font(.caption)
+                            } else {
+                                VStack(spacing: 8) {
+                                    Image(systemName: "film")
+                                        .font(.largeTitle)
+                                        .foregroundStyle(.white.opacity(0.3))
+                                    Text("Select a shot and generate video")
+                                        .font(.caption)
+                                        .foregroundStyle(.white.opacity(0.3))
+                                }
+                            }
+                        }
+                        .padding(16)
+
+                    // Filmstrip + production strip for selected scene
+                    if let scene = store.selectedScene, !scene.shots.isEmpty {
+                        Divider()
+                        ShotFilmstripView(store: store, shots: scene.shots, selectedShotIndex: $selectedShotIndex)
+                        if let idx = selectedShotIndex, idx < scene.shots.count {
+                            Divider()
+                            ShotProductionStripView(store: store, scene: scene, shot: scene.shots[idx], shotIndex: idx)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // MARK: Right Inspector
+            if inspectorVisible {
+                OperaChromeSplitHandle(
+                    onDragChanged: resizeInspector,
+                    onDragEnded: { }
+                )
+
+                OperaChromeFlatPane {
+                    OperaChromePaneHeader(
+                        eyebrow: "DETAILS",
+                        title: "Inspector",
+                        subtitle: "Animate"
+                    ) {
+                        OperaChromeActionButton(systemImage: "xmark") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                inspectorVisible = false
+                            }
+                        }
+                    }
+                } content: {
+                    AnimateViduInspectorView(store: store, selectedShot: selectedShot)
+                }
+                .frame(width: max(inspectorWidth, 320))
+            }
+        }
+        .background(OperaChromeTheme.workspaceBackground)
+    }
+
+    private func resizeSidebar(_ delta: CGFloat) {
+        sidebarWidth = min(
+            max(sidebarWidth + Double(delta), OperaChromeSidebarMetrics.minWidth),
+            OperaChromeSidebarMetrics.maxWidth
+        )
+    }
+
+    private func resizeInspector(_ delta: CGFloat) {
+        inspectorWidth = min(
+            max(inspectorWidth - Double(delta), 320),
+            600
+        )
+    }
+}
+
+// MARK: - Vidu Inspector Panel
+
+@available(macOS 26.0, *)
+private struct AnimateViduInspectorView: View {
+    @Bindable var store: AnimateStore
+    let selectedShot: AnimationSceneShot?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // Shot details
+                if let shot = selectedShot {
+                    shotDetailsSection(shot: shot)
+                    Divider()
+                    viduQueueSection(shot: shot)
+                } else {
+                    Text("Select a shot in the filmstrip to see details.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                        .padding()
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    @ViewBuilder
+    private func shotDetailsSection(shot: AnimationSceneShot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("SHOT")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .tracking(1.0)
+                .foregroundStyle(OperaChromeTheme.textTertiary)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(shot.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(OperaChromeTheme.textPrimary)
+
+                if let camera = shot.cameraShot {
+                    Label(camera.rawValue, systemImage: "camera")
+                        .font(.system(size: 11))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                }
+
+                HStack(spacing: 4) {
+                    Text("Frames \(shot.startFrame)–\(shot.endFrame)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func viduQueueSection(shot: AnimationSceneShot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("VIDU STATUS")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .tracking(1.0)
+                .foregroundStyle(OperaChromeTheme.textTertiary)
+
+            if let fg = shot.shotFrameGeneration {
+                VStack(alignment: .leading, spacing: 4) {
+                    statusRow(label: "First frame", ready: fg.firstFrameImagePath != nil)
+                    statusRow(label: "Last frame", ready: fg.lastFrameImagePath != nil)
+                    statusRow(label: "Video output", ready: fg.viduOutputPath != nil)
+
+                    if let videoPath = fg.viduOutputPath {
+                        Text(videoPath)
+                            .font(.system(size: 10))
+                            .foregroundStyle(OperaChromeTheme.textTertiary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                    }
+                }
+            } else {
+                Text("No generation data yet. Use the production strip to set up first/last frames and generate video.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func statusRow(label: String, ready: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: ready ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 11))
+                .foregroundStyle(ready ? Color.green : OperaChromeTheme.textTertiary)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(OperaChromeTheme.textSecondary)
         }
     }
 }
