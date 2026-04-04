@@ -120,10 +120,6 @@ final class ViduAPIService: Sendable {
     // MARK: - Poll Until Complete
 
     /// Poll a task until it reaches success or failed state.
-    /// - Parameters:
-    ///   - taskID: The task ID from createStartEndTask
-    ///   - interval: Polling interval in seconds (default 5)
-    ///   - progressHandler: Called with task state on each poll
     func pollUntilComplete(
         taskID: String,
         interval: Double = 5,
