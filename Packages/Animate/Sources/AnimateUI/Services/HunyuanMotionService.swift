@@ -287,4 +287,32 @@ final class HunyuanMotionService: Sendable {
         onProgress("Motion downloaded: \(fileName)")
         return destination
     }
+
+    // MARK: - NLA Pipeline Integration
+
+    /// Generate a HunyuanMotion clip and return it as an NLA-ready MotionClip.
+    /// Does NOT place it on the timeline — the caller does that via AnimateStore.
+    func generateMotionClip(
+        request: MotionRequest,
+        destinationDirectory: URL,
+        onProgress: @Sendable (String) -> Void
+    ) async throws -> AnimateUI.MotionClip {
+        let fbxURL = try await generateAndDownload(
+            request: request,
+            destinationDirectory: destinationDirectory,
+            onProgress: onProgress
+        )
+
+        onProgress("Loading FBX animation data...")
+        let fbxClip = try FBXMotionClipLoader.load(from: fbxURL)
+
+        onProgress("Converting to timeline clip...")
+        let nlaClip = FBXMotionClipLoader.toNLAMotionClip(
+            from: fbxClip,
+            source: .hunyuanMotion(prompt: request.prompt)
+        )
+
+        onProgress("Ready — \(nlaClip.frameCount) frames at \(nlaClip.fps) fps")
+        return nlaClip
+    }
 }

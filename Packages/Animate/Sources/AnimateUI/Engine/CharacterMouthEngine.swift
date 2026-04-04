@@ -57,11 +57,22 @@ struct CharacterMouthEngine: Sendable {
         blocking: CharacterBlockingPlan,
         frame: Int,
         liveCue: String?,
+        nlaBlendShapes: [String: Float]? = nil,
         baseFPS: Int,
         profile: Character3DPerformanceProfile? = nil
     ) -> CharacterMouthState {
         if let viseme = resolveLiveViseme(liveCue) {
             return canonicalized(state: state(for: viseme), profile: profile)
+        }
+
+        // NLA lip sync track takes priority over synthetic visemes
+        if let blendShapes = nlaBlendShapes, !blendShapes.isEmpty {
+            let snapshot = mouthSnapshotFromBlendShapes(blendShapes)
+            let viseme = dominantViseme(from: snapshot)
+            return canonicalized(
+                state: mouthState(from: snapshot, viseme: viseme),
+                profile: profile
+            )
         }
 
         if let beat = blocking.lipsyncBeats.first(where: { $0.startFrame <= frame && frame <= $0.endFrame }) {
@@ -256,5 +267,48 @@ private extension CharacterMouthEngine {
         }
         let canonicalViseme = profile.canonicalVisemeToken(for: state)
         return state.withCue(canonicalCue, viseme: canonicalViseme)
+    }
+
+    // MARK: - NLA Blend Shape Helpers (Phase 7)
+
+    /// Approximate a MouthSnapshot from string-keyed blend shape values.
+    func mouthSnapshotFromBlendShapes(_ shapes: [String: Float]) -> VisemeBlendEngine.MouthSnapshot {
+        let jawOpen = Double(shapes[BlendShapeName.jawOpen.rawValue] ?? 0)
+        let stretchL = Double(shapes[BlendShapeName.mouthStretchLeft.rawValue] ?? 0)
+        let stretchR = Double(shapes[BlendShapeName.mouthStretchRight.rawValue] ?? 0)
+        let smileL   = Double(shapes[BlendShapeName.mouthSmileLeft.rawValue] ?? 0)
+        let smileR   = Double(shapes[BlendShapeName.mouthSmileRight.rawValue] ?? 0)
+        let pucker   = Double(shapes[BlendShapeName.mouthPucker.rawValue] ?? 0)
+        let funnel   = Double(shapes[BlendShapeName.mouthFunnel.rawValue] ?? 0)
+
+        let mouthWidth   = (stretchL + stretchR + smileL + smileR) / 2.0 * 0.8 + 0.3
+        let mouthHeight  = jawOpen * 0.9
+        let puckerBlend  = pucker * 0.7 + funnel * 0.5
+        let smileBlend   = (smileL + smileR) / 2.0
+
+        return VisemeBlendEngine.MouthSnapshot(
+            jawOpen: jawOpen,
+            mouthWidth: mouthWidth,
+            mouthHeight: mouthHeight,
+            pucker: puckerBlend,
+            smileBlend: smileBlend
+        )
+    }
+
+    /// Determine the closest Preston Blair viseme for a mouth snapshot.
+    func dominantViseme(from snapshot: VisemeBlendEngine.MouthSnapshot) -> PrestonBlairViseme {
+        var bestViseme: PrestonBlairViseme = .rest
+        var bestScore: Double = .infinity
+
+        for (viseme, ref) in VisemeBlendEngine.visemeSnapshots {
+            let dist = abs(snapshot.jawOpen - ref.jawOpen)
+                + abs(snapshot.mouthWidth - ref.mouthWidth)
+                + abs(snapshot.pucker - ref.pucker)
+            if dist < bestScore {
+                bestScore = dist
+                bestViseme = viseme
+            }
+        }
+        return bestViseme
     }
 }

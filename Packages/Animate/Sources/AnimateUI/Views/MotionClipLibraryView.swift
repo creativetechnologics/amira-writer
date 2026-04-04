@@ -227,6 +227,7 @@ private struct MotionClipCard: View {
         case .hunyuanMotion: return "sparkles"
         case .importedBVH: return "doc.text"
         case .importedFBX: return "cube"
+        case .audioLipSync: return "waveform.and.mic"
         case .manual: return "hand.draw"
         }
     }

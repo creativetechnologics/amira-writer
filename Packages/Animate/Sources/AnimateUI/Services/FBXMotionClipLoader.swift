@@ -278,4 +278,71 @@ struct FBXMotionClipLoader: Sendable {
         let cache = buildNodeCache(targetRoot: targetRoot, retargetMap: retargetMap)
         apply(frame: frame, nodeCache: cache, rootPositionScale: rootPositionScale)
     }
+
+    // MARK: - Conversion to NLA MotionClip
+
+    /// Convert an FBX-loaded MotionClip into the NLA-compatible AnimateUI.MotionClip format.
+    /// Reuses the SMPL-H joint name mapping to normalize all joint names to the
+    /// standard skeleton used by the NLA pipeline.
+    static func toNLAMotionClip(
+        from fbxClip: FBXMotionClipLoader.MotionClip,
+        source: MotionClipSource
+    ) -> AnimateUI.MotionClip {
+        // Build reverse mapping: any FBX joint name -> canonical SMPL-H name
+        var fbxToCanonical: [String: String] = [:]
+        for (canonical, variants) in jointNameMapping {
+            for variant in variants {
+                fbxToCanonical[variant] = canonical
+                fbxToCanonical[variant.lowercased()] = canonical
+            }
+            fbxToCanonical[canonical] = canonical
+        }
+
+        // Collect all canonical joint names across all frames
+        var allCanonicalJoints: Set<String> = []
+        for fbxFrame in fbxClip.frames {
+            for jointName in fbxFrame.jointRotations.keys {
+                let canonical = fbxToCanonical[jointName]
+                    ?? fbxToCanonical[jointName.lowercased()]
+                    ?? jointName
+                allCanonicalJoints.insert(canonical)
+            }
+        }
+        let sortedJoints = allCanonicalJoints.sorted()
+
+        // Build per-joint arrays of quaternions (SIMD4: x=ix, y=iy, z=iz, w=r)
+        var jointRotations: [String: [SIMD4<Float>]] = [:]
+        var rootPositions: [SIMD3<Float>] = []
+
+        for jointName in sortedJoints {
+            jointRotations[jointName] = Array(repeating: SIMD4<Float>(0, 0, 0, 1), count: fbxClip.frameCount)
+        }
+
+        for (frameIdx, fbxFrame) in fbxClip.frames.enumerated() {
+            rootPositions.append(fbxFrame.rootPosition)
+            for (jointName, rotation) in fbxFrame.jointRotations {
+                let canonical = fbxToCanonical[jointName]
+                    ?? fbxToCanonical[jointName.lowercased()]
+                    ?? jointName
+                if jointRotations[canonical] != nil {
+                    let q = rotation
+                    jointRotations[canonical]![frameIdx] = SIMD4<Float>(q.imag.x, q.imag.y, q.imag.z, q.real)
+                }
+            }
+        }
+
+        let intFPS = Int(fbxClip.fps.rounded())
+        return AnimateUI.MotionClip(
+            id: UUID(),
+            name: fbxClip.name,
+            source: source,
+            fps: intFPS,
+            frameCount: fbxClip.frameCount,
+            duration: fbxClip.duration,
+            jointRotations: jointRotations,
+            rootPositions: rootPositions,
+            blendShapeWeights: [:],
+            createdAt: Date()
+        )
+    }
 }

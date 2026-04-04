@@ -14,6 +14,7 @@ struct MotionGenerationPane: View {
     @State private var generationProgress: String = ""
     @State private var generationError: String?
     @State private var generatedMotionPaths: [URL] = []
+    @State private var generatedClip: MotionClip?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -138,6 +139,19 @@ struct MotionGenerationPane: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                if let clip = generatedClip {
+                    Button("Send to Timeline") {
+                        store.addMotionClipToTimeline(clip)
+                        generatedClip = nil
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Text("\(clip.frameCount) frames, \(String(format: "%.1f", clip.duration))s")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if let error = generationError {
@@ -212,7 +226,7 @@ struct MotionGenerationPane: View {
         )
 
         do {
-            let fbxPath = try await service.generateAndDownload(
+            let clip = try await service.generateMotionClip(
                 request: request,
                 destinationDirectory: destinationDir
             ) { progress in
@@ -220,7 +234,12 @@ struct MotionGenerationPane: View {
                     generationProgress = progress
                 }
             }
-            generatedMotionPaths.insert(fbxPath, at: 0)
+            generatedClip = clip
+            // Also track the FBX path from the clip source for "Show in Finder"
+            if case .hunyuanMotion = clip.source {
+                let motionsDir = destinationDir
+                generatedMotionPaths.insert(motionsDir, at: 0)
+            }
             generationProgress = "Done!"
         } catch {
             generationError = error.localizedDescription

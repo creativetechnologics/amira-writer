@@ -83,6 +83,7 @@ enum MotionClipSource: Codable, Sendable, Hashable {
     case hunyuanMotion(prompt: String)
     case importedBVH(filePath: String)
     case importedFBX(filePath: String)
+    case audioLipSync
     case manual
 }
 

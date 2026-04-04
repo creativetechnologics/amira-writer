@@ -245,4 +245,46 @@ struct LipSyncEngine: Sendable {
     static func visemesToTimelineKeyframes(_ visemes: [VisemeKeyframe]) -> [TimelineKeyframe] {
         visemes.map { $0.toTimelineKeyframe() }
     }
+
+    // MARK: - Audio Analysis Mode (Phase 7)
+
+    /// Generate viseme keyframes from a sequence of audio viseme weight snapshots.
+    /// Selects the dominant viseme at each time step and deduplicates consecutive same-visemes.
+    static func generateFromAudioWeights(
+        _ weightSequence: [(timestamp: Double, weights: [PrestonBlairViseme: Float])],
+        fps: Int
+    ) -> [VisemeKeyframe] {
+        var result: [VisemeKeyframe] = []
+        var lastViseme: PrestonBlairViseme?
+
+        for entry in weightSequence {
+            let dominant = entry.weights
+                .max(by: { $0.value < $1.value })?.key ?? .rest
+            let frame = Int((entry.timestamp * Double(fps)).rounded())
+
+            // Skip if same viseme as last keyframe (reduce redundancy)
+            if dominant == lastViseme { continue }
+
+            // Placeholder duration — will be corrected in the fix-up pass below
+            let duration = max(1, Int(Double(fps) / 15.0))
+
+            result.append(VisemeKeyframe(
+                frame: frame,
+                viseme: dominant,
+                duration: duration
+            ))
+            lastViseme = dominant
+        }
+
+        // Fix up durations: each keyframe lasts until the next one starts
+        for i in 0..<result.count - 1 {
+            result[i] = VisemeKeyframe(
+                frame: result[i].frame,
+                viseme: result[i].viseme,
+                duration: result[i + 1].frame - result[i].frame
+            )
+        }
+
+        return result
+    }
 }

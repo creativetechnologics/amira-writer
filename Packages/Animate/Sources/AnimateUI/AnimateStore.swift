@@ -79,7 +79,9 @@ final class AnimateStore {
 
     nonisolated(unsafe) var mocapCaptureSession: CaptureSession?
     nonisolated(unsafe) var mocapBodyTracker: VisionBodyTracker?
+    nonisolated(unsafe) var mocapDWPoseTracker: DWPoseTracker? = nil
     var mocapTemporalFilter = TemporalFilterManager()
+    var mocapTrackingMode: CaptureTrackingMode = .standard
 
     // MARK: - Mocap Live Override
 
@@ -189,6 +191,17 @@ final class AnimateStore {
 
     var motionClips: [MotionClip] = []
     var selectedMotionClipID: UUID?
+
+    // Video import state (backing vars used by extension computed properties)
+    var _isImportingVideo: Bool = false
+    var _videoImportProgress: VideoMotionExtractor.ExtractionProgress? = nil
+    var _videoImportCancelled: Bool = false
+    // Atomic cancel flag accessible from Sendable closures
+    let _videoImportCancelBox = MocapAtomicState(false)
+
+    // Audio lip sync state
+    var isRecordingAudioLipSync: Bool = false
+    nonisolated(unsafe) var _audioLipSyncRecorder: AudioLipSyncRecorder? = nil
 
     var selectedMotionClip: MotionClip? {
         motionClips.first { $0.id == selectedMotionClipID }
@@ -8552,6 +8565,234 @@ final class AnimateStore {
 extension AnimateStore {
     func addMotionClip(_ clip: MotionClip) {
         motionClips.append(clip)
+    }
+
+    // MARK: - NLA Motion Clip Placement
+
+    /// Place a MotionClip on the NLA base (first) track.
+    /// Appends at the end of existing clips. Creates the timeline/track if needed.
+    func addMotionClipToTimeline(_ clip: MotionClip) {
+        // Ensure the clip is in the library
+        if !motionClips.contains(where: { $0.id == clip.id }) {
+            motionClips.append(clip)
+        }
+
+        // Ensure timeline exists
+        if nlaTimeline == nil {
+            nlaTimeline = NLATimeline(fps: fps)
+        }
+
+        // Ensure at least one track exists
+        if nlaTimeline!.tracks.isEmpty {
+            let baseTrack = NLATrack(name: "Base", colorTag: .imported)
+            nlaTimeline!.addTrack(baseTrack)
+        }
+
+        // Find the first track (sortOrder 0)
+        guard let trackIdx = nlaTimeline!.tracks.indices.first else { return }
+
+        // Append after the last clip on this track
+        let lastEnd = nlaTimeline!.tracks[trackIdx].clips
+            .map { $0.startFrame + $0.timelineDuration(motionClipFrameCount: clip.frameCount) }
+            .max() ?? 0
+
+        let entry = NLAClip(
+            motionClipID: clip.id,
+            startFrame: lastEnd,
+            speed: 1.0,
+            blendInFrames: 0,
+            blendOutFrames: 0
+        )
+
+        nlaTimeline!.tracks[trackIdx].clips.append(entry)
+
+        // Extend timeline duration if needed
+        let clipEndTime = Double(lastEnd + clip.frameCount) / Double(max(fps, 1))
+        nlaTimeline!.duration = max(nlaTimeline!.duration, clipEndTime)
+
+        saveNLATimeline()
+        evaluateNLAAtCurrentFrame()
+    }
+
+    /// Place a lip sync MotionClip on the dedicated "Lip Sync" track (.mouth body mask).
+    func addMotionClipToLipSyncTrack(_ clip: MotionClip) {
+        if !motionClips.contains(where: { $0.id == clip.id }) {
+            motionClips.append(clip)
+        }
+
+        if nlaTimeline == nil {
+            nlaTimeline = NLATimeline(fps: fps)
+        }
+
+        // Find or create the lip sync track
+        let lipSyncTrackIdx: Int
+        if let idx = nlaTimeline!.tracks.firstIndex(where: { $0.name == "Lip Sync" }) {
+            lipSyncTrackIdx = idx
+        } else {
+            var track = NLATrack(
+                name: "Lip Sync",
+                bodyMask: .mouth,
+                colorTag: .webcam
+            )
+            track.sortOrder = (nlaTimeline!.tracks.map(\.sortOrder).max() ?? -1) + 1
+            nlaTimeline!.tracks.append(track)
+            lipSyncTrackIdx = nlaTimeline!.tracks.count - 1
+        }
+
+        let lastEnd = nlaTimeline!.tracks[lipSyncTrackIdx].clips
+            .map { $0.startFrame + $0.timelineDuration(motionClipFrameCount: clip.frameCount) }
+            .max() ?? 0
+
+        let entry = NLAClip(
+            motionClipID: clip.id,
+            startFrame: lastEnd,
+            speed: 1.0,
+            blendInFrames: Int((Double(fps) * 0.05).rounded()),
+            blendOutFrames: Int((Double(fps) * 0.05).rounded())
+        )
+
+        nlaTimeline!.tracks[lipSyncTrackIdx].clips.append(entry)
+
+        let clipEndTime = Double(lastEnd + clip.frameCount) / Double(max(fps, 1))
+        nlaTimeline!.duration = max(nlaTimeline!.duration, clipEndTime)
+
+        saveNLATimeline()
+        evaluateNLAAtCurrentFrame()
+    }
+
+    // MARK: - Playback Helpers (Phase 6 additions)
+
+    /// Step the playhead by `delta` frames (only when not playing).
+    func stepFrame(delta: Int) {
+        guard !isPlaying else { return }
+        currentFrame = max(0, min(totalFrames - 1, currentFrame + delta))
+        evaluateNLAAtCurrentFrame()
+    }
+
+    // MARK: - BVH Export
+
+    func exportClipAsBVH(clipID: UUID) {
+        guard let clip = motionClips.first(where: { $0.id == clipID }) else { return }
+
+        let panel = NSSavePanel()
+        if let bvhType = UTType(filenameExtension: "bvh") {
+            panel.allowedContentTypes = [bvhType]
+        }
+        panel.nameFieldStringValue = "\(clip.name).bvh"
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            try BVHExporter.exportToFile(clip, url: url)
+        } catch {
+            print("[BVHExport] Error: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Clip Speed
+
+    func setClipSpeed(clipID: UUID, speed: Float) {
+        guard var timeline = nlaTimeline else { return }
+        for trackIdx in timeline.tracks.indices {
+            if let clipIdx = timeline.tracks[trackIdx].clips.firstIndex(where: { $0.id == clipID }) {
+                timeline.tracks[trackIdx].clips[clipIdx].speed = max(0.1, min(4.0, speed))
+            }
+        }
+        nlaTimeline = timeline
+        evaluateNLAAtCurrentFrame()
+    }
+
+    // MARK: - Video Import
+
+    var isImportingVideo: Bool {
+        get { _isImportingVideo }
+        set { _isImportingVideo = newValue }
+    }
+
+    var videoImportProgress: VideoMotionExtractor.ExtractionProgress? {
+        get { _videoImportProgress }
+        set { _videoImportProgress = newValue }
+    }
+
+    var videoImportCancelled: Bool {
+        get { _videoImportCancelled }
+        set { _videoImportCancelled = newValue }
+    }
+
+    func importVideoToTimeline(url: URL) async {
+        _isImportingVideo = true
+        _videoImportProgress = nil
+        _videoImportCancelled = false
+        _videoImportCancelBox.value = false
+
+        let cancelBox = _videoImportCancelBox
+
+        do {
+            let bodyTracker = VisionBodyTracker { _ in }
+            let faceTracker = VisionFaceTracker()
+
+            let clip = try await VideoMotionExtractor.extract(
+                from: url,
+                bodyTracker: bodyTracker,
+                faceTracker: faceTracker,
+                fps: 30,
+                onProgress: { [weak self] progress in
+                    Task { @MainActor [weak self] in
+                        self?._videoImportProgress = progress
+                    }
+                },
+                cancellation: {
+                    // Reads from the atomic box — safe from any context
+                    cancelBox.value
+                }
+            )
+
+            addMotionClipToTimeline(clip)
+        } catch {
+            print("[VideoImport] Error: \(error.localizedDescription)")
+        }
+
+        _isImportingVideo = false
+        _videoImportProgress = nil
+    }
+
+    func cancelVideoImport() {
+        _videoImportCancelled = true
+        _videoImportCancelBox.value = true
+    }
+
+    // MARK: - Audio Lip Sync Recording
+
+    func startAudioLipSyncRecording() {
+        guard !isRecordingAudioLipSync else { return }
+        let recorder = AudioLipSyncRecorder()
+        do {
+            try recorder.startRecording()
+            _audioLipSyncRecorder = recorder
+            isRecordingAudioLipSync = true
+        } catch {
+            print("[AudioLipSync] Failed to start: \(error.localizedDescription)")
+        }
+    }
+
+    func stopAudioLipSyncRecording() {
+        guard isRecordingAudioLipSync, let recorder = _audioLipSyncRecorder else { return }
+        let clip = recorder.stopRecording()
+        _audioLipSyncRecorder = nil
+        isRecordingAudioLipSync = false
+        addMotionClipToLipSyncTrack(clip)
+    }
+
+    // MARK: - Enhanced Tracking Mode (Phase 7)
+
+    /// Switch between standard Vision and enhanced DWPose tracking.
+    /// Enhanced mode loads the DWPose Core ML model on first use.
+    func setTrackingMode(_ mode: CaptureTrackingMode) throws {
+        mocapTrackingMode = mode
+        if mode == .enhanced && mocapDWPoseTracker == nil {
+            mocapDWPoseTracker = try DWPoseTracker()
+        }
     }
 
     func deleteMotionClip(id: UUID) {

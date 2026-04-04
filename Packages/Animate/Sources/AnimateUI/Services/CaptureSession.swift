@@ -5,6 +5,16 @@ import Foundation
 @available(macOS 26.0, *)
 typealias PixelBufferHandler = @Sendable (CVPixelBuffer, CMTime) -> Void
 
+// MARK: - Tracking Mode (Phase 7)
+
+@available(macOS 26.0, *)
+enum CaptureTrackingMode: String, Sendable, CaseIterable {
+    /// Apple Vision framework — fast, 3D body + face tracking.
+    case standard
+    /// DWPose Core ML — slower, 133 keypoints (body + hands + face).
+    case enhanced
+}
+
 @available(macOS 26.0, *)
 final class CaptureSession: NSObject, Sendable {
 

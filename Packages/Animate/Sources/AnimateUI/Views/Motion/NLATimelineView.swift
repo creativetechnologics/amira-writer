@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Main NLA timeline view. Lives in the Motion dock tab.
 /// Vertical stack of track lanes with horizontal scrolling time ruler.
@@ -44,8 +45,62 @@ struct NLATimelineView: View {
                     }
                 }
             }
+
+            // Video import progress overlay
+            if store._isImportingVideo {
+                videoImportProgressOverlay
+            }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        // Keyboard shortcuts — attached to the non-TextEditor container
+        .focusable()
+        .onKeyPress(.space) {
+            store.togglePlayback()
+            return .handled
+        }
+        .onKeyPress(phases: .down) { press in
+            switch press.key {
+            case .leftArrow:
+                if press.modifiers.contains(.shift) {
+                    store.stepFrame(delta: -10)
+                } else {
+                    store.stepFrame(delta: -1)
+                }
+                return .handled
+            case .rightArrow:
+                if press.modifiers.contains(.shift) {
+                    store.stepFrame(delta: 10)
+                } else {
+                    store.stepFrame(delta: 1)
+                }
+                return .handled
+            case "=", "+":
+                if press.modifiers.contains(.command) {
+                    pixelsPerFrame = min(20, pixelsPerFrame * 1.25)
+                    return .handled
+                }
+                return .ignored
+            case "-":
+                if press.modifiers.contains(.command) {
+                    pixelsPerFrame = max(1, pixelsPerFrame / 1.25)
+                    return .handled
+                }
+                return .ignored
+            default:
+                return .ignored
+            }
+        }
+        // Accept video file drops
+        .onDrop(of: [UTType.movie, UTType.mpeg4Movie], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                Task { @MainActor in
+                    await store.importVideoToTimeline(url: url)
+                }
+            }
+            return true
+        }
     }
 
     // MARK: - Toolbar
@@ -151,6 +206,14 @@ struct NLATimelineView: View {
             .onAppear {
                 scrollOffset = 0
             }
+            // Pinch to zoom
+            .gesture(
+                MagnifyGesture()
+                    .onChanged { value in
+                        let newPPF = pixelsPerFrame * value.magnification
+                        pixelsPerFrame = max(1, min(20, newPPF))
+                    }
+            )
         }
     }
 
@@ -159,6 +222,7 @@ struct NLATimelineView: View {
     @ViewBuilder
     private func trackLane(track: NLATrack) -> some View {
         let isSelected = selectedTrackID == track.id
+        let sortedClips = track.clips.sorted { $0.startFrame < $1.startFrame }
 
         HStack(spacing: 0) {
             // Track header
@@ -179,7 +243,10 @@ struct NLATimelineView: View {
                         ? Color.accentColor.opacity(0.04)
                         : Color(nsColor: .controlBackgroundColor).opacity(0.3))
 
-                // Clips
+                // Crossfade overlays for overlapping consecutive clips
+                crossfadeOverlays(for: sortedClips, pixelsPerFrame: pixelsPerFrame, trackHeight: 40)
+
+                // Clips with context menu
                 ForEach(track.clips) { clip in
                     NLAClipRectangleView(
                         clip: clip,
@@ -192,6 +259,21 @@ struct NLATimelineView: View {
                             moveClip(trackID: track.id, clipID: clipID, newStartFrame: newStart)
                         }
                     )
+                    .contextMenu {
+                        Menu("Speed") {
+                            Button("0.25x") { store.setClipSpeed(clipID: clip.id, speed: 0.25) }
+                            Button("0.5x")  { store.setClipSpeed(clipID: clip.id, speed: 0.5) }
+                            Button("1x")    { store.setClipSpeed(clipID: clip.id, speed: 1.0) }
+                            Button("2x")    { store.setClipSpeed(clipID: clip.id, speed: 2.0) }
+                        }
+                        Divider()
+                        Button("Export as BVH...") {
+                            store.exportClipAsBVH(clipID: clip.motionClipID)
+                        }
+                        Button("Remove from Track") {
+                            removeClipFromTrack(trackID: track.id, clipID: clip.id)
+                        }
+                    }
                 }
             }
             .frame(width: CGFloat(totalFrames) * pixelsPerFrame, height: 40)
@@ -201,6 +283,33 @@ struct NLATimelineView: View {
             Rectangle()
                 .stroke(Color(nsColor: .separatorColor).opacity(0.3), lineWidth: 0.5)
         )
+    }
+
+    // MARK: - Crossfade Overlays
+
+    @ViewBuilder
+    private func crossfadeOverlays(
+        for sortedClips: [NLAClip],
+        pixelsPerFrame: CGFloat,
+        trackHeight: CGFloat
+    ) -> some View {
+        ZStack(alignment: .leading) {
+            ForEach(Array(sortedClips.enumerated()), id: \.element.id) { index, clip in
+                if index + 1 < sortedClips.count {
+                    let next = sortedClips[index + 1]
+                    let clipEnd = clip.startFrame + clip.timelineDuration(
+                        motionClipFrameCount: motionClipFrameCount(for: clip.motionClipID))
+                    let overlapFrames = clipEnd - next.startFrame
+                    if overlapFrames > 0 {
+                        CrossfadeOverlayView(
+                            overlapStartX: CGFloat(next.startFrame) * pixelsPerFrame,
+                            overlapWidth: CGFloat(overlapFrames) * pixelsPerFrame,
+                            trackHeight: trackHeight
+                        )
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Track Inspector
@@ -230,7 +339,7 @@ struct NLATimelineView: View {
             Text("No Motion Tracks")
                 .font(.headline)
                 .foregroundStyle(.secondary)
-            Text("Add a track and drag motion clips from the library to start building your animation.")
+            Text("Add a track and drag motion clips from the library to start building your animation. You can also drop a video file here to extract motion.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -240,6 +349,43 @@ struct NLATimelineView: View {
                 .controlSize(.small)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Video Import Progress Overlay
+
+    @ViewBuilder
+    private var videoImportProgressOverlay: some View {
+        HStack {
+            Spacer()
+            VStack(spacing: 8) {
+                if let progress = store._videoImportProgress {
+                    ProgressView(value: progress.fraction) {
+                        Text("Processing video...")
+                            .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity)
+                    Text("Frame \(progress.framesProcessed) / \(progress.totalFrames)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Preparing video import...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Button("Cancel") {
+                    store.cancelVideoImport()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding()
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .frame(maxWidth: 280)
+            Spacer()
+        }
+        .padding()
     }
 
     // MARK: - Actions
@@ -275,6 +421,13 @@ struct NLATimelineView: View {
         store.saveNLATimeline()
     }
 
+    private func removeClipFromTrack(trackID: UUID, clipID: UUID) {
+        guard let trackIndex = store.nlaTimeline?.trackIndex(for: trackID) else { return }
+        store.nlaTimeline?.tracks[trackIndex].clips.removeAll { $0.id == clipID }
+        store.evaluateNLAAtCurrentFrame()
+        store.saveNLATimeline()
+    }
+
     // MARK: - Helpers
 
     private func binding(for trackID: UUID) -> Binding<NLATrack> {
@@ -292,8 +445,35 @@ struct NLATimelineView: View {
     }
 
     private func motionClipFrameCount(for clipID: UUID) -> Int {
-        // TODO: resolve from MotionClip library via AnimateStore
-        // For now return a default; Phase 3's MotionClip has frameCount.
-        240
+        store.motionClips.first(where: { $0.id == clipID })?.frameCount ?? 240
+    }
+}
+
+// MARK: - CrossfadeOverlayView
+
+/// Renders a diagonal gradient crossfade indicator in clip overlap zones.
+@available(macOS 26.0, *)
+struct CrossfadeOverlayView: View {
+    let overlapStartX: CGFloat
+    let overlapWidth: CGFloat
+    let trackHeight: CGFloat
+
+    var body: some View {
+        if overlapWidth > 0 {
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.blue.opacity(0.3),
+                            Color.orange.opacity(0.3)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: overlapWidth, height: trackHeight)
+                .offset(x: overlapStartX)
+                .allowsHitTesting(false)
+        }
     }
 }
