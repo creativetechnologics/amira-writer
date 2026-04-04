@@ -26,6 +26,11 @@ struct CharacterReferenceWorkflowSheet: View {
     @State private var generationStatus: String?
     @State private var generationError: String?
 
+    // Local text state — prevents cursor-jump from Binding(get:set:) on @Observable store
+    @State private var localMasterPrompt: String = ""
+    @State private var localHeadPrompt: String = ""
+    @State private var hasAppearedPrompts = false
+
     enum WorkflowAction: Hashable {
         case masterSheet
         case headSheet
@@ -76,6 +81,11 @@ struct CharacterReferenceWorkflowSheet: View {
         .frame(minWidth: 900, idealWidth: 1400, minHeight: 700)
         .task {
             store.seedCharacterReferenceWorkflowIfNeeded(for: characterID)
+            if let char = store.characters.first(where: { $0.id == characterID }) {
+                localMasterPrompt = char.masterReferenceSheetPrompt
+                localHeadPrompt = char.headTurnaroundSheetPrompt
+            }
+            hasAppearedPrompts = true
         }
         .sheet(item: $pendingPlan) { plan in
             GeminiGenerationPreflightSheet(
@@ -136,6 +146,11 @@ struct CharacterReferenceWorkflowSheet: View {
         }
         .task {
             store.seedCharacterReferenceWorkflowIfNeeded(for: characterID)
+            if let char = store.characters.first(where: { $0.id == characterID }) {
+                localMasterPrompt = char.masterReferenceSheetPrompt
+                localHeadPrompt = char.headTurnaroundSheetPrompt
+            }
+            hasAppearedPrompts = true
         }
         .sheet(item: $pendingPlan) { plan in
             GeminiGenerationPreflightSheet(
@@ -342,10 +357,11 @@ struct CharacterReferenceWorkflowSheet: View {
                 Text("Master Sheet Prompt")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: Binding(
-                    get: { character.masterReferenceSheetPrompt },
-                    set: { store.updateMasterReferenceSheetPrompt($0, for: characterID) }
-                ))
+                TextEditor(text: $localMasterPrompt)
+                    .onChange(of: localMasterPrompt) { _, newValue in
+                        guard hasAppearedPrompts else { return }
+                        store.updateMasterReferenceSheetPrompt(newValue, for: characterID)
+                    }
                 .font(.callout)
                 .frame(minHeight: 120)
                 .padding(8)
@@ -501,10 +517,11 @@ struct CharacterReferenceWorkflowSheet: View {
                 Text("Head Sheet Prompt")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: Binding(
-                    get: { character.headTurnaroundSheetPrompt },
-                    set: { store.updateHeadTurnaroundSheetPrompt($0, for: characterID) }
-                ))
+                TextEditor(text: $localHeadPrompt)
+                    .onChange(of: localHeadPrompt) { _, newValue in
+                        guard hasAppearedPrompts else { return }
+                        store.updateHeadTurnaroundSheetPrompt(newValue, for: characterID)
+                    }
                 .font(.callout)
                 .frame(minHeight: 88)
                 .padding(8)
