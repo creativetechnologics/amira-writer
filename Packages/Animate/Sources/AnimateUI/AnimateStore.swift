@@ -119,10 +119,27 @@ final class AnimateStore {
             tracker?.processFrame(pixelBuffer, timestamp: seconds)
         }
 
+        capture.onStateChange = { [weak self] newState in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch newState {
+                case .running:
+                    self.mocapIsRunning = true
+                    self.mocapErrorMessage = nil
+                case .failed:
+                    self.mocapIsRunning = false
+                    self.mocapErrorMessage = "Camera failed to start. Check permissions or camera connection."
+                case .stopped:
+                    self.mocapIsRunning = false
+                default:
+                    break
+                }
+            }
+        }
+
         mocapCaptureSession = capture
         mocapBodyTracker = tracker
         capture.start(cameraID: mocapCameraID)
-        mocapIsRunning = true
     }
 
     func stopMocap() {

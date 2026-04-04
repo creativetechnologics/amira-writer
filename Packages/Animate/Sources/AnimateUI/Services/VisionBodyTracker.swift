@@ -8,7 +8,8 @@ final class VisionBodyTracker: Sendable {
 
     let onPoseFrame: @Sendable (UnifiedPoseFrame) -> Void
 
-    private let _isBusy = AtomicState(false)
+    private let _isBusy = MocapAtomicState(false)
+    nonisolated(unsafe) private let request = VNDetectHumanBodyPose3DRequest()
 
     init(onPoseFrame: @escaping @Sendable (UnifiedPoseFrame) -> Void) {
         self.onPoseFrame = onPoseFrame
@@ -20,7 +21,6 @@ final class VisionBodyTracker: Sendable {
 
         defer { _isBusy.value = false }
 
-        let request = VNDetectHumanBodyPose3DRequest()
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
 
         do {
@@ -69,7 +69,7 @@ final class VisionBodyTracker: Sendable {
                 let recognized = try observation.recognizedPoint(visionName)
                 let col3 = recognized.position.columns.3
                 bodyJoints[jointName] = SIMD3<Float>(col3.x, col3.y, col3.z)
-                bodyConfidences[jointName] = 1.0
+                bodyConfidences[jointName] = Float(observation.confidence)
             } catch {
                 continue
             }

@@ -49,7 +49,6 @@ final class CameraPreviewNSView: NSView {
 @available(macOS 26.0, *)
 struct SkeletonOverlayView: View {
     let poseFrame: UnifiedPoseFrame?
-    let viewSize: CGSize
 
     var body: some View {
         Canvas { context, size in
@@ -136,22 +135,19 @@ struct CapturePreviewView: View {
     let poseFrame: UnifiedPoseFrame?
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                if let session = captureSession {
-                    CameraPreviewRepresentable(session: session)
-                } else {
-                    Rectangle()
-                        .fill(Color.black)
-                    Text("No camera feed")
-                        .foregroundStyle(.secondary)
-                }
-
-                SkeletonOverlayView(
-                    poseFrame: poseFrame,
-                    viewSize: geo.size
-                )
+        ZStack {
+            if let session = captureSession {
+                CameraPreviewRepresentable(session: session)
+            } else {
+                Rectangle()
+                    .fill(Color.black)
+                Text("No camera feed")
+                    .foregroundStyle(.secondary)
             }
+
+            SkeletonOverlayView(
+                poseFrame: poseFrame
+            )
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }

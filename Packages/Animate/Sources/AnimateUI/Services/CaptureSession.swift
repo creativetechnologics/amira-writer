@@ -24,8 +24,8 @@ final class CaptureSession: NSObject, Sendable {
         qos: .userInteractive
     )
 
-    private let _state = AtomicState(CaptureSession.State.idle)
-    private let _pixelBufferHandler = AtomicBox<PixelBufferHandler?>(nil)
+    private let _state = MocapAtomicState(CaptureSession.State.idle)
+    private let _pixelBufferHandler = MocapAtomicBox<PixelBufferHandler?>(nil)
 
     var state: CaptureSession.State { _state.value }
     var captureSession: AVCaptureSession? { session }
@@ -36,28 +36,59 @@ final class CaptureSession: NSObject, Sendable {
 
     static func availableCameras() -> [(id: String, name: String)] {
         let discoverySession = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
+            deviceTypes: [.builtInWideAngleCamera, .external],
             mediaType: .video,
             position: .unspecified
         )
         return discoverySession.devices.map { ($0.uniqueID, $0.localizedName) }
     }
 
+    nonisolated(unsafe) var onStateChange: (@Sendable (CaptureSession.State) -> Void)?
+
     func start(cameraID: String? = nil) {
         guard _state.value == .idle || _state.value == .stopped || _state.value == .failed else {
             return
         }
+
+        let authStatus = AVCaptureDevice.authorizationStatus(for: .video)
+        switch authStatus {
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                guard let self else { return }
+                if granted {
+                    self._state.value = .starting
+                    self.processingQueue.async { self.runConfigureAndStart(cameraID: cameraID) }
+                } else {
+                    self._state.value = .failed
+                    self.onStateChange?(.failed)
+                }
+            }
+            return
+        case .denied, .restricted:
+            _state.value = .failed
+            onStateChange?(.failed)
+            return
+        default:
+            break
+        }
+
         _state.value = .starting
 
         processingQueue.async { [weak self] in
             guard let self else { return }
-            do {
-                try self.configureAndStart(cameraID: cameraID)
-                self._state.value = .running
-            } catch {
-                print("[CaptureSession] Failed to start: \(error)")
-                self._state.value = .failed
-            }
+            self.runConfigureAndStart(cameraID: cameraID)
+        }
+    }
+
+    private func runConfigureAndStart(cameraID: String?) {
+        do {
+            try configureAndStart(cameraID: cameraID)
+            _state.value = .running
+            onStateChange?(.running)
+        } catch {
+            print("[CaptureSession] Failed to start: \(error)")
+            _state.value = .failed
+            onStateChange?(.failed)
         }
     }
 
@@ -66,6 +97,7 @@ final class CaptureSession: NSObject, Sendable {
             guard let self else { return }
             self.session?.stopRunning()
             self._state.value = .stopped
+            self.onStateChange?(.stopped)
         }
     }
 
@@ -146,7 +178,7 @@ enum CaptureSessionError: LocalizedError {
 }
 
 @available(macOS 26.0, *)
-final class AtomicState<T: Sendable>: Sendable {
+final class MocapAtomicState<T: Sendable>: Sendable {
     private let lock = NSLock()
     nonisolated(unsafe) private var _value: T
 
@@ -159,7 +191,7 @@ final class AtomicState<T: Sendable>: Sendable {
 }
 
 @available(macOS 26.0, *)
-final class AtomicBox<T: Sendable>: Sendable {
+final class MocapAtomicBox<T: Sendable>: Sendable {
     private let lock = NSLock()
     nonisolated(unsafe) private var _value: T
 

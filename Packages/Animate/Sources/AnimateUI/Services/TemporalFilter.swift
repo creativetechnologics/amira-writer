@@ -13,6 +13,7 @@ struct LowPassFilter: Sendable {
             return result
         } else {
             hatXPrev = value
+            hadPrev = true
             return value
         }
     }

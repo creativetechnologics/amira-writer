@@ -140,6 +140,12 @@ final class AssetManager {
         thumbnailCache.removeAllObjects()
     }
 
+    /// Invalidate the cached thumbnail for a specific file (e.g., after overwriting).
+    func invalidateThumbnail(for url: URL) {
+        let cacheKey = url.path as NSString
+        thumbnailCache.removeObject(forKey: cacheKey)
+    }
+
     // MARK: - File Listing
 
     /// List all image files in a directory, recursively.
