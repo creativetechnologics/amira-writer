@@ -282,6 +282,22 @@ enum ProjectDatabaseBridge {
         )
     }
 
+    static func loadDrawThingsPlacesConfigFromDisk(projectURL: URL) -> DrawThingsPlaceConfig? {
+        let fileURL = projectURL.appendingPathComponent("animate/drawThingsPlacesConfig.json")
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        return try? configuredDecoder().decode(DrawThingsPlaceConfig.self, from: data)
+    }
+
+    static func saveDrawThingsPlacesConfigToDisk(_ config: DrawThingsPlaceConfig, projectURL: URL) throws {
+        let fileURL = projectURL.appendingPathComponent("animate/drawThingsPlacesConfig.json")
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try configuredEncoder().encode(config)
+        try data.write(to: fileURL)
+    }
+
     private static func ensure3DManifest<T: Encodable>(
         _ manifest: T,
         relativePath: String,
