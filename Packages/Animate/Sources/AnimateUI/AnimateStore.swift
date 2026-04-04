@@ -6663,9 +6663,23 @@ final class AnimateStore {
               let url = resolvedCharacterAssetURL(for: sheet.imagePath),
               let image = NSImage(contentsOf: url) else { return }
 
+        let cropService = ReferenceSheetCropService()
+        let smartResults = cropService.cropSheet(image: image, kind: .head)
+
         for pose in CharacterReferencePose.allCases {
-            guard let slotIndex = characters[charIndex].headTurnaroundSlots.firstIndex(where: { $0.pose == pose }),
-                  let pngData = cropReferenceSheetImageData(image: image, pose: pose, kind: .head) else { continue }
+            guard let slotIndex = characters[charIndex].headTurnaroundSlots.firstIndex(where: { $0.pose == pose }) else { continue }
+
+            let smartResult = smartResults.first(where: { $0.pose == pose })
+            let pngData: Data
+            let cropRect: CropRect
+            if let result = smartResult, result.confidence >= 0.3 {
+                pngData = result.imageData
+                cropRect = result.cropRect
+            } else {
+                guard let gridData = cropReferenceSheetImageData(image: image, pose: pose, kind: .head) else { continue }
+                pngData = gridData
+                cropRect = normalizedCropRect(for: pose, kind: .head)
+            }
 
             var variant = try persistReferenceWorkflowVariant(
                 pngData,
@@ -6678,7 +6692,7 @@ final class AnimateStore {
                 imageSize: sheet.imageSize
             )
             variant.sourceSheetPath = sheet.imagePath
-            variant.sourceCropRect = normalizedCropRect(for: pose, kind: .head)
+            variant.sourceCropRect = cropRect
             characters[charIndex].headTurnaroundSlots[slotIndex].variants.append(variant)
             characters[charIndex].headTurnaroundSlots[slotIndex].approvedVariantID = variant.id
         }
@@ -6693,9 +6707,23 @@ final class AnimateStore {
               let url = resolvedCharacterAssetURL(for: sheet.imagePath),
               let image = NSImage(contentsOf: url) else { return }
 
+        let cropService = ReferenceSheetCropService()
+        let smartResults = cropService.cropSheet(image: image, kind: .fullBody)
+
         for pose in CharacterReferencePose.allCases {
-            guard let slotIndex = characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots.firstIndex(where: { $0.pose == pose }),
-                  let pngData = cropReferenceSheetImageData(image: image, pose: pose, kind: .fullBody) else { continue }
+            guard let slotIndex = characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots.firstIndex(where: { $0.pose == pose }) else { continue }
+
+            let smartResult = smartResults.first(where: { $0.pose == pose })
+            let pngData: Data
+            let cropRect: CropRect
+            if let result = smartResult, result.confidence >= 0.3 {
+                pngData = result.imageData
+                cropRect = result.cropRect
+            } else {
+                guard let gridData = cropReferenceSheetImageData(image: image, pose: pose, kind: .fullBody) else { continue }
+                pngData = gridData
+                cropRect = normalizedCropRect(for: pose, kind: .fullBody)
+            }
 
             let slot = characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex]
             var variant = try persistReferenceWorkflowVariant(
@@ -6709,7 +6737,7 @@ final class AnimateStore {
                 imageSize: sheet.imageSize
             )
             variant.sourceSheetPath = sheet.imagePath
-            variant.sourceCropRect = normalizedCropRect(for: pose, kind: .fullBody)
+            variant.sourceCropRect = cropRect
             characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].variants.append(variant)
             characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].approvedVariantID = variant.id
         }
