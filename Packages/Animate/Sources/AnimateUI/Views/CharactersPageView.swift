@@ -17,6 +17,7 @@ struct CharactersPageView: View {
     @State private var showReferenceImages: Bool = false
     @State private var showProfileImagePicker: Bool = false
     @AppStorage("charactersPage.showCharacterNotesPane") private var showCharacterNotesPane: Bool = true
+    @AppStorage("charactersPage.showLookDevelopmentPane") private var showLookDevelopmentPane: Bool = true
     @AppStorage("charactersPage.showInspirationPane") private var showInspirationPane: Bool = true
     @AppStorage("charactersPage.showReferenceWorkflowPane") private var showReferenceWorkflowPane: Bool = true
     @AppStorage("charactersPage.showAnimatedImagesPane") private var showAnimatedImagesPane: Bool = false
@@ -28,6 +29,7 @@ struct CharactersPageView: View {
     @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
     @State private var inspirationPendingPlan: PendingInspirationGenerationPlan?
     @State private var inspirationDrafts: [GeminiGenerationDraft] = []
+    @State private var inspirationActiveWardrobe: CharacterInspirationWardrobe?
     @State private var inspirationGenerationErrorMessage: String?
     @State private var inspirationGenerationStatus: String?
     @State private var inspirationStatusCharacterID: UUID?
@@ -159,16 +161,7 @@ struct CharactersPageView: View {
                     case .standard:
                         runInspirationGeneration(drafts)
                     case .batch:
-                        if let character = store.selectedCharacter {
-                            for draft in drafts {
-                                store.addToBatchQueue(
-                                    characterID: character.id,
-                                    characterName: character.name,
-                                    draftTitle: draft.title,
-                                    draft: draft
-                                )
-                            }
-                        }
+                        submitInspirationBatch(drafts, wardrobe: inspirationActiveWardrobe ?? .soldier)
                     }
                 },
                 onCancel: {
@@ -431,6 +424,8 @@ struct CharactersPageView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
 
+                    characterHeader(character)
+
                     collapsiblePane(
                         title: "Character Notes",
                         icon: "text.alignleft",
@@ -438,6 +433,14 @@ struct CharactersPageView: View {
                         isExpanded: $showCharacterNotesPane
                     ) {
                         textInfoSection(character)
+                    }
+
+                    collapsiblePane(
+                        title: "Look Development",
+                        icon: "paintpalette",
+                        isExpanded: $showLookDevelopmentPane
+                    ) {
+                        lookDevelopmentSection(character)
                     }
 
                     collapsiblePane(
@@ -1542,6 +1545,7 @@ struct CharactersPageView: View {
             )
         }
 
+        inspirationActiveWardrobe = wardrobe
         inspirationPendingPlan = PendingInspirationGenerationPlan(
             title: "\(character.name) • \(wardrobe.displayName) Inspiration",
             confirmTitle: mode == .batch
@@ -2894,19 +2898,13 @@ struct ImageCropperView: View {
     private func makeSquareCrop(for image: NSImage) {
         let imageAspectRatio = image.size.width / image.size.height
 
-        let centerX = cropRect.midX
-        let centerY = cropRect.midY
-        let maxWidth = 2 * min(centerX, 1 - centerX)
-        let maxHeight = 2 * min(centerY, 1 - centerY)
-        let squareWidth = min(maxWidth, maxHeight / imageAspectRatio)
-        let squareHeight = squareWidth * imageAspectRatio
-
-        cropRect = CGRect(
-            x: centerX - squareWidth / 2,
-            y: centerY - squareHeight / 2,
-            width: squareWidth,
-            height: squareHeight
-        )
+        if imageAspectRatio > 1 {
+            let w = 1.0 / imageAspectRatio
+            cropRect = CGRect(x: (1.0 - w) / 2, y: 0, width: w, height: 1.0)
+        } else {
+            let h = imageAspectRatio
+            cropRect = CGRect(x: 0, y: (1.0 - h) / 2, width: 1.0, height: h)
+        }
     }
 }
 
