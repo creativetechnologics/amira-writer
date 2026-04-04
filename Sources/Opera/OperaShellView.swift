@@ -276,6 +276,14 @@ struct OperaShellView: View {
             }
         }
         .task {
+            // Bridge Score→Mix exports: when Score exports a WAV, register it in Mix.
+            for await note in NotificationCenter.default.notifications(named: ScoreWorkspaceController.didExportSongToMix) {
+                guard let wavURL = note.userInfo?["wavURL"] as? URL,
+                      let songPath = note.userInfo?["songRelativePath"] as? String else { continue }
+                mixController.registerScoreExport(wavURL: wavURL, songRelativePath: songPath)
+            }
+        }
+        .task {
             // File-based remote control for diagnostics via SSH
             let commandPath = "/tmp/opera-command.txt"
             let fm = FileManager.default

@@ -47,6 +47,45 @@ struct ExportInspectorView: View {
 
             Divider()
 
+            Text("Mix Integration")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Button {
+                store.exportCurrentSongToMix()
+            } label: {
+                Label("Send to Mix", systemImage: "arrow.right.to.line")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(store.pianoRollNotes.isEmpty || store.isExportingFullMix || store.isBatchExporting)
+
+            Button {
+                Task { await store.exportAllSongsToMix() }
+            } label: {
+                Label("Send All to Mix", systemImage: "arrow.right.to.line.circle")
+            }
+            .controlSize(.small)
+            .disabled(store.midiAssets.isEmpty || store.isExportingFullMix || store.isBatchExporting)
+
+            if store.isBatchExporting {
+                VStack(alignment: .leading, spacing: 3) {
+                    ProgressView(value: store.batchExportProgress)
+                        .progressViewStyle(.linear)
+                    Text(store.batchExportStatus)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            } else if !store.batchExportStatus.isEmpty {
+                Text(store.batchExportStatus)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Divider()
+
             Text("Suno Prep")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
