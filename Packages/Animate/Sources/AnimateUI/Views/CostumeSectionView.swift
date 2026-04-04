@@ -170,7 +170,11 @@ struct CostumeSectionView: View {
 
                 if costume.approvedSheetVariant != nil {
                     Button {
-                        try? store.cropApprovedCostumeSheet(for: characterID, costumeID: costume.id)
+                        do {
+                            try store.cropApprovedCostumeSheet(for: characterID, costumeID: costume.id)
+                        } catch {
+                            generationError = "Crop failed: \(error.localizedDescription)"
+                        }
                     } label: {
                         Label("Re-crop from Sheet", systemImage: "crop")
                     }
@@ -218,7 +222,7 @@ struct CostumeSectionView: View {
                             store: store,
                             variant: variant,
                             title: "\(costume.name) Sheet \(index + 1)",
-                            isApproved: costume.approvedSheetVariantID == variant.id || (costume.approvedSheetVariantID == nil && costume.sheetVariants.last?.id == variant.id),
+                            isApproved: costume.approvedSheetVariantID == variant.id,
                             onQuickLook: {
                                 openQuickLook(for: costume.sheetVariants.map(\.imagePath), startingAt: index)
                             },
@@ -648,7 +652,11 @@ struct CostumeSectionView: View {
         guard let character else { return }
         let references = referenceDrafts(from: store.fullBodyReferencePaths(for: character.id, costumeID: costume.id, limit: 8))
         let slots = costume.fullBodySlots.filter { $0.approvedVariant == nil }
-        let targetSlots = slots.isEmpty ? costume.fullBodySlots : slots
+        guard !slots.isEmpty else {
+            generationStatus = "All costume slots already have approved variants."
+            return
+        }
+        let targetSlots = slots
         preflightDrafts = targetSlots.map { slot in
             GeminiGenerationDraft(
                 title: "\(costume.name) • \(slot.title)",
@@ -922,6 +930,7 @@ struct CostumeSectionView: View {
                 generationStatus = "Finished \(drafts.count) request\(drafts.count == 1 ? "" : "s")."
             } catch {
                 generationError = error.localizedDescription
+                generationStatus = nil
             }
 
             generatingActions = []

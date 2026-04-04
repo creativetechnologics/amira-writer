@@ -276,7 +276,7 @@ struct CharacterReferenceWorkflowSheet: View {
             HStack(spacing: 12) {
                 workflowPill(title: "Inspiration Images", value: "\(character.inspirationImagePaths.count)", systemImage: "photo.stack")
                 workflowPill(title: "Master Sheets", value: "\(character.masterReferenceSheetVariants.count)", systemImage: "rectangle.3.group")
-                workflowPill(title: "Head Poses", value: "\(approvedHeadCount)/6", systemImage: "person.crop.square")
+                workflowPill(title: "Head Poses", value: "\(approvedHeadCount)/\(character.headTurnaroundSlots.count)", systemImage: "person.crop.square")
                 workflowPill(title: "Costume Poses", value: "\(approvedFullBodyCount)", systemImage: "figure.stand")
                 workflowPill(title: "Accessories", value: "\(approvedAccessoryCount)", systemImage: "briefcase")
             }
@@ -320,6 +320,7 @@ struct CharacterReferenceWorkflowSheet: View {
                     Label("Generate 1", systemImage: "sparkles")
                 }
                 .buttonStyle(.bordered)
+                .disabled(store.geminiAPIKey.isEmpty)
 
                 Button {
                     importExistingMasterSheet()
@@ -408,7 +409,7 @@ struct CharacterReferenceWorkflowSheet: View {
                                 store: store,
                                 variant: variant,
                                 title: "Master Sheet \(index + 1)",
-                                isApproved: character.approvedMasterReferenceSheetVariantID == variant.id || (character.approvedMasterReferenceSheetVariantID == nil && character.masterReferenceSheetVariants.last?.id == variant.id),
+                                isApproved: character.approvedMasterReferenceSheetVariantID == variant.id,
                                 onQuickLook: {
                                     openQuickLook(
                                         for: character.masterReferenceSheetVariants.map(\.imagePath),
@@ -484,7 +485,11 @@ struct CharacterReferenceWorkflowSheet: View {
 
                 if character.approvedHeadTurnaroundSheetVariant != nil {
                     Button {
-                        try? store.cropApprovedHeadTurnaroundSheet(for: characterID)
+                        do {
+                            try store.cropApprovedHeadTurnaroundSheet(for: characterID)
+                        } catch {
+                            generationError = "Crop failed: \(error.localizedDescription)"
+                        }
                     } label: {
                         Label("Re-crop from Sheet", systemImage: "crop")
                     }
@@ -520,7 +525,7 @@ struct CharacterReferenceWorkflowSheet: View {
                                 store: store,
                                 variant: variant,
                                 title: "Head Sheet \(index + 1)",
-                                isApproved: character.approvedHeadTurnaroundSheetVariantID == variant.id || (character.approvedHeadTurnaroundSheetVariantID == nil && character.headTurnaroundSheetVariants.last?.id == variant.id),
+                                isApproved: character.approvedHeadTurnaroundSheetVariantID == variant.id,
                                 onQuickLook: {
                                     openQuickLook(for: character.headTurnaroundSheetVariants.map(\.imagePath), startingAt: index)
                                 },
@@ -830,7 +835,7 @@ struct CharacterReferenceWorkflowSheet: View {
         }
     }
 
-    private func workflowEmptyState(icon: String, message: String) -> some View {
+    func workflowEmptyState(icon: String, message: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .foregroundStyle(.tertiary)
@@ -953,7 +958,11 @@ struct CharacterReferenceWorkflowSheet: View {
         guard let character else { return }
         let references = referenceDrafts(from: store.headReferencePaths(for: character.id, limit: 8))
         let slots = character.headTurnaroundSlots.filter { $0.approvedVariant == nil }
-        let targetSlots = slots.isEmpty ? character.headTurnaroundSlots : slots
+        guard !slots.isEmpty else {
+            generationStatus = "All head slots already have approved variants."
+            return
+        }
+        let targetSlots = slots
         preflightDrafts = targetSlots.map { slot in
             GeminiGenerationDraft(
                 title: "Head • \(slot.title)",
@@ -1052,7 +1061,11 @@ struct CharacterReferenceWorkflowSheet: View {
         guard let character else { return }
         let references = referenceDrafts(from: store.fullBodyReferencePaths(for: character.id, costumeID: costume.id, limit: 8))
         let slots = costume.fullBodySlots.filter { $0.approvedVariant == nil }
-        let targetSlots = slots.isEmpty ? costume.fullBodySlots : slots
+        guard !slots.isEmpty else {
+            generationStatus = "All costume slots already have approved variants."
+            return
+        }
+        let targetSlots = slots
         preflightDrafts = targetSlots.map { slot in
             GeminiGenerationDraft(
                 title: "\(costume.name) • \(slot.title)",
@@ -1358,6 +1371,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 generationStatus = "Finished \(drafts.count) request\(drafts.count == 1 ? "" : "s")."
             } catch {
                 generationError = error.localizedDescription
+                generationStatus = nil
             }
 
             generatingActions = []
@@ -1526,7 +1540,7 @@ struct CharacterReferenceWorkflowSheet: View {
         """
     }
 
-    private func showPromptPreview(title: String, variant: CharacterLookDevelopmentVariant) {
+    func showPromptPreview(title: String, variant: CharacterLookDevelopmentVariant) {
         promptPreview = VariantPromptPreview(
             title: title,
             prompt: variant.prompt,
@@ -1688,7 +1702,7 @@ struct CharacterReferenceWorkflowSheet: View {
         }
     }
 
-    private func openQuickLook(
+    func openQuickLook(
         for paths: [String],
         startingAt index: Int
     ) {
@@ -1706,7 +1720,7 @@ struct CharacterReferenceWorkflowSheet: View {
         )
     }
 
-    private func copyImage(at path: String) {
+    func copyImage(at path: String) {
         guard let url = store.resolvedCharacterAssetURL(for: path),
               ImageClipboardService.copyImage(at: url) else {
             store.statusMessage = "Could not copy image"
@@ -1726,7 +1740,7 @@ struct CharacterReferenceWorkflowSheet: View {
 
 @available(macOS 26.0, *)
 struct ReferenceVariantCard: View {
-    let store: AnimateStore
+    @Bindable var store: AnimateStore
     let variant: CharacterLookDevelopmentVariant
     let title: String
     let isApproved: Bool
@@ -1832,7 +1846,7 @@ struct ReferenceVariantCard: View {
 
 @available(macOS 26.0, *)
 struct MiniVariantChip: View {
-    let store: AnimateStore
+    @Bindable var store: AnimateStore
     let variant: CharacterLookDevelopmentVariant
     let isApproved: Bool
     let onQuickLook: () -> Void
