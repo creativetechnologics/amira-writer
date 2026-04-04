@@ -26,9 +26,9 @@ let package = Package(
                 .product(name: "ProjectKit", package: "ProjectKit")
             ],
             path: "Sources/AnimateUI",
+            exclude: ["_archived_3d"],
             resources: [
-                .copy("Resources/Models3D"),
-                .process("Engine/CelShading.metal")
+                .copy("Resources/Models3D")
             ]
         ),
         .executableTarget(
