@@ -1486,6 +1486,41 @@ final class MixStore {
         NSLog("[Mix] Registered score export: %@ in scene %@", clip.name, scene.relativePath)
     }
 
+    // MARK: - Audio flatten
+
+    enum FlattenError: Error, LocalizedError {
+        case noSession
+        case noProjectURL
+
+        var errorDescription: String? {
+            switch self {
+            case .noSession:     return "No Mix session found for this scene."
+            case .noProjectURL:  return "Project URL is not set — load a project first."
+            }
+        }
+    }
+
+    /// Flatten all Mix clips for a scene into a single stereo WAV in <project>/Animate/audio/.
+    /// - Parameters:
+    ///   - scenePath:   The scene's relativePath key in `document.sceneSessions`.
+    ///   - projectURL:  Project root URL (used to create the output directory and resolve relative clip paths).
+    /// - Returns: URL of the written WAV file.
+    func flattenSceneAudio(scenePath: String, projectURL: URL) async throws -> URL {
+        guard let session = document.sceneSessions[scenePath] else {
+            throw FlattenError.noSession
+        }
+        let outputDir = projectURL.appendingPathComponent("Animate/audio")
+        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        let slug = scenePath
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ".json", with: "")
+        let outputURL = outputDir.appendingPathComponent("\(slug)-flat.wav")
+
+        let service = MixAudioFlattenService()
+        try await service.flatten(session: session, projectURL: projectURL, outputURL: outputURL)
+        return outputURL
+    }
+
     /// Import all audio files from a folder (recursively) onto the specified track,
     /// auto-sequenced end-to-end. Sorts files by name for deterministic order.
     /// Use this for batch-importing Suno WAV renders from a scene folder.

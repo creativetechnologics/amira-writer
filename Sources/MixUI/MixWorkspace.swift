@@ -39,6 +39,16 @@ public final class MixWorkspaceController: ObservableObject {
         store.registerScoreExport(wavURL: wavURL, songRelativePath: songRelativePath)
     }
 
+    /// Flatten all Mix clips for a scene into a single stereo WAV in <project>/Animate/audio/.
+    /// - Parameter scenePath: The scene's relative path (e.g. "Songs/Act1/Scene1.json").
+    /// - Returns: URL of the written flat WAV file.
+    public func flattenSceneAudio(scenePath: String) async throws -> URL {
+        guard let projectURL = store.projectURL else {
+            throw MixStore.FlattenError.noProjectURL
+        }
+        return try await store.flattenSceneAudio(scenePath: scenePath, projectURL: projectURL)
+    }
+
     public func setSelectionRestorePending(_ isPending: Bool) {
         isSelectionRestorePending = isPending
     }
