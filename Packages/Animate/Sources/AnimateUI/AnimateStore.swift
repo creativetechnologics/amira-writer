@@ -355,7 +355,12 @@ final class AnimateStore {
 
     // MARK: - Vidu Settings
 
-    var viduAPIKey: String = ""
+    var viduAPIKey: String = "" {
+        didSet {
+            guard !isHydratingViduSettings else { return }
+            viduCredentialStore.saveAPIKey(viduAPIKey)
+        }
+    }
     var viduQueue: [ViduBatchQueueItem] = []
 
     // MARK: - Meshy Settings
@@ -468,6 +473,7 @@ final class AnimateStore {
     @ObservationIgnored private var displayLinkProxy: AnimateDisplayLinkProxy?
     @ObservationIgnored private var isHydratingGeminiSettings = false
     @ObservationIgnored private var isHydratingMiniMaxSettings = false
+    @ObservationIgnored private var isHydratingViduSettings = false
     @ObservationIgnored private var isHydratingMeshySettings = false
     @ObservationIgnored private var isHydratingDrawThingsPlacesConfig = false
 
@@ -484,6 +490,7 @@ final class AnimateStore {
     private let sceneShotPresetStore = SceneShotPresetStore()
     private let geminiCredentialStore = GeminiCredentialStore()
     private let miniMaxCredentialStore = MiniMaxCredentialStore()
+    private let viduCredentialStore = ViduCredentialStore()
     private let meshyCredentialStore = MeshyCredentialStore()
     private let sceneAutomationPlanner = SceneAutomationPlanner()
     let audioPlayer = AnimationAudioPlayer()
@@ -524,6 +531,7 @@ final class AnimateStore {
         observePersistedSaveState()
         hydrateGeminiSettings()
         hydrateMiniMaxSettings()
+        hydrateViduSettings()
         hydrateMeshySettings()
     }
 
@@ -568,6 +576,20 @@ final class AnimateStore {
 
     func clearMiniMaxAPIKey() {
         miniMaxAPIKey = ""
+    }
+
+    private func hydrateViduSettings() {
+        isHydratingViduSettings = true
+        viduAPIKey = viduCredentialStore.loadAPIKey()
+        isHydratingViduSettings = false
+    }
+
+    func setViduAPIKey(_ apiKey: String) {
+        viduAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func clearViduAPIKey() {
+        viduAPIKey = ""
     }
 
     private func hydrateMeshySettings() {

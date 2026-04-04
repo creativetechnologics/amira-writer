@@ -30,6 +30,7 @@ struct AnimationScene: Identifiable, Codable, Sendable {
     var directionTemplate: SceneDirectionTemplate? = nil
     var automationProfile: SceneAutomationProfile? = nil
     var shots: [AnimationSceneShot] = []
+    var animationStylePreset: AnimationStylePreset? = nil
 }
 
 /// Persistence format for scenes.json inside Animate/ directory.
@@ -135,6 +136,8 @@ struct AnimationSceneShot: Identifiable, Codable, Sendable, Hashable {
     var sourceLineNumber: Int?
     var sourceLyricExcerpt: String?
     var scriptSyncRunID: UUID?
+    var shotFrameGeneration: ShotFrameGeneration? = nil
+    var shotBackgroundPlate: ShotBackgroundPlate? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -153,6 +156,8 @@ struct AnimationSceneShot: Identifiable, Codable, Sendable, Hashable {
         case sourceLineNumber
         case sourceLyricExcerpt
         case scriptSyncRunID
+        case shotFrameGeneration
+        case shotBackgroundPlate
     }
 
     init(
@@ -209,6 +214,8 @@ struct AnimationSceneShot: Identifiable, Codable, Sendable, Hashable {
         sourceLineNumber = try container.decodeIfPresent(Int.self, forKey: .sourceLineNumber)
         sourceLyricExcerpt = try container.decodeIfPresent(String.self, forKey: .sourceLyricExcerpt)
         scriptSyncRunID = try container.decodeIfPresent(UUID.self, forKey: .scriptSyncRunID)
+        shotFrameGeneration = try container.decodeIfPresent(ShotFrameGeneration.self, forKey: .shotFrameGeneration)
+        shotBackgroundPlate = try container.decodeIfPresent(ShotBackgroundPlate.self, forKey: .shotBackgroundPlate)
     }
 
     var durationFrames: Int {

@@ -37,6 +37,7 @@ private struct Animate3DWorkspaceContent: View {
     @State private var threeDHarnessState = Animate3DTestHarnessState()
     @State private var selectedDebugGuide: Animate3DDebugGuideSelection?
     @State private var renderSnapshot = Animate3DFrameSnapshot.empty
+    @State private var selectedShotIndex: Int?
     @State private var cachedAssetBridgeStatuses: [Animate3DCharacterAssetBridgeStatus] = []
     @State private var cachedPackageCutoutPlans: [Animate3DCharacterPackageCutoutPlan] = []
 
@@ -209,24 +210,38 @@ private struct Animate3DWorkspaceContent: View {
                     Spacer(minLength: 10)
                 }
             } content: {
-                if usesProductionPreview {
-                    Animate3DProductionPreviewView(
-                        store: store,
-                        harnessState: threeDHarnessState,
-                        scenario: threeDScenario,
-                        status: productionCoordinator.status,
-                        renderer: productionCoordinator.renderer
-                    )
-                } else {
-                    Animate3DTestHarnessView(
-                        store: store,
-                        harnessState: threeDHarnessState,
-                        scenario: threeDScenario,
-                        snapshot: renderSnapshot,
-                        assetBridgeStatuses: cachedAssetBridgeStatuses,
-                        packageCutoutPlans: cachedPackageCutoutPlans,
-                        selectedDebugGuide: $selectedDebugGuide
-                    )
+                VStack(spacing: 0) {
+                    Group {
+                        if usesProductionPreview {
+                            Animate3DProductionPreviewView(
+                                store: store,
+                                harnessState: threeDHarnessState,
+                                scenario: threeDScenario,
+                                status: productionCoordinator.status,
+                                renderer: productionCoordinator.renderer
+                            )
+                        } else {
+                            Animate3DTestHarnessView(
+                                store: store,
+                                harnessState: threeDHarnessState,
+                                scenario: threeDScenario,
+                                snapshot: renderSnapshot,
+                                assetBridgeStatuses: cachedAssetBridgeStatuses,
+                                packageCutoutPlans: cachedPackageCutoutPlans,
+                                selectedDebugGuide: $selectedDebugGuide
+                            )
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if let scene = store.selectedScene, !scene.shots.isEmpty {
+                        Divider()
+                        ShotFilmstripView(store: store, shots: scene.shots, selectedShotIndex: $selectedShotIndex)
+                        if let idx = selectedShotIndex, idx < scene.shots.count {
+                            Divider()
+                            ShotProductionStripView(store: store, scene: scene, shot: scene.shots[idx], shotIndex: idx)
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

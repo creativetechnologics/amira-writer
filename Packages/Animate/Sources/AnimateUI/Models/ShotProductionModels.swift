@@ -1,7 +1,7 @@
 import Foundation
 
 @available(macOS 26.0, *)
-struct ShotBackgroundPlate: Identifiable, Codable, Sendable {
+struct ShotBackgroundPlate: Identifiable, Codable, Sendable, Hashable {
     var id: UUID = UUID()
     var shotID: UUID
     var sceneID: UUID
@@ -14,7 +14,7 @@ struct ShotBackgroundPlate: Identifiable, Codable, Sendable {
 }
 
 @available(macOS 26.0, *)
-struct ShotFrameGeneration: Identifiable, Codable, Sendable {
+struct ShotFrameGeneration: Identifiable, Codable, Sendable, Hashable {
     var id: UUID = UUID()
     var shotID: UUID
     var sceneID: UUID
@@ -35,7 +35,7 @@ struct ShotFrameGeneration: Identifiable, Codable, Sendable {
     var viduOutputPath: String?
 }
 
-enum ViduTaskStatus: String, Codable, Sendable {
+enum ViduTaskStatus: String, Codable, Sendable, Hashable {
     case idle, queued, generating, succeeded, failed
 }
 
