@@ -8,13 +8,19 @@ struct APISettingsSheet: View {
 
     @State private var geminiKeyDraft: String = ""
     @State private var meshyKeyDraft: String = ""
+    @State private var miniMaxKeyDraft: String = ""
+    @State private var viduKeyDraft: String = ""
     @State private var revealGeminiKey: Bool = false
     @State private var revealMeshyKey: Bool = false
+    @State private var revealMiniMaxKey: Bool = false
+    @State private var revealViduKey: Bool = false
     @State private var selectedTab: SettingsTab = .gemini
 
     enum SettingsTab: String, CaseIterable {
         case gemini = "Gemini"
         case meshy = "Meshy"
+        case miniMax = "MiniMax"
+        case vidu = "Vidu"
     }
 
     var body: some View {
@@ -34,6 +40,10 @@ struct APISettingsSheet: View {
                 geminiForm
             case .meshy:
                 meshyForm
+            case .miniMax:
+                miniMaxForm
+            case .vidu:
+                viduForm
             }
 
             Divider()
@@ -44,6 +54,8 @@ struct APISettingsSheet: View {
         .onAppear {
             geminiKeyDraft = store.geminiAPIKey
             meshyKeyDraft = store.meshyAPIKey
+            miniMaxKeyDraft = store.miniMaxAPIKey
+            viduKeyDraft = store.viduAPIKey
             Task { await store.fetchMeshyBalance() }
         }
     }
@@ -132,6 +144,48 @@ struct APISettingsSheet: View {
         }
     }
 
+    // MARK: - MiniMax
+
+    private var miniMaxForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            apiKeyField(
+                label: "MiniMax API Key",
+                draft: $miniMaxKeyDraft,
+                reveal: $revealMiniMaxKey,
+                placeholder: "Paste MiniMax API key...",
+                isSaved: !store.miniMaxAPIKey.isEmpty,
+                savedLabel: "MiniMax key saved.",
+                unsavedLabel: "No MiniMax key saved yet."
+            )
+
+            Text("Used for video generation from character reference images. Get a key at platform.minimaxi.com.")
+                .font(.caption)
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Vidu
+
+    private var viduForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            apiKeyField(
+                label: "Vidu API Key",
+                draft: $viduKeyDraft,
+                reveal: $revealViduKey,
+                placeholder: "Paste Vidu API key...",
+                isSaved: !store.viduAPIKey.isEmpty,
+                savedLabel: "Vidu key saved.",
+                unsavedLabel: "No Vidu key saved yet."
+            )
+
+            Text("Used for video generation. Get a key at platform.vidu.com.")
+                .font(.caption)
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: - Shared API Key Field
 
     private func apiKeyField(
@@ -189,6 +243,12 @@ struct APISettingsSheet: View {
                 case .meshy:
                     meshyKeyDraft = ""
                     store.clearMeshyAPIKey()
+                case .miniMax:
+                    miniMaxKeyDraft = ""
+                    store.clearMiniMaxAPIKey()
+                case .vidu:
+                    viduKeyDraft = ""
+                    store.clearViduAPIKey()
                 }
             }
             .buttonStyle(.bordered)
@@ -204,6 +264,8 @@ struct APISettingsSheet: View {
             Button("Save") {
                 store.setGeminiAPIKey(geminiKeyDraft)
                 store.setMeshyAPIKey(meshyKeyDraft)
+                store.setMiniMaxAPIKey(miniMaxKeyDraft)
+                store.setViduAPIKey(viduKeyDraft)
                 onDismiss()
             }
             .buttonStyle(.borderedProminent)
@@ -214,6 +276,8 @@ struct APISettingsSheet: View {
         switch selectedTab {
         case .gemini: store.geminiAPIKey.isEmpty && geminiKeyDraft.isEmpty
         case .meshy: store.meshyAPIKey.isEmpty && meshyKeyDraft.isEmpty
+        case .miniMax: store.miniMaxAPIKey.isEmpty && miniMaxKeyDraft.isEmpty
+        case .vidu: store.viduAPIKey.isEmpty && viduKeyDraft.isEmpty
         }
     }
 }
