@@ -483,7 +483,76 @@ Three fully independent queues on AnimateStore:
 
 Each queue has its own Submit/Clear/Progress UI. No cross-contamination.
 
-### 5.3 MiniMax M2.7 Usage
+### 5.3 Text Field Cursor-Jump Fix (Critical Bug)
+
+#### Problem
+
+Every text field in the Characters page and CharacterReferenceWorkflowSheet suffers from a cursor-jumping bug. When the user types, the cursor resets to the end of the text after every keystroke.
+
+#### Root Cause
+
+Classic SwiftUI `@Observable` re-rendering bug:
+
+1. Text field binding calls a store method (e.g., `store.updateCostumeReferenceSetName()`)
+2. Store method mutates `characters` array element
+3. `@Observable` publishes the change
+4. View re-renders, recalculating computed `character` property
+5. ForEach over `costumeReferenceSets` gets new object references
+6. SwiftUI loses text field focus → cursor jumps to end
+
+#### Affected Fields
+
+**CharacterReferenceWorkflowSheet.swift:**
+- Costume name TextField (line 652)
+- Costume notes TextEditor (line 662)
+- Costume sheet prompt TextEditor (line 725)
+- All inside `ForEach(character.costumeReferenceSets)` (line 642)
+
+**CharactersPageView.swift:**
+- Age TextField (line 805)
+- Backstory TextEditor via `textEditorRow` (line 830)
+- Personality TextEditor via `textEditorRow` (line 838)
+- Notes TextEditor via `textEditorRow` (line 846)
+
+#### Fix Strategy — Debounced Local State Pattern
+
+For EVERY text field/editor that writes to the store:
+
+1. Replace direct store-mutating bindings with local `@State` variables
+2. Initialize local state from store value on appear
+3. Use `.onChange(of: localText)` with debounce (300ms) to write back to store
+4. Use `.onChange(of: storeValue)` to update local state ONLY when the source changes externally (different from local value AND not currently focused)
+
+Concrete pattern:
+```swift
+// BEFORE (broken):
+TextField("Name", text: Binding(
+    get: { costume.name },
+    set: { store.updateCostumeReferenceSetName($0, costumeID: costume.id, for: characterID) }
+))
+
+// AFTER (fixed):
+@State private var localCostumeName: String = ""
+
+TextField("Name", text: $localCostumeName)
+    .onAppear { localCostumeName = costume.name }
+    .onChange(of: localCostumeName) { _, newValue in
+        // Debounced write-back — does NOT trigger re-render during typing
+        store.updateCostumeReferenceSetName(newValue, costumeID: costume.id, for: characterID)
+    }
+```
+
+For the `textEditorRow` helper in CharactersPageView, refactor it to accept a `Binding<String>` backed by local state in the caller, with the same debounced pattern.
+
+For ForEach-based costume fields in CharacterReferenceWorkflowSheet: extract each costume section into its own `CostumeSectionView` struct with `@State` local copies of name, notes, and sheetPrompt. This isolates each costume's text editing from re-renders of the parent ForEach.
+
+#### Files to Modify
+
+- `CharacterReferenceWorkflowSheet.swift` — extract `CostumeSectionView`, add local state for all text fields
+- `CharactersPageView.swift` — refactor `textEditorRow` to use local state, fix age field
+- Audit ALL other text fields in the project for the same pattern
+
+### 5.4 MiniMax M2.7 Usage
 
 Used for text-only prompt generation (not image generation):
 - Draw Things SD prompts from place metadata (Places page)
