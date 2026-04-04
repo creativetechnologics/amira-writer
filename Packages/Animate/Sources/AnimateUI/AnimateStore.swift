@@ -81,6 +81,11 @@ final class AnimateStore {
     nonisolated(unsafe) var mocapBodyTracker: VisionBodyTracker?
     var mocapTemporalFilter = TemporalFilterManager()
 
+    // MARK: - Mocap Live Override
+
+    var liveMocapBlendShapes: [BlendShapeName: Float]?
+    var mocapDirectMorphMode: Bool = true
+
     func startMocap() {
         guard !mocapIsRunning else { return }
         mocapErrorMessage = nil
@@ -180,6 +185,15 @@ final class AnimateStore {
         showImageEraser = false
     }
 
+    // MARK: - Motion Clips
+
+    var motionClips: [MotionClip] = []
+    var selectedMotionClipID: UUID?
+
+    var selectedMotionClip: MotionClip? {
+        motionClips.first { $0.id == selectedMotionClipID }
+    }
+
     // MARK: - Song Data Cache
 
     /// Cached song data for the currently selected scene.
@@ -200,6 +214,15 @@ final class AnimateStore {
     var fps: Int = 24
     var isPlaying: Bool = false
     var totalFrames: Int = 0
+
+    // MARK: - NLA Motion Timeline
+
+    /// The NLA timeline for the currently selected scene.
+    var nlaTimeline: NLATimeline?
+    /// The most recently evaluated blended pose from NLA evaluation.
+    var nlaBlendedPose: BlendedPose?
+    /// Cache of loaded motion clip data, keyed by MotionClip UUID.
+    @ObservationIgnored private var motionClipDataCache: [UUID: NLAEvaluator.MotionClipData] = [:]
 
     // MARK: - Gemini
 
@@ -505,6 +528,55 @@ final class AnimateStore {
             if totalFrames > 0, currentFrame >= totalFrames {
                 currentFrame = 0 // Loop
             }
+
+            // Evaluate NLA timeline at the new frame
+            evaluateNLAAtCurrentFrame()
+        }
+    }
+
+    // MARK: - NLA Evaluation
+
+    /// Evaluate the NLA timeline at the current frame and update the blended pose.
+    func evaluateNLAAtCurrentFrame() {
+        guard let timeline = nlaTimeline, !timeline.tracks.isEmpty else {
+            nlaBlendedPose = nil
+            return
+        }
+        nlaBlendedPose = NLAEvaluator.evaluate(
+            timeline: timeline,
+            frame: currentFrame,
+            resolveClip: { [motionClipDataCache] clipID in
+                motionClipDataCache[clipID]
+            }
+        )
+    }
+
+    /// Register a motion clip's data in the evaluator cache.
+    func registerMotionClipData(id: UUID, data: NLAEvaluator.MotionClipData) {
+        motionClipDataCache[id] = data
+    }
+
+    /// Remove a motion clip from the evaluator cache.
+    func unregisterMotionClipData(id: UUID) {
+        motionClipDataCache.removeValue(forKey: id)
+    }
+
+    /// Clear the entire motion clip cache.
+    func clearMotionClipDataCache() {
+        motionClipDataCache.removeAll()
+    }
+
+    /// Save the current NLA timeline to disk immediately.
+    func saveNLATimeline() {
+        guard let sceneID = selectedSceneID,
+              let animateDir = animateURL,
+              let timeline = nlaTimeline else { return }
+        do {
+            try NLATimelinePersistence.save(
+                timeline: timeline, animateDir: animateDir, sceneID: sceneID
+            )
+        } catch {
+            print("[AnimateStore] Failed to save NLA timeline: \(error)")
         }
     }
 
@@ -1942,6 +2014,8 @@ final class AnimateStore {
         guard let scene = selectedScene else {
             sceneTracks = [:]
             cameraTrack = nil
+            nlaTimeline = nil
+            nlaBlendedPose = nil
             return
         }
 
@@ -1949,6 +2023,21 @@ final class AnimateStore {
         cameraTrack = tracks.removeValue(forKey: Self.cameraTrackName)
             .map { normalizeTimelineTrack($0, scene: scene) }
         sceneTracks = tracks
+
+        // Load NLA timeline for the newly selected scene
+        if let sceneID = selectedSceneID, let animateDir = animateURL {
+            do {
+                nlaTimeline = try NLATimelinePersistence.load(
+                    animateDir: animateDir, sceneID: sceneID
+                )
+            } catch {
+                print("[AnimateStore] Failed to load NLA timeline for scene \(sceneID): \(error)")
+                nlaTimeline = nil
+            }
+        } else {
+            nlaTimeline = nil
+        }
+        nlaBlendedPose = nil
     }
 
     private func matchingShotPresets(named name: String) -> [SceneShotPreset] {
@@ -3909,6 +3998,9 @@ final class AnimateStore {
                 selectedBackgroundID = backgrounds.first?.id
             }
 
+            // 8. Load motion clips
+            motionClips = (try? MotionClipPersistence.loadAll(animateURL: animateDir)) ?? []
+
             let projectName = url.deletingPathExtension().lastPathComponent
             if didMigrateCharacterStorage {
                 save()
@@ -4023,6 +4115,20 @@ final class AnimateStore {
 
             let placesData = try encoder.encode(backgrounds.map(persistedBackgroundPlate))
             try placesData.write(to: animateDir.appendingPathComponent("places.json"))
+
+            // Write motion clips
+            if !motionClips.isEmpty {
+                try MotionClipPersistence.saveAll(motionClips, animateURL: animateDir)
+            }
+
+            // Save NLA timelines
+            for scene in scenes {
+                if let timeline = (scene.id == selectedSceneID ? nlaTimeline : nil) {
+                    try NLATimelinePersistence.save(
+                        timeline: timeline, animateDir: animateDir, sceneID: scene.id
+                    )
+                }
+            }
 
             recordExternalFileSnapshots()
             markCurrentStateAsSaved()
@@ -8439,5 +8545,32 @@ final class AnimateStore {
         batchProcessingQueue.removeAll()
         batchProcessingActive = false
         batchProcessingCurrentSceneID = nil
+    }
+}
+
+// MARK: - Motion Clip Management (Phase 3)
+extension AnimateStore {
+    func addMotionClip(_ clip: MotionClip) {
+        motionClips.append(clip)
+    }
+
+    func deleteMotionClip(id: UUID) {
+        motionClips.removeAll { $0.id == id }
+        if selectedMotionClipID == id {
+            selectedMotionClipID = nil
+        }
+        if let animateDir = animateURL {
+            try? MotionClipPersistence.delete(clipID: id, animateURL: animateDir)
+        }
+    }
+
+    func renameMotionClip(id: UUID, newName: String) {
+        guard let index = motionClips.firstIndex(where: { $0.id == id }) else { return }
+        motionClips[index].name = newName
+    }
+
+    func importBVHFile(url: URL) throws {
+        let clip = try BVHParser.parse(url: url)
+        addMotionClip(clip)
     }
 }
