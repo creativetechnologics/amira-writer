@@ -55,7 +55,7 @@ struct Animate3DAssetGapQueueService {
     }
 
     private func enqueue(_ drafts: [QueuedDraft]) -> Int {
-        let existingKeys = Set(store.batchQueue.map { item in
+        let existingKeys = Set(store.geminiQueue.map { item in
             queueKey(
                 owner: item.characterSlug ?? item.outputRootRelativePath ?? item.characterName,
                 title: item.draftTitle,
@@ -74,7 +74,7 @@ struct Animate3DAssetGapQueueService {
             )
             guard !existingKeys.contains(key) else { continue }
             if let characterID = draft.characterID {
-                store.addToBatchQueue(
+                store.addToGeminiQueue(
                     characterID: characterID,
                     characterName: draft.characterName,
                     draftTitle: draft.draft.title,
@@ -82,8 +82,9 @@ struct Animate3DAssetGapQueueService {
                     characterSlug: draft.characterSlug
                 )
             } else if let outputRootRelativePath = draft.outputRootRelativePath {
-                store.addToBatchQueue(
-                    pipelineName: draft.characterName,
+                store.addToGeminiQueue(
+                    characterID: nil,
+                    characterName: draft.characterName,
                     draftTitle: draft.draft.title,
                     draft: draft.draft,
                     outputRootRelativePath: outputRootRelativePath

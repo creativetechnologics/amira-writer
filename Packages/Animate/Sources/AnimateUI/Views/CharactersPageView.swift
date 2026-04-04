@@ -438,10 +438,14 @@ struct CharactersPageView: View {
     @ViewBuilder
     private var characterDetail: some View {
         if let character = store.selectedCharacter {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+            VStack(spacing: 0) {
+                CharacterQueueControlsBar(store: store)
+                Divider()
+                    .opacity(!store.geminiQueue.isEmpty || !store.meshyQueue.isEmpty ? 1 : 0)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
 
-                    characterHeader(character)
+                        characterHeader(character)
 
                     collapsiblePane(
                         title: "Character Notes",
@@ -621,6 +625,8 @@ struct CharactersPageView: View {
                 .padding()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "person.2")

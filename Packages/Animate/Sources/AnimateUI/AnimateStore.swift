@@ -344,6 +344,15 @@ final class AnimateStore {
         }
     }
 
+    // MARK: - MiniMax Settings
+
+    var miniMaxAPIKey: String = "" {
+        didSet {
+            guard !isHydratingMiniMaxSettings else { return }
+            miniMaxCredentialStore.saveAPIKey(miniMaxAPIKey)
+        }
+    }
+
     // MARK: - Meshy Settings
 
     var meshyAPIKey: String = "" {
@@ -382,9 +391,9 @@ final class AnimateStore {
     var generationTargetPartID: UUID?
     var generationTargetAngle: AngleView?
 
-    // MARK: - Cross-Character Batch Queue
+    // MARK: - Gemini Generation Queue
 
-    struct BatchQueueItem: Identifiable, Sendable {
+    struct GeminiBatchQueueItem: Identifiable, Sendable {
         var id: UUID = UUID()
         var characterID: UUID?
         var characterName: String
@@ -395,9 +404,7 @@ final class AnimateStore {
         var dateQueued: Date = Date()
 
         var groupingKey: String {
-            if let characterID {
-                return "character:\(characterID.uuidString)"
-            }
+            if let characterID { return "character:\(characterID.uuidString)" }
             if let outputRootRelativePath,
                !outputRootRelativePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return "pipeline:\(outputRootRelativePath)"
@@ -406,48 +413,43 @@ final class AnimateStore {
         }
     }
 
-    var batchQueue: [BatchQueueItem] = []
+    struct MeshyBatchQueueItem: Identifiable, Sendable {
+        var id: UUID = UUID()
+        var characterID: UUID
+        var characterName: String
+        var costumeName: String
+        var dateQueued: Date = Date()
+    }
 
-    func addToBatchQueue(
-        characterID: UUID,
+    var geminiQueue: [GeminiBatchQueueItem] = []
+    var meshyQueue: [MeshyBatchQueueItem] = []
+
+    func addToGeminiQueue(
+        characterID: UUID?,
         characterName: String,
         draftTitle: String,
         draft: GeminiGenerationDraft,
-        characterSlug: String? = nil
+        characterSlug: String? = nil,
+        outputRootRelativePath: String? = nil
     ) {
-        batchQueue.append(BatchQueueItem(
+        geminiQueue.append(GeminiBatchQueueItem(
             characterID: characterID,
             characterName: characterName,
             characterSlug: characterSlug,
             draftTitle: draftTitle,
-            draft: draft
-        ))
-    }
-
-    func addToBatchQueue(
-        pipelineName: String,
-        draftTitle: String,
-        draft: GeminiGenerationDraft,
-        outputRootRelativePath: String
-    ) {
-        let normalizedRoot = outputRootRelativePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        batchQueue.append(BatchQueueItem(
-            characterID: nil,
-            characterName: pipelineName,
-            characterSlug: nil,
-            draftTitle: draftTitle,
             draft: draft,
-            outputRootRelativePath: normalizedRoot.isEmpty ? nil : normalizedRoot
+            outputRootRelativePath: outputRootRelativePath
         ))
     }
 
-    func removeBatchQueueItem(_ id: UUID) {
-        batchQueue.removeAll { $0.id == id }
+    func addToMeshyQueue(characterID: UUID, characterName: String, costumeName: String) {
+        meshyQueue.append(MeshyBatchQueueItem(characterID: characterID, characterName: characterName, costumeName: costumeName))
     }
 
-    func clearBatchQueue() {
-        batchQueue.removeAll()
-    }
+    func removeGeminiQueueItem(_ id: UUID) { geminiQueue.removeAll { $0.id == id } }
+    func removeMeshyQueueItem(_ id: UUID) { meshyQueue.removeAll { $0.id == id } }
+    func clearGeminiQueue() { geminiQueue.removeAll() }
+    func clearMeshyQueue() { meshyQueue.removeAll() }
 
     // MARK: - Scene Tracks (from direction compiler or manual editing)
 
@@ -460,6 +462,7 @@ final class AnimateStore {
     @ObservationIgnored private var displayLinkRunning = false
     @ObservationIgnored private var displayLinkProxy: AnimateDisplayLinkProxy?
     @ObservationIgnored private var isHydratingGeminiSettings = false
+    @ObservationIgnored private var isHydratingMiniMaxSettings = false
     @ObservationIgnored private var isHydratingMeshySettings = false
     @ObservationIgnored private var isHydratingDrawThingsPlacesConfig = false
 
@@ -475,6 +478,7 @@ final class AnimateStore {
     private let characterPackageSelectionStore = CharacterPackageSelectionStore()
     private let sceneShotPresetStore = SceneShotPresetStore()
     private let geminiCredentialStore = GeminiCredentialStore()
+    private let miniMaxCredentialStore = MiniMaxCredentialStore()
     private let meshyCredentialStore = MeshyCredentialStore()
     private let sceneAutomationPlanner = SceneAutomationPlanner()
     let audioPlayer = AnimationAudioPlayer()
@@ -514,6 +518,7 @@ final class AnimateStore {
     init() {
         observePersistedSaveState()
         hydrateGeminiSettings()
+        hydrateMiniMaxSettings()
         hydrateMeshySettings()
     }
 
@@ -544,6 +549,20 @@ final class AnimateStore {
             selectedGeminiModel = .flash
         }
         isHydratingGeminiSettings = false
+    }
+
+    private func hydrateMiniMaxSettings() {
+        isHydratingMiniMaxSettings = true
+        miniMaxAPIKey = miniMaxCredentialStore.loadAPIKey()
+        isHydratingMiniMaxSettings = false
+    }
+
+    func setMiniMaxAPIKey(_ apiKey: String) {
+        miniMaxAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func clearMiniMaxAPIKey() {
+        miniMaxAPIKey = ""
     }
 
     private func hydrateMeshySettings() {

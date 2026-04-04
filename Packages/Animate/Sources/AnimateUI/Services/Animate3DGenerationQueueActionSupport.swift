@@ -199,7 +199,7 @@ enum Animate3DGenerationQueueActionSupport {
         for draft in drafts {
             guard let owner = ownersByDraftID[draft.id] ?? fallbackOwner else { continue }
             if let characterID = owner.characterID {
-                store.addToBatchQueue(
+                store.addToGeminiQueue(
                     characterID: characterID,
                     characterName: owner.displayName,
                     draftTitle: draft.title,
@@ -208,8 +208,9 @@ enum Animate3DGenerationQueueActionSupport {
                 )
                 queued += 1
             } else if let outputRootRelativePath = owner.outputRootRelativePath {
-                store.addToBatchQueue(
-                    pipelineName: owner.displayName,
+                store.addToGeminiQueue(
+                    characterID: nil,
+                    characterName: owner.displayName,
                     draftTitle: draft.title,
                     draft: draft,
                     outputRootRelativePath: outputRootRelativePath
@@ -222,7 +223,7 @@ enum Animate3DGenerationQueueActionSupport {
 
     static func isQueued(item: Animate3DGenerationQueueItem, store: AnimateStore) -> Bool {
         let owner = PreflightOwner(item: item, store: store)
-        return store.batchQueue.contains { queuedItem in
+        return store.geminiQueue.contains { queuedItem in
             guard queuedItem.draftTitle == item.title else { return false }
             if let characterID = owner.characterID {
                 return queuedItem.characterID == characterID

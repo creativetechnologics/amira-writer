@@ -576,14 +576,14 @@ struct InspectorView: View {
         inspectorScrollContainer {
             VStack(alignment: .leading, spacing: 12) {
                 Label(
-                    store.batchQueue.isEmpty
+                    store.geminiQueue.isEmpty
                         ? "Batch Queue"
-                        : "\(store.batchQueue.count) item\(store.batchQueue.count == 1 ? "" : "s") queued",
+                        : "\(store.geminiQueue.count) item\(store.geminiQueue.count == 1 ? "" : "s") queued",
                     systemImage: "tray.full"
                 )
                 .font(.headline)
 
-                if store.batchQueue.isEmpty {
+                if store.geminiQueue.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Add items to the batch queue from the character reference workflow or the 3D production preview.")
                             .font(.callout)
@@ -592,7 +592,7 @@ struct InspectorView: View {
                     }
                     .padding(.vertical, 8)
                 } else {
-                    ForEach(store.batchQueue) { item in
+                    ForEach(store.geminiQueue) { item in
                         HStack(alignment: .top, spacing: 8) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.characterName)
@@ -611,7 +611,7 @@ struct InspectorView: View {
                             }
                             Spacer()
                             Button {
-                                store.removeBatchQueueItem(item.id)
+                                store.removeGeminiQueueItem(item.id)
                             } label: {
                                 Image(systemName: "trash")
                                     .foregroundStyle(.red)
@@ -634,7 +634,7 @@ struct InspectorView: View {
                         .disabled(store.geminiAPIKey.isEmpty)
 
                         Button("Clear Queue") {
-                            store.clearBatchQueue()
+                            store.clearGeminiQueue()
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -645,10 +645,10 @@ struct InspectorView: View {
     }
 
     private func submitBatchQueue() {
-        guard !store.batchQueue.isEmpty,
+        guard !store.geminiQueue.isEmpty,
               let animateURL = store.animateURL else { return }
 
-        let queueSnapshot = store.batchQueue
+        let queueSnapshot = store.geminiQueue
 
         let grouped = Dictionary(grouping: queueSnapshot, by: \.groupingKey)
 
@@ -752,27 +752,19 @@ struct InspectorView: View {
                     }
                     // Remove only this group's items from the queue after successful submission
                     for item in items {
-                        store.removeBatchQueueItem(item.id)
+                        store.removeGeminiQueueItem(item.id)
                     }
                 } catch {
                     // Re-queue items on failure so the user doesn't lose them
                     for item in items {
-                        if let characterID = item.characterID {
-                            store.addToBatchQueue(
-                                characterID: characterID,
-                                characterName: item.characterName,
-                                draftTitle: item.draftTitle,
-                                draft: item.draft,
-                                characterSlug: item.characterSlug
-                            )
-                        } else if let outputRootRelativePath = item.outputRootRelativePath {
-                            store.addToBatchQueue(
-                                pipelineName: item.characterName,
-                                draftTitle: item.draftTitle,
-                                draft: item.draft,
-                                outputRootRelativePath: outputRootRelativePath
-                            )
-                        }
+                        store.addToGeminiQueue(
+                            characterID: item.characterID,
+                            characterName: item.characterName,
+                            draftTitle: item.draftTitle,
+                            draft: item.draft,
+                            characterSlug: item.characterSlug,
+                            outputRootRelativePath: item.outputRootRelativePath
+                        )
                     }
                 }
             }

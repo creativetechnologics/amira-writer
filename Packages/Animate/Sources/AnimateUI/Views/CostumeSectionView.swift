@@ -80,7 +80,7 @@ struct CostumeSectionView: View {
                         case .batch:
                             if let character {
                                 for draft in drafts {
-                                    store.addToBatchQueue(
+                                    store.addToGeminiQueue(
                                         characterID: character.id,
                                         characterName: character.name,
                                         draftTitle: draft.title,
