@@ -756,6 +756,37 @@ struct Animate3DFrameSnapshot: Hashable, Sendable {
     var camera: Animate3DCameraSnapshot
     var characters: [Animate3DCharacterSnapshot]
     var objects: [Animate3DObjectSnapshot]
+    /// NLA-blended joint rotations, if NLA evaluation produced a pose this frame.
+    var nlaJointRotations: [String: simd_quatf]?
+    /// NLA-blended blend shape weights.
+    var nlaBlendShapeWeights: [String: Float]?
+    /// NLA root position offset.
+    var nlaRootPosition: SIMD3<Float>?
+
+    /// Convenience initializer for existing call sites that do not provide NLA data.
+    init(
+        rawFrame: Int,
+        displayFrame: Int,
+        totalFrames: Int,
+        activeShotTitle: String?,
+        camera: Animate3DCameraSnapshot,
+        characters: [Animate3DCharacterSnapshot],
+        objects: [Animate3DObjectSnapshot],
+        nlaJointRotations: [String: simd_quatf]? = nil,
+        nlaBlendShapeWeights: [String: Float]? = nil,
+        nlaRootPosition: SIMD3<Float>? = nil
+    ) {
+        self.rawFrame = rawFrame
+        self.displayFrame = displayFrame
+        self.totalFrames = totalFrames
+        self.activeShotTitle = activeShotTitle
+        self.camera = camera
+        self.characters = characters
+        self.objects = objects
+        self.nlaJointRotations = nlaJointRotations
+        self.nlaBlendShapeWeights = nlaBlendShapeWeights
+        self.nlaRootPosition = nlaRootPosition
+    }
 
     static let empty = Animate3DFrameSnapshot(
         rawFrame: 0,

@@ -1284,7 +1284,12 @@ struct AnimatePageView: View {
                 case .handoff:
                     handoffDeck(for: scene)
                 case .motion:
-                    MotionCaptureDeck(store: store)
+                    VSplitView {
+                        MotionCaptureDeck(store: store)
+                            .frame(minHeight: 200)
+                        NLATimelineView(store: store)
+                            .frame(minHeight: 150)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

@@ -64,21 +64,31 @@ struct Animate3DSceneAdapter {
     ) -> Animate3DFrameSnapshot {
         let displayFrame = playbackStyle.quantizedFrame(rawFrame, baseFPS: scenario.baseFPS)
 
+        var snapshot: Animate3DFrameSnapshot
         if let compiled = scenario.compiledScene {
-            return compiledFrameSnapshot(
+            snapshot = compiledFrameSnapshot(
                 scenario: scenario,
                 compiled: compiled,
                 rawFrame: rawFrame,
                 displayFrame: displayFrame
             )
+        } else {
+            snapshot = selectedSceneFrameSnapshot(
+                scenario: scenario,
+                store: store,
+                rawFrame: rawFrame,
+                displayFrame: displayFrame
+            )
         }
 
-        return selectedSceneFrameSnapshot(
-            scenario: scenario,
-            store: store,
-            rawFrame: rawFrame,
-            displayFrame: displayFrame
-        )
+        // Overlay NLA blended pose if available
+        if let nlaPose = store.nlaBlendedPose {
+            snapshot.nlaJointRotations = nlaPose.jointRotations.isEmpty ? nil : nlaPose.jointRotations
+            snapshot.nlaBlendShapeWeights = nlaPose.blendShapeWeights.isEmpty ? nil : nlaPose.blendShapeWeights
+            snapshot.nlaRootPosition = nlaPose.rootPosition == .zero ? nil : nlaPose.rootPosition
+        }
+
+        return snapshot
     }
 
     func motionTrails(
