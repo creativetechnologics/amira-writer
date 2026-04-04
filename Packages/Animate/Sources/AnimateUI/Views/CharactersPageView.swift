@@ -24,9 +24,7 @@ struct CharactersPageView: View {
     @AppStorage("charactersPage.showReferenceWorkflowPane") private var showReferenceWorkflowPane: Bool = true
     @AppStorage("charactersPage.showAnimatedImagesPane") private var showAnimatedImagesPane: Bool = false
     @AppStorage("charactersPage.showPackagesPane") private var showPackagesPane: Bool = false
-    @AppStorage("charactersPage.showMeshy3DGenerationPane") private var showMeshy3DGenerationPane: Bool = false
     @AppStorage("charactersPage.show3DSidecarsPane") private var show3DSidecarsPane: Bool = true
-    @AppStorage("charactersPage.show3DModelsPane") private var show3DModelsPane: Bool = false
     @AppStorage("charactersPage.showMotionGenerationPane") private var showMotionGenerationPane: Bool = false
     @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
     @State private var inspirationPendingPlan: PendingInspirationGenerationPlan?
@@ -41,7 +39,6 @@ struct CharactersPageView: View {
     @State private var isSubmittingInspirationBatch: Bool = false
     @State private var submittingInspirationBatchCharacterID: UUID?
     @State private var characterSearchText: String = ""
-    @State private var viewing3DModelID: UUID?
     var showSidebar: Bool = true
 
     private static let batchTimestampFormatter: DateFormatter = {
@@ -442,7 +439,7 @@ struct CharactersPageView: View {
             VStack(spacing: 0) {
                 CharacterQueueControlsBar(store: store)
                 Divider()
-                    .opacity(!store.geminiQueue.isEmpty || !store.meshyQueue.isEmpty ? 1 : 0)
+                    .opacity(!store.geminiQueue.isEmpty ? 1 : 0)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
 
@@ -532,16 +529,6 @@ struct CharactersPageView: View {
                     }
 
                     collapsiblePane(
-                        title: "3D Model Generation",
-                        icon: "cube.transparent",
-                        isExpanded: $showMeshy3DGenerationPane
-                    ) {
-                        if showMeshy3DGenerationPane {
-                            Meshy3DGenerationPane(store: store, character: character)
-                        }
-                    }
-
-                    collapsiblePane(
                         title: "Animated Images",
                         icon: "figure.walk.motion",
                         counterText: "\(character.animatedImagePaths.count) images",
@@ -619,14 +606,6 @@ struct CharactersPageView: View {
                             .padding(.vertical, 8)
                     }
 
-                    collapsiblePane(
-                        title: "3D Models",
-                        icon: "cube",
-                        counterText: "\(character.models3D.count) model\(character.models3D.count == 1 ? "" : "s")",
-                        isExpanded: $show3DModelsPane
-                    ) {
-                        models3DSection(character)
-                    }
                 }
                 .padding()
             }
@@ -1236,151 +1215,6 @@ struct CharactersPageView: View {
                 }
             }
         }
-    }
-
-    // MARK: - 3D Models Section
-
-    @ViewBuilder
-    private func models3DSection(_ character: AnimationCharacter) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("3D models organized by costume. Import .glb, .usdz, or .obj files for each costume to use in 3D preview and animation workflows.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("3D asset folders")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(OperaChromeTheme.textPrimary)
-                Text("Body models live in Animate/characters/<slug>/models/. The 3D Sidecars pane manages face-rigs/, mouth-profiles/, expressions/, motions/, materials/, and the project-wide 3D registry scaffold.")
-                    .font(.caption2)
-                    .foregroundStyle(OperaChromeTheme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(OperaChromeTheme.raisedBackground.opacity(0.4))
-            )
-
-            if character.costumeReferenceSets.isEmpty {
-                emptyStateMessage(
-                    icon: "cube",
-                    message: "No costumes defined. Add costumes in the Character Reference Workflow to organize 3D models by costume."
-                )
-            } else {
-                VStack(alignment: .leading, spacing: 16) {
-                    ForEach(character.costumeReferenceSets) { costume in
-                        models3DCostumeRow(character: character, costume: costume)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func models3DCostumeRow(character: AnimationCharacter, costume: CharacterCostumeReferenceSet) -> some View {
-        let model = character.models3D.first(where: { $0.costumeName == costume.name })
-
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label(costume.name.isEmpty ? "Unnamed Costume" : costume.name, systemImage: "tshirt")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundStyle(OperaChromeTheme.textPrimary)
-
-                Spacer()
-
-                Button {
-                    store.import3DModel(for: character.id, costumeName: costume.name)
-                } label: {
-                    Label(model == nil ? "Import Model" : "Replace Model", systemImage: "square.and.arrow.down")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(store.animateURL == nil)
-            }
-
-            if let model {
-                HStack(spacing: 12) {
-                    Image(systemName: "cube.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(OperaChromeTheme.textSecondary)
-                        .frame(width: 32, height: 32)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(model.modelFileName)
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .foregroundStyle(OperaChromeTheme.textPrimary)
-                            .lineLimit(1)
-
-                        Text("\(model.modelFormat.uppercased()) — Added \(model.dateAdded.formatted(date: .abbreviated, time: .omitted))")
-                            .font(.caption2)
-                            .foregroundStyle(OperaChromeTheme.textTertiary)
-                    }
-
-                    Spacer()
-
-                    Button {
-                        viewing3DModelID = viewing3DModelID == model.id ? nil : model.id
-                    } label: {
-                        Label(viewing3DModelID == model.id ? "Close" : "View",
-                              systemImage: viewing3DModelID == model.id ? "xmark" : "eye")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Button(role: .destructive) {
-                        store.remove3DModel(model.id, for: character.id)
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Remove 3D Model")
-                }
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(OperaChromeTheme.raisedBackground.opacity(0.4))
-                )
-
-                // Character3DModelViewer archived — SceneKit 3D preview removed
-            } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "cube.transparent")
-                        .foregroundStyle(.tertiary)
-                    Text("No 3D model imported")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.04), lineWidth: 1)
-                )
-            }
-        }
-    }
-
-    private func view3DModel(character: AnimationCharacter, model: Character3DModel) {
-        guard let animateURL = store.animateURL else { return }
-        let slug = character.assetFolderSlug
-        let modelURL = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(slug)
-            .appendingPathComponent("models")
-            .appendingPathComponent(model.modelFileName)
-
-        guard FileManager.default.fileExists(atPath: modelURL.path) else {
-            store.statusMessage = "3D model file not found: \(model.modelFileName)"
-            return
-        }
-        NSWorkspace.shared.open(modelURL)
     }
 
     private func textInfoSummary(for character: AnimationCharacter) -> String {

@@ -363,22 +363,6 @@ final class AnimateStore {
     }
     var viduQueue: [ViduBatchQueueItem] = []
 
-    // MARK: - Meshy Settings
-
-    var meshyAPIKey: String = "" {
-        didSet {
-            guard !isHydratingMeshySettings else { return }
-            meshyCredentialStore.saveAPIKey(meshyAPIKey)
-        }
-    }
-
-    var meshyBalance: Int?
-    var meshyGenerationTaskID: String?
-    var meshyGenerationStatus: MeshyTaskStatus?
-    var meshyGenerationProgress: Int = 0
-    var meshyGenerationError: String?
-    var isGeneratingMeshy3D: Bool = false
-    var meshyGeneratingCharacterID: UUID?
     var isGeneratingLLMPlan: Bool = false
 
     // MARK: - Animate Scene Macro (Item 16)
@@ -423,16 +407,7 @@ final class AnimateStore {
         }
     }
 
-    struct MeshyBatchQueueItem: Identifiable, Sendable {
-        var id: UUID = UUID()
-        var characterID: UUID
-        var characterName: String
-        var costumeName: String
-        var dateQueued: Date = Date()
-    }
-
     var geminiQueue: [GeminiBatchQueueItem] = []
-    var meshyQueue: [MeshyBatchQueueItem] = []
 
     func addToGeminiQueue(
         characterID: UUID?,
@@ -452,14 +427,8 @@ final class AnimateStore {
         ))
     }
 
-    func addToMeshyQueue(characterID: UUID, characterName: String, costumeName: String) {
-        meshyQueue.append(MeshyBatchQueueItem(characterID: characterID, characterName: characterName, costumeName: costumeName))
-    }
-
     func removeGeminiQueueItem(_ id: UUID) { geminiQueue.removeAll { $0.id == id } }
-    func removeMeshyQueueItem(_ id: UUID) { meshyQueue.removeAll { $0.id == id } }
     func clearGeminiQueue() { geminiQueue.removeAll() }
-    func clearMeshyQueue() { meshyQueue.removeAll() }
 
     // MARK: - Scene Tracks (from direction compiler or manual editing)
 
@@ -474,7 +443,6 @@ final class AnimateStore {
     @ObservationIgnored private var isHydratingGeminiSettings = false
     @ObservationIgnored private var isHydratingMiniMaxSettings = false
     @ObservationIgnored private var isHydratingViduSettings = false
-    @ObservationIgnored private var isHydratingMeshySettings = false
     @ObservationIgnored private var isHydratingDrawThingsPlacesConfig = false
 
     // MARK: - Track Resolution Cache
@@ -491,7 +459,6 @@ final class AnimateStore {
     private let geminiCredentialStore = GeminiCredentialStore()
     private let miniMaxCredentialStore = MiniMaxCredentialStore()
     private let viduCredentialStore = ViduCredentialStore()
-    private let meshyCredentialStore = MeshyCredentialStore()
     private let sceneAutomationPlanner = SceneAutomationPlanner()
     let audioPlayer = AnimationAudioPlayer()
     private var backgroundIndexRefreshTask: Task<Void, Never>?
@@ -532,7 +499,6 @@ final class AnimateStore {
         hydrateGeminiSettings()
         hydrateMiniMaxSettings()
         hydrateViduSettings()
-        hydrateMeshySettings()
     }
 
     func setGeminiAPIKey(_ apiKey: String) {
@@ -541,15 +507,6 @@ final class AnimateStore {
 
     func clearGeminiAPIKey() {
         geminiAPIKey = ""
-    }
-
-    func setMeshyAPIKey(_ apiKey: String) {
-        meshyAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    func clearMeshyAPIKey() {
-        meshyAPIKey = ""
-        meshyBalance = nil
     }
 
     private func hydrateGeminiSettings() {
@@ -590,12 +547,6 @@ final class AnimateStore {
 
     func clearViduAPIKey() {
         viduAPIKey = ""
-    }
-
-    private func hydrateMeshySettings() {
-        isHydratingMeshySettings = true
-        meshyAPIKey = meshyCredentialStore.loadAPIKey()
-        isHydratingMeshySettings = false
     }
 
     private func hydrateDrawThingsPlacesConfig(_ config: DrawThingsPlaceConfig) {
@@ -5618,92 +5569,6 @@ final class AnimateStore {
         }
     }
 
-    // MARK: - Character 3D Models
-
-    func import3DModel(for characterID: UUID, costumeName: String) {
-        guard let index = characters.firstIndex(where: { $0.id == characterID }),
-              let animateURL else { return }
-
-        let panel = NSOpenPanel()
-        panel.title = "Import 3D Model for \(costumeName)"
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [
-            .init(filenameExtension: "glb")!,
-            .init(filenameExtension: "usdz")!,
-            .init(filenameExtension: "obj")!,
-        ]
-
-        panel.begin { [weak self] response in
-            guard response == .OK, let sourceURL = panel.url else { return }
-            Task { @MainActor in
-                guard let self else { return }
-                guard let index = self.characters.firstIndex(where: { $0.id == characterID }) else { return }
-                let slug = self.characters[index].assetFolderSlug
-                let modelsDir = animateURL
-                    .appendingPathComponent("characters")
-                    .appendingPathComponent(slug)
-                    .appendingPathComponent("models")
-
-                do {
-                    try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
-                    let destURL = modelsDir.appendingPathComponent(sourceURL.lastPathComponent)
-                    if FileManager.default.fileExists(atPath: destURL.path) {
-                        try FileManager.default.removeItem(at: destURL)
-                    }
-                    try FileManager.default.copyItem(at: sourceURL, to: destURL)
-
-                    let ext = sourceURL.pathExtension.lowercased()
-                    let model = Character3DModel(
-                        costumeName: costumeName,
-                        modelFileName: sourceURL.lastPathComponent,
-                        modelFormat: ext
-                    )
-
-                    // Remove any existing model for this costume, then add the new one
-                    self.characters[index].models3D.removeAll(where: { $0.costumeName == costumeName })
-                    self.characters[index].models3D.append(model)
-                    self.save()
-                    self.statusMessage = "Imported 3D model: \(sourceURL.lastPathComponent)"
-                } catch {
-                    self.statusMessage = "Failed to import 3D model: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    func remove3DModel(_ modelID: UUID, for characterID: UUID) {
-        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }),
-              let modelIndex = characters[charIndex].models3D.firstIndex(where: { $0.id == modelID })
-        else { return }
-
-        let model = characters[charIndex].models3D[modelIndex]
-
-        // Remove the file from disk if possible
-        if let animateURL {
-            let slug = characters[charIndex].assetFolderSlug
-            let modelFile = animateURL
-                .appendingPathComponent("characters")
-                .appendingPathComponent(slug)
-                .appendingPathComponent("models")
-                .appendingPathComponent(model.modelFileName)
-            try? FileManager.default.removeItem(at: modelFile)
-        }
-
-        characters[charIndex].models3D.remove(at: modelIndex)
-        save()
-        statusMessage = "Removed 3D model: \(model.modelFileName)"
-    }
-
-    func update3DModelNotes(_ modelID: UUID, notes: String, for characterID: UUID) {
-        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }),
-              let modelIndex = characters[charIndex].models3D.firstIndex(where: { $0.id == modelID })
-        else { return }
-        characters[charIndex].models3D[modelIndex].notes = notes
-        save()
-    }
-
     // MARK: - Character Reference Workflow
 
     func seedCharacterReferenceWorkflowIfNeeded(for characterID: UUID) {
@@ -8625,224 +8490,6 @@ final class AnimateStore {
         return resolved
     }
 
-    // MARK: - Meshy 3D Generation
-
-    func generateMeshy3DModel(
-        for characterID: UUID,
-        imageURLs: [String],
-        textureImageURL: String?,
-        config: MeshyMultiImageRequest
-    ) async {
-        guard !meshyAPIKey.isEmpty else {
-            meshyGenerationError = "No Meshy API key configured. Open Settings to add one."
-            return
-        }
-        guard !isGeneratingMeshy3D else { return }
-        guard !imageURLs.isEmpty else { meshyGenerationError = "No reference images available."; isGeneratingMeshy3D = false; return }
-
-        isGeneratingMeshy3D = true
-        meshyGeneratingCharacterID = characterID
-        meshyGenerationError = nil
-        meshyGenerationProgress = 0
-        meshyGenerationStatus = .pending
-
-        do {
-            let service = MeshyService(apiKey: meshyAPIKey)
-            var request = config
-            request.imageURLs = imageURLs
-            if let textureURL = textureImageURL {
-                request.textureImageURL = textureURL
-            }
-
-            let endpoint: String
-            let taskID: String
-            if imageURLs.count > 1 {
-                taskID = try await service.createMultiImageTo3D(request)
-                endpoint = "multi-image-to-3d"
-            } else {
-                let singleRequest = MeshyImageRequest(
-                    imageURL: imageURLs[0],
-                    aiModel: request.aiModel,
-                    topology: request.topology,
-                    targetPolycount: request.targetPolycount,
-                    shouldRemesh: request.shouldRemesh,
-                    shouldTexture: request.shouldTexture,
-                    enablePBR: request.enablePBR,
-                    removeLighting: request.removeLighting,
-                    textureImageURL: request.textureImageURL,
-                    targetFormats: request.targetFormats
-                )
-                taskID = try await service.createImageTo3D(singleRequest)
-                endpoint = "image-to-3d"
-            }
-
-            meshyGenerationTaskID = taskID
-
-            let result = try await service.pollUntilComplete(
-                endpoint: endpoint,
-                taskID: taskID
-            ) { [weak self] progress in
-                Task { @MainActor in
-                    self?.meshyGenerationStatus = progress.status
-                    self?.meshyGenerationProgress = progress.progress
-                }
-            }
-
-            guard let modelURLs = result.modelURLs else {
-                throw MeshyService.ServiceError.invalidResponse
-            }
-
-            try await downloadMeshyAssets(
-                service: service,
-                characterID: characterID,
-                taskID: taskID,
-                modelURLs: modelURLs,
-                thumbnailURL: result.thumbnailURL
-            )
-
-            meshyGenerationStatus = .succeeded
-            meshyGeneratingCharacterID = nil
-
-        } catch {
-            meshyGenerationError = error.localizedDescription
-            meshyGenerationStatus = .failed
-            meshyGeneratingCharacterID = nil
-        }
-
-        isGeneratingMeshy3D = false
-    }
-
-    private func downloadMeshyAssets(
-        service: MeshyService,
-        characterID: UUID,
-        taskID: String,
-        modelURLs: [String: String],
-        thumbnailURL: String?
-    ) async throws {
-        guard let character = characters.first(where: { $0.id == characterID }),
-              let animateURL = animateURL else { return }
-
-        let slug = character.assetFolderSlug
-        let assetDir = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(slug)
-            .appendingPathComponent("3d-models")
-            .appendingPathComponent(taskID)
-
-        try FileManager.default.createDirectory(at: assetDir, withIntermediateDirectories: true)
-
-        for (format, urlString) in modelURLs {
-            guard let remoteURL = URL(string: urlString) else { continue }
-            if format.hasPrefix("pre_remeshed") || format == "mtl" { continue }
-            let destination = assetDir.appendingPathComponent("model.\(format)")
-            try await service.downloadAsset(from: remoteURL, to: destination)
-
-            let model3D = Character3DModel(
-                costumeName: "meshy-\(taskID.prefix(8))",
-                modelFileName: "model.\(format)",
-                modelFormat: format,
-                notes: "Generated via Meshy.ai (\(taskID))"
-            )
-            addModel3D(model3D, to: characterID)
-        }
-
-        if let thumbURLString = thumbnailURL, let thumbURL = URL(string: thumbURLString) {
-            let thumbDest = assetDir.appendingPathComponent("thumbnail.png")
-            try? await service.downloadAsset(from: thumbURL, to: thumbDest)
-        }
-
-        let metadataURL = assetDir.appendingPathComponent("metadata.json")
-        let metadata: [String: Any] = [
-            "taskID": taskID,
-            "modelURLs": modelURLs,
-            "downloadedAt": ISO8601DateFormatter().string(from: Date())
-        ]
-        do {
-            let metadataData = try JSONSerialization.data(withJSONObject: metadata, options: .prettyPrinted)
-            try metadataData.write(to: metadataURL)
-        } catch {
-            statusMessage = "Failed to save model metadata: \(error.localizedDescription)"
-        }
-    }
-
-    private func addModel3D(_ model: Character3DModel, to characterID: UUID) {
-        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
-        characters[index].models3D.append(model)
-        save()
-    }
-
-    // MARK: - Meshy Bridge (auto-trigger from batch completion)
-
-    /// Called when a Gemini batch item completes that may need 3D conversion.
-    /// Checks the provider route and, if it's a Meshy route, triggers the bridge.
-    func handleBatchItemCompletion(
-        kind: String,
-        characterID: UUID?,
-        characterSlug: String?,
-        costumeName: String?,
-        generatedImagePaths: [String]
-    ) async {
-        guard !isGeneratingMeshy3D else { statusMessage = "Meshy generation in progress — queued."; return }
-        // Animate3DGenerationProviderRoute archived — Meshy is the only route used here
-        guard !meshyAPIKey.isEmpty,
-              let characterID,
-              let characterSlug,
-              let animateURL,
-              !generatedImagePaths.isEmpty
-        else { return }
-
-        let job = MeshyBridgeService.BridgeJob(
-            characterID: characterID,
-            characterSlug: characterSlug,
-            costumeName: costumeName ?? "default",
-            sourceImagePaths: generatedImagePaths,
-            meshyConfig: MeshyMultiImageRequest(
-                imageURLs: [],
-                targetPolycount: 100_000,
-                targetFormats: ["glb", "usdz"]
-            )
-        )
-
-        isGeneratingMeshy3D = true
-        meshyGeneratingCharacterID = characterID
-        meshyGenerationError = nil
-        meshyGenerationProgress = 0
-        meshyGenerationStatus = .pending
-
-        do {
-            let result = try await MeshyBridgeService.execute(
-                job: job,
-                apiKey: meshyAPIKey,
-                animateURL: animateURL
-            ) { [weak self] status, progress in
-                Task { @MainActor in
-                    self?.meshyGenerationStatus = status
-                    self?.meshyGenerationProgress = progress
-                }
-            }
-
-            // Register downloaded models on the character
-            for model in result.models {
-                addModel3D(model, to: characterID)
-            }
-
-            meshyGenerationStatus = .succeeded
-        } catch {
-            meshyGenerationError = error.localizedDescription
-            meshyGenerationStatus = .failed
-        }
-
-        isGeneratingMeshy3D = false
-    }
-
-    func fetchMeshyBalance() async {
-        guard !meshyAPIKey.isEmpty else {
-            meshyBalance = nil
-            return
-        }
-        let service = MeshyService(apiKey: meshyAPIKey)
-        meshyBalance = try? await service.checkBalance()
-    }
 
     // MARK: - Animate Scene Macro (Item 16)
 

@@ -7,18 +7,15 @@ struct APISettingsSheet: View {
     let onDismiss: () -> Void
 
     @State private var geminiKeyDraft: String = ""
-    @State private var meshyKeyDraft: String = ""
     @State private var miniMaxKeyDraft: String = ""
     @State private var viduKeyDraft: String = ""
     @State private var revealGeminiKey: Bool = false
-    @State private var revealMeshyKey: Bool = false
     @State private var revealMiniMaxKey: Bool = false
     @State private var revealViduKey: Bool = false
     @State private var selectedTab: SettingsTab = .gemini
 
     enum SettingsTab: String, CaseIterable {
         case gemini = "Gemini"
-        case meshy = "Meshy"
         case miniMax = "MiniMax"
         case vidu = "Vidu"
     }
@@ -38,8 +35,6 @@ struct APISettingsSheet: View {
             switch selectedTab {
             case .gemini:
                 geminiForm
-            case .meshy:
-                meshyForm
             case .miniMax:
                 miniMaxForm
             case .vidu:
@@ -53,10 +48,8 @@ struct APISettingsSheet: View {
         .frame(width: 540)
         .onAppear {
             geminiKeyDraft = store.geminiAPIKey
-            meshyKeyDraft = store.meshyAPIKey
             miniMaxKeyDraft = store.miniMaxAPIKey
             viduKeyDraft = store.viduAPIKey
-            Task { await store.fetchMeshyBalance() }
         }
     }
 
@@ -102,45 +95,6 @@ struct APISettingsSheet: View {
                     .foregroundStyle(OperaChromeTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        }
-    }
-
-    // MARK: - Meshy
-
-    private var meshyForm: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            apiKeyField(
-                label: "Meshy API Key",
-                draft: $meshyKeyDraft,
-                reveal: $revealMeshyKey,
-                placeholder: "Paste Meshy API key...",
-                isSaved: !store.meshyAPIKey.isEmpty,
-                savedLabel: "Meshy key saved.",
-                unsavedLabel: "No Meshy key saved yet."
-            )
-
-            if let balance = store.meshyBalance {
-                HStack(spacing: 8) {
-                    Image(systemName: "creditcard")
-                        .foregroundStyle(.secondary)
-                    Text("\(balance) credits remaining")
-                        .font(.callout)
-                        .foregroundStyle(OperaChromeTheme.textPrimary)
-                    Spacer()
-                    Button("Refresh") {
-                        Task { await store.fetchMeshyBalance() }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-                .padding(10)
-                .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-            }
-
-            Text("Used for 3D model generation from character reference images. Get a key at meshy.ai/settings/api.")
-                .font(.caption)
-                .foregroundStyle(OperaChromeTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -240,9 +194,6 @@ struct APISettingsSheet: View {
                 case .gemini:
                     geminiKeyDraft = ""
                     store.clearGeminiAPIKey()
-                case .meshy:
-                    meshyKeyDraft = ""
-                    store.clearMeshyAPIKey()
                 case .miniMax:
                     miniMaxKeyDraft = ""
                     store.clearMiniMaxAPIKey()
@@ -263,7 +214,6 @@ struct APISettingsSheet: View {
 
             Button("Save") {
                 store.setGeminiAPIKey(geminiKeyDraft)
-                store.setMeshyAPIKey(meshyKeyDraft)
                 store.setMiniMaxAPIKey(miniMaxKeyDraft)
                 store.setViduAPIKey(viduKeyDraft)
                 onDismiss()
@@ -275,7 +225,6 @@ struct APISettingsSheet: View {
     private var currentKeyIsEmpty: Bool {
         switch selectedTab {
         case .gemini: store.geminiAPIKey.isEmpty && geminiKeyDraft.isEmpty
-        case .meshy: store.meshyAPIKey.isEmpty && meshyKeyDraft.isEmpty
         case .miniMax: store.miniMaxAPIKey.isEmpty && miniMaxKeyDraft.isEmpty
         case .vidu: store.viduAPIKey.isEmpty && viduKeyDraft.isEmpty
         }

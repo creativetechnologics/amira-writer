@@ -20,23 +20,6 @@ struct CharacterQueueControlsBar: View {
                         .buttonStyle(.bordered).controlSize(.mini)
                 }
             }
-
-            Divider().frame(height: 16)
-
-            // Meshy queue
-            HStack(spacing: 6) {
-                Image(systemName: "cube.fill")
-                    .foregroundStyle(store.meshyQueue.isEmpty ? .tertiary : .primary)
-                Text("Meshy: \(store.meshyQueue.count)")
-                    .fontWeight(.medium)
-                    .foregroundStyle(store.meshyQueue.isEmpty ? .secondary : .primary)
-                if !store.meshyQueue.isEmpty {
-                    Button("Submit") { /* TODO: wire to submit logic */ }
-                        .buttonStyle(.borderedProminent).controlSize(.mini)
-                    Button("Clear") { store.clearMeshyQueue() }
-                        .buttonStyle(.bordered).controlSize(.mini)
-                }
-            }
         }
         .font(.caption)
         .padding(.horizontal, 16).padding(.vertical, 6)
