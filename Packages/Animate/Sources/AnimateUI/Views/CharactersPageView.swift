@@ -24,7 +24,7 @@ struct CharactersPageView: View {
     @AppStorage("charactersPage.showReferenceWorkflowPane") private var showReferenceWorkflowPane: Bool = true
     @AppStorage("charactersPage.showAnimatedImagesPane") private var showAnimatedImagesPane: Bool = false
     @AppStorage("charactersPage.showPackagesPane") private var showPackagesPane: Bool = false
-    @AppStorage("charactersPage.show3DSidecarsPane") private var show3DSidecarsPane: Bool = true
+    // 3D Sidecars pane archived
     @AppStorage("charactersPage.showMotionGenerationPane") private var showMotionGenerationPane: Bool = false
     @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
     @State private var inspirationPendingPlan: PendingInspirationGenerationPlan?
@@ -607,17 +607,7 @@ struct CharactersPageView: View {
                         }
                     }
 
-                    // Character3DAssetLibraryView archived — 3D pipeline removed
-                    collapsiblePane(
-                        title: "3D Sidecars",
-                        icon: "folder.badge.gearshape",
-                        isExpanded: $show3DSidecarsPane
-                    ) {
-                        Text("3D sidecar management has been moved to the archived 3D pipeline.")
-                            .font(.caption)
-                            .foregroundStyle(OperaChromeTheme.textSecondary)
-                            .padding(.vertical, 8)
-                    }
+                    // 3D Sidecars and 3D Asset Library archived — 3D pipeline removed
 
                 }
                 .padding()

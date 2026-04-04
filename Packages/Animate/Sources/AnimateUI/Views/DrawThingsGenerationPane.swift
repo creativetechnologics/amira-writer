@@ -127,7 +127,7 @@ struct DrawThingsGenerationPane: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Text("\(store.drawThingsPlaceConfig.apiHost):\(store.drawThingsPlaceConfig.apiPort)")
+            Text("\(store.drawThingsPlaceConfig.apiHost):\(String(store.drawThingsPlaceConfig.apiPort))")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
             Button("Ping") { pingDrawThings() }
