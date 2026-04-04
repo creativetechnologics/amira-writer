@@ -238,6 +238,20 @@ struct CharactersPageView: View {
                 }
             }
         }
+        .sheet(isPresented: $store.showImageEraser) {
+            if let imagePath = store.pendingEraserImagePath {
+                ImageEraserView(
+                    store: store,
+                    imagePath: imagePath,
+                    onDone: {
+                        store.closeEraseTool()
+                    },
+                    onCancel: {
+                        store.closeEraseTool()
+                    }
+                )
+            }
+        }
         .task(id: store.workingOWPURL?.path) {
             while !Task.isCancelled {
                 let hasActiveBatchJobs = store.characters.contains { character in
@@ -813,62 +827,78 @@ struct CharactersPageView: View {
 
             Divider()
 
-            textEditorRow(
+            DebouncedTextEditorRow(
                 title: "Backstory",
                 icon: "book.fill",
-                text: character.backstory,
+                storeValue: character.backstory,
                 placeholder: "Enter character backstory, history, and origin...",
                 onChange: { store.updateCharacterBackstory($0, for: character.id) }
             )
 
-            textEditorRow(
+            DebouncedTextEditorRow(
                 title: "Personality",
                 icon: "brain.fill",
-                text: character.personality,
+                storeValue: character.personality,
                 placeholder: "Describe personality traits, mannerisms, and behaviors...",
                 onChange: { store.updateCharacterPersonality($0, for: character.id) }
             )
 
-            textEditorRow(
+            DebouncedTextEditorRow(
                 title: "Notes",
                 icon: "note.text",
-                text: character.notes,
+                storeValue: character.notes,
                 placeholder: "General notes about the character...",
                 onChange: { store.updateCharacterNotes($0, for: character.id) }
             )
         }
     }
 
-    private func textEditorRow(
-        title: String,
-        icon: String,
-        text: String,
-        placeholder: String,
-        onChange: @escaping (String) -> Void
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: icon)
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundStyle(.secondary)
+    @available(macOS 26.0, *)
+    private struct DebouncedTextEditorRow: View {
+        let title: String
+        let icon: String
+        let storeValue: String
+        let placeholder: String
+        let onChange: (String) -> Void
 
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: Binding(
-                    get: { text },
-                    set: onChange
-                ))
-                .font(.body)
-                .frame(minHeight: 100, maxHeight: 200)
-                .scrollContentBackground(.hidden)
-                .background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+        @State private var localText: String = ""
+        @State private var hasAppeared = false
 
-                if text.isEmpty {
-                    Text(placeholder)
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(title, systemImage: icon)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $localText)
                         .font(.body)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                        .allowsHitTesting(false)
+                        .frame(minHeight: 100, maxHeight: 200)
+                        .scrollContentBackground(.hidden)
+                        .background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
+                        .onChange(of: localText) { _, newValue in
+                            guard hasAppeared else { return }
+                            onChange(newValue)
+                        }
+
+                    if localText.isEmpty {
+                        Text(placeholder)
+                            .font(.body)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 12)
+                            .allowsHitTesting(false)
+                    }
+                }
+            }
+            .onAppear {
+                localText = storeValue
+                hasAppeared = true
+            }
+            .onChange(of: storeValue) { _, newValue in
+                if !hasAppeared || localText != newValue {
+                    localText = newValue
                 }
             }
         }

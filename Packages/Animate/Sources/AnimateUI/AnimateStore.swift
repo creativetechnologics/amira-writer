@@ -216,9 +216,85 @@ final class AnimateStore {
 
     var backgrounds: [BackgroundPlate] = []
     var selectedBackgroundID: UUID?
+    var scriptPlaceRequirements: [PlacesScriptSceneRequirement] = []
+    var isRefreshingPlacesIndex: Bool = false
+    var placeGenerationStatusByID: [UUID: String] = [:]
+    var generatingPlaceIDs: Set<UUID> = []
+    var drawThingsPlaceConfig: DrawThingsPlaceConfig = .init() {
+        didSet {
+            guard !isHydratingDrawThingsPlacesConfig,
+                  drawThingsPlaceConfig != oldValue else { return }
+            scheduleDebouncedSave()
+        }
+    }
 
     var selectedPlace: BackgroundPlate? {
         backgrounds.first { $0.id == selectedBackgroundID }
+    }
+
+    var selectedScenePlaceRequirement: PlacesScriptSceneRequirement? {
+        guard let selectedSceneID else { return nil }
+        return scriptPlaceRequirements.first { $0.sceneID == selectedSceneID }
+    }
+
+    var indexedPlaces: [PlacesIndexedEntry] {
+        let orderByKey = scriptPlaceRequirements
+            .flatMap(\.locations)
+            .enumerated()
+            .reduce(into: [String: Int]()) { partialResult, entry in
+                partialResult[entry.element.normalizedKey] = min(
+                    partialResult[entry.element.normalizedKey] ?? .max,
+                    entry.offset
+                )
+            }
+
+        let grouped = Dictionary(grouping: scriptPlaceRequirements.flatMap { requirement in
+            requirement.locations.map { location in
+                (
+                    key: location.normalizedKey,
+                    reference: PlacesScriptSceneReference(
+                        sceneID: requirement.sceneID,
+                        sceneName: requirement.sceneName,
+                        songPath: requirement.songPath
+                    ),
+                    inferredCategory: location.inferredCategory,
+                    sourceLine: location.sourceLine
+                )
+            }
+        }, by: \.key)
+
+        return grouped.compactMap { key, values in
+            guard let place = backgrounds.first(where: {
+                PlacesScriptIndexService.normalizedKey(for: $0.name) == key
+            }) else {
+                return nil
+            }
+
+            let references = Array(Set(values.map(\.reference)))
+                .sorted { lhs, rhs in
+                    lhs.songPath.localizedStandardCompare(rhs.songPath) == .orderedAscending
+                }
+            let sourceLines = Array(Set(values.compactMap(\.sourceLine)))
+                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            let inferredCategory = values
+                .map(\.inferredCategory)
+                .first(where: { !$0.isEmpty }) ?? ""
+
+            return PlacesIndexedEntry(
+                placeID: place.id,
+                displayName: place.name,
+                normalizedKey: key,
+                inferredCategory: inferredCategory,
+                sceneReferences: references,
+                sourceLines: sourceLines
+            )
+        }
+        .sorted { lhs, rhs in
+            let lhsOrder = orderByKey[lhs.normalizedKey] ?? .max
+            let rhsOrder = orderByKey[rhs.normalizedKey] ?? .max
+            if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
+            return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+        }
     }
 
     // MARK: - Timeline
@@ -385,6 +461,7 @@ final class AnimateStore {
     @ObservationIgnored private var displayLinkProxy: AnimateDisplayLinkProxy?
     @ObservationIgnored private var isHydratingGeminiSettings = false
     @ObservationIgnored private var isHydratingMeshySettings = false
+    @ObservationIgnored private var isHydratingDrawThingsPlacesConfig = false
 
     // MARK: - Track Resolution Cache
     // Caches the result of timelineTrack(for:role:) and related lookups so
@@ -473,6 +550,50 @@ final class AnimateStore {
         isHydratingMeshySettings = true
         meshyAPIKey = meshyCredentialStore.loadAPIKey()
         isHydratingMeshySettings = false
+    }
+
+    private func hydrateDrawThingsPlacesConfig(_ config: DrawThingsPlaceConfig) {
+        isHydratingDrawThingsPlacesConfig = true
+        drawThingsPlaceConfig = config
+        isHydratingDrawThingsPlacesConfig = false
+    }
+
+    func sceneRequirement(for sceneID: UUID?) -> PlacesScriptSceneRequirement? {
+        guard let sceneID else { return nil }
+        return scriptPlaceRequirements.first { $0.sceneID == sceneID }
+    }
+
+    func sceneLocationNames(for sceneID: UUID?) -> [String] {
+        sceneRequirement(for: sceneID)?.locations.map(\.displayName) ?? []
+    }
+
+    func sceneReferences(for placeID: UUID) -> [PlacesScriptSceneReference] {
+        indexedPlaces.first(where: { $0.placeID == placeID })?.sceneReferences ?? []
+    }
+
+    func sourceLines(for placeID: UUID) -> [String] {
+        indexedPlaces.first(where: { $0.placeID == placeID })?.sourceLines ?? []
+    }
+
+    func isGeneratingPlaceImage(_ placeID: UUID) -> Bool {
+        generatingPlaceIDs.contains(placeID)
+    }
+
+    func placeGenerationStatus(for placeID: UUID) -> String? {
+        placeGenerationStatusByID[placeID]
+    }
+
+    func selectPlacesScene(_ sceneID: UUID) {
+        selectedSceneID = sceneID
+        if let primaryKey = sceneRequirement(for: sceneID)?.primaryLocation?.normalizedKey,
+           let place = backgrounds.first(where: {
+               PlacesScriptIndexService.normalizedKey(for: $0.name) == primaryKey
+           }) {
+            selectedBackgroundID = place.id
+        }
+        if let scene = scenes.first(where: { $0.id == sceneID }) {
+            Task { await loadSongData(for: scene) }
+        }
     }
 
     func startPlayback() {
@@ -3131,6 +3252,7 @@ final class AnimateStore {
         Task { [weak self, scene] in
             guard let self else { return }
             await self.loadSongData(for: scene)
+            _ = await self.refreshPlacesFromScript()
             await MainActor.run {
                 self.markAgentUpdated(paths: [relativePath])
                 self.statusMessage = "Reloaded external song data"
@@ -3176,12 +3298,14 @@ final class AnimateStore {
                     if let selectedScene {
                         Task { await self.loadSongData(for: selectedScene) }
                     }
+                    Task { _ = await self.refreshPlacesFromScript() }
                 }
             case ProjectDatabaseBridge.animatePlacesPath:
                 await MainActor.run {
                     guard let animateDir = self.animateURL else { return }
                     let backgroundDir = animateDir.appendingPathComponent("backgrounds")
                     self.backgrounds = (try? self.loadPlaces(from: animateDir, backgroundDirectoryURL: backgroundDir)) ?? []
+                    _ = self.applyScriptPlaceRequirements(self.scriptPlaceRequirements, persistChanges: false)
                     self.markAgentUpdated()
                     self.statusMessage = "Reloaded external project changes"
                 }
@@ -3919,6 +4043,10 @@ final class AnimateStore {
                 shotPresets = sortedShotPresets(sceneShotPresetStore.load(from: animateDir).presets)
             }
 
+            hydrateDrawThingsPlacesConfig(
+                ProjectDatabaseBridge.loadDrawThingsPlacesConfigFromDisk(projectURL: effectiveProjectURL) ?? .init()
+            )
+
             // 4. Load saved scene data from disk
             let savedScenesBySongPath = result.savedScenes
 
@@ -4007,15 +4135,14 @@ final class AnimateStore {
             } else {
                 backgrounds = []
             }
-            if selectedBackgroundID == nil || !backgrounds.contains(where: { $0.id == selectedBackgroundID }) {
-                selectedBackgroundID = backgrounds.first?.id
-            }
+
+            let didRefreshPlaces = await refreshPlacesFromScript(persistChanges: false)
 
             // 8. Load motion clips
             motionClips = (try? MotionClipPersistence.loadAll(animateURL: animateDir)) ?? []
 
             let projectName = url.deletingPathExtension().lastPathComponent
-            if didMigrateCharacterStorage {
+            if didMigrateCharacterStorage || didRefreshPlaces {
                 save()
             }
             statusMessage = "Opened: \(projectName) (\(scenes.count) songs, \(characters.count) characters)"
@@ -4128,6 +4255,10 @@ final class AnimateStore {
 
             let placesData = try encoder.encode(backgrounds.map(persistedBackgroundPlate))
             try placesData.write(to: animateDir.appendingPathComponent("places.json"))
+            try ProjectDatabaseBridge.saveDrawThingsPlacesConfigToDisk(
+                drawThingsPlaceConfig,
+                projectURL: workingOWPURL ?? owpURL ?? animateDir.deletingLastPathComponent()
+            )
 
             // Write motion clips
             if !motionClips.isEmpty {
@@ -4764,9 +4895,10 @@ final class AnimateStore {
     }
 
     func updateCharacterBackstory(_ text: String, for characterID: UUID) {
-        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard let index = characters.firstIndex(where: { $0.id == characterID }),
+              characters[index].backstory != text else { return }
         characters[index].backstory = text
-        save()
+        scheduleDebouncedSave()
     }
 
     private func migrateCharacterStorageSlugIfNeeded(
@@ -4925,9 +5057,10 @@ final class AnimateStore {
     }
 
     func updateCharacterPersonality(_ text: String, for characterID: UUID) {
-        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard let index = characters.firstIndex(where: { $0.id == characterID }),
+              characters[index].personality != text else { return }
         characters[index].personality = text
-        save()
+        scheduleDebouncedSave()
     }
 
     func updateCharacterNotes(_ text: String, for characterID: UUID) {
@@ -6868,6 +7001,144 @@ final class AnimateStore {
 
     // MARK: - Background Management
 
+    @discardableResult
+    func refreshPlacesFromScript(persistChanges: Bool = true) async -> Bool {
+        guard let projectURL = fileOWPURL else {
+            scriptPlaceRequirements = []
+            return false
+        }
+
+        isRefreshingPlacesIndex = true
+        defer { isRefreshingPlacesIndex = false }
+
+        let requirements = await PlacesScriptIndexService.buildRequirements(
+            projectURL: projectURL,
+            scenes: scenes
+        )
+        scriptPlaceRequirements = requirements
+        return applyScriptPlaceRequirements(requirements, persistChanges: persistChanges)
+    }
+
+    private func applyScriptPlaceRequirements(
+        _ requirements: [PlacesScriptSceneRequirement],
+        persistChanges: Bool
+    ) -> Bool {
+        let legacyPlaceholderKeys = Set(
+            BackgroundPlaceholderService.amiraLocations.map {
+                PlacesScriptIndexService.normalizedKey(for: $0.name)
+            }
+        )
+
+        var didMutate = false
+        let requiredLocations = requirements.flatMap(\.locations)
+        let requiredKeys = Set(requiredLocations.map(\.normalizedKey))
+        let requiredByKey = requiredLocations.reduce(into: [String: PlacesScriptLocationRequirement]()) { partialResult, location in
+            partialResult[location.normalizedKey] = partialResult[location.normalizedKey] ?? location
+        }
+        let sceneNamesByKey = Dictionary(
+            grouping: requirements.flatMap { requirement in
+                requirement.locations.map { ($0.normalizedKey, requirement.sceneName) }
+            },
+            by: \.0
+        ).mapValues { values in
+            Array(Set(values.map(\.1))).sorted {
+                $0.localizedStandardCompare($1) == .orderedAscending
+            }
+        }
+
+        let removedLegacyIDs = Set(backgrounds.compactMap { place -> UUID? in
+            let key = PlacesScriptIndexService.normalizedKey(for: place.name)
+            guard legacyPlaceholderKeys.contains(key),
+                  !requiredKeys.contains(key),
+                  place.imagePaths.isEmpty,
+                  place.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            return place.id
+        })
+        if !removedLegacyIDs.isEmpty {
+            backgrounds.removeAll { removedLegacyIDs.contains($0.id) }
+            for index in scenes.indices where scenes[index].backgroundID.map(removedLegacyIDs.contains) == true {
+                scenes[index].backgroundID = nil
+            }
+            didMutate = true
+        }
+
+        for index in backgrounds.indices {
+            let key = PlacesScriptIndexService.normalizedKey(for: backgrounds[index].name)
+            guard requiredKeys.contains(key) else { continue }
+            let usage = sceneNamesByKey[key] ?? []
+            if backgrounds[index].sceneUsage != usage {
+                backgrounds[index].sceneUsage = usage
+                didMutate = true
+            }
+            if backgrounds[index].locationCategory.isEmpty,
+               let inferredCategory = requiredByKey[key]?.inferredCategory,
+               !inferredCategory.isEmpty {
+                backgrounds[index].locationCategory = inferredCategory
+                didMutate = true
+            }
+        }
+
+        for requirement in requirements {
+            guard let sceneIndex = scenes.firstIndex(where: { $0.id == requirement.sceneID }),
+                  let primary = requirement.primaryLocation else { continue }
+
+            let matchingPlaceID = backgrounds.first(where: {
+                PlacesScriptIndexService.normalizedKey(for: $0.name) == primary.normalizedKey
+            })?.id
+
+            if let matchingPlaceID {
+                if scenes[sceneIndex].backgroundID != matchingPlaceID {
+                    scenes[sceneIndex].backgroundID = matchingPlaceID
+                    didMutate = true
+                }
+                continue
+            }
+
+            let inferredCategory = primary.inferredCategory
+            let newPlace = BackgroundPlate(
+                name: primary.displayName,
+                filename: "\(PlacesScriptIndexService.fileStem(for: primary.displayName)).png",
+                notes: "",
+                imagePaths: [],
+                approvedImagePath: nil,
+                sourceURL: nil,
+                angleImages: [],
+                locationCategory: inferredCategory,
+                sceneUsage: sceneNamesByKey[primary.normalizedKey] ?? []
+            )
+            backgrounds.append(newPlace)
+            scenes[sceneIndex].backgroundID = newPlace.id
+            didMutate = true
+        }
+
+        backgrounds.sort { lhs, rhs in
+            let lhsKey = PlacesScriptIndexService.normalizedKey(for: lhs.name)
+            let rhsKey = PlacesScriptIndexService.normalizedKey(for: rhs.name)
+            let lhsIndex = requiredLocations.firstIndex(where: { $0.normalizedKey == lhsKey }) ?? .max
+            let rhsIndex = requiredLocations.firstIndex(where: { $0.normalizedKey == rhsKey }) ?? .max
+            if lhsIndex != rhsIndex { return lhsIndex < rhsIndex }
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
+
+        if let selectedSceneID,
+           let primaryKey = sceneRequirement(for: selectedSceneID)?.primaryLocation?.normalizedKey,
+           let selectedPlace = backgrounds.first(where: {
+               PlacesScriptIndexService.normalizedKey(for: $0.name) == primaryKey
+           }) {
+            selectedBackgroundID = selectedPlace.id
+        } else if selectedBackgroundID == nil || !backgrounds.contains(where: { $0.id == selectedBackgroundID }) {
+            selectedBackgroundID = backgrounds.first?.id
+        }
+
+        if didMutate && persistChanges {
+            save()
+        }
+
+        return didMutate
+    }
+
     func importBackground(from url: URL) {
         guard let animateDir = animateURL else { return }
         do {
@@ -7082,6 +7353,54 @@ final class AnimateStore {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
         backgrounds[index].sceneUsage = usage
         save()
+    }
+
+    func generateDrawThingsPlaceImage(for placeID: UUID) {
+        guard !generatingPlaceIDs.contains(placeID),
+              let place = backgrounds.first(where: { $0.id == placeID }) else {
+            return
+        }
+
+        let sceneNames = sceneReferences(for: placeID).map(\.sceneName)
+        let notes = place.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let promptSegments = [
+            drawThingsPlaceConfig.promptPrefix.trimmingCharacters(in: .whitespacesAndNewlines),
+            "Cinematic environment concept art for the Amira opera location \(place.name).",
+            place.locationCategory.isEmpty ? "" : "\(place.locationCategory) location.",
+            sceneNames.isEmpty ? "" : "Used in scenes: \(sceneNames.joined(separator: ", ")).",
+            notes.isEmpty ? "" : "Production notes: \(notes).",
+            "No characters, no text, no lettering, focus on the location only.",
+            drawThingsPlaceConfig.promptSuffix.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+
+        let service = DrawThingsPlaceGenerationService()
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(PlacesScriptIndexService.fileStem(for: place.name))-\(UUID().uuidString).png")
+
+        generatingPlaceIDs.insert(placeID)
+        placeGenerationStatusByID[placeID] = "Generating…"
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.generatingPlaceIDs.remove(placeID) }
+
+            do {
+                try await service.generateImage(
+                    prompt: promptSegments,
+                    config: self.drawThingsPlaceConfig,
+                    outputURL: tempURL
+                )
+                self.addImageToPlace(from: tempURL, placeID: placeID)
+                self.placeGenerationStatusByID[placeID] = "Generated \(tempURL.lastPathComponent)"
+                self.statusMessage = "Generated image for \(place.name)"
+                try? FileManager.default.removeItem(at: tempURL)
+            } catch {
+                self.placeGenerationStatusByID[placeID] = error.localizedDescription
+                self.statusMessage = "Place generation failed for \(place.name): \(error.localizedDescription)"
+            }
+        }
     }
 
     /// Returns camera shot types required for a given place based on scenes that use it.
