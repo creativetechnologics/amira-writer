@@ -25,12 +25,8 @@ struct SceneProductionInput: Sendable {
     var characterCast: [SceneProductionCharacterInput] = []
     var objectSetups: [ObjectSetup]
     var backgroundName: String?
-    var worldChunk: Animate3DWorldChunkDescriptor? = nil
-    var styleProfile: Animate3DStyleProfileDescriptor? = nil
-    var cameraPresets: [Animate3DCameraPresetDescriptor] = []
+    // 3D pipeline fields archived — were: worldChunk, styleProfile, cameraPresets, lightRig, atmospherePreset
     var availableCameraPresetCount: Int = 0
-    var lightRig: Animate3DLightRigDescriptor? = nil
-    var atmospherePreset: Animate3DAtmospherePresetDescriptor? = nil
     var baseFPS: Int
     var totalBeats: Int
     var bpm: Double
@@ -39,11 +35,8 @@ struct SceneProductionInput: Sendable {
 @available(macOS 26.0, *)
 struct SceneProductionPlan: Sendable {
     var sceneID: UUID, sceneName: String, backgroundName: String?, totalFrames: Int, baseFPS: Int
-    var worldChunk: Animate3DWorldChunkDescriptor?
-    var styleProfile: Animate3DStyleProfileDescriptor?
+    // 3D pipeline fields archived — were: worldChunk, styleProfile, lightRig, atmospherePreset
     var availableCameraPresetCount: Int
-    var lightRig: Animate3DLightRigDescriptor?
-    var atmospherePreset: Animate3DAtmospherePresetDescriptor?
     var characterBlocking: [CharacterBlockingPlan]
     var cameraChoreography: CameraChoreographyPlan
     var objectPlacements: [ObjectPlacementPlan]
@@ -144,11 +137,7 @@ enum SceneProductionCompiler {
             sceneName: input.sceneName,
             backgroundName: input.backgroundName,
             totalFrames: total, baseFPS: input.baseFPS,
-            worldChunk: input.worldChunk,
-            styleProfile: input.styleProfile,
             availableCameraPresetCount: input.availableCameraPresetCount,
-            lightRig: input.lightRig,
-            atmospherePreset: input.atmospherePreset,
             characterBlocking: blocking, cameraChoreography: cam,
             objectPlacements: obj, depthAssignments: depth, frameRateProfile: fr)
     }
@@ -434,13 +423,7 @@ enum SceneProductionCompiler {
     }
 
     private static func focalLength(for shot: CameraShot, input: SceneProductionInput) -> Double {
-        if let preset = input.cameraPresets.first(where: {
-            $0.shotName.caseInsensitiveCompare(shot.rawValue) == .orderedSame ||
-            $0.shotName.caseInsensitiveCompare(shot.displayName) == .orderedSame ||
-            $0.presetID.caseInsensitiveCompare(shot.rawValue) == .orderedSame
-        }) {
-            return preset.focalLength
-        }
+        // 3D camera presets archived — fall through to default focal range
         return AnimationCamera.focalRange(for: shot).mid
     }
     private static let stagePositions: [StagePosition] = [.center,.centerLeft,.centerRight,.left,.right,.stageLeft,.stageRight]

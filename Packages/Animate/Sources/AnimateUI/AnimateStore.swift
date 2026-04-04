@@ -397,7 +397,7 @@ final class AnimateStore {
     var showGenerationSheet: Bool = false
     var showRigEditor: Bool = false
     var showExportSheet: Bool = false
-    var show3DExportSheet: Bool = false
+    // show3DExportSheet removed — 3D workspace archived; use standard export sheet
     var generationTargetPartID: UUID?
     var generationTargetAngle: AngleView?
 
@@ -8783,9 +8783,8 @@ final class AnimateStore {
         generatedImagePaths: [String]
     ) async {
         guard !isGeneratingMeshy3D else { statusMessage = "Meshy generation in progress — queued."; return }
-        let route = Animate3DGenerationProviderRoute.defaultRoute(for: kind)
-        guard route == .meshy,
-              !meshyAPIKey.isEmpty,
+        // Animate3DGenerationProviderRoute archived — Meshy is the only route used here
+        guard !meshyAPIKey.isEmpty,
               let characterID,
               let characterSlug,
               let animateURL,

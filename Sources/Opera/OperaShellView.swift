@@ -509,7 +509,7 @@ struct OperaShellView: View {
         case .props:
             PropsWorkspace(controller: animateController)
         case .animate:
-            Animate3DWorkspace(controller: animateController)
+            AnimateWorkspace(controller: animateController)
         }
     }
 

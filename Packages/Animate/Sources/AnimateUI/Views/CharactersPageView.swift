@@ -607,12 +607,16 @@ struct CharactersPageView: View {
                         }
                     }
 
+                    // Character3DAssetLibraryView archived — 3D pipeline removed
                     collapsiblePane(
                         title: "3D Sidecars",
                         icon: "folder.badge.gearshape",
                         isExpanded: $show3DSidecarsPane
                     ) {
-                        Character3DAssetLibraryView(store: store, character: character)
+                        Text("3D sidecar management has been moved to the archived 3D pipeline.")
+                            .font(.caption)
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                            .padding(.vertical, 8)
                     }
 
                     collapsiblePane(
@@ -1344,15 +1348,7 @@ struct CharactersPageView: View {
                         .fill(OperaChromeTheme.raisedBackground.opacity(0.4))
                 )
 
-                if viewing3DModelID == model.id, let animateURL = store.animateURL {
-                    let modelURL = animateURL
-                        .appendingPathComponent("characters")
-                        .appendingPathComponent(character.assetFolderSlug)
-                        .appendingPathComponent("models")
-                        .appendingPathComponent(model.modelFileName)
-                    Character3DModelViewer(modelURL: modelURL)
-                        .transition(.opacity)
-                }
+                // Character3DModelViewer archived — SceneKit 3D preview removed
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "cube.transparent")

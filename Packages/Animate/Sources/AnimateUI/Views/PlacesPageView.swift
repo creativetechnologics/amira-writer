@@ -69,130 +69,12 @@ struct PlacesSidebarView: View {
 
 @available(macOS 26.0, *)
 private extension PlacesPageView {
-    struct RegistryCard: Identifiable {
-        let id: String
-        let title: String
-        let subtitle: String
-        let systemImage: String
-        let relativePath: String
-        let manifestKind: Animate3DRegistryManifestKind?
-        let manifestPath: String?
-        let countLabel: String
-    }
-
     var projectURL: URL? {
         store.workingOWPURL ?? store.owpURL
     }
 
-    var registryCards: [RegistryCard] {
-        guard let projectURL else { return [] }
-        ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
-        let index = ProjectDatabaseBridge.loadAnimate3DRegistryIndexFromDisk(projectURL: projectURL) ?? Animate3DRegistryIndex()
-        let assetRegistry = ProjectDatabaseBridge.loadAnimate3DAssetRegistryFromDisk(projectURL: projectURL)
-        let characterRegistry = ProjectDatabaseBridge.loadAnimate3DCharacterRegistryFromDisk(projectURL: projectURL)
-        let motionRegistry = ProjectDatabaseBridge.loadAnimate3DMotionRegistryFromDisk(projectURL: projectURL)
-        let worldCatalog = ProjectDatabaseBridge.loadAnimate3DWorldCatalogFromDisk(projectURL: projectURL)
-        let styleProfiles = ProjectDatabaseBridge.loadAnimate3DStyleProfilesFromDisk(projectURL: projectURL)
-        let cameraPresets = ProjectDatabaseBridge.loadAnimate3DCameraPresetsFromDisk(projectURL: projectURL)
-        let lightRigs = ProjectDatabaseBridge.loadAnimate3DLightRigsFromDisk(projectURL: projectURL)
-        let atmospherePresets = ProjectDatabaseBridge.loadAnimate3DAtmospherePresetsFromDisk(projectURL: projectURL)
-
-        return [
-            RegistryCard(
-                id: "world",
-                title: "World Catalog",
-                subtitle: "Zone meshes, depth maps, previews, and libretto place mappings.",
-                systemImage: "globe.europe.africa.fill",
-                relativePath: "Animate/3d/world-catalog",
-                manifestKind: .worldCatalog,
-                manifestPath: index.worldCatalogPath,
-                countLabel: "\(worldCatalog?.chunks.count ?? 0) chunks"
-            ),
-            RegistryCard(
-                id: "styles",
-                title: "Style Profiles",
-                subtitle: "Cel bands, outline looks, and overall anime render profiles.",
-                systemImage: "paintpalette.fill",
-                relativePath: "Animate/3d/style-profiles",
-                manifestKind: .styleProfiles,
-                manifestPath: index.styleProfilesPath,
-                countLabel: "\(styleProfiles?.profiles.count ?? 0) styles"
-            ),
-            RegistryCard(
-                id: "camera",
-                title: "Camera Presets",
-                subtitle: "Deterministic shot vocabulary the LLM can safely target.",
-                systemImage: "camera.aperture",
-                relativePath: "Animate/3d/camera-presets",
-                manifestKind: .cameraPresets,
-                manifestPath: index.cameraPresetsPath,
-                countLabel: "\(cameraPresets?.presets.count ?? 0) presets"
-            ),
-            RegistryCard(
-                id: "lights",
-                title: "Light Rigs",
-                subtitle: "Reusable lighting packages for time-of-day and mood.",
-                systemImage: "lightbulb.max.fill",
-                relativePath: "Animate/3d/light-rigs",
-                manifestKind: .lightRigs,
-                manifestPath: index.lightRigsPath,
-                countLabel: "\(lightRigs?.rigs.count ?? 0) rigs"
-            ),
-            RegistryCard(
-                id: "atmosphere",
-                title: "Atmosphere Presets",
-                subtitle: "Fog, haze, palette, and air perspective presets.",
-                systemImage: "cloud.fog.fill",
-                relativePath: "Animate/3d/atmosphere-presets",
-                manifestKind: .atmospherePresets,
-                manifestPath: index.atmospherePresetsPath,
-                countLabel: "\(atmospherePresets?.presets.count ?? 0) presets"
-            ),
-            RegistryCard(
-                id: "assets",
-                title: "Asset Registry",
-                subtitle: "Cross-scene 3D bundles and production-ready asset manifests.",
-                systemImage: "shippingbox.fill",
-                relativePath: "Animate/3d/asset-registry",
-                manifestKind: .assetRegistry,
-                manifestPath: index.assetRegistryPath,
-                countLabel: "\(assetRegistry?.bundles.count ?? 0) bundles"
-            ),
-            RegistryCard(
-                id: "characters",
-                title: "Character Registry",
-                subtitle: "Character bundle mappings from model to face/mouth/material sidecars.",
-                systemImage: "person.crop.rectangle.stack.fill",
-                relativePath: "Animate/3d/character-registry",
-                manifestKind: .characterRegistry,
-                manifestPath: index.characterRegistryPath,
-                countLabel: "\(characterRegistry?.bundles.count ?? 0) bundles"
-            ),
-            RegistryCard(
-                id: "motions",
-                title: "Motion Registry",
-                subtitle: "Reusable motions and action clips for low-touch staging.",
-                systemImage: "figure.walk.motion",
-                relativePath: "Animate/3d/motion-registry",
-                manifestKind: .motionRegistry,
-                manifestPath: index.motionRegistryPath,
-                countLabel: "\(motionRegistry?.motions.count ?? 0) motions"
-            )
-        ]
-    }
-
-    func linkedWorldChunks(for place: BackgroundPlate) -> [Animate3DWorldChunkDescriptor] {
-        guard let projectURL else { return [] }
-        let catalog = ProjectDatabaseBridge.loadAnimate3DWorldCatalogFromDisk(projectURL: projectURL) ?? Animate3DWorldCatalog()
-        return catalog.chunks.filter { chunk in
-            chunk.placeNames.contains { $0.caseInsensitiveCompare(place.name) == .orderedSame }
-        }
-    }
-
-    func ensure3DRegistryScaffolding() {
-        guard let projectURL else { return }
-        ProjectDatabaseBridge.ensureAnimate3DRegistryScaffolding(projectURL: projectURL)
-    }
+    // 3D registry methods archived — types moved to _archived_3d, excluded from build
+    func ensure3DRegistryScaffolding() { }
 
     func reveal3DRegistryRoot() {
         reveal3DRelativePath(ProjectDatabaseBridge.animate3DRegistryRootPath)
@@ -218,7 +100,6 @@ struct PlacesPageView: View {
     @State private var lastClickedGalleryImagePath: String?
     @State private var thumbnailBaseSize: CGFloat = 140
     @State private var viewMode: PlacesViewMode = .grid
-    @State private var registryEditorContext: Animate3DRegistryEditorContext?
     @State private var showDrawThingsPane: Bool = false
     var showSidebar: Bool = true
 
@@ -248,15 +129,6 @@ struct PlacesPageView: View {
         .task(id: store.workingOWPURL?.path) {
             ensure3DRegistryScaffolding()
         }
-        .sheet(item: $registryEditorContext) { context in
-            if let projectURL {
-                Animate3DRegistryEditorSheet(
-                    projectURL: projectURL,
-                    context: context,
-                    onClose: { registryEditorContext = nil }
-                )
-            }
-        }
     }
 
     @ViewBuilder
@@ -264,7 +136,6 @@ struct PlacesPageView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 mapOverviewSection
-                worldCatalogSection
                 viewModePicker
                 switch viewMode {
                 case .grid:
@@ -389,102 +260,7 @@ struct PlacesPageView: View {
         }
     }
 
-    // MARK: - 3D World Catalog
-
-    private var worldCatalogSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("3D World Pipeline")
-                        .font(.title3)
-                        .fontWeight(.semibold)
-                    Text("Project-local upload points for world chunks, style profiles, camera presets, light rigs, and atmosphere presets. This is the bridge from generated place art to explorable 3D zones.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer()
-
-                Button {
-                    reveal3DRegistryRoot()
-                } label: {
-                    Label("Open 3D Folder", systemImage: "folder")
-                }
-                .buttonStyle(.bordered)
-                .disabled(projectURL == nil)
-            }
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 12)], spacing: 12) {
-                ForEach(registryCards) { card in
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .center, spacing: 8) {
-                            Image(systemName: card.systemImage)
-                                .foregroundStyle(.secondary)
-                            Text(card.title)
-                                .font(.headline)
-                            Spacer()
-                            Text(card.countLabel)
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Text(card.subtitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Text(card.relativePath)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(OperaChromeTheme.textTertiary)
-                            .lineLimit(2)
-
-                        HStack(spacing: 8) {
-                            Button("Reveal Folder") {
-                                reveal3DRelativePath(card.relativePath)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(projectURL == nil)
-
-                            if let manifestPath = card.manifestPath {
-                                Button("Open JSON") {
-                                    reveal3DRelativePath(manifestPath)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(projectURL == nil)
-
-                                Button("Edit JSON") {
-                                    registryEditorContext = Animate3DRegistryEditorContext(
-                                        kind: card.manifestKind ?? .worldCatalog,
-                                        title: card.title,
-                                        relativePath: manifestPath
-                                    )
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(projectURL == nil || card.manifestKind == nil)
-                            }
-                        }
-                    }
-                    .padding(14)
-                    .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-            }
-
-            if let selectedPlace {
-                selectedPlaceWorldCoverageCard(selectedPlace)
-            }
-
-            Animate3DWorldPipelineEditorView(
-                store: store,
-                selectedPlaceName: selectedPlace?.name
-            )
-        }
-        .padding(18)
-        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-    }
+    // MARK: - 3D World Catalog (archived — 3D pipeline removed)
 
     // MARK: - Location Grid
 
@@ -503,51 +279,6 @@ struct PlacesPageView: View {
                 }
             }
         }
-    }
-
-    @ViewBuilder
-    private func selectedPlaceWorldCoverageCard(_ place: BackgroundPlate) -> some View {
-        let chunks = linkedWorldChunks(for: place)
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Selected Place → 3D Coverage")
-                    .font(.headline)
-                Spacer()
-                Text(place.name)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-
-            if chunks.isEmpty {
-                Text("No 3D world chunk is mapped to this place yet. Add an entry to the world catalog and include this place name in `placeNames` to connect libretto locations to explorable 3D regions.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                ForEach(chunks) { chunk in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(chunk.title.isEmpty ? "\(chunk.worldID) / \(chunk.zoneID)" : chunk.title)
-                            .font(.subheadline.weight(.semibold))
-                        Text("World \(chunk.worldID) • Zone \(chunk.zoneID)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text([
-                            chunk.meshPath.map { "mesh \($0)" },
-                            chunk.depthMapPath.map { "depth \($0)" },
-                            chunk.previewImagePath.map { "preview \($0)" },
-                            chunk.lightRigID.map { "light \($0)" },
-                            chunk.atmospherePresetID.map { "atmo \($0)" }
-                        ].compactMap { $0 }.joined(separator: " • "))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(10)
-                    .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-            }
-        }
-        .padding(.top, 4)
     }
 
     // MARK: - Detail View (existing single-place view)
