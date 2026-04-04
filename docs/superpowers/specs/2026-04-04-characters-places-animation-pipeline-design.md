@@ -552,7 +552,395 @@ For ForEach-based costume fields in CharacterReferenceWorkflowSheet: extract eac
 - `CharactersPageView.swift` — refactor `textEditorRow` to use local state, fix age field
 - Audit ALL other text fields in the project for the same pattern
 
-### 5.4 MiniMax M2.7 Usage
+### 5.4 Smart Reference Sheet Cropping
+
+#### Problem
+
+Current cropping (`cropReferenceSheetImageData` in AnimateStore.swift:6732) uses a dumb 3x2 grid with 2% inset. It assumes the reference sheet is a perfect grid with no variation. In practice, Gemini-generated reference sheets have:
+- Uneven spacing between poses
+- Poses that bleed across grid cell boundaries
+- Variable amounts of whitespace around each figure
+- Text labels and annotations that shouldn't be in the crop
+- Figures of different sizes (head close-ups vs full-body)
+
+Results: crops cut off limbs, include pieces of adjacent drawings, have inconsistent whitespace.
+
+#### Fix — Vision-Based Smart Cropping
+
+Replace the dumb grid crop with a multi-step image analysis pipeline:
+
+**Step 1: Connected Component Analysis**
+- Convert image to grayscale, threshold to binary (white background vs content)
+- Find connected components (contiguous non-white regions)
+- Filter out tiny components (noise, dots, text labels < N pixels)
+- Result: bounding boxes of each major figure in the sheet
+
+**Step 2: Grid-Guided Assignment**
+- Use the expected 3x2 grid as a guide to assign each detected figure to a pose slot
+- For each grid cell, find the connected component whose centroid is closest to the cell center
+- Handle cases where a figure spans two cells (use the cell with the most overlap)
+
+**Step 3: Tight Crop with Uniform Padding**
+- For each assigned figure, compute the tight bounding box from the connected component
+- Add uniform padding (configurable, default 5% of cell size) on all sides
+- Clamp to image bounds
+
+**Step 4: Adjacent Figure Masking**
+- For each crop region, check if any OTHER figure's pixels fall within the padded bounds
+- If so, flood-fill those intruding pixels with white (the background color)
+- This cleanly removes parts of adjacent drawings that bleed into the crop box
+
+**Step 5: Output**
+- Render each cleaned crop as PNG
+- Store the actual crop rect used (for the variant's `sourceCropRect`)
+
+#### Implementation
+
+New `ReferenceSheetCropService`:
+```swift
+class ReferenceSheetCropService {
+    struct CropResult {
+        let pose: CharacterReferencePose
+        let imageData: Data
+        let cropRect: CropRect     // normalized
+        let confidence: Double     // 0-1, how well the figure was detected
+    }
+    
+    func cropSheet(
+        image: NSImage,
+        kind: ReferenceSheetCropKind,  // .head or .fullBody
+        expectedPoses: [CharacterReferencePose]
+    ) -> [CropResult]
+}
+```
+
+Uses Core Image + Accelerate framework for performant image analysis:
+- `CIFilter` for threshold/edge detection
+- `vImage` for connected component labeling
+- No ML model needed — this is straightforward computer vision
+
+#### Fallback
+
+If the smart crop fails (confidence < 0.3 for any slot), fall back to the current grid-based crop for that slot and log a warning. The user can then manually adjust via the existing `CharacterVariantCropSheet`.
+
+#### Files to Create/Modify
+
+**New:**
+- `Services/ReferenceSheetCropService.swift` — the smart cropping pipeline
+
+**Modify:**
+- `AnimateStore.swift` — replace `cropReferenceSheetImageData` and `normalizedCropRect` calls with `ReferenceSheetCropService`
+
+---
+
+## 6. Characters Page Audit — Bug Fixes
+
+Comprehensive audit of CharactersPageView, CharacterReferenceWorkflowSheet, Meshy3DGenerationPane, InspectorView, and AnimateStore character methods. All issues below must be fixed.
+
+### 6.1 Critical Bugs
+
+#### 6.1.1 `characterHeader` Never Called — No Character Identity in Detail Pane
+**CharactersPageView.swift:620-655**
+
+`characterHeader(_:)` is a full ViewBuilder (profile image, name, color dot, description) that is never inserted into `characterDetail`. The detail pane shows no identification of which character the user is looking at — it starts directly with collapsible sections.
+
+**Fix:** Call `characterHeader(character)` at the top of the `characterDetail` ScrollView content.
+
+#### 6.1.2 `lookDevelopmentSection` Never Called — Dead Summary UI
+**CharactersPageView.swift:1039-1079**
+
+`lookDevelopmentSection(_:)` builds stat pills and master sheet preview. Never referenced anywhere.
+
+**Fix:** Add as a collapsible pane in `characterDetail`, between Notes and Inspiration.
+
+#### 6.1.3 `submitInspirationBatch` Unreachable — Batch Mode Silently Broken
+**CharactersPageView.swift:1592-1667**
+
+The GeminiGenerationPreflightSheet `.batch` case only calls `store.addToBatchQueue()`. The actual `submitInspirationBatch` function (which submits to GeminiBatchService, launches watchdog, registers job) is never called.
+
+**Fix:** Route the `.batch` case through `submitInspirationBatch` instead of `store.addToBatchQueue`.
+
+#### 6.1.4 ImageCropper "1:1 Square" Produces Non-Square Rectangle
+**CharactersPageView.swift:2878-2894**
+
+`makeSquareCrop(for:)` math is inverted — produces a rectangle, not a square, for non-square images.
+
+**Fix:** `let squareSize = min(maxWidth, maxHeight)` and use equal width/height.
+
+#### 6.1.5 `submitBatch()` Dead Code in CharacterReferenceWorkflowSheet
+**CharacterReferenceWorkflowSheet.swift:1664-1738**
+
+Complete 74-line function never called. Batch mode falls through to `store.addToBatchQueue()` instead.
+
+**Fix:** Either wire this function into the batch path or remove it and fix the batch flow.
+
+#### 6.1.6 "Generate 1" Button Missing Disabled Check
+**CharacterReferenceWorkflowSheet.swift:316-322**
+
+"Generate 1" master sheet button has no `.disabled(store.geminiAPIKey.isEmpty)`. Will proceed with empty API key and fail.
+
+**Fix:** Add `.disabled(store.geminiAPIKey.isEmpty)`.
+
+#### 6.1.7 "Generate Missing" Regenerates ALL When None Are Missing
+**CharacterReferenceWorkflowSheet.swift:1243-1244, 1342-1343**
+
+When all slots have approved variants, `slots.isEmpty` triggers fallback to ALL slots. User clicks "Generate Missing" expecting no-op; gets full regeneration.
+
+**Fix:** When `slots.isEmpty`, show a "Nothing to generate" message and return early.
+
+#### 6.1.8 Meshy 3D Downloads Completely Broken — Three Compounding Bugs
+**AnimateStore.swift:8618-8674**
+
+Three bugs combine to make Meshy downloads appear to not work at all:
+
+1. **Wrong directory path** (line 8628-8630): Uses `owpSlug` instead of `assetFolderSlug`, and `"Characters"` (capital C) instead of `"characters"`. Files download to a non-standard parallel directory that nothing else references.
+
+2. **No `save()` call** (line 8671-8674): `addModel3D` appends to in-memory array but never persists. Even if files download correctly, the data model forgets them on restart.
+
+3. **Wrong costume name** (line 8644): Hardcoded to `"meshy-\(taskID.prefix(8))"` instead of passing through the actual costume name from the generation request.
+
+**Fix:** 
+- Use `character.assetFolderSlug` and lowercase `"characters"` 
+- Add `save()` at end of `addModel3D`
+- Thread the costume name through from the generation request
+
+#### 6.1.9 `generateMeshy3DModel` Crashes on Empty `imageURLs`
+**AnimateStore.swift:8563-8581**
+
+`imageURLs[0]` with no bounds check. Crashes if all images fail to encode, also permanently locks `isGeneratingMeshy3D = true`.
+
+**Fix:** Add `guard !imageURLs.isEmpty` with error message and flag cleanup.
+
+#### 6.1.10 `meshyGeneratingCharacterID` Never Cleared
+**AnimateStore.swift:8548-8615**
+
+Set at start of generation, never reset to nil on completion. Causes stale UI state.
+
+**Fix:** Set to nil alongside `isGeneratingMeshy3D = false`.
+
+#### 6.1.11 Stale Index After Async Panel in Import Methods
+**AnimateStore.swift:5147-5184, 5412-5441, 5572-5621**
+
+`importInspirationImages`, `importReferenceImages`, `import3DModel` all capture array index before panel open. If characters are reordered while panel is open, files go to wrong character directory.
+
+**Fix:** Re-resolve index by characterID inside the async Task block.
+
+### 6.2 High-Severity Issues
+
+#### 6.2.1 Shared Gallery Selection State Across Sections
+**CharactersPageView.swift:12-13**
+
+`selectedGalleryImagePaths` and `lastClickedGalleryImagePath` shared between Inspiration and Animated galleries. Selections cross-contaminate, deletions can affect wrong gallery.
+
+**Fix:** Separate selection state per gallery section.
+
+#### 6.2.2 `InspirationGallerySheet` and `ReferenceImagesSheet` Load NSImage Synchronously
+**CharactersPageView.swift:3006-3011, 3291-3297**
+
+Synchronous `NSImage(contentsOf:)` in body — freezes UI with large galleries. Rest of file uses `AsyncThumbnailView`.
+
+**Fix:** Use `AsyncThumbnailView` pattern.
+
+#### 6.2.3 Double-Tap Detection Using `NSApp.currentEvent` Unreliable
+**CharactersPageView.swift:2321-2333**
+
+`TapGesture` + `NSApp.currentEvent?.clickCount` fires asynchronously. Double-click detection unreliable.
+
+**Fix:** Use `.onTapGesture(count: 2)` like other locations in the file.
+
+#### 6.2.4 `showInspirationGallery` Never Set to True — Sheet Unreachable
+**CharactersPageView.swift:15, 101-109**
+
+State variable exists, sheet modifier exists, but no button ever sets it to true. Dead because `characterHeader` is never called.
+
+**Fix:** Will be fixed when `characterHeader` is restored (6.1.1).
+
+#### 6.2.5 `onMove` Silently Fails During Search
+**CharactersPageView.swift:350-355**
+
+Drag-to-reorder returns silently when search is active. User sees animation complete then snap back.
+
+**Fix:** Disable drag affordance when search text is non-empty.
+
+#### 6.2.6 Phantom Approval UI — Auto-Selects Last Variant as "Chosen"
+**CharacterReferenceWorkflowSheet.swift:410, 522, 749**
+
+When no explicit approval exists, last variant gets green "Chosen" border. Creates false sense of approval.
+
+**Fix:** Remove auto-selection visual, or persist it to the store on seed.
+
+#### 6.2.7 `try?` Silently Drops Crop Errors
+**CharacterReferenceWorkflowSheet.swift:486, 704**
+
+"Re-crop from Sheet" buttons use `try?`. Crop failures are invisible to user.
+
+**Fix:** Use `do/catch` and set `generationError`.
+
+#### 6.2.8 Meshy Batch Loop Reports Success Even When Items Failed
+**Meshy3DGenerationPane.swift:355-366**
+
+"Batch complete — N costumes generated" shown unconditionally regardless of failures.
+
+**Fix:** Track per-item status, only show success if all succeeded.
+
+#### 6.2.9 `encodeImages` Blocks Main Thread
+**Meshy3DGenerationPane.swift:440-448**
+
+Synchronous `Data(contentsOf:)` on main actor for multiple large images.
+
+**Fix:** Make async, use background task for file I/O.
+
+#### 6.2.10 Meshy `batchQueue` Lost on Pane Collapse
+**Meshy3DGenerationPane.swift:22-24**
+
+Local `@State` destroyed when collapsible section collapses. Can leave `store.isGeneratingMeshy3D` permanently true.
+
+**Fix:** Move to store, keyed by character ID. (Already planned in Section 1.)
+
+#### 6.2.11 `handleBatchItemCompletion` No Concurrent Guard
+**AnimateStore.swift:8680-8737**
+
+Can race with user-initiated generation, clobbering shared state.
+
+**Fix:** Add `guard !isGeneratingMeshy3D` or serialize via operation queue.
+
+#### 6.2.12 `downloadMeshyAssets` Wrong Slug + Wrong Capitalization
+**AnimateStore.swift:8628-8630**
+
+Uses `owpSlug` instead of `assetFolderSlug`, and `"Characters"` instead of `"characters"`. Creates parallel directory trees.
+
+**Fix:** Use `character.assetFolderSlug` and lowercase `"characters"`.
+
+### 6.3 Important Issues
+
+#### 6.3.1 Gallery Selection Not Reset on Character Switch
+**CharactersPageView.swift:430**
+
+`selectedGalleryImagePaths` not cleared when `selectedCharacterID` changes. Orphaned selections shown for wrong character.
+
+**Fix:** Add `.onChange(of: store.selectedCharacterID)` to clear selection state.
+
+#### 6.3.2 `textEditorRow` Cursor Jump (All Character Note Fields)
+**CharactersPageView.swift:856-873**
+
+Already covered in Section 5.3.
+
+#### 6.3.3 All Costume Text Fields Cursor Jump
+**CharacterReferenceWorkflowSheet.swift:652, 662, 725**
+
+Already covered in Section 5.3.
+
+#### 6.3.4 `generationStatus` Not Cleared on Error Path
+**CharacterReferenceWorkflowSheet.swift:1646-1649**
+
+After error, status shows "Generating N of M…" with checkmark icon.
+
+**Fix:** Set `generationStatus = nil` in catch block.
+
+#### 6.3.5 Accessory Slots Missing Crop Callbacks
+**CharacterReferenceWorkflowSheet.swift:866-913**
+
+`onAdjustCrop` defaults to no-op for accessories. "Adjust Crop" context menu does nothing.
+
+**Fix:** Wire to `store.openVariantCropTool` or hide menu item for accessories.
+
+#### 6.3.6 `ReferenceVariantCard` Store as `let` — No Observation
+**CharacterReferenceWorkflowSheet.swift:2017, 2123**
+
+Store captured as `let` in child views, doesn't register @Observable dependencies.
+
+**Fix:** Change to `@Bindable var store`.
+
+#### 6.3.7 Hardcoded `/6` in Head Poses Pill
+**CharacterReferenceWorkflowSheet.swift:278**
+
+Should use `character.headTurnaroundSlots.count`.
+
+#### 6.3.8 `updateCharacterBackstory`/`updateCharacterPersonality` Save on Every Keystroke
+**AnimateStore.swift:4897-4901, 5058-5062**
+
+Full `save()` on every character typed. Should use `scheduleDebouncedSave()` with change guard.
+
+#### 6.3.9 `seedCharacterReferenceWorkflowIfNeeded` Unconditional Save
+**AnimateStore.swift:5657-5703**
+
+Calls `save()` even when nothing changed. Add `didMutate` tracking.
+
+#### 6.3.10 Accessory Key Corruption on Costume Rename
+**AnimateStore.swift:6015-6032**
+
+Accessory key reconstruction uses `split(separator: "-").last`, losing multi-word names ("leather-boots" → "boots").
+
+**Fix:** Use stable per-slot identifier for suffix.
+
+#### 6.3.11 sheetBody/inlineBody Duplicated Modifiers
+**CharacterReferenceWorkflowSheet.swift:78-121, 138-181**
+
+Sheet/alert logic copy-pasted verbatim. Extract into shared ViewModifier.
+
+#### 6.3.12 `installedPackages(for:)` Reads Filesystem Every Render
+**CharactersPageView.swift:1832-1839**
+
+Creates `CharacterPackageLibrary()` and reads disk on every body evaluation.
+
+**Fix:** Cache in store as observable property, refresh on import/delete.
+
+#### 6.3.13 `ForEach(Array(paths.enumerated()), id: \.offset)` — Index as Identity
+**CharactersPageView.swift:2168, 2967, 3251**
+
+Uses offset as SwiftUI identity. Causes re-creation of all cells on deletion instead of animation.
+
+**Fix:** Use `id: \.element` or `ForEach(paths, id: \.self)`.
+
+#### 6.3.14 InspectorView Batch Queue No Progress/Error Display
+**InspectorView.swift:628-641**
+
+After "Submit All", queue clears immediately with no progress indicator or error feedback.
+
+**Fix:** Add submission progress state and per-group results.
+
+#### 6.3.15 InspectorView Queue Clears Before Async Work Completes
+**InspectorView.swift:651-653**
+
+Items lost on crash. Re-queue on failure creates new UUIDs.
+
+**Fix:** Remove items individually as each succeeds. Preserve original item structs on re-queue.
+
+#### 6.3.16 `ProfileImagePickerSheet` Synchronous Thumbnails
+**CharactersPageView.swift:2678**
+
+Synchronous `thumbnailImage(for:)` in body. Should use `AsyncThumbnailView`.
+
+#### 6.3.17 `Meshy isGeneratingMeshy3D` Single Global Flag
+**Meshy3DGenerationPane.swift:375 / AnimateStore.swift:8546**
+
+Shared across all characters. Character A's generation disables Character B's button with no explanation.
+
+**Fix:** Per-character generation state dictionary. (Addressed in Section 1 queue redesign.)
+
+#### 6.3.18 `textureImageURL` Always First Image Regardless of Pose
+**Meshy3DGenerationPane.swift:242-246**
+
+Should explicitly find `.frontNeutral` before falling back to first.
+
+#### 6.3.19 `sanitizedFilenameStem` Doesn't Strip All Unsafe Characters
+**CharactersPageView.swift:1724-1731**
+
+Missing colons, quotes, asterisks. Can break filenames.
+
+**Fix:** Strip all non-alphanumeric except hyphens and underscores.
+
+### 6.4 Files Affected by Audit Fixes
+
+- `CharactersPageView.swift` — 16 fixes
+- `CharacterReferenceWorkflowSheet.swift` — 11 fixes
+- `Meshy3DGenerationPane.swift` — 6 fixes
+- `InspectorView.swift` — 3 fixes
+- `AnimateStore.swift` — 11 fixes
+
+---
+
+## 7. MiniMax M2.7 Usage
 
 Used for text-only prompt generation (not image generation):
 - Draw Things SD prompts from place metadata (Places page)
