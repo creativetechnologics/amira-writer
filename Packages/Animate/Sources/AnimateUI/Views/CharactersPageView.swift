@@ -39,6 +39,8 @@ struct CharactersPageView: View {
     @State private var isSubmittingInspirationBatch: Bool = false
     @State private var submittingInspirationBatchCharacterID: UUID?
     @State private var characterSearchText: String = ""
+    @State private var filteredCharacters: [AnimationCharacter] = []
+    @State private var cachedInstalledPackages: [InstalledCharacterPackage] = []
     var showSidebar: Bool = true
 
     private static let batchTimestampFormatter: DateFormatter = {
@@ -48,6 +50,31 @@ struct CharactersPageView: View {
         formatter.dateFormat = "yyyyMMdd'T'HHmmssSSS'Z'"
         return formatter
     }()
+
+    // MARK: - Cached State Helpers
+
+    private func refreshInstalledPackages() {
+        guard let character = store.selectedCharacter,
+              let animateURL = store.animateURL else {
+            cachedInstalledPackages = []
+            return
+        }
+        cachedInstalledPackages = CharacterPackageLibrary().installedPackages(
+            for: character.assetFolderSlug,
+            in: animateURL,
+            preferredActivePackageID: store.activePackageID(for: character.owpSlug)
+        )
+    }
+
+    private func updateFilteredCharacters() {
+        if characterSearchText.isEmpty {
+            filteredCharacters = store.characters
+        } else {
+            filteredCharacters = store.characters.filter {
+                $0.name.localizedCaseInsensitiveContains(characterSearchText)
+            }
+        }
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -157,6 +184,17 @@ struct CharactersPageView: View {
             animatedSelectedPaths = []
             animatedLastClicked = nil
             previewImageIndex = nil
+            refreshInstalledPackages()
+        }
+        .onChange(of: characterSearchText) { _, _ in
+            updateFilteredCharacters()
+        }
+        .onChange(of: store.characters.count) { _, _ in
+            updateFilteredCharacters()
+        }
+        .onAppear {
+            updateFilteredCharacters()
+            refreshInstalledPackages()
         }
         .onChange(of: showReferenceWorkflowPane) { _, expanded in
             if expanded, let character = store.selectedCharacter {
@@ -327,9 +365,6 @@ struct CharactersPageView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                let filteredCharacters = store.characters.filter {
-                    characterSearchText.isEmpty || $0.name.localizedCaseInsensitiveContains(characterSearchText)
-                }
                 List(selection: $store.selectedCharacterID) {
                     ForEach(filteredCharacters) { character in
                         characterRow(character)
@@ -398,37 +433,17 @@ struct CharactersPageView: View {
                 }
             }
         } icon: {
-            characterThumbnail(character)
+            characterThumbnail(character, owpChar: owpChar)
         }
     }
 
     @ViewBuilder
-    private func characterThumbnail(_ character: AnimationCharacter) -> some View {
-        let owpChar = store.owpCharacter(for: character)
-        if let profileURL = store.resolvedCharacterAssetURL(for: character.profileImagePath),
-           let image = NSImage(contentsOf: profileURL) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 28, height: 28)
-                .clipShape(Circle())
-        } else if let owpChar,
-                  let imageDir = store.owpCharacterImageDirectory(for: owpChar),
-                  let firstImage = owpChar.images.first {
-            let imageURL = imageDir.appendingPathComponent(firstImage.filename)
-            AsyncImage(url: imageURL) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 28, height: 28)
-                    .clipShape(Circle())
-            } placeholder: {
-                Image(systemName: "person.fill")
-                    .foregroundStyle(.secondary)
-            }
-        } else {
-            Image(systemName: "person.fill")
-        }
+    private func characterThumbnail(_ character: AnimationCharacter, owpChar: OPWCharacter?) -> some View {
+        AsyncSidebarThumbnail(
+            store: store,
+            character: character,
+            owpChar: owpChar
+        )
     }
 
     // MARK: - Character Detail
@@ -438,8 +453,6 @@ struct CharactersPageView: View {
         if let character = store.selectedCharacter {
             VStack(spacing: 0) {
                 CharacterQueueControlsBar(store: store)
-                Divider()
-                    .opacity(!store.geminiQueue.isEmpty ? 1 : 0)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
 
@@ -547,7 +560,7 @@ struct CharactersPageView: View {
                     collapsiblePane(
                         title: "Character Packages",
                         icon: "shippingbox",
-                        counterText: "\(installedPackages(for: character).count) packages",
+                        counterText: "\(cachedInstalledPackages.count) packages",
                         isExpanded: $showPackagesPane,
                         trailing: {
                             ViewThatFits {
@@ -674,46 +687,11 @@ struct CharactersPageView: View {
                 Text("Reference Images")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                if let referenceURL = store.resolvedCharacterAssetURL(for: character.inspirationReferenceImagePath),
-                   let image = NSImage(contentsOf: referenceURL) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 64, height: 64)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(alignment: .bottomTrailing) {
-                            Image(systemName: "photo.fill")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(4)
-                                .background(.ultraThinMaterial, in: Circle())
-                                .offset(x: 4, y: 4)
-                        }
-                        .contextMenu {
-                            if let refPath = character.inspirationReferenceImagePath {
-                                Button("Show in Finder", systemImage: "folder") {
-                                    showInFinder(at: refPath)
-                                }
-                            }
-                        }
-                } else {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.quaternary)
-                        .frame(width: 64, height: 64)
-                        .overlay {
-                            Image(systemName: "photo.fill")
-                                .font(.title2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .overlay(alignment: .bottomTrailing) {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(4)
-                                .background(.ultraThinMaterial, in: Circle())
-                                .offset(x: 4, y: 4)
-                        }
-                }
+                AsyncReferenceThumbView(
+                    store: store,
+                    character: character,
+                    onShowInFinder: { path in showInFinder(at: path) }
+                )
             }
         }
         .buttonStyle(.plain)
@@ -722,30 +700,11 @@ struct CharactersPageView: View {
 
     @ViewBuilder
     private func profileImageView(character: AnimationCharacter, owpChar: OPWCharacter?) -> some View {
-        if let image = store.thumbnailImage(for: character.profileImagePath, maxSize: 128) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(alignment: .bottomTrailing) {
-                    Image(systemName: "camera.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(4)
-                        .background(.ultraThinMaterial, in: Circle())
-                        .offset(x: 4, y: 4)
-                }
-                .contextMenu {
-                    if let profilePath = character.profileImagePath {
-                        Button("Show in Finder", systemImage: "folder") {
-                            showInFinder(at: profilePath)
-                        }
-                    }
-                }
-        } else {
-            placeholderProfileImage
-        }
+        AsyncProfileImageView(
+            store: store,
+            character: character,
+            onShowInFinder: { path in showInFinder(at: path) }
+        )
     }
 
     private var placeholderProfileImage: some View {
@@ -1119,62 +1078,29 @@ struct CharactersPageView: View {
 
     @ViewBuilder
     private func approvedMasterPreview(variant: CharacterLookDevelopmentVariant, title: String) -> some View {
-        if let url = store.resolvedCharacterAssetURL(for: variant.imagePath),
-           let image = NSImage(contentsOf: url) {
-            VStack(alignment: .leading, spacing: 4) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 156, height: 92)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .onTapGesture(count: 2) {
-                        openQuickLook(for: [variant.imagePath], startingAt: 0)
-                    }
-                    .contextMenu {
-                        Button("Show in Finder", systemImage: "folder") {
-                            showInFinder(at: variant.imagePath)
-                        }
-                        Button("Copy Image", systemImage: "doc.on.doc") {
-                            copyImage(at: variant.imagePath)
-                        }
-                    }
-                Text(title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 156, alignment: .leading)
-                    .lineLimit(2)
-            }
-        }
+        AsyncApprovedVariantView(
+            store: store,
+            variant: variant,
+            title: title,
+            width: 156, height: 92,
+            onQuickLook: { openQuickLook(for: [variant.imagePath], startingAt: 0) },
+            onShowInFinder: { showInFinder(at: variant.imagePath) },
+            onCopy: { copyImage(at: variant.imagePath) }
+        )
     }
 
     @ViewBuilder
     private func approvedPosePreview(title: String, variant: CharacterLookDevelopmentVariant?) -> some View {
-        if let variant,
-           let url = store.resolvedCharacterAssetURL(for: variant.imagePath),
-           let image = NSImage(contentsOf: url) {
-            VStack(alignment: .leading, spacing: 4) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 92, height: 92)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .onTapGesture(count: 2) {
-                        openQuickLook(for: [variant.imagePath], startingAt: 0)
-                    }
-                    .contextMenu {
-                        Button("Show in Finder", systemImage: "folder") {
-                            showInFinder(at: variant.imagePath)
-                        }
-                        Button("Copy Image", systemImage: "doc.on.doc") {
-                            copyImage(at: variant.imagePath)
-                        }
-                    }
-                Text(title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 92, alignment: .leading)
-                    .lineLimit(2)
-            }
+        if let variant {
+            AsyncApprovedVariantView(
+                store: store,
+                variant: variant,
+                title: title,
+                width: 92, height: 92,
+                onQuickLook: { openQuickLook(for: [variant.imagePath], startingAt: 0) },
+                onShowInFinder: { showInFinder(at: variant.imagePath) },
+                onCopy: { copyImage(at: variant.imagePath) }
+            )
         }
     }
 
@@ -1182,8 +1108,8 @@ struct CharactersPageView: View {
 
     @ViewBuilder
     private func characterPackagesSection(_ character: AnimationCharacter) -> some View {
-        let packages = installedPackages(for: character)
-        let activePackageID = activePackageID(for: character)
+        let packages = cachedInstalledPackages
+        let activePackageID = cachedActivePackageID(for: character)
 
         VStack(alignment: .leading, spacing: 12) {
             Text("Character Packages contain all the parts and pieces needed for animation—rig assets, blueprints, poses, and generation configs. Import packages to build your character's animation library.")
@@ -1290,7 +1216,7 @@ struct CharactersPageView: View {
     }
 
     private func deletePackage(_ packageID: UUID, for character: AnimationCharacter) {
-        let packages = installedPackages(for: character)
+        let packages = cachedInstalledPackages
         guard let package = packages.first(where: { $0.id == packageID }) else { return }
 
         let alert = NSAlert()
@@ -1314,6 +1240,7 @@ struct CharactersPageView: View {
                 store.setActivePackage(nil, for: character.owpSlug)
             }
             store.statusMessage = "Deleted package: \(package.manifest.displayName)"
+            refreshInstalledPackages()
         } else {
             store.statusMessage = "Failed to delete package"
         }
@@ -1712,6 +1639,7 @@ struct CharactersPageView: View {
                 store.statusMessage = "Imported character package: \(preview.bundle.manifest.displayName)"
             }
             packageImportPreview = nil
+            refreshInstalledPackages()
         } catch {
             packageImportErrorMessage = error.localizedDescription
         }
@@ -1730,20 +1658,18 @@ struct CharactersPageView: View {
         CharacterPackageLibrary().primaryAssetURL(for: package)
     }
 
-    private func activePackageID(for character: AnimationCharacter) -> UUID? {
-        let packages = installedPackages(for: character)
-
+    private func cachedActivePackageID(for character: AnimationCharacter) -> UUID? {
         if let explicitID = store.activePackageID(for: character.owpSlug),
-           packages.contains(where: { $0.id == explicitID }) {
+           cachedInstalledPackages.contains(where: { $0.id == explicitID }) {
             return explicitID
         }
-
-        return packages.first?.id
+        return cachedInstalledPackages.first?.id
     }
 
     private func setActivePackage(_ packageID: UUID, for character: AnimationCharacter) {
         store.setActivePackage(packageID, for: character.owpSlug)
-        if let package = installedPackages(for: character).first(where: { $0.id == packageID }) {
+        refreshInstalledPackages()
+        if let package = cachedInstalledPackages.first(where: { $0.id == packageID }) {
             store.statusMessage = "Active package for \(character.name): \(package.manifest.displayName)"
         } else {
             store.statusMessage = "Active package updated for \(character.name)"
@@ -1787,6 +1713,281 @@ struct CharactersPageView: View {
             return
         }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+}
+
+// MARK: - Async Image Helper Views
+
+/// Sidebar 28×28 character thumbnail — loads asynchronously to avoid sync NSImage in body.
+@available(macOS 26.0, *)
+private struct AsyncSidebarThumbnail: View {
+    let store: AnimateStore
+    let character: AnimationCharacter
+    let owpChar: OPWCharacter?
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 28, height: 28)
+                    .clipShape(Circle())
+            } else if let owpChar,
+                      let imageDir = store.owpCharacterImageDirectory(for: owpChar),
+                      let firstImage = owpChar.images.first {
+                let imageURL = imageDir.appendingPathComponent(firstImage.filename)
+                AsyncImage(url: imageURL) { img in
+                    img
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 28, height: 28)
+                        .clipShape(Circle())
+                } placeholder: {
+                    Image(systemName: "person.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                }
+            } else {
+                Image(systemName: "person.fill")
+                    .frame(width: 28, height: 28)
+            }
+        }
+        .task(id: character.profileImagePath ?? "") {
+            guard let path = character.profileImagePath,
+                  let url = store.resolvedCharacterAssetURL(for: path) else {
+                image = nil
+                return
+            }
+            image = await Task.detached(priority: .userInitiated) {
+                NSImage(contentsOf: url)
+            }.value
+        }
+    }
+}
+
+/// Header profile image (64×64) — loads asynchronously.
+@available(macOS 26.0, *)
+private struct AsyncProfileImageView: View {
+    let store: AnimateStore
+    let character: AnimationCharacter
+    let onShowInFinder: (String) -> Void
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "camera.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(4)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .offset(x: 4, y: 4)
+                    }
+                    .contextMenu {
+                        if let profilePath = character.profileImagePath {
+                            Button("Show in Finder", systemImage: "folder") {
+                                onShowInFinder(profilePath)
+                            }
+                        }
+                    }
+            } else {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.quaternary)
+                    .frame(width: 64, height: 64)
+                    .overlay {
+                        Image(systemName: "person.fill")
+                            .font(.title2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "camera.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(4)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .offset(x: 4, y: 4)
+                    }
+            }
+        }
+        .task(id: character.profileImagePath ?? "") {
+            guard let path = character.profileImagePath else { image = nil; return }
+            let loaded = await store.thumbnailImageAsync(for: path, maxSize: 128)
+            if !Task.isCancelled { image = loaded }
+        }
+    }
+}
+
+/// Reference thumbnail in the character header — loads asynchronously.
+@available(macOS 26.0, *)
+private struct AsyncReferenceThumbView: View {
+    let store: AnimateStore
+    let character: AnimationCharacter
+    let onShowInFinder: (String) -> Void
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "photo.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(4)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .offset(x: 4, y: 4)
+                    }
+                    .contextMenu {
+                        if let refPath = character.inspirationReferenceImagePath {
+                            Button("Show in Finder", systemImage: "folder") {
+                                onShowInFinder(refPath)
+                            }
+                        }
+                    }
+            } else {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.quaternary)
+                    .frame(width: 64, height: 64)
+                    .overlay {
+                        Image(systemName: "photo.fill")
+                            .font(.title2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(4)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .offset(x: 4, y: 4)
+                    }
+            }
+        }
+        .task(id: character.inspirationReferenceImagePath ?? "") {
+            guard let path = character.inspirationReferenceImagePath,
+                  let url = store.resolvedCharacterAssetURL(for: path) else {
+                image = nil; return
+            }
+            let loaded = await Task.detached(priority: .userInitiated) {
+                NSImage(contentsOf: url)
+            }.value
+            if !Task.isCancelled { image = loaded }
+        }
+    }
+}
+
+/// Look development approved variant preview — loads asynchronously.
+@available(macOS 26.0, *)
+private struct AsyncApprovedVariantView: View {
+    let store: AnimateStore
+    let variant: CharacterLookDevelopmentVariant
+    let title: String
+    let width: CGFloat
+    let height: CGFloat
+    let onQuickLook: () -> Void
+    let onShowInFinder: () -> Void
+    let onCopy: () -> Void
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        if image != nil || true {
+            VStack(alignment: .leading, spacing: 4) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(.quaternary.opacity(0.22))
+                        .frame(width: width, height: height)
+                    if let image {
+                        Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: width, height: height)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .transition(.opacity.animation(.easeIn(duration: 0.15)))
+                    } else {
+                        Image(systemName: "photo")
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .frame(width: width, height: height)
+                .onTapGesture(count: 2) { onQuickLook() }
+                .contextMenu {
+                    Button("Show in Finder", systemImage: "folder") { onShowInFinder() }
+                    Button("Copy Image", systemImage: "doc.on.doc") { onCopy() }
+                }
+
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(width: width, alignment: .leading)
+                    .lineLimit(2)
+            }
+            .task(id: variant.imagePath) {
+                guard let url = store.resolvedCharacterAssetURL(for: variant.imagePath) else { return }
+                let loaded = await Task.detached(priority: .userInitiated) {
+                    NSImage(contentsOf: url)
+                }.value
+                if !Task.isCancelled { image = loaded }
+            }
+        }
+    }
+}
+
+/// Generic async thumbnail used by gallery sheets.
+@available(macOS 26.0, *)
+private struct AsyncSheetThumbnail: View {
+    let store: AnimateStore
+    let path: String
+    let size: CGFloat
+    let aspectMultiplier: CGFloat
+    let minHeight: CGFloat
+
+    @State private var image: NSImage?
+
+    private var boxHeight: CGFloat { max(minHeight, size * aspectMultiplier) }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.quaternary.opacity(0.22))
+                .frame(width: size, height: boxHeight)
+
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size, height: boxHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .transition(.opacity.animation(.easeIn(duration: 0.15)))
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(width: size, height: boxHeight)
+        .task(id: "\(path)#\(Int(size))") {
+            if let cached = store.thumbnailImage(for: path, maxSize: size) {
+                image = cached
+                return
+            }
+            let loaded = await store.thumbnailImageAsync(for: path, maxSize: size)
+            if !Task.isCancelled { image = loaded }
+        }
     }
 }
 
@@ -2882,29 +3083,7 @@ struct InspirationGallerySheet: View {
 
     @ViewBuilder
     private func thumbnailImage(for path: String) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.quaternary.opacity(0.22))
-                .frame(width: thumbnailBaseSize, height: max(96, thumbnailBaseSize * 0.68))
-
-            if let imageURL = store.resolvedCharacterAssetURL(for: path),
-               let image = NSImage(contentsOf: imageURL) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: thumbnailBaseSize, height: max(96, thumbnailBaseSize * 0.68))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.quaternary)
-                    .frame(width: thumbnailBaseSize, height: max(96, thumbnailBaseSize * 0.68))
-                    .overlay {
-                        Image(systemName: "photo")
-                            .foregroundStyle(.tertiary)
-                    }
-            }
-        }
-        .frame(width: thumbnailBaseSize, height: max(96, thumbnailBaseSize * 0.68))
+        AsyncSheetThumbnail(store: store, path: path, size: thumbnailBaseSize, aspectMultiplier: 0.68, minHeight: 96)
     }
 
     private func openQuickLook(for paths: [String], startingAt index: Int) {
@@ -2924,6 +3103,7 @@ struct ReferenceImagesSheet: View {
     let onDismiss: () -> Void
 
     @State private var thumbnailBaseSize: CGFloat = 120
+    @State private var mainRefImage: NSImage?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2939,6 +3119,16 @@ struct ReferenceImagesSheet: View {
             }
         }
         .frame(width: 600, height: 650)
+        .task(id: character.inspirationReferenceImagePath ?? "") {
+            guard let path = character.inspirationReferenceImagePath,
+                  let url = store.resolvedCharacterAssetURL(for: path) else {
+                mainRefImage = nil; return
+            }
+            let loaded = await Task.detached(priority: .userInitiated) {
+                NSImage(contentsOf: url)
+            }.value
+            if !Task.isCancelled { mainRefImage = loaded }
+        }
     }
 
     private var headerBar: some View {
@@ -2961,14 +3151,14 @@ struct ReferenceImagesSheet: View {
     }
 
     private var mainReferenceImageSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let refURL = store.resolvedCharacterAssetURL(for: character.inspirationReferenceImagePath)
+        return VStack(alignment: .leading, spacing: 12) {
             Text("Main Reference Image")
                 .font(.subheadline)
                 .fontWeight(.medium)
                 .foregroundStyle(.secondary)
 
-            if let refURL = store.resolvedCharacterAssetURL(for: character.inspirationReferenceImagePath),
-               let image = NSImage(contentsOf: refURL) {
+            if let refURL, let image = mainRefImage {
                 VStack(spacing: 12) {
                     Image(nsImage: image)
                         .resizable()
@@ -3013,6 +3203,12 @@ struct ReferenceImagesSheet: View {
                         .buttonStyle(.bordered)
                     }
                 }
+            } else if refURL != nil {
+                // URL exists but image still loading — show placeholder
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.quaternary.opacity(0.3))
+                    .frame(height: 200)
+                    .overlay { ProgressView() }
             } else {
                 VStack(spacing: 12) {
                     RoundedRectangle(cornerRadius: 12)
@@ -3168,29 +3364,7 @@ struct ReferenceImagesSheet: View {
 
     @ViewBuilder
     private func thumbnailImage(for path: String) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.quaternary.opacity(0.22))
-                .frame(width: thumbnailBaseSize, height: max(88, thumbnailBaseSize * 0.68))
-
-            if let imageURL = store.resolvedCharacterAssetURL(for: path),
-               let image = NSImage(contentsOf: imageURL) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: thumbnailBaseSize, height: max(88, thumbnailBaseSize * 0.68))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(.quaternary)
-                    .frame(width: thumbnailBaseSize, height: max(88, thumbnailBaseSize * 0.68))
-                    .overlay {
-                        Image(systemName: "photo")
-                            .foregroundStyle(.tertiary)
-                    }
-            }
-        }
-        .frame(width: thumbnailBaseSize, height: max(88, thumbnailBaseSize * 0.68))
+        AsyncSheetThumbnail(store: store, path: path, size: thumbnailBaseSize, aspectMultiplier: 0.68, minHeight: 88)
     }
 
     private func openQuickLook(for paths: [String], startingAt index: Int) {
