@@ -353,6 +353,11 @@ final class AnimateStore {
         }
     }
 
+    // MARK: - Vidu Settings
+
+    var viduAPIKey: String = ""
+    var viduQueue: [ViduBatchQueueItem] = []
+
     // MARK: - Meshy Settings
 
     var meshyAPIKey: String = "" {

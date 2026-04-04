@@ -219,6 +219,7 @@ struct PlacesPageView: View {
     @State private var thumbnailBaseSize: CGFloat = 140
     @State private var viewMode: PlacesViewMode = .grid
     @State private var registryEditorContext: Animate3DRegistryEditorContext?
+    @State private var showDrawThingsPane: Bool = false
     var showSidebar: Bool = true
 
     enum PlacesViewMode: String, CaseIterable {
@@ -561,6 +562,7 @@ struct PlacesPageView: View {
                 approvedPlaceSection(place)
                 notesSection(place)
                 placeImagesSection(place)
+                drawThingsCollapsiblePane(place)
             }
         } else {
             VStack(spacing: 16) {
@@ -978,6 +980,33 @@ struct PlacesPageView: View {
             return
         }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    // MARK: - Draw Things Generation Pane
+
+    @ViewBuilder
+    private func drawThingsCollapsiblePane(_ place: BackgroundPlate) -> some View {
+        DisclosureGroup(isExpanded: $showDrawThingsPane) {
+            DrawThingsGenerationPane(store: store, place: place)
+                .padding(.top, 12)
+        } label: {
+            HStack(spacing: 10) {
+                Label("Local Generation (Draw Things)", systemImage: "cpu")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(OperaChromeTheme.panelBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.05))
+        )
     }
 }
 
