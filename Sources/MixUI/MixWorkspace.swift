@@ -33,6 +33,12 @@ public final class MixWorkspaceController: ObservableObject {
         store.save()
     }
 
+    /// Register a Score-exported WAV file into the Mix session for the corresponding scene.
+    /// Finds or creates a "Score Export" track and appends the clip, then saves.
+    public func registerScoreExport(wavURL: URL, songRelativePath: String) {
+        store.registerScoreExport(wavURL: wavURL, songRelativePath: songRelativePath)
+    }
+
     public func setSelectionRestorePending(_ isPending: Bool) {
         isSelectionRestorePending = isPending
     }

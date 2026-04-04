@@ -13,6 +13,10 @@ public final class ScoreWorkspaceController: ObservableObject {
     @Published public private(set) var saveIndicator: SaveIndicatorState = .idle
     @Published public private(set) var activeProjectPath: String?
     @Published public private(set) var selectedScenePath: String?
+
+    /// Re-exported so callers outside the Score package can observe Score→Mix exports.
+    /// UserInfo keys: "wavURL" (URL), "songRelativePath" (String).
+    public static let didExportSongToMix = ScoreStore.didExportSongToMix
     private var isAPIServerDisabled: Bool {
         ProcessInfo.processInfo.environment["NOVOTRO_DISABLE_SCORE_API_SERVER"] == "1"
     }

@@ -1096,6 +1096,15 @@ final class ScoreStore {
     /// Export progress from 0.0 to 1.0 — updated during real-time render exports.
     var fullMixExportProgress: Double = 0
 
+    // MARK: - Batch / Send-to-Mix Export
+    var isBatchExporting: Bool = false
+    var batchExportStatus: String = ""
+    var batchExportProgress: Double = 0
+
+    /// Posted when a song is successfully exported to Mix/exports/.
+    /// UserInfo keys: "wavURL" (URL), "songRelativePath" (String).
+    nonisolated static let didExportSongToMix = Notification.Name("novotro.score.didExportSongToMix")
+
     // MARK: - Suno Export
     var sunoSplitTicks: [Int] = []
     var sunoExportProgress: Double = 0
@@ -5592,6 +5601,149 @@ final class ScoreStore {
         fullMixExportStatus = "Exported \(exported) stems to \(outputDir.lastPathComponent)/"
         NSLog("[Stems] Exported %d stems to %@", exported, outputDir.path)
         isExportingFullMix = false
+    }
+
+    // MARK: - Send-to-Mix / Batch Export
+
+    /// Returns the output URL for a song's Mix export WAV.
+    /// Path: <projectURL>/Mix/exports/<slug>.wav
+    private func mixExportURL(for asset: MidiAsset) -> URL? {
+        guard let projectURL = fileProjectURL else { return nil }
+        let slug = asset.displayName
+            .replacingOccurrences(of: "[^A-Za-z0-9_-]+", with: "_", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        let safeName = slug.isEmpty ? "untitled" : slug
+        let exportsDir = projectURL.appendingPathComponent("Mix/exports")
+        return exportsDir.appendingPathComponent("\(safeName).wav")
+    }
+
+    /// Export the currently-loaded song to <projectURL>/Mix/exports/<slug>.wav
+    /// and post `didExportSongToMix` so the Mix layer can register the clip.
+    func exportCurrentSongToMix() {
+        guard let asset = selectedMidiAsset else {
+            fullMixExportStatus = "No song selected."
+            return
+        }
+        guard !pianoRollNotes.isEmpty else {
+            fullMixExportStatus = "No notes to export."
+            return
+        }
+        guard !isExportingFullMix else {
+            fullMixExportStatus = "Export already in progress."
+            return
+        }
+        guard let outputURL = mixExportURL(for: asset) else {
+            fullMixExportStatus = "No project open."
+            return
+        }
+        Task { @MainActor in
+            do {
+                try FileManager.default.createDirectory(
+                    at: outputURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                fullMixExportStatus = "Could not create Mix/exports/: \(error.localizedDescription)"
+                return
+            }
+            await exportFullMixToWav(outputURL: outputURL)
+            if fullMixExportStatus.hasPrefix("Exported") {
+                NotificationCenter.default.post(
+                    name: ScoreStore.didExportSongToMix,
+                    object: nil,
+                    userInfo: [
+                        "wavURL": outputURL,
+                        "songRelativePath": asset.relativePath
+                    ]
+                )
+            }
+        }
+    }
+
+    /// Export ALL songs that have MIDI note data to <projectURL>/Mix/exports/.
+    /// Loads each song if not already hydrated. Posts `didExportSongToMix` per song.
+    func exportAllSongsToMix() async {
+        guard let projectURL = fileProjectURL else {
+            batchExportStatus = "No project open."
+            return
+        }
+        guard !isBatchExporting, !isExportingFullMix else {
+            batchExportStatus = "An export is already in progress."
+            return
+        }
+
+        let exportsDir = projectURL.appendingPathComponent("Mix/exports")
+        do {
+            try FileManager.default.createDirectory(at: exportsDir, withIntermediateDirectories: true)
+        } catch {
+            batchExportStatus = "Could not create Mix/exports/: \(error.localizedDescription)"
+            return
+        }
+
+        isBatchExporting = true
+        batchExportProgress = 0
+        batchExportStatus = "Starting batch export..."
+
+        let assets = midiAssets
+        var exported = 0
+
+        for (index, asset) in assets.enumerated() {
+            batchExportStatus = "Hydrating \(asset.displayName)..."
+
+            // Ensure song is loaded from disk (hydrateSongPlaybackIfNeeded is the public-ish entry point)
+            _ = await hydrateSongPlaybackIfNeeded(id: asset.id)
+
+            // Switch to this song so pianoRollNotes / mappings are populated
+            let savedSelectedID = selectedMidiID
+            if selectedMidiID != asset.id {
+                setSelectedMidi(id: asset.id, stopPlaybackBeforeSelect: true)
+                // Brief yield so @Observable updates propagate
+                for _ in 0..<3 { await Task.yield() }
+            }
+
+            guard !pianoRollNotes.isEmpty else {
+                NSLog("[BatchExport] Skipping %@ — no notes.", asset.displayName)
+                batchExportProgress = Double(index + 1) / Double(assets.count)
+                if savedSelectedID != asset.id { setSelectedMidi(id: savedSelectedID, stopPlaybackBeforeSelect: false) }
+                continue
+            }
+
+            guard let outputURL = mixExportURL(for: asset) else { continue }
+
+            batchExportStatus = "Rendering \(asset.displayName) (\(index + 1)/\(assets.count))..."
+            let endTick = pianoRollNotes.map { $0.startTick + $0.duration }.max() ?? 0
+            guard endTick > 0 else {
+                batchExportProgress = Double(index + 1) / Double(assets.count)
+                if savedSelectedID != asset.id { setSelectedMidi(id: savedSelectedID, stopPlaybackBeforeSelect: false) }
+                continue
+            }
+
+            do {
+                try await renderChunkToWav(notes: pianoRollNotes, startTick: 0, endTick: endTick, outputURL: outputURL)
+                exported += 1
+                NSLog("[BatchExport] Exported %@ -> %@", asset.displayName, outputURL.path)
+                let capturedPath = asset.relativePath
+                NotificationCenter.default.post(
+                    name: ScoreStore.didExportSongToMix,
+                    object: nil,
+                    userInfo: ["wavURL": outputURL, "songRelativePath": capturedPath]
+                )
+            } catch {
+                NSLog("[BatchExport] Failed %@: %@", asset.displayName, error.localizedDescription)
+            }
+
+            batchExportProgress = Double(index + 1) / Double(assets.count)
+
+            // Restore original selection if we changed it
+            if savedSelectedID != asset.id {
+                setSelectedMidi(id: savedSelectedID, stopPlaybackBeforeSelect: false)
+                for _ in 0..<2 { await Task.yield() }
+            }
+        }
+
+        batchExportProgress = 1.0
+        batchExportStatus = "Batch export done — \(exported)/\(assets.count) songs exported."
+        isBatchExporting = false
     }
 
     // MARK: - Suno Export Pipeline

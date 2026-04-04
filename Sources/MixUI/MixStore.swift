@@ -1421,6 +1421,71 @@ final class MixStore {
         addClips(from: [fileURL], to: trackID, startingAt: startSeconds)
     }
 
+    /// Register a Score-exported WAV into the Mix session for the matching scene.
+    /// Finds or creates a "Score Export" track in the scene session, then appends the clip.
+    /// Called by OperaShellView in response to `ScoreStore.didExportSongToMix`.
+    func registerScoreExport(wavURL: URL, songRelativePath: String) {
+        // Find the scene whose relativePath matches the Score song's relativePath
+        guard let scene = scenes.first(where: { $0.relativePath == songRelativePath }) else {
+            NSLog("[Mix] registerScoreExport: no scene found for %@", songRelativePath)
+            return
+        }
+
+        // Probe audio duration — required for MixClip
+        guard let duration = Self.audioDurationSync(for: wavURL), duration > 0 else {
+            NSLog("[Mix] registerScoreExport: could not read duration for %@", wavURL.path)
+            return
+        }
+
+        // Ensure the session exists
+        ensureSceneSessionExists(scene)
+        guard var session = document.sceneSessions[scene.relativePath] else { return }
+
+        // Find or create a "Score Export" track
+        let trackName = "Score Export"
+        let trackID: UUID
+        if let existing = session.tracks.first(where: { $0.name == trackName }) {
+            trackID = existing.id
+        } else {
+            let ordinal = max(session.nextTrackOrdinal, 1)
+            let newTrack = MixTrack(
+                name: trackName,
+                accentHex: "#4A90D9"   // a blue accent to distinguish from recorded takes
+            )
+            session.tracks.append(newTrack)
+            session.nextTrackOrdinal = ordinal + 1
+            trackID = newTrack.id
+        }
+
+        // Compute start position: place after the last existing clip on this track
+        let lastEnd = session.clips
+            .filter { $0.trackID == trackID }
+            .map { $0.startSeconds + $0.durationSeconds }
+            .max() ?? 0
+        let startSeconds = lastEnd > 0 ? lastEnd + 0.25 : 0
+
+        // Remove any previously exported clip with the same file path on this track
+        // so re-exporting replaces the old clip rather than duplicating it
+        session.clips.removeAll { $0.trackID == trackID && $0.filePath == wavURL.path }
+
+        let clip = MixClip(
+            trackID: trackID,
+            name: wavURL.deletingPathExtension().lastPathComponent,
+            filePath: wavURL.path,
+            sourceGroup: "Score",
+            startSeconds: startSeconds,
+            sourceDurationSeconds: duration,
+            durationSeconds: duration,
+            colorHex: "#4A90D9"
+        )
+        session.clips.append(clip)
+        Self.repairSelection(in: &session)
+        document.sceneSessions[scene.relativePath] = session
+        scheduleSave()
+        statusMessage = "Score export registered: \(clip.name) in \(scene.displayTitle)."
+        NSLog("[Mix] Registered score export: %@ in scene %@", clip.name, scene.relativePath)
+    }
+
     /// Import all audio files from a folder (recursively) onto the specified track,
     /// auto-sequenced end-to-end. Sorts files by name for deterministic order.
     /// Use this for batch-importing Suno WAV renders from a scene folder.
