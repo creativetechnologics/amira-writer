@@ -238,8 +238,9 @@ struct Meshy3DGenerationPane: View {
 
                 Button {
                     Task {
-                        let imageDataURLs = encodeImages(images)
-                        let textureURL = imageDataURLs.first
+                        let imageDataURLs = await encodeImages(images)
+                        let frontIndex = images.firstIndex(where: { $0.pose == .frontNeutral }) ?? 0
+                        let textureURL = imageDataURLs.indices.contains(frontIndex) ? imageDataURLs[frontIndex] : imageDataURLs.first
                         await store.generateMeshy3DModel(
                             for: character.id,
                             imageURLs: imageDataURLs,
@@ -354,15 +355,29 @@ struct Meshy3DGenerationPane: View {
                 .background(.quaternary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
             } else if !batchQueue.isEmpty {
                 // Show completed queue summary
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Text("Batch complete — \(batchQueue.count) costume\(batchQueue.count == 1 ? "" : "s") generated.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                let failedItems = batchQueue.filter { if case .failed = $0.status { return true }; return false }
+                let succeededCount = batchQueue.filter { if case .succeeded = $0.status { return true }; return false }.count
+                if failedItems.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("Batch complete — \(succeededCount) costume\(succeededCount == 1 ? "" : "s") generated.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .background(.green.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+                } else {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Batch finished with \(failedItems.count) failure\(failedItems.count == 1 ? "" : "s")\(succeededCount > 0 ? " — \(succeededCount) succeeded" : "").")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                 }
-                .padding(10)
-                .background(.green.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
             }
 
             // Generate All button
@@ -383,9 +398,11 @@ struct Meshy3DGenerationPane: View {
         let imagePath: String
     }
 
+    private enum BatchItemStatus { case pending, inProgress, succeeded, failed(String) }
     private struct BatchItem {
         let costumeName: String
         let images: [PoseImage]
+        var status: BatchItemStatus = .pending
     }
 
     /// Returns approved pose images for the currently selected source.
@@ -437,20 +454,26 @@ struct Meshy3DGenerationPane: View {
         )
     }
 
-    private func encodeImages(_ items: [PoseImage]) -> [String] {
-        items.compactMap { item -> String? in
+    private func encodeImages(_ items: [PoseImage]) async -> [String] {
+        var results: [String] = []
+        for item in items {
             guard let url = store.resolvedCharacterAssetURL(for: item.imagePath),
-                  let data = try? Data(contentsOf: url) else { return nil }
+                  let data = try? Data(contentsOf: url) else { continue }
             let ext = url.pathExtension.lowercased()
             let mime = ext == "png" ? "image/png" : "image/jpeg"
-            return "data:\(mime);base64,\(data.base64EncodedString())"
+            results.append("data:\(mime);base64,\(data.base64EncodedString())")
         }
+        return results
     }
 
     @MainActor
     private func runBatchGeneration() async {
         let costumes = character.costumeReferenceSets
         guard !costumes.isEmpty else { return }
+
+        // Bug 4: Clear stale queue before building a new one
+        batchQueue = []
+        currentBatchIndex = 0
 
         // Build queue from all costume sets that have at least one approved image
         let items: [BatchItem] = costumes.compactMap { costume in
@@ -461,20 +484,29 @@ struct Meshy3DGenerationPane: View {
         guard !items.isEmpty else { return }
 
         batchQueue = items
-        currentBatchIndex = 0
         isBatchGenerating = true
 
-        for (index, item) in items.enumerated() {
+        for (index, item) in batchQueue.enumerated() {
             currentBatchIndex = index
+            batchQueue[index].status = .inProgress
             let request = buildRequest()
-            let imageDataURLs = encodeImages(item.images)
-            let textureURL = imageDataURLs.first
+            let imageDataURLs = await encodeImages(item.images)
+            // Bug 3: Use frontNeutral as texture image, not just first image
+            let frontIndex = item.images.firstIndex(where: { $0.pose == .frontNeutral }) ?? 0
+            let textureURL = imageDataURLs.indices.contains(frontIndex) ? imageDataURLs[frontIndex] : imageDataURLs.first
             await store.generateMeshy3DModel(
                 for: character.id,
                 imageURLs: imageDataURLs,
                 textureImageURL: shouldTexture ? textureURL : nil,
                 config: request
             )
+            // Bug 2: Track per-item success/failure
+            if store.meshyGenerationStatus == .succeeded {
+                batchQueue[index].status = .succeeded
+            } else {
+                let errorMsg = store.meshyGenerationError ?? "Generation failed"
+                batchQueue[index].status = .failed(errorMsg)
+            }
         }
 
         currentBatchIndex = items.count

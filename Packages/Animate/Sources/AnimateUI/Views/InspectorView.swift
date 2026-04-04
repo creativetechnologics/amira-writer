@@ -174,37 +174,49 @@ struct InspectorView: View {
 
     @ViewBuilder
     private var placeInspector: some View {
-        if let place = store.selectedPlace {
-            VStack(alignment: .leading, spacing: 12) {
-                Label("Places", systemImage: "building.2")
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Draw Things", systemImage: "sparkles")
+                .font(.headline)
 
-                LabeledContent("Name") {
-                    Text(place.name)
-                }
-
-                LabeledContent("Images") {
-                    Text("\(place.imagePaths.count)")
-                }
-
-                LabeledContent("Scenes Using It") {
-                    Text("\(store.scenes.filter { $0.backgroundID == place.id }.count)")
-                }
-
-                if let approved = place.resolvedApprovedImagePath {
-                    LabeledContent("Approved Image") {
-                        Text(URL(fileURLWithPath: approved).lastPathComponent)
-                            .lineLimit(1)
+            if let place = store.selectedPlace {
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent("Selected Location") {
+                        Text(place.name)
+                    }
+                    LabeledContent("Scenes Using It") {
+                        Text("\(store.sceneReferences(for: place.id).count)")
+                    }
+                    if let approved = place.resolvedApprovedImagePath {
+                        LabeledContent("Approved Image") {
+                            Text(URL(fileURLWithPath: approved).lastPathComponent)
+                                .lineLimit(1)
+                        }
                     }
                 }
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Places", systemImage: "building.2")
-                    .font(.headline)
-                Text("Select a place to inspect its approved scene image, notes, and usage.")
+            } else {
+                Text("Select a script location in the middle pane to generate imagery for it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Group {
+                labeledTextField("Host", text: drawThingsBinding(\.apiHost))
+                labeledIntegerField("Port", value: drawThingsBinding(\.apiPort))
+
+                HStack(spacing: 8) {
+                    labeledIntegerField("Width", value: drawThingsBinding(\.imageWidth))
+                    labeledIntegerField("Height", value: drawThingsBinding(\.imageHeight))
+                }
+
+                HStack(spacing: 8) {
+                    labeledIntegerField("Steps", value: drawThingsBinding(\.steps))
+                    labeledDoubleField("CFG", value: drawThingsBinding(\.cfgScale))
+                }
+
+                labeledOptionalIntegerField("Seed", value: drawThingsBinding(\.seed))
+                labeledTextField("Prompt Prefix", text: drawThingsBinding(\.promptPrefix), axis: .vertical)
+                labeledTextField("Prompt Suffix", text: drawThingsBinding(\.promptSuffix), axis: .vertical)
+                labeledTextField("Negative Prompt", text: drawThingsBinding(\.negativePrompt), axis: .vertical)
             }
         }
     }
@@ -637,7 +649,6 @@ struct InspectorView: View {
               let animateURL = store.animateURL else { return }
 
         let queueSnapshot = store.batchQueue
-        store.clearBatchQueue()
 
         let grouped = Dictionary(grouping: queueSnapshot, by: \.groupingKey)
 
@@ -738,6 +749,10 @@ struct InspectorView: View {
                         store.refreshInspirationBatchJobs()
                     } else {
                         store.statusMessage = "Submitted pipeline batch with \(items.count) item\(items.count == 1 ? "" : "s") to \(submission.outputRoot.lastPathComponent)"
+                    }
+                    // Remove only this group's items from the queue after successful submission
+                    for item in items {
+                        store.removeBatchQueueItem(item.id)
                     }
                 } catch {
                     // Re-queue items on failure so the user doesn't lose them
@@ -1757,6 +1772,84 @@ struct InspectorView: View {
                 }
             }
         )
+    }
+
+    private func drawThingsBinding<Value>(
+        _ keyPath: WritableKeyPath<DrawThingsPlaceConfig, Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { store.drawThingsPlaceConfig[keyPath: keyPath] },
+            set: { newValue in
+                var updated = store.drawThingsPlaceConfig
+                updated[keyPath: keyPath] = newValue
+                store.drawThingsPlaceConfig = updated
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func labeledTextField(
+        _ title: String,
+        text: Binding<String>,
+        axis: Axis = .horizontal
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(title, text: text, axis: axis)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    @ViewBuilder
+    private func labeledIntegerField(
+        _ title: String,
+        value: Binding<Int>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(title, value: value, format: .number)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    @ViewBuilder
+    private func labeledOptionalIntegerField(
+        _ title: String,
+        value: Binding<Int?>
+    ) -> some View {
+        let stringBinding = Binding<String>(
+            get: { value.wrappedValue.map(String.init) ?? "" },
+            set: { newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                value.wrappedValue = trimmed.isEmpty ? nil : Int(trimmed)
+            }
+        )
+
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(title, text: stringBinding)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    @ViewBuilder
+    private func labeledDoubleField(
+        _ title: String,
+        value: Binding<Double>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(title, value: value, format: .number.precision(.fractionLength(1...2)))
+                .textFieldStyle(.roundedBorder)
+        }
     }
 
     private func importBackground() {
