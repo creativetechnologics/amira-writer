@@ -200,6 +200,8 @@ struct ScoreSidebarView: View {
     var store: ScoreStore
     @Binding var selectedSongID: UUID?
 
+    @State private var cachedDurations: [UUID: Double] = [:]
+
     var body: some View {
         OperaChromeSidebarList {
             ForEach(store.midiAssets) { asset in
@@ -218,12 +220,41 @@ struct ScoreSidebarView: View {
                                 .font(.system(size: 12.5, weight: .medium))
                                 .foregroundStyle(OperaChromeTheme.textPrimary)
                                 .lineLimit(1)
+                            Spacer()
+                            if let seconds = cachedDurations[asset.id] {
+                                Text(formatDuration(seconds))
+                                    .font(.caption.monospacedDigit())
+                                    .fontWeight(.light)
+                                    .foregroundStyle(Color.gray.opacity(0.6))
+                            }
                         }
                     }
                 }
                 .buttonStyle(.plain)
             }
         }
+        .onAppear { recomputeDurations() }
+        .onChange(of: store.midiAssets.map(\.id)) { _, _ in recomputeDurations() }
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        let mins = Int(seconds) / 60
+        let secs = Int(seconds) % 60
+        return "\(mins):\(String(format: "%02d", secs))"
+    }
+
+    private func recomputeDurations() {
+        var result: [UUID: Double] = [:]
+        for asset in store.midiAssets {
+            guard let parsed = try? MIDIParser.parse(asset.data) else { continue }
+            let secs = ScoreStore.ticksToSecondsStatic(
+                parsed.lengthTicks,
+                ticksPerQuarter: parsed.ticksPerQuarter,
+                tempoEvents: parsed.tempoEvents
+            )
+            result[asset.id] = secs
+        }
+        cachedDurations = result
     }
 }
 
