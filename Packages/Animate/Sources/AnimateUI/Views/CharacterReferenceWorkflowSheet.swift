@@ -1262,6 +1262,7 @@ struct CharacterReferenceWorkflowSheet: View {
 
     private func run(plan: PendingGenerationPlan, drafts: [GeminiGenerationDraft]) {
         guard let character else { return }
+        store.saveCharacterPromptEdits()  // Save any pending prompt edits before generating
         isGenerating = true
         generationStatus = nil
         generationError = nil

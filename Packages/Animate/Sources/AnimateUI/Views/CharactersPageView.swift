@@ -154,6 +154,7 @@ struct CharactersPageView: View {
             }
         }
         .onChange(of: store.selectedCharacterID) { _, _ in
+            store.saveCharacterPromptEdits()  // Save edits before switching character
             inspirationSelectedPaths = []
             inspirationLastClicked = nil
             animatedSelectedPaths = []

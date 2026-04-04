@@ -5784,11 +5784,17 @@ final class AnimateStore {
         save()
     }
 
+    /// Explicitly save any in-memory prompt/text edits to disk.
+    /// Call this on generate, navigate away, or other explicit user actions — NOT on keystroke.
+    func saveCharacterPromptEdits() {
+        save()
+    }
+
     func updateMasterReferenceSheetPrompt(_ prompt: String, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }),
               characters[index].masterReferenceSheetPrompt != prompt else { return }
         characters[index].masterReferenceSheetPrompt = prompt
-        scheduleDebouncedSave()
+        // No autosave — prompts save on generate/navigate, not on keystroke
     }
 
     func setMasterReferenceSourceInclusion(_ included: Bool, path: String, for characterID: UUID) {
@@ -5870,7 +5876,7 @@ final class AnimateStore {
         guard let index = characters.firstIndex(where: { $0.id == characterID }),
               characters[index].headTurnaroundSheetPrompt != prompt else { return }
         characters[index].headTurnaroundSheetPrompt = prompt
-        scheduleDebouncedSave()
+        // No autosave — prompts save on generate/navigate, not on keystroke
     }
 
     func setApprovedHeadTurnaroundSheetVariant(_ variantID: UUID?, for characterID: UUID) {
@@ -6105,7 +6111,7 @@ final class AnimateStore {
                 )
             }
         )
-        save()
+        // No autosave — costume data saves on generate/navigate, not on keystroke
     }
 
     func updateCostumeReferenceSetNotes(_ notes: String, costumeID: UUID, for characterID: UUID) {
@@ -6142,7 +6148,7 @@ final class AnimateStore {
                     costumeNotes: notes
                 )
         }
-        scheduleDebouncedSave()
+        // No autosave — costume data saves on generate/navigate, not on keystroke
     }
 
     func updateCostumeSheetPrompt(_ prompt: String, costumeID: UUID, for characterID: UUID) {
@@ -6152,7 +6158,7 @@ final class AnimateStore {
             return
         }
         characters[charIndex].costumeReferenceSets[costumeIndex].sheetPrompt = prompt
-        scheduleDebouncedSave()
+        // No autosave — prompts save on generate/navigate, not on keystroke
     }
 
     func setApprovedCostumeSheetVariant(_ variantID: UUID?, costumeID: UUID, for characterID: UUID) {
