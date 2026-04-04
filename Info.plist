@@ -22,5 +22,7 @@
     <string>26.0</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2026 Amira Writer. All rights reserved.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Amira Writer uses the camera for real-time motion capture to drive character animations.</string>
 </dict>
 </plist>
