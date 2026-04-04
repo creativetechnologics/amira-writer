@@ -10,8 +10,10 @@ struct CharactersPageView: View {
     @State private var promptPreview: ImagePromptPreview?
     @State private var previewImageIndex: Int?
     @State private var previewImagePaths: [String] = []
-    @State private var selectedGalleryImagePaths: Set<String> = []
-    @State private var lastClickedGalleryImagePath: String?
+    @State private var inspirationSelectedPaths: Set<String> = []
+    @State private var inspirationLastClicked: String?
+    @State private var animatedSelectedPaths: Set<String> = []
+    @State private var animatedLastClicked: String?
     @State private var thumbnailBaseSize: CGFloat = 120
     @State private var showInspirationGallery: Bool = false
     @State private var showReferenceImages: Bool = false
@@ -92,8 +94,14 @@ struct CharactersPageView: View {
                             previewImageIndex = newIndex
                             if previewImagePaths.indices.contains(newIndex) {
                                 let path = previewImagePaths[newIndex]
-                                selectedGalleryImagePaths = [path]
-                                lastClickedGalleryImagePath = path
+                                // Update whichever gallery owns this path
+                                if inspirationSelectedPaths.contains(path) || inspirationLastClicked != nil {
+                                    inspirationSelectedPaths = [path]
+                                    inspirationLastClicked = path
+                                } else {
+                                    animatedSelectedPaths = [path]
+                                    animatedLastClicked = path
+                                }
                             }
                         }
                     ),
@@ -143,6 +151,13 @@ struct CharactersPageView: View {
                     onDismiss: { showProfileImagePicker = false }
                 )
             }
+        }
+        .onChange(of: store.selectedCharacterID) { _, _ in
+            inspirationSelectedPaths = []
+            inspirationLastClicked = nil
+            animatedSelectedPaths = []
+            animatedLastClicked = nil
+            previewImageIndex = nil
         }
         .onChange(of: showReferenceWorkflowPane) { _, expanded in
             if expanded, let character = store.selectedCharacter {
@@ -321,6 +336,7 @@ struct CharactersPageView: View {
                         characterRow(character)
                             .tag(character.id)
                             .draggable(character.id.uuidString)
+                            .moveDisabled(!characterSearchText.isEmpty)
                             .contextMenu {
                                 Button("Edit Rig") {
                                     store.selectedCharacterID = character.id
@@ -972,8 +988,8 @@ struct CharactersPageView: View {
                 onToggleCurated: { path in store.toggleCuratedInspirationImage(path, for: character.id) },
                 curatedPaths: Set(character.curatedInspirationImagePaths),
                 showsHeader: false,
-                selectedPaths: $selectedGalleryImagePaths,
-                lastClickedPath: $lastClickedGalleryImagePath,
+                selectedPaths: $inspirationSelectedPaths,
+                lastClickedPath: $inspirationLastClicked,
                 onDropURLs: { urls in
                     importImageURLs(urls, using: { validURLs in
                         store.importInspirationImages(from: validURLs, for: character.id)
@@ -1042,8 +1058,8 @@ struct CharactersPageView: View {
                 showPromptPreview(for: path)
             },
             showsHeader: false,
-            selectedPaths: $selectedGalleryImagePaths,
-            lastClickedPath: $lastClickedGalleryImagePath,
+            selectedPaths: $animatedSelectedPaths,
+            lastClickedPath: $animatedLastClicked,
             onDropURLs: { urls in
                 importImageURLs(urls, using: { validURLs in
                     store.importAnimatedImages(from: validURLs, for: character.id)
@@ -1741,13 +1757,15 @@ struct CharactersPageView: View {
         }
     }
 
-    private func sanitizedFilenameStem(for title: String) -> String {
-        title
+    private func sanitizedFilenameStem(for input: String) -> String {
+        var result = input
+            .components(separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_")).inverted)
+            .joined(separator: "-")
             .lowercased()
-            .replacingOccurrences(of: "°", with: "deg")
-            .replacingOccurrences(of: " ", with: "-")
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: "•", with: "-")
+        while result.contains("--") {
+            result = result.replacingOccurrences(of: "--", with: "-")
+        }
+        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 
     private func importImageURLs(
@@ -2185,7 +2203,8 @@ struct ImageGallerySection: View {
             columns: [GridItem(.adaptive(minimum: thumbnailBaseSize, maximum: thumbnailBaseSize), spacing: 12)],
             spacing: 12
         ) {
-            ForEach(Array(paths.enumerated()), id: \.offset) { index, path in
+            ForEach(paths, id: \.self) { path in
+                let index = paths.firstIndex(of: path) ?? 0
                 ImageGalleryThumbnail(
                     store: store,
                     path: path,
@@ -2337,20 +2356,20 @@ struct ImageGalleryThumbnail: View {
                 )
         )
         .contentShape(RoundedRectangle(cornerRadius: 12))
-        .gesture(TapGesture().onEnded {
+        .onTapGesture(count: 2) {
+            onClick(GalleryClickEvent(modifiers: .none))
+            onPreview()
+        }
+        .onTapGesture(count: 1) {
             let flags = NSEvent.modifierFlags
-            let clickCount = NSApp.currentEvent?.clickCount ?? 1
-            if clickCount >= 2 {
-                onClick(GalleryClickEvent(modifiers: .none))
-                onPreview()
-            } else if flags.contains(.command) {
+            if flags.contains(.command) {
                 onClick(GalleryClickEvent(modifiers: .command))
             } else if flags.contains(.shift) {
                 onClick(GalleryClickEvent(modifiers: .shift))
             } else {
                 onClick(GalleryClickEvent(modifiers: .none))
             }
-        })
+        }
         .modifier(FileDragModifier(url: store.resolvedCharacterAssetURL(for: path)))
     }
 
@@ -2978,7 +2997,8 @@ struct InspirationGallerySheet: View {
 
     private var galleryGrid: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: thumbnailBaseSize, maximum: thumbnailBaseSize), spacing: 12)], spacing: 12) {
-            ForEach(Array(character.inspirationImagePaths.enumerated()), id: \.offset) { index, path in
+            ForEach(character.inspirationImagePaths, id: \.self) { path in
+                let index = character.inspirationImagePaths.firstIndex(of: path) ?? 0
                 galleryThumbnail(path: path, index: index)
             }
         }
@@ -3262,7 +3282,8 @@ struct ReferenceImagesSheet: View {
             columns: [GridItem(.adaptive(minimum: thumbnailBaseSize, maximum: thumbnailBaseSize), spacing: 12)],
             spacing: 12
         ) {
-            ForEach(Array(character.referenceImagePaths.enumerated()), id: \.offset) { index, path in
+            ForEach(character.referenceImagePaths, id: \.self) { path in
+                let index = character.referenceImagePaths.firstIndex(of: path) ?? 0
                 referenceGalleryThumbnail(path: path, index: index)
             }
         }
