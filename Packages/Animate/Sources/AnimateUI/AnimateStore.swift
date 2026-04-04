@@ -4,6 +4,7 @@ import Metal
 import QuartzCore
 import ProjectKit
 import UniformTypeIdentifiers
+import CoreMedia
 
 @MainActor
 private final class AnimateDisplayLinkProxy: NSObject {
@@ -67,6 +68,70 @@ final class AnimateStore {
     var activePackageIDsByCharacterSlug: [String: UUID] = [:]
     var shotPresets: [SceneShotPreset] = []
 
+    // MARK: - Motion Capture State
+
+    var mocapIsRunning = false
+    var mocapCameraID: String?
+    var mocapLatestPoseFrame: UnifiedPoseFrame?
+    var mocapFrameCount: Int = 0
+    var mocapErrorMessage: String?
+    var mocapFilterEnabled = true
+
+    nonisolated(unsafe) var mocapCaptureSession: CaptureSession?
+    nonisolated(unsafe) var mocapBodyTracker: VisionBodyTracker?
+    var mocapTemporalFilter = TemporalFilterManager()
+
+    func startMocap() {
+        guard !mocapIsRunning else { return }
+        mocapErrorMessage = nil
+        mocapFrameCount = 0
+        mocapLatestPoseFrame = nil
+        mocapTemporalFilter.reset()
+
+        let capture = CaptureSession()
+        let tracker = VisionBodyTracker { [weak self] frame in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                var finalFrame = frame
+                if self.mocapFilterEnabled, let joints = frame.bodyJoints {
+                    let filtered = self.mocapTemporalFilter.filter(
+                        joints: joints,
+                        timestamp: frame.timestamp
+                    )
+                    finalFrame = UnifiedPoseFrame(
+                        timestamp: frame.timestamp,
+                        source: frame.source,
+                        bodyJoints: filtered,
+                        bodyConfidences: frame.bodyConfidences,
+                        leftHandJoints: frame.leftHandJoints,
+                        rightHandJoints: frame.rightHandJoints,
+                        faceBlendShapes: frame.faceBlendShapes,
+                        faceLandmarks: frame.faceLandmarks
+                    )
+                }
+                self.mocapLatestPoseFrame = finalFrame
+                self.mocapFrameCount += 1
+            }
+        }
+
+        capture.setPixelBufferHandler { [weak tracker] pixelBuffer, presentationTime in
+            let seconds = CMTimeGetSeconds(presentationTime)
+            tracker?.processFrame(pixelBuffer, timestamp: seconds)
+        }
+
+        mocapCaptureSession = capture
+        mocapBodyTracker = tracker
+        capture.start(cameraID: mocapCameraID)
+        mocapIsRunning = true
+    }
+
+    func stopMocap() {
+        mocapCaptureSession?.stop()
+        mocapCaptureSession = nil
+        mocapBodyTracker = nil
+        mocapIsRunning = false
+    }
+
     // MARK: - Image Crop State
 
     private let assetManager = AssetManager()
@@ -82,6 +147,21 @@ final class AnimateStore {
     var pendingVariantCropSourceSheetPath: String? = nil
     var pendingVariantCropInitialRect: CropRect? = nil
     var showVariantCropper: Bool = false
+
+    // MARK: - Image Eraser State
+
+    var pendingEraserImagePath: String? = nil
+    var showImageEraser: Bool = false
+
+    func openEraseTool(for imagePath: String) {
+        pendingEraserImagePath = imagePath
+        showImageEraser = true
+    }
+
+    func closeEraseTool() {
+        pendingEraserImagePath = nil
+        showImageEraser = false
+    }
 
     // MARK: - Song Data Cache
 
@@ -1952,6 +2032,12 @@ final class AnimateStore {
         }
 
         return await assetManager.thumbnailAsync(for: url, maxSize: maxSize)
+    }
+
+    /// Invalidate cached thumbnails for a file that was overwritten (e.g., after cropping).
+    func invalidateThumbnail(for path: String?) {
+        guard let url = resolvedCharacterAssetURL(for: path) else { return }
+        assetManager.invalidateThumbnail(for: url)
     }
 
     private func normalizedCharacterAssetPath(_ path: String?) -> String? {
@@ -4333,7 +4419,9 @@ final class AnimateStore {
                 category: "profile",
                 animateURL: try requireAnimateURL()
             )
+            invalidateThumbnail(for: characters[index].profileImagePath)
             setCharacterProfileImage(storedURL.path, for: characterID)
+            invalidateThumbnail(for: storedURL.path)
             pendingCropImagePath = nil
             pendingCropCharacterID = nil
             showImageCropper = false
@@ -4423,6 +4511,7 @@ final class AnimateStore {
                     if let path = targetImagePath,
                        let existingURL = resolvedCharacterAssetURL(for: path) {
                         try pngData.write(to: existingURL)
+                        invalidateThumbnail(for: path)
                     }
                     characters[charIdx].headTurnaroundSlots[slotIdx].variants[variantIdx].sourceCropRect = CropRect.from(cropRect)
                     characters[charIdx].headTurnaroundSlots[slotIdx].variants[variantIdx].sourceSheetPath = sourceSheetPath
@@ -4441,6 +4530,7 @@ final class AnimateStore {
                         if let path = targetImagePath,
                            let existingURL = resolvedCharacterAssetURL(for: path) {
                             try pngData.write(to: existingURL)
+                            invalidateThumbnail(for: path)
                         }
                         characters[charIdx].costumeReferenceSets[costumeIdx].fullBodySlots[slotIdx].variants[variantIdx].sourceCropRect = CropRect.from(cropRect)
                         characters[charIdx].costumeReferenceSets[costumeIdx].fullBodySlots[slotIdx].variants[variantIdx].sourceSheetPath = sourceSheetPath
@@ -5138,6 +5228,12 @@ final class AnimateStore {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
         guard characters[charIndex].animatedImagePaths.indices.contains(indexToRemove) else { return }
         characters[charIndex].animatedImagePaths.remove(at: indexToRemove)
+        save()
+    }
+
+    func removeAnimatedImages(at indices: IndexSet, for characterID: UUID) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        characters[charIndex].animatedImagePaths.remove(atOffsets: indices)
         save()
     }
 
