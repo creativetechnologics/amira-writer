@@ -29,6 +29,13 @@ struct MixSceneSidebarView: View {
                                     .font(.system(size: 12.5, weight: .medium))
                                     .foregroundStyle(OperaChromeTheme.textPrimary)
                                     .lineLimit(1)
+                                Spacer()
+                                if let dur = sessionInfo.durationSeconds {
+                                    Text(formatDuration(dur))
+                                        .font(.caption.monospacedDigit())
+                                        .fontWeight(.light)
+                                        .foregroundStyle(Color.gray.opacity(0.6))
+                                }
                             }
                         }
                     }
@@ -41,20 +48,31 @@ struct MixSceneSidebarView: View {
     private struct SceneSessionInfo {
         let hasContent: Bool
         let summary: String
+        let durationSeconds: Double?
     }
 
     private func sceneSessionInfo(for scene: MixSceneSummary) -> SceneSessionInfo {
         guard let session = store.sessionForScene(scene) else {
-            return SceneSessionInfo(hasContent: false, summary: "")
+            return SceneSessionInfo(hasContent: false, summary: "", durationSeconds: nil)
         }
         let trackCount = session.tracks.count
         let clipCount = session.clips.count
+        let duration = session.clips
+            .map { $0.startSeconds + $0.durationSeconds }
+            .max()
         if trackCount == 0 && clipCount == 0 {
-            return SceneSessionInfo(hasContent: false, summary: "")
+            return SceneSessionInfo(hasContent: false, summary: "", durationSeconds: nil)
         }
         return SceneSessionInfo(
             hasContent: true,
-            summary: "\(trackCount)T \u{00B7} \(clipCount)C"
+            summary: "\(trackCount)T \u{00B7} \(clipCount)C",
+            durationSeconds: duration
         )
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        let mins = Int(seconds) / 60
+        let secs = Int(seconds) % 60
+        return "\(mins):\(String(format: "%02d", secs))"
     }
 }
