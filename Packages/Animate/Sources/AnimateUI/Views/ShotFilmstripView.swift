@@ -49,9 +49,7 @@ struct ShotFilmstripView: View {
 
     private func shotChip(index: Int, shot: AnimationSceneShot) -> some View {
         let isSelected = selectedShotIndex == index
-        let firstOK = shot.shotFrameGeneration?.firstFrameApproved ?? false
-        let lastOK = shot.shotFrameGeneration?.lastFrameApproved ?? false
-        let statusText = (firstOK ? "✓" : "·") + (lastOK ? "✓" : "·")
+        let statusText = "··"
 
         return VStack(spacing: 2) {
             Text("S\(index + 1)")
@@ -61,7 +59,7 @@ struct ShotFilmstripView: View {
                 .foregroundStyle(.secondary)
             Text(statusText)
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(firstOK && lastOK ? .green : .secondary)
+                .foregroundStyle(Color.secondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

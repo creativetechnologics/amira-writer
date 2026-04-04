@@ -41,6 +41,7 @@ struct CharactersPageView: View {
     @State private var isSubmittingInspirationBatch: Bool = false
     @State private var submittingInspirationBatchCharacterID: UUID?
     @State private var characterSearchText: String = ""
+    @State private var viewing3DModelID: UUID?
     var showSidebar: Bool = true
 
     private static let batchTimestampFormatter: DateFormatter = {
@@ -1312,9 +1313,10 @@ struct CharactersPageView: View {
                     Spacer()
 
                     Button {
-                        view3DModel(character: character, model: model)
+                        viewing3DModelID = viewing3DModelID == model.id ? nil : model.id
                     } label: {
-                        Label("View", systemImage: "eye")
+                        Label(viewing3DModelID == model.id ? "Close" : "View",
+                              systemImage: viewing3DModelID == model.id ? "xmark" : "eye")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -1333,6 +1335,16 @@ struct CharactersPageView: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(OperaChromeTheme.raisedBackground.opacity(0.4))
                 )
+
+                if viewing3DModelID == model.id, let animateURL = store.animateURL {
+                    let modelURL = animateURL
+                        .appendingPathComponent("characters")
+                        .appendingPathComponent(character.assetFolderSlug)
+                        .appendingPathComponent("models")
+                        .appendingPathComponent(model.modelFileName)
+                    Character3DModelViewer(modelURL: modelURL)
+                        .transition(.opacity)
+                }
             } else {
                 HStack(spacing: 8) {
                     Image(systemName: "cube.transparent")
