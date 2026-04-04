@@ -169,6 +169,7 @@ public struct AnimateWorkspace: View {
 private struct AnimateWorkspaceContent: View {
     @Bindable var store: AnimateStore
     @State private var selectedShotIndex: Int?
+    @StateObject private var waveformCache = AnimateAudioWaveformCache()
 
     @AppStorage("novotro.animate.sidebarVisible") private var sidebarVisible = true
     @AppStorage("novotro.animate.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
@@ -299,6 +300,16 @@ private struct AnimateWorkspaceContent: View {
                             Divider()
                             ShotProductionStripView(store: store, scene: scene, shot: scene.shots[idx], shotIndex: idx)
                         }
+                    }
+
+                    // Audio waveform track — always visible when a scene is selected
+                    if let scene = store.selectedScene {
+                        Divider()
+                        AudioWaveformTrackView(
+                            store: store,
+                            scene: scene,
+                            waveformCache: waveformCache
+                        )
                     }
                 }
             }
