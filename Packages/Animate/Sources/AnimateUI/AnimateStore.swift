@@ -602,6 +602,8 @@ final class AnimateStore {
     private static let geminiModelDefaultsKey = "novotro.animate.gemini.model"
 
     init() {
+        AppLog.rollIfLarge()
+        AppLog.log("STARTUP", "AnimateStore init — log file at \(AppLog.logFileURL.path)")
         observePersistedSaveState()
         hydrateGeminiSettings()
         hydrateMiniMaxSettings()
@@ -4783,6 +4785,11 @@ final class AnimateStore {
     // MARK: - Save (writes only to Animate/ subdirectory; places sidecars are explicit-only)
 
     func save(writePlaces: Bool = false) {
+        let saveStart = Date()
+        defer {
+            let ms = Int(Date().timeIntervalSince(saveStart) * 1000)
+            AppLog.log("STORE", "save(writePlaces: \(writePlaces)) — \(characters.count) chars, \(ms) ms")
+        }
         let wasSyncingBeforeCheck = isAgentSyncInProgress
         checkForExternalProjectChanges()
         guard !wasSyncingBeforeCheck, !hasPendingAgentChanges else {
