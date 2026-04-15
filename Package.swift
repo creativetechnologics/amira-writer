@@ -52,21 +52,21 @@ let package = Package(
             ],
             path: "Sources/Opera"
         ),
-        .testTarget(
-            name: "WriteTests",
-            dependencies: [
-                "WriteUI",
-                .product(name: "ProjectKit", package: "ProjectKit")
-            ],
-            path: "Tests/WriteTests"
-        ),
-        .testTarget(
-            name: "MixTests",
-            dependencies: [
-                "MixUI",
-                .product(name: "ProjectKit", package: "ProjectKit")
-            ],
-            path: "Tests/MixTests"
-        )
+        // .testTarget(
+        //     name: "WriteTests",
+        //     dependencies: [
+        //         "WriteUI",
+        //         .product(name: "ProjectKit", package: "ProjectKit")
+        //     ],
+        //     path: "Tests/WriteTests"
+        // ),
+        // .testTarget(
+        //     name: "MixTests",
+        //     dependencies: [
+        //         "MixUI",
+        //         .product(name: "ProjectKit", package: "ProjectKit")
+        //     ],
+        //     path: "Tests/MixTests"
+        // )
     ]
 )

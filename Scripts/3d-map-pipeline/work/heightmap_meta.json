@@ -1,0 +1,17 @@
+{
+  "working_resolution": [
+    10200,
+    5380
+  ],
+  "meters_per_pixel": 0.4734848484848485,
+  "peak_alt_m": 500.0,
+  "river_alt_m": 0.0,
+  "world_width_m": 4829.545454545455,
+  "anchor": {
+    "river_raw_pct2": 2.850417375564575,
+    "peak_raw_pct99": 7.303616523742676,
+    "scale": 112.27883221987966
+  },
+  "model": "depth-anything/Depth-Anything-V2-Base-hf",
+  "device": "mps"
+}

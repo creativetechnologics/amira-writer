@@ -37,15 +37,15 @@
 ## Build And Deploy
 
 - Fast local loop (preferred for day-to-day iteration):
-  - `rtk /Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-opera-dev.sh`
+  - `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-opera-dev.sh`
 - Local build:
-  - `rtk swift build -c release --product Opera`
+  - `swift build -c release --product Opera`
 - Local tests:
-  - `rtk swift test -c release`
+  - `swift test -c release`
 - Bundle build:
-  - `rtk /Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-app.sh`
+  - `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-app.sh`
 - Remote deploy to Gary's user Applications folders:
-  - `rtk /Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-app.sh`
+  - `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-app.sh`
   - This installs locally, then deploys to both `gary@Garys-Laptop.local:~/Applications/` and `gary@Garys-MacBook.local:~/Applications/` by default.
   - Use `--local-only` to skip remote deployment when needed.
 

@@ -17,6 +17,10 @@ public final class AnimateWorkspaceController: ObservableObject {
 
     public init() {
         store.disableExternalFileWatch = true
+        _ = RunPodLORAService.shared
+        _ = RunPodMouthSyncService.shared
+        RunPodLORAService.shared.setActiveAnimateURL(store.animateURL)
+        RunPodMouthSyncService.shared.setActiveAnimateURL(store.animateURL)
         activeProjectPath = store.owpURL?.standardizedFileURL.path
         selectedScenePath = currentSelectionPath()
         saveIndicator = store.saveIndicator
@@ -25,6 +29,26 @@ public final class AnimateWorkspaceController: ObservableObject {
     }
 
     public var isDirty: Bool { store.saveIndicator == .unsavedChanges }
+
+    public var drawThingsHost: String { store.drawThingsPlaceConfig.apiHost }
+    public var drawThingsPort: Int { store.drawThingsPlaceConfig.apiPort }
+
+    /// Whether any RunPod-backed Animate workflow currently has an active pod.
+    public var isRunPodActive: Bool {
+        RunPodLORAService.shared.podStatus.isActive || RunPodMouthSyncService.shared.podStatus.isActive
+    }
+
+    /// Manual emergency stop for all active RunPod-backed Animate jobs.
+    public func terminateRunPodPods() {
+        RunPodLORAService.shared.terminateAllPods()
+        RunPodMouthSyncService.shared.terminateAllPods()
+    }
+
+    /// Diagnostic: run a codex CLI test to verify the prompt service works.
+    /// Returns the prompt string on success, throws on failure.
+    public static func runCodexDiagnostic() async throws -> String {
+        try await ImagineScenePromptService.runDiagnosticTest()
+    }
 
     public func suspendBackgroundWork() {
         store.suspendBackgroundWork()
@@ -60,7 +84,11 @@ public final class AnimateWorkspaceController: ObservableObject {
            !store.isLoadingProject,
            store.loadErrorMessage == nil {
             activeProjectPath = normalizedPath
+            RunPodLORAService.shared.setActiveAnimateURL(store.animateURL)
+            RunPodMouthSyncService.shared.setActiveAnimateURL(store.animateURL)
             store.resumeBackgroundWork()
+            // Refresh scene data from disk so authored shots survive re-entry
+            store.reloadScenesFromDisk()
             return nil
         }
 
@@ -95,6 +123,8 @@ public final class AnimateWorkspaceController: ObservableObject {
            store.loadErrorMessage == nil {
             loadedProjectPath = normalizedPath
             activeProjectPath = normalizedPath
+            RunPodLORAService.shared.setActiveAnimateURL(store.animateURL)
+            RunPodMouthSyncService.shared.setActiveAnimateURL(store.animateURL)
             return nil
         }
 
@@ -107,6 +137,26 @@ public final class AnimateWorkspaceController: ObservableObject {
 
     public func currentSelectionPath() -> String? {
         store.selectedScene?.owpSongPath
+    }
+
+    public func setDefaultAudioPath(_ path: String?, for sceneID: UUID) {
+        store.setDefaultAudioPath(path, for: sceneID)
+    }
+
+    public func songPath(for sceneID: UUID) -> String? {
+        store.scenes.first(where: { $0.id == sceneID })?.owpSongPath
+    }
+
+    /// Explicitly reload Animate/scenes.json from disk, refreshing authored shot data.
+    public func reloadScenesFromDisk() {
+        store.reloadScenesFromDisk()
+    }
+
+    /// Returns all scenes as (id, owpSongPath, hasAudio) tuples for cross-module coordination.
+    public func sceneAudioStatus() -> [(id: UUID, songPath: String, hasAudio: Bool)] {
+        store.scenes.map { scene in
+            (id: scene.id, songPath: scene.owpSongPath, hasAudio: !(scene.defaultAudioPath ?? "").isEmpty)
+        }
     }
 
     private func observeSaveIndicator() {

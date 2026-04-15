@@ -337,36 +337,12 @@ struct MixEmptyArrangeView: View {
     let viewportWidth: CGFloat
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: true) {
-            VStack(spacing: 0) {
-                MixTimelineRulerView(duration: min(max(store.activeSceneDurationSeconds, 45), 36_000), pixelsPerSecond: pixelsPerSecond, height: 34)
+        VStack(spacing: 0) {
+            MixTimelineRulerView(duration: min(max(store.activeSceneDurationSeconds, 45), 36_000), pixelsPerSecond: pixelsPerSecond, height: 34)
 
-                ZStack {
-                    Rectangle()
-                        .fill(MixPalette.arrangeBackground)
-
-                    VStack(spacing: 10) {
-                        Image(systemName: "waveform.badge.plus")
-                            .font(.system(size: 28, weight: .medium))
-                            .foregroundStyle(MixPalette.cyan)
-                        Text("Drop audio files anywhere to create the first track")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.9))
-                        Text("You can also add a blank track or a vocal record track and start building the session manually.")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.white.opacity(0.58))
-                        HStack(spacing: 8) {
-                            MixToolbarButton(title: "Add Track", systemImage: "plus") {
-                                _ = store.addTrack()
-                            }
-                            MixToolbarButton(title: "Add Vocal Track", systemImage: "mic.badge.plus") {
-                                _ = store.addTrack(armForRecording: true)
-                            }
-                        }
-                    }
-                    .padding(24)
-                }
-                .frame(minWidth: viewportWidth, maxHeight: .infinity)
+            Rectangle()
+                .fill(MixPalette.arrangeBackground)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onDrop(
                     of: [UTType.fileURL, UTType.url],
                     delegate: MixTimelineDropDelegate(
@@ -376,11 +352,7 @@ struct MixEmptyArrangeView: View {
                         pixelsPerSecond: pixelsPerSecond
                     )
                 )
-            }
-            .frame(minWidth: viewportWidth, alignment: .topLeading)
         }
-        .frame(width: viewportWidth, alignment: .leading)
-        .clipped()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

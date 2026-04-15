@@ -8,6 +8,8 @@ import ProjectKit
 struct ScriptCenterView: View {
     @Bindable var store: ScriptStore
     var showScratchpad: Bool = false
+    var showLyricIterations: Bool = false
+    var selectedLyricIterationSlot: Int = 1
 
     var body: some View {
         if store.librettoFiles.isEmpty {
@@ -26,7 +28,9 @@ struct ScriptCenterView: View {
         } else {
             ScriptScrollContent(
                 store: store,
-                showScratchpad: showScratchpad
+                showScratchpad: showScratchpad,
+                showLyricIterations: showLyricIterations,
+                selectedLyricIterationSlot: selectedLyricIterationSlot
             )
         }
     }
@@ -38,6 +42,9 @@ struct ScriptCenterView: View {
 struct ScriptScrollContent: View {
     @Bindable var store: ScriptStore
     var showScratchpad: Bool
+    var showLyricIterations: Bool
+    var selectedLyricIterationSlot: Int
+    @AppStorage("novotro.write.lyricIterations.width") private var lyricIterationsWidth: Double = 340
     @AppStorage("novotro.write.scratchpad.width") private var scratchpadWidth: Double = 340
 
     private var displayNamesByPath: [String: String] {
@@ -55,6 +62,9 @@ struct ScriptScrollContent: View {
                                 displayName: displayNamesByPath[libretto.relativePath] ?? libretto.displayName,
                                 path: libretto.relativePath,
                                 store: store,
+                                showLyricIterations: showLyricIterations,
+                                selectedLyricIterationSlot: selectedLyricIterationSlot,
+                                lyricIterationsWidth: lyricIterationsWidth,
                                 showScratchpad: showScratchpad,
                                 scratchpadWidth: scratchpadWidth
                             )
@@ -75,7 +85,7 @@ struct ScriptScrollContent: View {
 
                         Spacer().frame(height: 200)
                     }
-                    .padding(.horizontal, showScratchpad ? 28 : 40)
+                    .padding(.horizontal, (showScratchpad || showLyricIterations) ? 28 : 40)
                     .padding(.top, 20)
                     .padding(.bottom, 40)
                 }
@@ -134,6 +144,9 @@ private struct ScriptSectionRowView: View {
     let displayName: String
     let path: String
     @Bindable var store: ScriptStore
+    let showLyricIterations: Bool
+    let selectedLyricIterationSlot: Int
+    let lyricIterationsWidth: Double
     let showScratchpad: Bool
     let scratchpadWidth: Double
 
@@ -154,6 +167,16 @@ private struct ScriptSectionRowView: View {
                     store: store
                 )
                 .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                if showLyricIterations {
+                    ScriptLyricIterationSectionView(
+                        displayName: displayName,
+                        path: path,
+                        slot: selectedLyricIterationSlot,
+                        store: store
+                    )
+                    .frame(width: lyricIterationsWidth, alignment: .topLeading)
+                }
 
                 if showScratchpad {
                     ScriptScratchpadSectionView(
@@ -579,6 +602,79 @@ private struct ScriptScratchpadSectionView: View {
                 suppressWriteBack = false
             }
         }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct ScriptLyricIterationSectionView: View {
+    let displayName: String
+    let path: String
+    let slot: Int
+    @Bindable var store: ScriptStore
+
+    private var iterationText: String {
+        store.lyricIterationText(forPath: path, slot: slot)
+    }
+
+    private var iterationRelativePath: String {
+        store.lyricIterationRelativePath(forPath: path, slot: slot)
+    }
+
+    private var hasContent: Bool {
+        !iterationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("LYRIC ITERATION \(slot)")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.cyan.opacity(0.9))
+                    .tracking(1.2)
+
+                Text(displayName)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                OperaChromeStatusBadge(
+                    text: hasContent ? "READY" : "EMPTY",
+                    tint: hasContent ? Color.cyan.opacity(0.85) : OperaChromeTheme.textTertiary
+                )
+            }
+
+            Text(iterationRelativePath)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(OperaChromeTheme.textTertiary)
+                .textSelection(.enabled)
+
+            if hasContent {
+                Text(verbatim: iterationText)
+                    .font(.system(size: 13, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.88))
+                    .lineSpacing(5)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(.vertical, 6)
+            } else {
+                Text("Place a lyrics-only draft in this file to preview it here automatically. Keep it plain lyrics with no stage directions.")
+                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .foregroundStyle(OperaChromeTheme.textTertiary)
+                    .padding(.top, 10)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(OperaChromeTheme.raisedBackground.opacity(0.7))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
+        )
     }
 }
 

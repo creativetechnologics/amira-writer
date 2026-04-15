@@ -24,5 +24,12 @@
     <string>Copyright 2026 Amira Writer. All rights reserved.</string>
     <key>NSCameraUsageDescription</key>
     <string>Amira Writer uses the camera for real-time motion capture to drive character animations.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Amira Writer connects to Draw Things on your local network for AI image generation.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_http._tcp</string>
+    </array>
+
 </dict>
 </plist>

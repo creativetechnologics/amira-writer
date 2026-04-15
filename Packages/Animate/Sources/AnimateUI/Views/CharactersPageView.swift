@@ -5,66 +5,25 @@ import ProjectKit
 @available(macOS 26.0, *)
 struct CharactersPageView: View {
     @Bindable var store: AnimateStore
-    @State private var packageImportPreview: CharacterPackageImportPreview?
-    @State private var packageImportErrorMessage: String?
     @State private var promptPreview: ImagePromptPreview?
     @State private var previewImageIndex: Int?
     @State private var previewImagePaths: [String] = []
     @State private var inspirationSelectedPaths: Set<String> = []
     @State private var inspirationLastClicked: String?
-    @State private var animatedSelectedPaths: Set<String> = []
-    @State private var animatedLastClicked: String?
     @State private var thumbnailBaseSize: CGFloat = 120
-    @State private var showInspirationGallery: Bool = false
     @State private var showReferenceImages: Bool = false
-    @State private var showProfileImagePicker: Bool = false
+    @State private var showExpressionBatchSheet: Bool = false
     @AppStorage("charactersPage.showCharacterNotesPane") private var showCharacterNotesPane: Bool = true
     @AppStorage("charactersPage.showLookDevelopmentPane") private var showLookDevelopmentPane: Bool = true
-    @AppStorage("charactersPage.showInspirationPane") private var showInspirationPane: Bool = true
     @AppStorage("charactersPage.showReferenceWorkflowPane") private var showReferenceWorkflowPane: Bool = true
-    @AppStorage("charactersPage.showAnimatedImagesPane") private var showAnimatedImagesPane: Bool = false
-    @AppStorage("charactersPage.showPackagesPane") private var showPackagesPane: Bool = false
     // 3D Sidecars pane archived
-    @AppStorage("charactersPage.showMotionGenerationPane") private var showMotionGenerationPane: Bool = false
+    @AppStorage("charactersPage.showActionImagesPane") private var showActionImagesPane: Bool = false
     @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
-    @State private var inspirationPendingPlan: PendingInspirationGenerationPlan?
-    @State private var inspirationDrafts: [GeminiGenerationDraft] = []
-    @State private var inspirationActiveWardrobe: CharacterInspirationWardrobe?
-    @State private var inspirationGenerationErrorMessage: String?
-    @State private var inspirationGenerationStatus: String?
-    @State private var inspirationStatusCharacterID: UUID?
-    @State private var inspirationGenerationProgress: Double = 0
-    @State private var isGeneratingInspiration: Bool = false
-    @State private var generatingInspirationCharacterID: UUID?
-    @State private var isSubmittingInspirationBatch: Bool = false
-    @State private var submittingInspirationBatchCharacterID: UUID?
     @State private var characterSearchText: String = ""
     @State private var filteredCharacters: [AnimationCharacter] = []
-    @State private var cachedInstalledPackages: [InstalledCharacterPackage] = []
     var showSidebar: Bool = true
 
-    private static let batchTimestampFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyyMMdd'T'HHmmssSSS'Z'"
-        return formatter
-    }()
-
     // MARK: - Cached State Helpers
-
-    private func refreshInstalledPackages() {
-        guard let character = store.selectedCharacter,
-              let animateURL = store.animateURL else {
-            cachedInstalledPackages = []
-            return
-        }
-        cachedInstalledPackages = CharacterPackageLibrary().installedPackages(
-            for: character.assetFolderSlug,
-            in: animateURL,
-            preferredActivePackageID: store.activePackageID(for: character.owpSlug)
-        )
-    }
 
     private func updateFilteredCharacters() {
         if characterSearchText.isEmpty {
@@ -90,24 +49,6 @@ struct CharactersPageView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        .sheet(item: $packageImportPreview) { preview in
-            CharacterPackageImportSheet(
-                preview: preview,
-                onImport: {
-                    performPackageImport(preview)
-                }
-            )
-        }
-        .alert("Character Package Import", isPresented: packageImportAlertBinding) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(packageImportErrorMessage ?? "Unknown import error.")
-        }
-        .alert("Inspiration Image Generation", isPresented: inspirationGenerationAlertBinding) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(inspirationGenerationErrorMessage ?? "Unknown error.")
-        }
         .overlay {
             if let index = previewImageIndex {
                 ImagePreviewOverlay(
@@ -119,27 +60,12 @@ struct CharactersPageView: View {
                             previewImageIndex = newIndex
                             if previewImagePaths.indices.contains(newIndex) {
                                 let path = previewImagePaths[newIndex]
-                                // Update whichever gallery owns this path
-                                if inspirationSelectedPaths.contains(path) || inspirationLastClicked != nil {
-                                    inspirationSelectedPaths = [path]
-                                    inspirationLastClicked = path
-                                } else {
-                                    animatedSelectedPaths = [path]
-                                    animatedLastClicked = path
-                                }
+                                inspirationSelectedPaths = [path]
+                                inspirationLastClicked = path
                             }
                         }
                     ),
                     onDismiss: { previewImageIndex = nil }
-                )
-            }
-        }
-        .sheet(isPresented: $showInspirationGallery) {
-            if let character = store.selectedCharacter {
-                InspirationGallerySheet(
-                    character: character,
-                    store: store,
-                    onDismiss: { showInspirationGallery = false }
                 )
             }
         }
@@ -152,39 +78,11 @@ struct CharactersPageView: View {
                 )
             }
         }
-        .sheet(isPresented: $showProfileImagePicker) {
-            if let character = store.selectedCharacter {
-                ProfileImagePickerSheet(
-                    character: character,
-                    store: store,
-                    onChooseImagePath: { path in
-                        showProfileImagePicker = false
-                        if let resolvedURL = store.resolvedCharacterAssetURL(for: path) {
-                            store.pendingCropImagePath = resolvedURL.path
-                            store.pendingCropCharacterID = character.id
-                            store.showImageCropper = true
-                        } else {
-                            store.setCharacterProfileImage(path, for: character.id)
-                        }
-                    },
-                    onChooseFromDisk: {
-                        showProfileImagePicker = false
-                        DispatchQueue.main.async {
-                            store.setCharacterProfileImageFromPicker(for: character.id)
-                        }
-                    },
-                    onDismiss: { showProfileImagePicker = false }
-                )
-            }
-        }
         .onChange(of: store.selectedCharacterID) { _, _ in
             store.saveCharacterPromptEdits()  // Save edits before switching character
             inspirationSelectedPaths = []
             inspirationLastClicked = nil
-            animatedSelectedPaths = []
-            animatedLastClicked = nil
             previewImageIndex = nil
-            refreshInstalledPackages()
         }
         .onChange(of: characterSearchText) { _, _ in
             updateFilteredCharacters()
@@ -194,32 +92,11 @@ struct CharactersPageView: View {
         }
         .onAppear {
             updateFilteredCharacters()
-            refreshInstalledPackages()
         }
         .onChange(of: showReferenceWorkflowPane) { _, expanded in
             if expanded, let character = store.selectedCharacter {
                 store.seedCharacterReferenceWorkflowIfNeeded(for: character.id)
             }
-        }
-        .sheet(item: $inspirationPendingPlan) { plan in
-            GeminiGenerationPreflightSheet(
-                store: store,
-                drafts: $inspirationDrafts,
-                title: plan.title,
-                confirmTitle: plan.confirmTitle,
-                onConfirm: { drafts, mode in
-                    inspirationPendingPlan = nil
-                    switch mode {
-                    case .standard:
-                        runInspirationGeneration(drafts)
-                    case .batch:
-                        submitInspirationBatch(drafts, wardrobe: inspirationActiveWardrobe ?? .soldier)
-                    }
-                },
-                onCancel: {
-                    inspirationPendingPlan = nil
-                }
-            )
         }
         .sheet(item: $promptPreview) { preview in
             StoredImagePromptPreviewSheet(preview: preview)
@@ -297,15 +174,9 @@ struct CharactersPageView: View {
                 )
             }
         }
-        .task(id: store.workingOWPURL?.path) {
-            while !Task.isCancelled {
-                let hasActiveBatchJobs = store.characters.contains { character in
-                    character.inspirationBatchJobs.contains { !$0.isTerminal }
-                }
-                if hasActiveBatchJobs {
-                    store.refreshInspirationBatchJobs()
-                }
-                try? await Task.sleep(for: .seconds(20))
+        .sheet(isPresented: $showExpressionBatchSheet) {
+            if let character = store.selectedCharacter {
+                ExpressionBatchSheet(store: store, character: character)
             }
         }
     }
@@ -384,10 +255,6 @@ struct CharactersPageView: View {
                                 }
                                 Button("Save Rig") {
                                     store.saveCharacterRig(character.id)
-                                }
-                                Button("Import Package...") {
-                                    store.selectedCharacterID = character.id
-                                    openCharacterPackagePicker()
                                 }
                             }
                     }
@@ -477,53 +344,6 @@ struct CharactersPageView: View {
                     }
 
                     collapsiblePane(
-                        title: "Inspiration Images",
-                        icon: "photo.stack",
-                        counterText: "\(character.inspirationImagePaths.count) images",
-                        isExpanded: $showInspirationPane,
-                        trailing: {
-                            ViewThatFits {
-                                HStack(spacing: 8) {
-                                    Menu {
-                                        inspirationGenerationMenuItems(for: character, wardrobe: character.defaultWardrobeType)
-                                    } label: {
-                                        Label("Generate", systemImage: "sparkles")
-                                    }
-                                    .menuStyle(.button)
-                                    .buttonStyle(.borderedProminent)
-                                    .controlSize(.small)
-                                    .disabled(store.geminiAPIKey.isEmpty || isGeneratingInspiration || isSubmittingInspirationBatch)
-
-                                    Button("Import") {
-                                        store.importInspirationImages(for: character.id)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                }
-
-                                Menu {
-                                    Section("Generate") {
-                                        inspirationGenerationMenuItems(for: character, wardrobe: character.defaultWardrobeType)
-                                    }
-                                    Section {
-                                        Button("Import Images", systemImage: "square.and.arrow.down") {
-                                            store.importInspirationImages(for: character.id)
-                                        }
-                                    }
-                                } label: {
-                                    Image(systemName: "plus.circle.fill")
-                                }
-                                .menuStyle(.button)
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-                                .disabled(store.geminiAPIKey.isEmpty || isGeneratingInspiration || isSubmittingInspirationBatch)
-                            }
-                        }
-                    ) {
-                        inspirationImagesSection(character)
-                    }
-
-                    collapsiblePane(
                         title: "Character Reference Workflow",
                         icon: "square.grid.3x3.topleft.filled",
                         counterText: character.approvedMasterReferenceSheetVariant == nil
@@ -541,71 +361,40 @@ struct CharactersPageView: View {
                         }
                     }
 
+                    // Character Packages archived 2026-04-05 — Vidu pipeline replaces SceneKit
+
                     collapsiblePane(
-                        title: "Animated Images",
+                        title: "Action Images",
                         icon: "figure.walk.motion",
-                        counterText: "\(character.animatedImagePaths.count) images",
-                        isExpanded: $showAnimatedImagesPane,
-                        trailing: {
-                            Button("Import") {
-                                store.importAnimatedImages(for: character.id)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
+                        isExpanded: $showActionImagesPane
                     ) {
-                        animatedImagesSection(character)
-                    }
-
-                    collapsiblePane(
-                        title: "Character Packages",
-                        icon: "shippingbox",
-                        counterText: "\(cachedInstalledPackages.count) packages",
-                        isExpanded: $showPackagesPane,
-                        trailing: {
-                            ViewThatFits {
-                                Button("Import Package...") {
-                                    openCharacterPackagePicker()
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(store.animateURL == nil)
-
-                                Button {
-                                    openCharacterPackagePicker()
-                                } label: {
-                                    Image(systemName: "square.and.arrow.down")
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(store.animateURL == nil)
-                                .help("Import Character Package")
-                            }
+                        if showActionImagesPane {
+                            ActionImagesPane(store: store, character: character)
                         }
-                    ) {
-                        characterPackagesSection(character)
                     }
 
                     collapsiblePane(
                         title: "Expression Library",
                         icon: "face.smiling",
                         counterText: "\(EmotionLibrary.presets.count) presets",
-                        isExpanded: $showExpressionLibraryPane
+                        isExpanded: $showExpressionLibraryPane,
+                        trailing: {
+                            Button {
+                                showExpressionBatchSheet = true
+                            } label: {
+                                Label("Batch Generate", systemImage: "tray.full")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(store.geminiAPIKey.isEmpty || !store.geminiMasterSwitch)
+                        }
                     ) {
                         if showExpressionLibraryPane {
                             ExpressionLibraryView()
                         }
                     }
 
-                    collapsiblePane(
-                        title: "Motion Generation",
-                        icon: "figure.walk.motion",
-                        isExpanded: $showMotionGenerationPane
-                    ) {
-                        if showMotionGenerationPane {
-                            MotionGenerationPane(store: store, character: character)
-                        }
-                    }
+                    // Motion Generation archived 2026-04-05
 
                     // 3D Sidecars and 3D Asset Library archived — 3D pipeline removed
 
@@ -635,13 +424,7 @@ struct CharactersPageView: View {
         let owpChar = store.owpCharacter(for: character)
 
         HStack(spacing: 16) {
-            Button {
-                showProfileImagePicker = true
-            } label: {
-                profileImageView(character: character, owpChar: owpChar)
-            }
-            .buttonStyle(.plain)
-            .help("Click to choose a profile image from this character's images or from disk")
+            profileImageView(character: character, owpChar: owpChar)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
@@ -680,7 +463,8 @@ struct CharactersPageView: View {
                 AsyncReferenceThumbView(
                     store: store,
                     character: character,
-                    onShowInFinder: { path in showInFinder(at: path) }
+                    onShowInFinder: { path in showInFinder(at: path) },
+                    onSetAsProfilePic: { path in store.prepareProfilePicCrop(from: path, for: character.id) }
                 )
             }
         }
@@ -693,7 +477,8 @@ struct CharactersPageView: View {
         AsyncProfileImageView(
             store: store,
             character: character,
-            onShowInFinder: { path in showInFinder(at: path) }
+            onShowInFinder: { path in showInFinder(at: path) },
+            onSetAsProfilePic: { path in store.prepareProfilePicCrop(from: path, for: character.id) }
         )
     }
 
@@ -864,82 +649,6 @@ struct CharactersPageView: View {
         }
     }
 
-    // MARK: - Inspiration Images Section
-
-    @ViewBuilder
-    private func inspirationImagesSection(_ character: AnimationCharacter) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if isGeneratingInspiration, generatingInspirationCharacterID == character.id {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text(inspirationGenerationStatus ?? "Generating inspiration images…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    ProgressView(value: inspirationGenerationProgress)
-                        .progressViewStyle(.linear)
-                }
-                .padding(12)
-                .background(.quaternary.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            } else if isSubmittingInspirationBatch, submittingInspirationBatchCharacterID == character.id {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Submitting inspiration batch and starting watchdog…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(12)
-                .background(.quaternary.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            } else if let inspirationGenerationStatus,
-                      inspirationStatusCharacterID == character.id,
-                      !inspirationGenerationStatus.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Label(inspirationGenerationStatus, systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if !character.inspirationBatchJobs.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(character.inspirationBatchJobs.sorted(by: { $0.submittedAt > $1.submittedAt }).prefix(3)) { job in
-                        inspirationBatchJobRow(job, characterID: character.id)
-                    }
-                }
-            }
-
-            ImageGallerySection(
-                store: store,
-                title: "Inspiration Images",
-                icon: "photo.stack",
-                paths: character.inspirationImagePaths,
-                thumbnailBaseSize: $thumbnailBaseSize,
-                onImport: { store.importInspirationImages(for: character.id) },
-                onRemove: { index in store.removeInspirationImage(at: index, for: character.id) },
-                onRemoveMultiple: { indices in store.removeInspirationImages(at: indices, for: character.id) },
-                onPreview: { index, paths in
-                    openQuickLook(for: paths, startingAt: index)
-                },
-                onCopy: { path in copyImage(at: path) },
-                onShowInFinder: { path in showInFinder(at: path) },
-                onShowPrompt: { path in
-                    showPromptPreview(for: path)
-                },
-                onToggleCurated: { path in store.toggleCuratedInspirationImage(path, for: character.id) },
-                curatedPaths: Set(character.curatedInspirationImagePaths),
-                showsHeader: false,
-                selectedPaths: $inspirationSelectedPaths,
-                lastClickedPath: $inspirationLastClicked,
-                onDropURLs: { urls in
-                    importImageURLs(urls, using: { validURLs in
-                        store.importInspirationImages(from: validURLs, for: character.id)
-                    })
-                }
-            )
-        }
-    }
-
     private func inspirationBatchJobRow(_ job: CharacterInspirationBatchJob, characterID: UUID) -> some View {
         HStack(spacing: 10) {
             Image(systemName: job.isTerminal ? "checkmark.circle.fill" : "clock.arrow.circlepath")
@@ -978,37 +687,6 @@ struct CharactersPageView: View {
         .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    // MARK: - Animated Images Section
-
-    @ViewBuilder
-    private func animatedImagesSection(_ character: AnimationCharacter) -> some View {
-        ImageGallerySection(
-            store: store,
-            title: "Animated Images",
-            icon: "figure.walk.motion",
-            paths: character.animatedImagePaths,
-            thumbnailBaseSize: $thumbnailBaseSize,
-            onImport: { store.importAnimatedImages(for: character.id) },
-            onRemove: { index in store.removeAnimatedImage(at: index, for: character.id) },
-            onPreview: { index, paths in
-                openQuickLook(for: paths, startingAt: index)
-            },
-            onCopy: { path in copyImage(at: path) },
-            onShowInFinder: { path in showInFinder(at: path) },
-            onShowPrompt: { path in
-                showPromptPreview(for: path)
-            },
-            showsHeader: false,
-            selectedPaths: $animatedSelectedPaths,
-            lastClickedPath: $animatedLastClicked,
-            onDropURLs: { urls in
-                importImageURLs(urls, using: { validURLs in
-                    store.importAnimatedImages(from: validURLs, for: character.id)
-                })
-            }
-        )
-    }
-
     // MARK: - Look Development Section
 
     @ViewBuilder
@@ -1042,10 +720,10 @@ struct CharactersPageView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
                         if let approvedMaster {
-                            approvedMasterPreview(variant: approvedMaster, title: "Approved Master")
+                            approvedMasterPreview(variant: approvedMaster, title: "Approved Master", characterID: character.id)
                         }
                         ForEach(Array(character.headTurnaroundSlots.filter { $0.approvedVariant != nil }.prefix(5))) { slot in
-                            approvedPosePreview(title: slot.title, variant: slot.approvedVariant)
+                            approvedPosePreview(title: slot.title, variant: slot.approvedVariant, characterID: character.id)
                         }
                     }
                     .padding(.vertical, 2)
@@ -1067,7 +745,7 @@ struct CharactersPageView: View {
     }
 
     @ViewBuilder
-    private func approvedMasterPreview(variant: CharacterLookDevelopmentVariant, title: String) -> some View {
+    private func approvedMasterPreview(variant: CharacterLookDevelopmentVariant, title: String, characterID: UUID) -> some View {
         AsyncApprovedVariantView(
             store: store,
             variant: variant,
@@ -1075,12 +753,13 @@ struct CharactersPageView: View {
             width: 156, height: 92,
             onQuickLook: { openQuickLook(for: [variant.imagePath], startingAt: 0) },
             onShowInFinder: { showInFinder(at: variant.imagePath) },
-            onCopy: { copyImage(at: variant.imagePath) }
+            onCopy: { copyImage(at: variant.imagePath) },
+            onSetAsProfilePic: { store.prepareProfilePicCrop(from: variant.imagePath, for: characterID) }
         )
     }
 
     @ViewBuilder
-    private func approvedPosePreview(title: String, variant: CharacterLookDevelopmentVariant?) -> some View {
+    private func approvedPosePreview(title: String, variant: CharacterLookDevelopmentVariant?, characterID: UUID) -> some View {
         if let variant {
             AsyncApprovedVariantView(
                 store: store,
@@ -1089,47 +768,9 @@ struct CharactersPageView: View {
                 width: 92, height: 92,
                 onQuickLook: { openQuickLook(for: [variant.imagePath], startingAt: 0) },
                 onShowInFinder: { showInFinder(at: variant.imagePath) },
-                onCopy: { copyImage(at: variant.imagePath) }
+                onCopy: { copyImage(at: variant.imagePath) },
+                onSetAsProfilePic: { store.prepareProfilePicCrop(from: variant.imagePath, for: characterID) }
             )
-        }
-    }
-
-    // MARK: - Character Packages Section
-
-    @ViewBuilder
-    private func characterPackagesSection(_ character: AnimationCharacter) -> some View {
-        let packages = cachedInstalledPackages
-        let activePackageID = cachedActivePackageID(for: character)
-
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Character Packages contain all the parts and pieces needed for animation—rig assets, blueprints, poses, and generation configs. Import packages to build your character's animation library.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if packages.isEmpty {
-                emptyStateMessage(
-                    icon: "shippingbox",
-                    message: "No imported packages yet. Import a package to add animation assets."
-                )
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(packages) { package in
-                        CharacterPackageCardView(
-                            package: package,
-                            previewURL: primaryAssetURL(for: package),
-                            isActive: package.id == activePackageID,
-                            onSetActive: {
-                                setActivePackage(package.id, for: character)
-                            },
-                            onDelete: {
-                                deletePackage(package.id, for: character)
-                            }
-                        )
-                    }
-                }
-            }
         }
     }
 
@@ -1205,37 +846,6 @@ struct CharactersPageView: View {
         )
     }
 
-    private func deletePackage(_ packageID: UUID, for character: AnimationCharacter) {
-        let packages = cachedInstalledPackages
-        guard let package = packages.first(where: { $0.id == packageID }) else { return }
-
-        let alert = NSAlert()
-        alert.messageText = "Delete Character Package?"
-        alert.informativeText = "This will permanently delete '\(package.manifest.displayName)' and all its assets. This action cannot be undone."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        guard let animateURL = store.animateURL else { return }
-        let success = CharacterPackageLibrary().deletePackage(
-            packageID,
-            for: character.assetFolderSlug,
-            in: animateURL
-        )
-
-        if success {
-            if store.activePackageID(for: character.owpSlug) == packageID {
-                store.setActivePackage(nil, for: character.owpSlug)
-            }
-            store.statusMessage = "Deleted package: \(package.manifest.displayName)"
-            refreshInstalledPackages()
-        } else {
-            store.statusMessage = "Failed to delete package"
-        }
-    }
-
     // MARK: - Image Gallery Components
 
     @ViewBuilder
@@ -1251,289 +861,6 @@ struct CharactersPageView: View {
     }
 
     // MARK: - Helpers
-
-    private var packageImportAlertBinding: Binding<Bool> {
-        Binding(
-            get: { packageImportErrorMessage != nil },
-            set: { newValue in
-                if !newValue {
-                    packageImportErrorMessage = nil
-                }
-            }
-        )
-    }
-
-    private var inspirationGenerationAlertBinding: Binding<Bool> {
-        Binding(
-            get: { inspirationGenerationErrorMessage != nil },
-            set: { newValue in
-                if !newValue {
-                    inspirationGenerationErrorMessage = nil
-                }
-            }
-        )
-    }
-
-    @ViewBuilder
-    private func inspirationGenerationMenuItems(
-        for character: AnimationCharacter,
-        wardrobe: CharacterInspirationWardrobe
-    ) -> some View {
-        Section(wardrobe.displayName) {
-            Button("Generate 1 Test Image") {
-                prepareInspirationGenerationPlan(for: character, count: 1, wardrobe: wardrobe, mode: .immediate)
-            }
-
-            Button("Generate 27-Image Set Now") {
-                prepareInspirationGenerationPlan(
-                    for: character,
-                    count: CharacterInspirationPromptCatalog.allSpecs.count,
-                    wardrobe: wardrobe,
-                    mode: .immediate
-                )
-            }
-
-            Button("Submit 27-Image Batch + Watchdog") {
-                prepareInspirationGenerationPlan(
-                    for: character,
-                    count: CharacterInspirationPromptCatalog.allSpecs.count,
-                    wardrobe: wardrobe,
-                    mode: .batch
-                )
-            }
-        }
-    }
-
-    private func prepareInspirationGenerationPlan(
-        for character: AnimationCharacter,
-        count: Int,
-        wardrobe: CharacterInspirationWardrobe,
-        mode: CharacterInspirationGenerationMode
-    ) {
-        let specs = Array(CharacterInspirationPromptCatalog.allSpecs.prefix(count))
-        inspirationDrafts = specs.map { spec in
-            GeminiGenerationDraft(
-                title: spec.title,
-                destinationDescription: "\(wardrobe.displayName) inspiration image",
-                prompt: CharacterInspirationPromptCatalog.prompt(
-                    for: spec,
-                    character: character,
-                    wardrobe: wardrobe
-                ),
-                model: store.selectedGeminiModel,
-                aspectRatio: CharacterInspirationPromptCatalog.defaultAspectRatio,
-                imageSize: CharacterInspirationPromptCatalog.defaultImageSize,
-                referenceItems: inspirationReferenceDrafts(for: character),
-                pricingMode: mode == .batch ? .batch : .standard
-            )
-        }
-
-        inspirationActiveWardrobe = wardrobe
-        inspirationPendingPlan = PendingInspirationGenerationPlan(
-            title: "\(character.name) • \(wardrobe.displayName) Inspiration",
-            confirmTitle: mode == .batch
-                ? "Submit \(count)-Image Batch"
-                : (count == 1 ? "Generate 1 Image" : "Generate \(count) Images"),
-            mode: mode,
-            wardrobe: wardrobe
-        )
-    }
-
-    private func runInspirationGeneration(_ drafts: [GeminiGenerationDraft]) {
-        guard let character = store.selectedCharacter else { return }
-
-        isGeneratingInspiration = true
-        generatingInspirationCharacterID = character.id
-        inspirationStatusCharacterID = character.id
-        inspirationGenerationStatus = nil
-        inspirationGenerationProgress = 0
-        inspirationGenerationErrorMessage = nil
-
-        Task { @MainActor in
-            let service = GeminiImageService()
-
-            do {
-                let total = Double(max(drafts.count, 1))
-
-                for (index, draft) in drafts.enumerated() {
-                    inspirationGenerationStatus = "Generating \(index + 1) of \(drafts.count)…"
-                    inspirationGenerationProgress = Double(index) / total
-
-                    let request = GeminiImageService.GenerationRequest(
-                        prompt: draft.prompt,
-                        referenceImages: buildReferenceImages(from: draft.referenceItems),
-                        model: draft.model,
-                        aspectRatio: draft.aspectRatio,
-                        imageSize: draft.imageSize
-                    )
-
-                    store.logGeminiAPICall(endpoint: "image-generation", source: "CharactersPageView.generateInspirationImages()")
-                    let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
-
-                    try store.storeGeneratedInspirationImage(
-                        result.imageData,
-                        prompt: draft.prompt,
-                        model: draft.model,
-                        filenameStem: sanitizedFilenameStem(for: draft.title),
-                        for: character.id,
-                        aspectRatio: draft.aspectRatio,
-                        imageSize: draft.imageSize
-                    )
-                }
-
-                inspirationGenerationProgress = 1
-                inspirationGenerationStatus = "Finished \(drafts.count) inspiration image\(drafts.count == 1 ? "" : "s")."
-            } catch {
-                inspirationGenerationErrorMessage = error.localizedDescription
-            }
-
-            isGeneratingInspiration = false
-            generatingInspirationCharacterID = nil
-        }
-    }
-
-    private func submitInspirationBatch(
-        _ drafts: [GeminiGenerationDraft],
-        wardrobe: CharacterInspirationWardrobe
-    ) {
-        guard let character = store.selectedCharacter,
-              let animateURL = store.animateURL else { return }
-
-        let batchTitle = "\(wardrobe.displayName) Inspiration Batch"
-        if character.inspirationBatchJobs.contains(where: { !$0.isTerminal && $0.title == batchTitle }) {
-            inspirationStatusCharacterID = character.id
-            inspirationGenerationErrorMessage = "A \(wardrobe.displayName.lowercased()) inspiration batch is already active for this character. Wait for it to finish before submitting another batch."
-            return
-        }
-
-        isSubmittingInspirationBatch = true
-        submittingInspirationBatchCharacterID = character.id
-        inspirationStatusCharacterID = character.id
-        inspirationGenerationErrorMessage = nil
-
-        Task { @MainActor in
-            defer {
-                isSubmittingInspirationBatch = false
-                submittingInspirationBatchCharacterID = nil
-            }
-
-            do {
-                let stamp = Self.batchTimestampFormatter.string(from: Date())
-                let outputRoot = animateURL
-                    .appendingPathComponent("characters")
-                    .appendingPathComponent(character.assetFolderSlug)
-                    .appendingPathComponent("inspiration-batches")
-                    .appendingPathComponent("\(stamp)-\(wardrobe.rawValue)")
-
-                let promptRequests = try drafts.map { draft in
-                    GeminiBatchSubmissionPlan.PromptRequest(
-                        id: sanitizedFilenameStem(for: draft.title),
-                        title: draft.title,
-                        prompt: draft.prompt,
-                        referencePaths: try resolvedBatchReferencePaths(from: draft.includedReferenceItems)
-                    )
-                }
-
-                let submissionPlan = GeminiBatchSubmissionPlan(
-                    characterName: character.name,
-                    characterSlug: character.assetFolderSlug,
-                    displayName: "\(character.name.lowercased().replacingOccurrences(of: " ", with: "-"))-\(wardrobe.rawValue)-inspiration-\(stamp.lowercased())",
-                    model: drafts.first?.model ?? store.selectedGeminiModel,
-                    aspectRatio: drafts.first?.aspectRatio ?? CharacterInspirationPromptCatalog.defaultAspectRatio,
-                    imageSize: drafts.first?.imageSize ?? CharacterInspirationPromptCatalog.defaultImageSize,
-                    outputRoot: outputRoot,
-                    prompts: promptRequests
-                )
-
-                let service = GeminiBatchService()
-                let submission = try await service.submit(plan: submissionPlan, apiKey: store.geminiAPIKey)
-                try service.launchWatchdog(metadataPath: submission.metadataPath, apiKey: store.geminiAPIKey)
-
-                store.registerInspirationBatchJob(
-                    CharacterInspirationBatchJob(
-                        title: batchTitle,
-                        batchName: submission.batchName,
-                        metadataPath: submission.metadataPath.path,
-                        outputRootPath: submission.outputRoot.path,
-                        state: submission.state,
-                        promptCount: submission.promptCount,
-                        submittedAt: submission.submittedAt
-                    ),
-                    for: character.id
-                )
-                store.refreshInspirationBatchJobs()
-                inspirationGenerationStatus = "Submitted \(submission.promptCount)-image batch. Watchdog is active."
-            } catch {
-                inspirationGenerationErrorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    private func inspirationReferenceDrafts(for character: AnimationCharacter) -> [GeminiGenerationReferenceDraft] {
-        var ordered: [String] = []
-        var seen = Set<String>()
-
-        func append(_ path: String?) {
-            guard let path, seen.insert(path).inserted else { return }
-            ordered.append(path)
-        }
-
-        append(character.inspirationReferenceImagePath)
-        character.referenceImagePaths.forEach { append($0) }
-
-        return ordered.map { path in
-            GeminiGenerationReferenceDraft(
-                label: URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent,
-                path: path,
-                isIncluded: true
-            )
-        }
-    }
-
-    private func buildReferenceImages(from references: [GeminiGenerationReferenceDraft]) -> [GeminiImageService.ReferenceImage] {
-        references
-            .filter(\.isIncluded)
-            .compactMap { reference in
-                let url = store.resolvedCharacterAssetURL(for: reference.path) ?? URL(fileURLWithPath: reference.path)
-                return GeminiImageService.referenceImage(from: url)
-            }
-    }
-
-    private func resolvedBatchReferencePaths(
-        from references: [GeminiGenerationReferenceDraft]
-    ) throws -> [String] {
-        let included = references.filter(\.isIncluded)
-        return try included.map { reference in
-            if let resolvedURL = store.resolvedCharacterAssetURL(for: reference.path) {
-                return resolvedURL.path
-            }
-
-            let candidate = URL(fileURLWithPath: reference.path)
-            if FileManager.default.fileExists(atPath: candidate.path) {
-                return candidate.path
-            }
-
-            throw NSError(
-                domain: "CharactersPageView.BatchReferences",
-                code: 1,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "Reference image could not be resolved for batch submission: \(reference.path)"
-                ]
-            )
-        }
-    }
-
-    private func sanitizedFilenameStem(for input: String) -> String {
-        var result = input
-            .components(separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_")).inverted)
-            .joined(separator: "-")
-            .lowercased()
-        while result.contains("--") {
-            result = result.replacingOccurrences(of: "--", with: "-")
-        }
-        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-    }
 
     private func importImageURLs(
         _ urls: [URL],
@@ -1561,110 +888,8 @@ struct CharactersPageView: View {
         )
     }
 
-    private func openCharacterPackagePicker() {
-        guard let animateURL = store.animateURL else {
-            packageImportErrorMessage = "Open a project before importing a character package."
-            return
-        }
-        guard let character = store.selectedCharacter else {
-            packageImportErrorMessage = "Select a character before importing a character package."
-            return
-        }
+    // MARK: - Profile Pic from Context Menu
 
-        let panel = NSOpenPanel()
-        panel.title = "Import Character Package for \(character.name)"
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.begin { response in
-            guard response == .OK, let packageURL = panel.url else { return }
-            prepareImportPreview(for: packageURL, animateURL: animateURL)
-        }
-    }
-
-    private func prepareImportPreview(for packageURL: URL, animateURL: URL) {
-        let service = CharacterPackageImportService()
-        let targetCharacterSlug = store.selectedCharacter?.assetFolderSlug
-
-        do {
-            let bundle = try service.loadPackage(from: packageURL)
-            let blockingIssues = bundle.validationReport.issues.filter { $0.severity == .error }
-
-            var importPlan: CharacterPackageImportPlan?
-            var importErrorMessage: String?
-
-            if blockingIssues.isEmpty {
-                do {
-                    importPlan = try service.makeImportPlan(
-                        from: packageURL,
-                        into: animateURL,
-                        targetCharacterSlug: targetCharacterSlug
-                    )
-                } catch {
-                    importErrorMessage = error.localizedDescription
-                }
-            }
-
-            packageImportPreview = CharacterPackageImportPreview(
-                bundle: bundle,
-                importPlan: importPlan,
-                importErrorMessage: importErrorMessage
-            )
-        } catch {
-            packageImportErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func performPackageImport(_ preview: CharacterPackageImportPreview) {
-        guard let plan = preview.importPlan else { return }
-
-        do {
-            try CharacterPackageImportService().execute(plan)
-            if let character = store.selectedCharacter {
-                store.setActivePackage(plan.manifest.id, for: character.owpSlug)
-            }
-            if let character = store.selectedCharacter {
-                store.statusMessage = "Imported character package for \(character.name): \(preview.bundle.manifest.displayName)"
-            } else {
-                store.statusMessage = "Imported character package: \(preview.bundle.manifest.displayName)"
-            }
-            packageImportPreview = nil
-            refreshInstalledPackages()
-        } catch {
-            packageImportErrorMessage = error.localizedDescription
-        }
-    }
-
-    private func installedPackages(for character: AnimationCharacter) -> [InstalledCharacterPackage] {
-        guard let animateURL = store.animateURL else { return [] }
-        return CharacterPackageLibrary().installedPackages(
-            for: character.assetFolderSlug,
-            in: animateURL,
-            preferredActivePackageID: store.activePackageID(for: character.owpSlug)
-        )
-    }
-
-    private func primaryAssetURL(for package: InstalledCharacterPackage) -> URL? {
-        CharacterPackageLibrary().primaryAssetURL(for: package)
-    }
-
-    private func cachedActivePackageID(for character: AnimationCharacter) -> UUID? {
-        if let explicitID = store.activePackageID(for: character.owpSlug),
-           cachedInstalledPackages.contains(where: { $0.id == explicitID }) {
-            return explicitID
-        }
-        return cachedInstalledPackages.first?.id
-    }
-
-    private func setActivePackage(_ packageID: UUID, for character: AnimationCharacter) {
-        store.setActivePackage(packageID, for: character.owpSlug)
-        refreshInstalledPackages()
-        if let package = cachedInstalledPackages.first(where: { $0.id == packageID }) {
-            store.statusMessage = "Active package for \(character.name): \(package.manifest.displayName)"
-        } else {
-            store.statusMessage = "Active package updated for \(character.name)"
-        }
-    }
 
     private func openQuickLook(
         for paths: [String],
@@ -1704,6 +929,14 @@ struct CharactersPageView: View {
         }
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
+
+    // MARK: - Archived: Inspiration Images (moved to ImagineCharactersPageView)
+    // The following sections were moved to the Imagine page on 2026-04-05:
+    // - Inspiration Images collapsible pane
+    // - Animated Images collapsible pane
+    // - Profile Image Picker sheet
+    // - inspirationGenerationMenuItems, prepareInspirationGenerationPlan,
+    //   runInspirationGeneration, submitInspirationBatch, and related helpers
 }
 
 // MARK: - Async Image Helper Views
@@ -1745,6 +978,20 @@ private struct AsyncSidebarThumbnail: View {
                     .frame(width: 28, height: 28)
             }
         }
+        .contextMenu {
+            Button("Set as Profile Pic") {
+                if let path = character.profileImagePath,
+                   let character = store.selectedCharacter {
+                    store.prepareProfilePicCrop(from: path, for: character.id)
+                }
+            }
+            Button("Show in Finder", systemImage: "folder") {
+                if let path = character.profileImagePath,
+                   let url = store.resolvedCharacterAssetURL(for: path) {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+            }
+        }
         .task(id: character.profileImagePath ?? "") {
             guard let path = character.profileImagePath,
                   let url = store.resolvedCharacterAssetURL(for: path) else {
@@ -1756,6 +1003,7 @@ private struct AsyncSidebarThumbnail: View {
             }.value
         }
     }
+
 }
 
 /// Header profile image (64×64) — loads asynchronously.
@@ -1764,6 +1012,7 @@ private struct AsyncProfileImageView: View {
     let store: AnimateStore
     let character: AnimationCharacter
     let onShowInFinder: (String) -> Void
+    let onSetAsProfilePic: (String) -> Void
 
     @State private var image: NSImage?
 
@@ -1785,6 +1034,9 @@ private struct AsyncProfileImageView: View {
                     }
                     .contextMenu {
                         if let profilePath = character.profileImagePath {
+                            Button("Set as Profile Pic") {
+                                onSetAsProfilePic(profilePath)
+                            }
                             Button("Show in Finder", systemImage: "folder") {
                                 onShowInFinder(profilePath)
                             }
@@ -1823,6 +1075,7 @@ private struct AsyncReferenceThumbView: View {
     let store: AnimateStore
     let character: AnimationCharacter
     let onShowInFinder: (String) -> Void
+    let onSetAsProfilePic: (String) -> Void
 
     @State private var image: NSImage?
 
@@ -1844,6 +1097,9 @@ private struct AsyncReferenceThumbView: View {
                     }
                     .contextMenu {
                         if let refPath = character.inspirationReferenceImagePath {
+                            Button("Set as Profile Pic") {
+                                onSetAsProfilePic(refPath)
+                            }
                             Button("Show in Finder", systemImage: "folder") {
                                 onShowInFinder(refPath)
                             }
@@ -1892,6 +1148,7 @@ private struct AsyncApprovedVariantView: View {
     let onQuickLook: () -> Void
     let onShowInFinder: () -> Void
     let onCopy: () -> Void
+    let onSetAsProfilePic: () -> Void
 
     @State private var image: NSImage?
 
@@ -1917,6 +1174,7 @@ private struct AsyncApprovedVariantView: View {
                 .frame(width: width, height: height)
                 .onTapGesture(count: 2) { onQuickLook() }
                 .contextMenu {
+                    Button("Set as Profile Pic") { onSetAsProfilePic() }
                     Button("Show in Finder", systemImage: "folder") { onShowInFinder() }
                     Button("Copy Image", systemImage: "doc.on.doc") { onCopy() }
                 }
@@ -1996,6 +1254,7 @@ struct ImageGallerySection: View {
     let onPreview: (Int, [String]) -> Void
     let onCopy: (String) -> Void
     let onShowInFinder: (String) -> Void
+    let onSetAsProfilePic: ((String) -> Void)?
     let onShowPrompt: ((String) -> Void)?
     let onToggleCurated: ((String) -> Void)?
     var curatedPaths: Set<String>
@@ -2003,6 +1262,8 @@ struct ImageGallerySection: View {
     @Binding var selectedPaths: Set<String>
     @Binding var lastClickedPath: String?
     let onDropURLs: (([URL]) -> Bool)?
+    let onFocusPathChange: ((String?) -> Void)?
+    @FocusState private var galleryKeyboardFocused: Bool
 
     private let minThumbnailSize: CGFloat = 80
     private let maxThumbnailSize: CGFloat = 300
@@ -2019,13 +1280,15 @@ struct ImageGallerySection: View {
         onPreview: @escaping (Int, [String]) -> Void,
         onCopy: @escaping (String) -> Void,
         onShowInFinder: @escaping (String) -> Void,
+        onSetAsProfilePic: ((String) -> Void)? = nil,
         onShowPrompt: ((String) -> Void)? = nil,
         onToggleCurated: ((String) -> Void)? = nil,
         curatedPaths: Set<String> = [],
         showsHeader: Bool = true,
         selectedPaths: Binding<Set<String>>,
         lastClickedPath: Binding<String?>,
-        onDropURLs: (([URL]) -> Bool)? = nil
+        onDropURLs: (([URL]) -> Bool)? = nil,
+        onFocusPathChange: ((String?) -> Void)? = nil
     ) {
         self.store = store
         self.title = title
@@ -2038,6 +1301,7 @@ struct ImageGallerySection: View {
         self.onPreview = onPreview
         self.onCopy = onCopy
         self.onShowInFinder = onShowInFinder
+        self.onSetAsProfilePic = onSetAsProfilePic
         self.onShowPrompt = onShowPrompt
         self.onToggleCurated = onToggleCurated
         self.curatedPaths = curatedPaths
@@ -2045,6 +1309,7 @@ struct ImageGallerySection: View {
         self._selectedPaths = selectedPaths
         self._lastClickedPath = lastClickedPath
         self.onDropURLs = onDropURLs
+        self.onFocusPathChange = onFocusPathChange
     }
 
     var body: some View {
@@ -2058,6 +1323,7 @@ struct ImageGallerySection: View {
             } else {
                 galleryGrid
                     .focusable()
+                    .focused($galleryKeyboardFocused)
                     .focusEffectDisabled()
                     .onKeyPress(.space) {
                         guard let focusPath = lastClickedPath,
@@ -2083,6 +1349,7 @@ struct ImageGallerySection: View {
                         let newPath = paths[newIndex]
                         selectedPaths = [newPath]
                         lastClickedPath = newPath
+                        onFocusPathChange?(newPath)
                         if QuickLookPreviewController.shared.isVisible {
                             QuickLookPreviewController.shared.navigateTo(index: newIndex)
                         }
@@ -2098,6 +1365,7 @@ struct ImageGallerySection: View {
                         let newPath = paths[newIndex]
                         selectedPaths = [newPath]
                         lastClickedPath = newPath
+                        onFocusPathChange?(newPath)
                         if QuickLookPreviewController.shared.isVisible {
                             QuickLookPreviewController.shared.navigateTo(index: newIndex)
                         }
@@ -2111,6 +1379,7 @@ struct ImageGallerySection: View {
                         if !selectedPaths.isEmpty {
                             selectedPaths.removeAll()
                             lastClickedPath = nil
+                            onFocusPathChange?(nil)
                             return .handled
                         }
                         return .ignored
@@ -2144,6 +1413,7 @@ struct ImageGallerySection: View {
                 Button("Deselect All") {
                     selectedPaths.removeAll()
                     lastClickedPath = nil
+                    onFocusPathChange?(nil)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -2212,6 +1482,7 @@ struct ImageGallerySection: View {
     }
 
     private func handleClick(path: String, event: GalleryClickEvent) {
+        galleryKeyboardFocused = true
         switch event.modifiers {
         case .command:
             if selectedPaths.contains(path) {
@@ -2233,6 +1504,7 @@ struct ImageGallerySection: View {
             selectedPaths = [path]
         }
         lastClickedPath = path
+        onFocusPathChange?(path)
         if QuickLookPreviewController.shared.isVisible,
            let clickIndex = paths.firstIndex(of: path) {
             QuickLookPreviewController.shared.navigateTo(index: clickIndex)
@@ -2267,6 +1539,7 @@ struct ImageGallerySection: View {
                     onPreview: { onPreview(index, paths) },
                     onCopy: { onCopy(path) },
                     onShowInFinder: { onShowInFinder(path) },
+                    onSetAsProfilePic: onSetAsProfilePic == nil ? nil : { onSetAsProfilePic?(path) },
                     onShowPrompt: onShowPrompt == nil ? nil : { onShowPrompt?(path) },
                     onToggleCurated: onToggleCurated == nil ? nil : { onToggleCurated?(path) }
                 )
@@ -2307,6 +1580,7 @@ struct ImageGalleryThumbnail: View {
     let onPreview: () -> Void
     let onCopy: () -> Void
     let onShowInFinder: () -> Void
+    let onSetAsProfilePic: (() -> Void)?
     let onShowPrompt: (() -> Void)?
     let onToggleCurated: (() -> Void)?
 
@@ -2336,6 +1610,11 @@ struct ImageGalleryThumbnail: View {
                     }
                     Button("Show in Finder", systemImage: "folder") {
                         onShowInFinder()
+                    }
+                    if let onSetAsProfilePic {
+                        Button("Set as Profile Pic") {
+                            onSetAsProfilePic()
+                        }
                     }
                     Button("Copy Image", systemImage: "doc.on.doc") {
                         onCopy()
@@ -2777,6 +2056,11 @@ private struct ProfileImagePickerSheet: View {
                                             }
                                             .buttonStyle(.plain)
                                             .contextMenu {
+                                                Button("Set as Profile Pic") {
+                                                    if let character = store.selectedCharacter {
+                                                        store.prepareProfilePicCrop(from: path, for: character.id)
+                                                    }
+                                                }
                                                 Button("Show in Finder", systemImage: "folder") {
                                                     NSWorkspace.shared.activateFileViewerSelecting([url])
                                                 }
@@ -2800,6 +2084,7 @@ private struct ProfileImagePickerSheet: View {
         .frame(width: 820, height: 680)
         .background(Color(nsColor: .windowBackgroundColor))
     }
+
 }
 
 // MARK: - Image Cropper View
@@ -3050,6 +2335,11 @@ struct InspirationGallerySheet: View {
         VStack(spacing: 4) {
             thumbnailImage(for: path)
                 .contextMenu {
+                    Button("Set as Profile Pic") {
+                        if let character = store.selectedCharacter {
+                            store.prepareProfilePicCrop(from: path, for: character.id)
+                        }
+                    }
                     Button("Show in Finder", systemImage: "folder") {
                         if let url = store.resolvedCharacterAssetURL(for: path) {
                             NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -3083,6 +2373,7 @@ struct InspirationGallerySheet: View {
         guard !urls.isEmpty else { return }
         QuickLookPreviewController.shared.present(urls: urls, startAt: min(index, urls.count - 1))
     }
+
 }
 
 // MARK: - Reference Images Sheet
@@ -3165,6 +2456,11 @@ struct ReferenceImagesSheet: View {
                         }
                         .contextMenu {
                             if let refPath = character.inspirationReferenceImagePath {
+                                Button("Set as Profile Pic") {
+                                    if let character = store.selectedCharacter {
+                                        store.prepareProfilePicCrop(from: refPath, for: character.id)
+                                    }
+                                }
                                 Button("Show in Finder", systemImage: "folder") {
                                     if let url = store.resolvedCharacterAssetURL(for: refPath) {
                                         NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -3330,6 +2626,11 @@ struct ReferenceImagesSheet: View {
         VStack(spacing: 4) {
             thumbnailImage(for: path)
                 .contextMenu {
+                    Button("Set as Profile Pic") {
+                        if let character = store.selectedCharacter {
+                            store.prepareProfilePicCrop(from: path, for: character.id)
+                        }
+                    }
                     Button("Show in Finder", systemImage: "folder") {
                         if let url = store.resolvedCharacterAssetURL(for: path) {
                             NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -3364,13 +2665,14 @@ struct ReferenceImagesSheet: View {
         guard !urls.isEmpty else { return }
         QuickLookPreviewController.shared.present(urls: urls, startAt: min(index, urls.count - 1))
     }
+
 }
 
 @available(macOS 26.0, *)
-private typealias CharacterInspirationWardrobe = CharacterWardrobeType
+typealias CharacterInspirationWardrobe = CharacterWardrobeType
 
 @available(macOS 26.0, *)
-private struct CharacterInspirationPromptSpec: Identifiable, Hashable, Sendable {
+struct CharacterInspirationPromptSpec: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
     let category: String
@@ -3378,13 +2680,13 @@ private struct CharacterInspirationPromptSpec: Identifiable, Hashable, Sendable 
 }
 
 @available(macOS 26.0, *)
-private enum CharacterInspirationGenerationMode: String, Hashable, Sendable {
+enum CharacterInspirationGenerationMode: String, Hashable, Sendable {
     case immediate
     case batch
 }
 
 @available(macOS 26.0, *)
-private enum CharacterInspirationPromptCatalog {
+enum CharacterInspirationPromptCatalog {
     static let defaultAspectRatio = "1:1"
     static let defaultImageSize = "2K"
 
@@ -3426,13 +2728,19 @@ private enum CharacterInspirationPromptCatalog {
         let subject = subjectDescriptor(for: character)
         let shortSubject = shortSubjectDescriptor(for: character)
         return """
-        Create one highly photorealistic cinematic documentary frame with natural filmic color, authentic fabric texture, realistic skin pores, sharp face detail, strong identity preservation, and shallow depth of field of the exact same \(subject) from the reference image. Preserve the identity exactly from the reference image: same face shape, eyes, nose, mouth, hairline, skin tone, and apparent age. The setting should feel native to \(CharacterPromptWorldContext.settingSummary).
+        TASK: Generate a brand-new photorealistic cinematic documentary frame. This is a NEW image — do NOT reproduce, edit, or copy any reference image. The reference images are provided ONLY for facial identity lock.
 
-        Use this exact pose and framing: \(spec.poseInstruction).
+        IDENTITY LOCK (from reference images): Retain the facial identity of \(subject) — same face shape, eyes, nose, mouth, hairline, skin tone, and apparent age as shown in the reference images. Do NOT use the references for composition, background, framing, lighting, crop, pose, clothing details, or any other visual element. The references are identity-only.
 
-        \(wardrobePrompt(for: character, wardrobe: wardrobe))
+        NEW COMPOSITION (this is required — ignore any composition cues from references): \(spec.poseInstruction). The pose, camera angle, framing, background, lighting, and crop must all come from this instruction, NOT from any reference image.
 
-        Place \(shortSubject) on \(CharacterPromptWorldContext.cityClinicEnvironment). Keep the frame inside the city-and-clinic setting rather than at the bridge. \(shortSubject.capitalized) should feel grounded, emotionally believable, and visually consistent with \(CharacterPromptWorldContext.settingSummary). No readable nametag, no gibberish text, no fake patches, no shiny vest, no oversized body armor, no stone bridge in the background, no bridge visible anywhere in the frame, no European stone village look, no text, no watermark.
+        WARDROBE: \(wardrobePrompt(for: character, wardrobe: wardrobe))
+
+        SETTING: Place \(shortSubject) on \(CharacterPromptWorldContext.cityClinicEnvironment). The scene must feel native to \(CharacterPromptWorldContext.settingSummary). Keep the frame inside the city-and-clinic setting — no bridge, no European stone village look. \(shortSubject.capitalized) should feel grounded, emotionally believable, and visually consistent with the world.
+
+        RENDERING: natural filmic color, authentic fabric texture, realistic skin pores, sharp face detail, shallow depth of field, documentary cinematography.
+
+        NEGATIVE: no readable nametag, no gibberish text, no fake patches, no shiny vest, no oversized body armor, no stone bridge, no European stone village look, no text, no watermark, no copying of the reference image composition or background.
         """
     }
 
@@ -3462,7 +2770,7 @@ private enum CharacterInspirationPromptCatalog {
 }
 
 @available(macOS 26.0, *)
-private struct PendingInspirationGenerationPlan: Identifiable, Hashable {
+struct PendingInspirationGenerationPlan: Identifiable, Hashable {
     var id: UUID = UUID()
     var title: String
     var confirmTitle: String

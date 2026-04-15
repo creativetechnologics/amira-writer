@@ -464,7 +464,17 @@ enum CharacterCanvasRenderMode: String, Codable, Sendable, CaseIterable, Hashabl
 }
 
 struct CharacterInspirationBatchJob: Identifiable, Codable, Sendable, Hashable {
+    enum Kind: String, Codable, Sendable, Hashable {
+        case inspiration
+        case loraCandidate = "lora_candidate"
+
+        var autoSelectForLoRA: Bool {
+            self == .loraCandidate
+        }
+    }
+
     var id: UUID
+    var kind: Kind
     var title: String
     var batchName: String
     var metadataPath: String
@@ -473,12 +483,17 @@ struct CharacterInspirationBatchJob: Identifiable, Codable, Sendable, Hashable {
     var promptCount: Int
     var submittedAt: Date
     var lastCheckedAt: Date?
+    var remoteUpdatedAt: Date?
+    var remoteStartedAt: Date?
+    var remoteFinishedAt: Date?
+    var remoteSuccessfulCount: Int?
     var downloadedImagePaths: [String]
     var autoImportedImagePaths: [String]
     var lastErrorMessage: String?
 
     init(
         id: UUID = UUID(),
+        kind: Kind = .inspiration,
         title: String,
         batchName: String,
         metadataPath: String,
@@ -487,11 +502,16 @@ struct CharacterInspirationBatchJob: Identifiable, Codable, Sendable, Hashable {
         promptCount: Int,
         submittedAt: Date = Date(),
         lastCheckedAt: Date? = nil,
+        remoteUpdatedAt: Date? = nil,
+        remoteStartedAt: Date? = nil,
+        remoteFinishedAt: Date? = nil,
+        remoteSuccessfulCount: Int? = nil,
         downloadedImagePaths: [String] = [],
         autoImportedImagePaths: [String] = [],
         lastErrorMessage: String? = nil
     ) {
         self.id = id
+        self.kind = kind
         self.title = title
         self.batchName = batchName
         self.metadataPath = metadataPath
@@ -500,6 +520,10 @@ struct CharacterInspirationBatchJob: Identifiable, Codable, Sendable, Hashable {
         self.promptCount = promptCount
         self.submittedAt = submittedAt
         self.lastCheckedAt = lastCheckedAt
+        self.remoteUpdatedAt = remoteUpdatedAt
+        self.remoteStartedAt = remoteStartedAt
+        self.remoteFinishedAt = remoteFinishedAt
+        self.remoteSuccessfulCount = remoteSuccessfulCount
         self.downloadedImagePaths = downloadedImagePaths
         self.autoImportedImagePaths = autoImportedImagePaths
         self.lastErrorMessage = lastErrorMessage
@@ -508,6 +532,7 @@ struct CharacterInspirationBatchJob: Identifiable, Codable, Sendable, Hashable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .inspiration
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? "Inspiration Batch"
         batchName = try c.decodeIfPresent(String.self, forKey: .batchName) ?? ""
         metadataPath = try c.decodeIfPresent(String.self, forKey: .metadataPath) ?? ""
@@ -516,6 +541,10 @@ struct CharacterInspirationBatchJob: Identifiable, Codable, Sendable, Hashable {
         promptCount = try c.decodeIfPresent(Int.self, forKey: .promptCount) ?? 0
         submittedAt = try c.decodeIfPresent(Date.self, forKey: .submittedAt) ?? Date(timeIntervalSinceReferenceDate: 0)
         lastCheckedAt = try c.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
+        remoteUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .remoteUpdatedAt)
+        remoteStartedAt = try c.decodeIfPresent(Date.self, forKey: .remoteStartedAt)
+        remoteFinishedAt = try c.decodeIfPresent(Date.self, forKey: .remoteFinishedAt)
+        remoteSuccessfulCount = try c.decodeIfPresent(Int.self, forKey: .remoteSuccessfulCount)
         downloadedImagePaths = try c.decodeIfPresent([String].self, forKey: .downloadedImagePaths) ?? []
         autoImportedImagePaths = try c.decodeIfPresent([String].self, forKey: .autoImportedImagePaths) ?? []
         lastErrorMessage = try c.decodeIfPresent(String.self, forKey: .lastErrorMessage)
@@ -570,7 +599,7 @@ enum CharacterGenderType: String, Codable, Sendable, CaseIterable, Identifiable,
 }
 
 struct AnimationCharacter: Identifiable, Codable, Sendable {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     var schemaVersion: Int
     var id: UUID
@@ -587,6 +616,9 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
     var backstory: String
     var personality: String
     var notes: String
+    var activeLORAFilename: String?
+    var activeLORATriggerWord: String?
+    var activeLORAWeight: Double
     var defaultWardrobeType: CharacterWardrobeType
     var genderType: CharacterGenderType
     var age: Int?
@@ -623,6 +655,9 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         backstory: String = "",
         personality: String = "",
         notes: String = "",
+        activeLORAFilename: String? = nil,
+        activeLORATriggerWord: String? = nil,
+        activeLORAWeight: Double = 1.0,
         defaultWardrobeType: CharacterWardrobeType = .soldier,
         genderType: CharacterGenderType = .person,
         age: Int? = nil,
@@ -658,6 +693,9 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         self.backstory = backstory
         self.personality = personality
         self.notes = notes
+        self.activeLORAFilename = activeLORAFilename
+        self.activeLORATriggerWord = activeLORATriggerWord
+        self.activeLORAWeight = activeLORAWeight
         self.defaultWardrobeType = defaultWardrobeType
         self.genderType = genderType
         self.age = age
@@ -696,6 +734,9 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         backstory = try c.decodeIfPresent(String.self, forKey: .backstory) ?? ""
         personality = try c.decodeIfPresent(String.self, forKey: .personality) ?? ""
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        activeLORAFilename = try c.decodeIfPresent(String.self, forKey: .activeLORAFilename)
+        activeLORATriggerWord = try c.decodeIfPresent(String.self, forKey: .activeLORATriggerWord)
+        activeLORAWeight = try c.decodeIfPresent(Double.self, forKey: .activeLORAWeight) ?? 1.0
         defaultWardrobeType = try c.decodeIfPresent(CharacterWardrobeType.self, forKey: .defaultWardrobeType) ?? .soldier
         genderType = try c.decodeIfPresent(CharacterGenderType.self, forKey: .genderType) ?? .person
         age = try c.decodeIfPresent(Int.self, forKey: .age)
@@ -927,16 +968,467 @@ struct DrawingVariant: Identifiable, Codable, Sendable {
 
 // MARK: - Backgrounds
 
-struct PlaceAngleImage: Codable, Identifiable, Sendable {
+struct WorldMapPoint: Codable, Sendable, Hashable {
+    var x: Double
+    var y: Double
+
+    init(x: Double = 0.5, y: Double = 0.5) {
+        self.x = x
+        self.y = y
+    }
+
+    func clamped() -> WorldMapPoint {
+        WorldMapPoint(
+            x: min(max(x, 0), 1),
+            y: min(max(y, 0), 1)
+        )
+    }
+}
+
+struct WorldCameraPose: Codable, Sendable, Hashable {
+    var yawDegrees: Double
+    var pitchDegrees: Double
+    var rollDegrees: Double
+    var focalLengthMM: Double
+    var horizontalFOVDegrees: Double?
+    var verticalFOVDegrees: Double?
+
+    init(
+        yawDegrees: Double = 0,
+        pitchDegrees: Double = 0,
+        rollDegrees: Double = 0,
+        focalLengthMM: Double = 35,
+        horizontalFOVDegrees: Double? = nil,
+        verticalFOVDegrees: Double? = nil
+    ) {
+        self.yawDegrees = yawDegrees
+        self.pitchDegrees = pitchDegrees
+        self.rollDegrees = rollDegrees
+        self.focalLengthMM = focalLengthMM
+        self.horizontalFOVDegrees = horizontalFOVDegrees
+        self.verticalFOVDegrees = verticalFOVDegrees
+    }
+}
+
+enum GeneratedBackgroundMapPlacementStatus: String, Codable, Sendable, Hashable, CaseIterable {
+    case unplaced
+    case inferred
+    case confirmed
+
+    var displayName: String {
+        switch self {
+        case .unplaced: "Unplaced"
+        case .inferred: "Inferred"
+        case .confirmed: "Confirmed"
+        }
+    }
+}
+
+enum GeneratedBackgroundOrientationState: String, Codable, Sendable, Hashable, CaseIterable {
+    case unknown
+    case original
+    case mirrored
+
+    var displayName: String {
+        switch self {
+        case .unknown: "Unknown"
+        case .original: "Original"
+        case .mirrored: "Mirrored"
+        }
+    }
+}
+
+enum WorldCanonStatus: String, Codable, Sendable, Hashable, CaseIterable {
+    case unreviewed
+    case candidate
+    case canon
+    case rejected
+
+    var displayName: String {
+        switch self {
+        case .unreviewed: "Unreviewed"
+        case .candidate: "Candidate"
+        case .canon: "Canon"
+        case .rejected: "Rejected"
+        }
+    }
+}
+
+enum PlaceQASeverity: String, Codable, Sendable, Hashable {
+    case info
+    case warning
+    case critical
+}
+
+struct PlaceQAFlag: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var code: String
+    var message: String
+    var severity: PlaceQASeverity
+
+    init(
+        id: UUID = UUID(),
+        code: String,
+        message: String,
+        severity: PlaceQASeverity = .warning
+    ) {
+        self.id = id
+        self.code = code
+        self.message = message
+        self.severity = severity
+    }
+}
+
+enum PlaceWorldNodeRole: String, Codable, Sendable, Hashable, CaseIterable {
+    case traverse
+    case hero
+    case coverage
+    case reverse
+    case landmark
+
+    var displayName: String {
+        switch self {
+        case .traverse: "Traverse"
+        case .hero: "Hero"
+        case .coverage: "Coverage"
+        case .reverse: "Reverse"
+        case .landmark: "Landmark"
+        }
+    }
+}
+
+struct PlaceWorldRoute: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var name: String
+    var placeID: UUID?
+    var notes: String
+    var colorHex: String
+    var isClosedLoop: Bool
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        placeID: UUID? = nil,
+        notes: String = "",
+        colorHex: String = "#6EA7FF",
+        isClosedLoop: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.placeID = placeID
+        self.notes = notes
+        self.colorHex = colorHex
+        self.isClosedLoop = isClosedLoop
+    }
+}
+
+struct PlaceWorldNode: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var routeID: UUID?
+    var placeID: UUID?
+    var title: String
+    var sequenceIndex: Int
+    var role: PlaceWorldNodeRole
+    var mapPoint: WorldMapPoint
+    var cameraPose: WorldCameraPose
+    var notes: String
+    var linkedNodeIDs: [UUID]
+    var expectedLandmarkIDs: [UUID]
+    var expectedLandmarkTitles: [String]
+    var forbiddenLandmarkTitles: [String]
+    var approvedPhotorealImagePath: String?
+    var approvedAnimatedImagePath: String?
+    var lastReviewID: UUID?
+
+    init(
+        id: UUID = UUID(),
+        routeID: UUID? = nil,
+        placeID: UUID? = nil,
+        title: String = "View Node",
+        sequenceIndex: Int = 0,
+        role: PlaceWorldNodeRole = .traverse,
+        mapPoint: WorldMapPoint = .init(),
+        cameraPose: WorldCameraPose = .init(),
+        notes: String = "",
+        linkedNodeIDs: [UUID] = [],
+        expectedLandmarkIDs: [UUID] = [],
+        expectedLandmarkTitles: [String] = [],
+        forbiddenLandmarkTitles: [String] = [],
+        approvedPhotorealImagePath: String? = nil,
+        approvedAnimatedImagePath: String? = nil,
+        lastReviewID: UUID? = nil
+    ) {
+        self.id = id
+        self.routeID = routeID
+        self.placeID = placeID
+        self.title = title
+        self.sequenceIndex = sequenceIndex
+        self.role = role
+        self.mapPoint = mapPoint
+        self.cameraPose = cameraPose
+        self.notes = notes
+        self.linkedNodeIDs = linkedNodeIDs
+        self.expectedLandmarkIDs = expectedLandmarkIDs
+        self.expectedLandmarkTitles = expectedLandmarkTitles
+        self.forbiddenLandmarkTitles = forbiddenLandmarkTitles
+        self.approvedPhotorealImagePath = approvedPhotorealImagePath
+        self.approvedAnimatedImagePath = approvedAnimatedImagePath
+        self.lastReviewID = lastReviewID
+    }
+
+    func approvedImagePath(for workflow: PlaceWorkflowMode) -> String? {
+        switch workflow {
+        case .photorealistic:
+            approvedPhotorealImagePath
+        case .animated:
+            approvedAnimatedImagePath
+        }
+    }
+}
+
+struct PlaceWorldGraph: Codable, Sendable, Hashable {
+    var routes: [PlaceWorldRoute]
+    var nodes: [PlaceWorldNode]
+
+    init(
+        routes: [PlaceWorldRoute] = [],
+        nodes: [PlaceWorldNode] = []
+    ) {
+        self.routes = routes
+        self.nodes = nodes
+    }
+}
+
+enum PlaceContinuityReviewStatus: String, Codable, Sendable, Hashable, CaseIterable {
+    case pending
+    case approved
+    case rejected
+    case ignored
+}
+
+struct PlaceContinuityReview: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var nodeID: UUID
+    var routeID: UUID?
+    var workflow: PlaceWorkflowMode
+    var candidateRecordID: UUID?
+    var candidateImagePath: String
+    var comparedNodeIDs: [UUID]
+    var comparedImagePaths: [String]
+    var similarityScore: Double
+    var histogramScore: Double
+    var metadataScore: Double
+    var overallScore: Double
+    var flags: [PlaceQAFlag]
+    var status: PlaceContinuityReviewStatus
+    var analyzedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        nodeID: UUID,
+        routeID: UUID? = nil,
+        workflow: PlaceWorkflowMode,
+        candidateRecordID: UUID? = nil,
+        candidateImagePath: String,
+        comparedNodeIDs: [UUID] = [],
+        comparedImagePaths: [String] = [],
+        similarityScore: Double = 0,
+        histogramScore: Double = 0,
+        metadataScore: Double = 0,
+        overallScore: Double = 0,
+        flags: [PlaceQAFlag] = [],
+        status: PlaceContinuityReviewStatus = .pending,
+        analyzedAt: Date = Date()
+    ) {
+        self.id = id
+        self.nodeID = nodeID
+        self.routeID = routeID
+        self.workflow = workflow
+        self.candidateRecordID = candidateRecordID
+        self.candidateImagePath = candidateImagePath
+        self.comparedNodeIDs = comparedNodeIDs
+        self.comparedImagePaths = comparedImagePaths
+        self.similarityScore = similarityScore
+        self.histogramScore = histogramScore
+        self.metadataScore = metadataScore
+        self.overallScore = overallScore
+        self.flags = flags
+        self.status = status
+        self.analyzedAt = analyzedAt
+    }
+}
+
+struct PlaceWorldGenerationBatchFailure: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var key: String
+    var message: String
+    var code: Int?
+
+    init(
+        id: UUID = UUID(),
+        key: String,
+        message: String,
+        code: Int? = nil
+    ) {
+        self.id = id
+        self.key = key
+        self.message = message
+        self.code = code
+    }
+}
+
+struct PlaceWorldGenerationBatch: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var routeID: UUID?
+    var placeID: UUID?
+    var workflow: PlaceWorkflowMode
+    var title: String
+    var state: String
+    var batchName: String?
+    var nodeIDs: [UUID]
+    var promptCount: Int
+    var imageSize: String
+    var aspectRatio: String?
+    var model: GeminiModel
+    var submittedAt: Date
+    var lastCheckedAt: Date?
+    var remoteUpdatedAt: Date?
+    var remoteStartedAt: Date?
+    var remoteFinishedAt: Date?
+    var successCount: Int
+    var failureCount: Int
+    var lastErrorMessage: String?
+    var failures: [PlaceWorldGenerationBatchFailure]
+    var metadataPath: String?
+    var outputRootPath: String?
+    var generatedImagePaths: [String]
+
+    init(
+        id: UUID = UUID(),
+        routeID: UUID? = nil,
+        placeID: UUID? = nil,
+        workflow: PlaceWorkflowMode,
+        title: String,
+        state: String = "queued",
+        batchName: String? = nil,
+        nodeIDs: [UUID] = [],
+        promptCount: Int = 0,
+        imageSize: String = "1K",
+        aspectRatio: String? = nil,
+        model: GeminiModel = .flash,
+        submittedAt: Date = Date(),
+        lastCheckedAt: Date? = nil,
+        remoteUpdatedAt: Date? = nil,
+        remoteStartedAt: Date? = nil,
+        remoteFinishedAt: Date? = nil,
+        successCount: Int = 0,
+        failureCount: Int = 0,
+        lastErrorMessage: String? = nil,
+        failures: [PlaceWorldGenerationBatchFailure] = [],
+        metadataPath: String? = nil,
+        outputRootPath: String? = nil,
+        generatedImagePaths: [String] = []
+    ) {
+        self.id = id
+        self.routeID = routeID
+        self.placeID = placeID
+        self.workflow = workflow
+        self.title = title
+        self.state = state
+        self.batchName = batchName
+        self.nodeIDs = nodeIDs
+        self.promptCount = promptCount
+        self.imageSize = imageSize
+        self.aspectRatio = aspectRatio
+        self.model = model
+        self.submittedAt = submittedAt
+        self.lastCheckedAt = lastCheckedAt
+        self.remoteUpdatedAt = remoteUpdatedAt
+        self.remoteStartedAt = remoteStartedAt
+        self.remoteFinishedAt = remoteFinishedAt
+        self.successCount = successCount
+        self.failureCount = failureCount
+        self.lastErrorMessage = lastErrorMessage
+        self.failures = failures
+        self.metadataPath = metadataPath
+        self.outputRootPath = outputRootPath
+        self.generatedImagePaths = generatedImagePaths
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case routeID
+        case placeID
+        case workflow
+        case title
+        case state
+        case batchName
+        case nodeIDs
+        case promptCount
+        case imageSize
+        case aspectRatio
+        case model
+        case submittedAt
+        case lastCheckedAt
+        case remoteUpdatedAt
+        case remoteStartedAt
+        case remoteFinishedAt
+        case successCount
+        case failureCount
+        case lastErrorMessage
+        case failures
+        case metadataPath
+        case outputRootPath
+        case generatedImagePaths
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        routeID = try c.decodeIfPresent(UUID.self, forKey: .routeID)
+        placeID = try c.decodeIfPresent(UUID.self, forKey: .placeID)
+        workflow = try c.decodeIfPresent(PlaceWorkflowMode.self, forKey: .workflow) ?? .photorealistic
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "Batch"
+        state = try c.decodeIfPresent(String.self, forKey: .state) ?? "queued"
+        batchName = try c.decodeIfPresent(String.self, forKey: .batchName)
+        nodeIDs = try c.decodeIfPresent([UUID].self, forKey: .nodeIDs) ?? []
+        promptCount = try c.decodeIfPresent(Int.self, forKey: .promptCount) ?? 0
+        imageSize = try c.decodeIfPresent(String.self, forKey: .imageSize) ?? "1K"
+        aspectRatio = try c.decodeIfPresent(String.self, forKey: .aspectRatio)
+        model = try c.decodeIfPresent(GeminiModel.self, forKey: .model) ?? .flash
+        submittedAt = try c.decodeIfPresent(Date.self, forKey: .submittedAt) ?? Date()
+        lastCheckedAt = try c.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
+        remoteUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .remoteUpdatedAt)
+        remoteStartedAt = try c.decodeIfPresent(Date.self, forKey: .remoteStartedAt)
+        remoteFinishedAt = try c.decodeIfPresent(Date.self, forKey: .remoteFinishedAt)
+        successCount = try c.decodeIfPresent(Int.self, forKey: .successCount) ?? 0
+        failureCount = try c.decodeIfPresent(Int.self, forKey: .failureCount) ?? 0
+        lastErrorMessage = try c.decodeIfPresent(String.self, forKey: .lastErrorMessage)
+        failures = try c.decodeIfPresent([PlaceWorldGenerationBatchFailure].self, forKey: .failures) ?? []
+        metadataPath = try c.decodeIfPresent(String.self, forKey: .metadataPath)
+        outputRootPath = try c.decodeIfPresent(String.self, forKey: .outputRootPath)
+        generatedImagePaths = try c.decodeIfPresent([String].self, forKey: .generatedImagePaths) ?? []
+    }
+}
+
+struct PlaceAngleImage: Codable, Identifiable, Sendable, Hashable {
     var id: UUID = UUID()
     var imagePath: String
     var cameraShot: String?     // "wide", "medium", "close", etc.
     var angle: String?          // "front", "left", "right", "overhead"
     var timeOfDay: String?      // "day", "night", "dawn", "dusk"
     var notes: String = ""
+    var worldNodeID: UUID?
+    var routeID: UUID?
+    var sequenceIndex: Int?
+    var cameraPose: WorldCameraPose?
+    var mapPoint: WorldMapPoint?
+    var linkedGeneratedRecordID: UUID?
+    var canonStatus: WorldCanonStatus
 
     enum CodingKeys: String, CodingKey {
         case id, imagePath, cameraShot, angle, timeOfDay, notes
+        case worldNodeID, routeID, sequenceIndex, cameraPose, mapPoint, linkedGeneratedRecordID, canonStatus
     }
 
     init(
@@ -945,7 +1437,14 @@ struct PlaceAngleImage: Codable, Identifiable, Sendable {
         cameraShot: String? = nil,
         angle: String? = nil,
         timeOfDay: String? = nil,
-        notes: String = ""
+        notes: String = "",
+        worldNodeID: UUID? = nil,
+        routeID: UUID? = nil,
+        sequenceIndex: Int? = nil,
+        cameraPose: WorldCameraPose? = nil,
+        mapPoint: WorldMapPoint? = nil,
+        linkedGeneratedRecordID: UUID? = nil,
+        canonStatus: WorldCanonStatus = .candidate
     ) {
         self.id = id
         self.imagePath = imagePath
@@ -953,6 +1452,13 @@ struct PlaceAngleImage: Codable, Identifiable, Sendable {
         self.angle = angle
         self.timeOfDay = timeOfDay
         self.notes = notes
+        self.worldNodeID = worldNodeID
+        self.routeID = routeID
+        self.sequenceIndex = sequenceIndex
+        self.cameraPose = cameraPose
+        self.mapPoint = mapPoint
+        self.linkedGeneratedRecordID = linkedGeneratedRecordID
+        self.canonStatus = canonStatus
     }
 
     init(from decoder: Decoder) throws {
@@ -963,6 +1469,681 @@ struct PlaceAngleImage: Codable, Identifiable, Sendable {
         angle = try c.decodeIfPresent(String.self, forKey: .angle)
         timeOfDay = try c.decodeIfPresent(String.self, forKey: .timeOfDay)
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        worldNodeID = try c.decodeIfPresent(UUID.self, forKey: .worldNodeID)
+        routeID = try c.decodeIfPresent(UUID.self, forKey: .routeID)
+        sequenceIndex = try c.decodeIfPresent(Int.self, forKey: .sequenceIndex)
+        cameraPose = try c.decodeIfPresent(WorldCameraPose.self, forKey: .cameraPose)
+        mapPoint = try c.decodeIfPresent(WorldMapPoint.self, forKey: .mapPoint)
+        linkedGeneratedRecordID = try c.decodeIfPresent(UUID.self, forKey: .linkedGeneratedRecordID)
+        canonStatus = try c.decodeIfPresent(WorldCanonStatus.self, forKey: .canonStatus) ?? .candidate
+    }
+}
+
+enum PlaceWorkflowMode: String, Codable, Sendable, CaseIterable, Hashable {
+    case photorealistic
+    case animated
+
+    var displayName: String {
+        switch self {
+        case .photorealistic: "Photorealistic"
+        case .animated: "Animated"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .photorealistic: "Photo"
+        case .animated: "Animate"
+        }
+    }
+}
+
+struct PlaceReferenceImage: Identifiable, Codable, Sendable, Hashable {
+    enum Category: String, Codable, Sendable, CaseIterable, Hashable {
+        case bridge
+        case map
+        case landmark
+        case style
+        case terrain
+        case architecture
+        case misc
+
+        var displayName: String {
+            switch self {
+            case .bridge: "Bridge"
+            case .map: "Map"
+            case .landmark: "Landmark"
+            case .style: "Style"
+            case .terrain: "Terrain"
+            case .architecture: "Architecture"
+            case .misc: "Misc"
+            }
+        }
+    }
+
+    var id: UUID
+    var title: String
+    var imagePath: String
+    var category: Category
+    var notes: String
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        imagePath: String,
+        category: Category = .misc,
+        notes: String = ""
+    ) {
+        self.id = id
+        self.title = title
+        self.imagePath = imagePath
+        self.category = category
+        self.notes = notes
+    }
+}
+
+struct PlaceLandmarkProfile: Identifiable, Codable, Sendable, Hashable {
+    enum Kind: String, Codable, Sendable, CaseIterable, Hashable {
+        case bridge
+        case clinic = "clinic"
+        case amiraHome = "amira_home"
+        case gatheringSpace = "gathering_space"
+        case marketplace
+        case memorial
+        case ridge
+        case riverside
+        case custom
+
+        var displayName: String {
+            switch self {
+            case .bridge: "Bridge"
+            case .clinic: "Clinic"
+            case .amiraHome: "Amira’s Home"
+            case .gatheringSpace: "Gathering Space"
+            case .marketplace: "Marketplace"
+            case .memorial: "Memorial / Grave"
+            case .ridge: "Ridge / Valley"
+            case .riverside: "Riverside"
+            case .custom: "Custom"
+            }
+        }
+    }
+
+    var id: UUID
+    var title: String
+    var kind: Kind
+    var notes: String
+    var exteriorPlaceID: UUID?
+    var exteriorImagePath: String?
+    var interiorPlaceID: UUID?
+    var interiorImagePath: String?
+    var primaryImagePath: String?
+    var galleryImagePaths: [String]
+    var anchorNodeID: UUID?
+    var mapPoint: WorldMapPoint?
+    var updatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case kind
+        case notes
+        case exteriorPlaceID
+        case exteriorImagePath
+        case interiorPlaceID
+        case interiorImagePath
+        case primaryImagePath
+        case galleryImagePaths
+        case anchorNodeID
+        case mapPoint
+        case updatedAt
+    }
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        kind: Kind,
+        notes: String = "",
+        exteriorPlaceID: UUID? = nil,
+        exteriorImagePath: String? = nil,
+        interiorPlaceID: UUID? = nil,
+        interiorImagePath: String? = nil,
+        primaryImagePath: String? = nil,
+        galleryImagePaths: [String] = [],
+        anchorNodeID: UUID? = nil,
+        mapPoint: WorldMapPoint? = nil,
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.title = title
+        self.kind = kind
+        self.notes = notes
+        self.exteriorPlaceID = exteriorPlaceID
+        self.exteriorImagePath = exteriorImagePath
+        self.interiorPlaceID = interiorPlaceID
+        self.interiorImagePath = interiorImagePath
+        self.primaryImagePath = primaryImagePath
+        self.galleryImagePaths = galleryImagePaths
+        self.anchorNodeID = anchorNodeID
+        self.mapPoint = mapPoint
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        exteriorPlaceID = try container.decodeIfPresent(UUID.self, forKey: .exteriorPlaceID)
+        exteriorImagePath = try container.decodeIfPresent(String.self, forKey: .exteriorImagePath)
+        interiorPlaceID = try container.decodeIfPresent(UUID.self, forKey: .interiorPlaceID)
+        interiorImagePath = try container.decodeIfPresent(String.self, forKey: .interiorImagePath)
+        primaryImagePath = try container.decodeIfPresent(String.self, forKey: .primaryImagePath)
+        galleryImagePaths = try container.decodeIfPresent([String].self, forKey: .galleryImagePaths)
+            ?? [primaryImagePath, exteriorImagePath, interiorImagePath].compactMap { $0 }
+        anchorNodeID = try container.decodeIfPresent(UUID.self, forKey: .anchorNodeID)
+        mapPoint = try container.decodeIfPresent(WorldMapPoint.self, forKey: .mapPoint)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(notes, forKey: .notes)
+        try container.encodeIfPresent(exteriorPlaceID, forKey: .exteriorPlaceID)
+        try container.encodeIfPresent(exteriorImagePath, forKey: .exteriorImagePath)
+        try container.encodeIfPresent(interiorPlaceID, forKey: .interiorPlaceID)
+        try container.encodeIfPresent(interiorImagePath, forKey: .interiorImagePath)
+        try container.encodeIfPresent(primaryImagePath, forKey: .primaryImagePath)
+        try container.encode(galleryImagePaths, forKey: .galleryImagePaths)
+        try container.encodeIfPresent(anchorNodeID, forKey: .anchorNodeID)
+        try container.encodeIfPresent(mapPoint, forKey: .mapPoint)
+        try container.encode(updatedAt, forKey: .updatedAt)
+    }
+}
+
+struct PlaceWorkflowRenderConfig: Codable, Sendable, Hashable {
+    var model: GeminiModel
+    var aspectRatio: String
+    var imageSize: String
+    var lensDescription: String
+    var promptPrefix: String
+    var promptSuffix: String
+
+    init(
+        model: GeminiModel = .flash,
+        aspectRatio: String = "16:9",
+        imageSize: String = "1K",
+        lensDescription: String = "",
+        promptPrefix: String = "",
+        promptSuffix: String = ""
+    ) {
+        self.model = model
+        self.aspectRatio = aspectRatio
+        self.imageSize = imageSize
+        self.lensDescription = lensDescription
+        self.promptPrefix = promptPrefix
+        self.promptSuffix = promptSuffix
+    }
+
+    static let photorealDefault = PlaceWorkflowRenderConfig(
+        model: .flash,
+        aspectRatio: "16:9",
+        imageSize: "1K",
+        lensDescription: "Shot on a full-frame camera, grounded cinematic photography, realistic depth of field, and lensing appropriate to the composition.",
+        promptPrefix: "",
+        promptSuffix: ""
+    )
+
+    static let animatedDefault = PlaceWorkflowRenderConfig(
+        model: .flash,
+        aspectRatio: "16:9",
+        imageSize: "1K",
+        lensDescription: "Cinematic animated layout with the optical feel of a full-frame lens choice, grounded depth cues, and believable staging.",
+        promptPrefix: "",
+        promptSuffix: ""
+    )
+}
+
+struct GeneratedBackgroundEditHistoryEntry: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var createdAt: Date
+    var instructions: String
+    var sourcePath: String
+    var resultPath: String?
+    var prompt: String?
+
+    init(
+        id: UUID = UUID(),
+        createdAt: Date = Date(),
+        instructions: String,
+        sourcePath: String,
+        resultPath: String? = nil,
+        prompt: String? = nil
+    ) {
+        self.id = id
+        self.createdAt = createdAt
+        self.instructions = instructions
+        self.sourcePath = sourcePath
+        self.resultPath = resultPath
+        self.prompt = prompt
+    }
+}
+
+struct GeneratedBackgroundVersionRecord: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var path: String
+    var supersededAt: Date
+
+    init(
+        id: UUID = UUID(),
+        path: String,
+        supersededAt: Date = Date()
+    ) {
+        self.id = id
+        self.path = path
+        self.supersededAt = supersededAt
+    }
+}
+
+struct GeneratedBackgroundLibraryRecord: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var activePath: String
+    var workflow: PlaceWorkflowMode
+    var duplicatePaths: [String]
+    var priorVersions: [GeneratedBackgroundVersionRecord]
+    var contentFingerprint: String?
+    var rating: Int?
+    var isRejected: Bool
+    var rejectionNotes: String
+    var draftEditNotes: String
+    var editHistory: [GeneratedBackgroundEditHistoryEntry]
+    var summary: String
+    var keywords: [String]
+    var sourcePrompt: String?
+    var linkedPlaceID: UUID?
+    var worldNodeID: UUID?
+    var routeID: UUID?
+    var cameraPose: WorldCameraPose?
+    var mapPoint: WorldMapPoint?
+    var mapPlacementStatus: GeneratedBackgroundMapPlacementStatus
+    var mapPlacementConfirmedAt: Date?
+    var buildingAnchorNodeID: UUID?
+    var orientationState: GeneratedBackgroundOrientationState
+    var qaFlags: [PlaceQAFlag]
+    var continuityReviewIDs: [UUID]
+    var canonStatus: WorldCanonStatus
+    var createdAt: Date
+    var updatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case activePath
+        case workflow
+        case duplicatePaths
+        case priorVersions
+        case contentFingerprint
+        case rating
+        case isRejected
+        case rejectionNotes
+        case draftEditNotes
+        case editHistory
+        case summary
+        case keywords
+        case sourcePrompt
+        case linkedPlaceID
+        case worldNodeID
+        case routeID
+        case cameraPose
+        case mapPoint
+        case mapPlacementStatus
+        case mapPlacementConfirmedAt
+        case buildingAnchorNodeID
+        case orientationState
+        case qaFlags
+        case continuityReviewIDs
+        case canonStatus
+        case createdAt
+        case updatedAt
+    }
+
+    init(
+        id: UUID = UUID(),
+        activePath: String,
+        workflow: PlaceWorkflowMode = .photorealistic,
+        duplicatePaths: [String] = [],
+        priorVersions: [GeneratedBackgroundVersionRecord] = [],
+        contentFingerprint: String? = nil,
+        rating: Int? = nil,
+        isRejected: Bool = false,
+        rejectionNotes: String = "",
+        draftEditNotes: String = "",
+        editHistory: [GeneratedBackgroundEditHistoryEntry] = [],
+        summary: String = "",
+        keywords: [String] = [],
+        sourcePrompt: String? = nil,
+        linkedPlaceID: UUID? = nil,
+        worldNodeID: UUID? = nil,
+        routeID: UUID? = nil,
+        cameraPose: WorldCameraPose? = nil,
+        mapPoint: WorldMapPoint? = nil,
+        mapPlacementStatus: GeneratedBackgroundMapPlacementStatus? = nil,
+        mapPlacementConfirmedAt: Date? = nil,
+        buildingAnchorNodeID: UUID? = nil,
+        orientationState: GeneratedBackgroundOrientationState = .unknown,
+        qaFlags: [PlaceQAFlag] = [],
+        continuityReviewIDs: [UUID] = [],
+        canonStatus: WorldCanonStatus = .unreviewed,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.activePath = activePath
+        self.workflow = workflow
+        self.duplicatePaths = duplicatePaths
+        self.priorVersions = priorVersions
+        self.contentFingerprint = contentFingerprint
+        self.rating = rating
+        self.isRejected = isRejected
+        self.rejectionNotes = rejectionNotes
+        self.draftEditNotes = draftEditNotes
+        self.editHistory = editHistory
+        self.summary = summary
+        self.keywords = keywords
+        self.sourcePrompt = sourcePrompt
+        self.linkedPlaceID = linkedPlaceID
+        self.worldNodeID = worldNodeID
+        self.routeID = routeID
+        self.cameraPose = cameraPose
+        self.mapPoint = mapPoint
+        self.mapPlacementStatus = mapPlacementStatus
+            ?? ((mapPoint != nil || cameraPose != nil) ? .inferred : .unplaced)
+        self.mapPlacementConfirmedAt = self.mapPlacementStatus == .confirmed
+            ? (mapPlacementConfirmedAt ?? updatedAt)
+            : mapPlacementConfirmedAt
+        self.buildingAnchorNodeID = buildingAnchorNodeID
+        self.orientationState = orientationState
+        self.qaFlags = qaFlags
+        self.continuityReviewIDs = continuityReviewIDs
+        self.canonStatus = canonStatus
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        activePath = try c.decode(String.self, forKey: .activePath)
+        workflow = try c.decodeIfPresent(PlaceWorkflowMode.self, forKey: .workflow) ?? .photorealistic
+        duplicatePaths = try c.decodeIfPresent([String].self, forKey: .duplicatePaths) ?? []
+        priorVersions = try c.decodeIfPresent([GeneratedBackgroundVersionRecord].self, forKey: .priorVersions) ?? []
+        contentFingerprint = try c.decodeIfPresent(String.self, forKey: .contentFingerprint)
+        rating = try c.decodeIfPresent(Int.self, forKey: .rating)
+        isRejected = try c.decodeIfPresent(Bool.self, forKey: .isRejected) ?? false
+        rejectionNotes = try c.decodeIfPresent(String.self, forKey: .rejectionNotes) ?? ""
+        draftEditNotes = try c.decodeIfPresent(String.self, forKey: .draftEditNotes) ?? ""
+        editHistory = try c.decodeIfPresent([GeneratedBackgroundEditHistoryEntry].self, forKey: .editHistory) ?? []
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        keywords = try c.decodeIfPresent([String].self, forKey: .keywords) ?? []
+        sourcePrompt = try c.decodeIfPresent(String.self, forKey: .sourcePrompt)
+        linkedPlaceID = try c.decodeIfPresent(UUID.self, forKey: .linkedPlaceID)
+        worldNodeID = try c.decodeIfPresent(UUID.self, forKey: .worldNodeID)
+        routeID = try c.decodeIfPresent(UUID.self, forKey: .routeID)
+        cameraPose = try c.decodeIfPresent(WorldCameraPose.self, forKey: .cameraPose)
+        mapPoint = try c.decodeIfPresent(WorldMapPoint.self, forKey: .mapPoint)
+        mapPlacementStatus = try c.decodeIfPresent(GeneratedBackgroundMapPlacementStatus.self, forKey: .mapPlacementStatus)
+            ?? ((mapPoint != nil || cameraPose != nil) ? .inferred : .unplaced)
+        mapPlacementConfirmedAt = try c.decodeIfPresent(Date.self, forKey: .mapPlacementConfirmedAt)
+        buildingAnchorNodeID = try c.decodeIfPresent(UUID.self, forKey: .buildingAnchorNodeID)
+        orientationState = try c.decodeIfPresent(GeneratedBackgroundOrientationState.self, forKey: .orientationState) ?? .unknown
+        qaFlags = try c.decodeIfPresent([PlaceQAFlag].self, forKey: .qaFlags) ?? []
+        continuityReviewIDs = try c.decodeIfPresent([UUID].self, forKey: .continuityReviewIDs) ?? []
+        canonStatus = try c.decodeIfPresent(WorldCanonStatus.self, forKey: .canonStatus) ?? .unreviewed
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+        if mapPlacementStatus == .confirmed, mapPlacementConfirmedAt == nil {
+            mapPlacementConfirmedAt = updatedAt
+        }
+    }
+}
+
+struct PlaceImageEditQueueItem: Identifiable, Codable, Sendable, Hashable {
+    enum State: String, Codable, Sendable, Hashable {
+        case queued
+        case submitted
+        case failed
+        case succeeded
+    }
+
+    var id: UUID
+    var imageRecordID: UUID
+    var sourcePath: String
+    var workflow: PlaceWorkflowMode
+    var instructions: String
+    var state: State
+    var queuedAt: Date
+    var lastSubmittedAt: Date?
+    var lastBatchJobID: UUID?
+    var lastErrorMessage: String?
+
+    init(
+        id: UUID = UUID(),
+        imageRecordID: UUID,
+        sourcePath: String,
+        workflow: PlaceWorkflowMode,
+        instructions: String,
+        state: State = .queued,
+        queuedAt: Date = Date(),
+        lastSubmittedAt: Date? = nil,
+        lastBatchJobID: UUID? = nil,
+        lastErrorMessage: String? = nil
+    ) {
+        self.id = id
+        self.imageRecordID = imageRecordID
+        self.sourcePath = sourcePath
+        self.workflow = workflow
+        self.instructions = instructions
+        self.state = state
+        self.queuedAt = queuedAt
+        self.lastSubmittedAt = lastSubmittedAt
+        self.lastBatchJobID = lastBatchJobID
+        self.lastErrorMessage = lastErrorMessage
+    }
+}
+
+struct PlaceImageEditBatchJob: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var title: String
+    var batchName: String
+    var metadataPath: String
+    var outputRootPath: String
+    var state: String
+    var workflow: PlaceWorkflowMode
+    var promptCount: Int
+    var submittedAt: Date
+    var lastCheckedAt: Date?
+    var remoteUpdatedAt: Date?
+    var remoteStartedAt: Date?
+    var remoteFinishedAt: Date?
+    var remoteSuccessfulCount: Int?
+    var downloadedImagePaths: [String]
+    var queueItemIDs: [UUID]
+    var lastErrorMessage: String?
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        batchName: String,
+        metadataPath: String,
+        outputRootPath: String,
+        state: String,
+        workflow: PlaceWorkflowMode,
+        promptCount: Int,
+        submittedAt: Date = Date(),
+        lastCheckedAt: Date? = nil,
+        remoteUpdatedAt: Date? = nil,
+        remoteStartedAt: Date? = nil,
+        remoteFinishedAt: Date? = nil,
+        remoteSuccessfulCount: Int? = nil,
+        downloadedImagePaths: [String] = [],
+        queueItemIDs: [UUID] = [],
+        lastErrorMessage: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.batchName = batchName
+        self.metadataPath = metadataPath
+        self.outputRootPath = outputRootPath
+        self.state = state
+        self.workflow = workflow
+        self.promptCount = promptCount
+        self.submittedAt = submittedAt
+        self.lastCheckedAt = lastCheckedAt
+        self.remoteUpdatedAt = remoteUpdatedAt
+        self.remoteStartedAt = remoteStartedAt
+        self.remoteFinishedAt = remoteFinishedAt
+        self.remoteSuccessfulCount = remoteSuccessfulCount
+        self.downloadedImagePaths = downloadedImagePaths
+        self.queueItemIDs = queueItemIDs
+        self.lastErrorMessage = lastErrorMessage
+    }
+
+    var isTerminal: Bool {
+        switch state {
+        case "JOB_STATE_SUCCEEDED", "JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED":
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+struct GeneratedBackgroundWorldMapCanonRecord: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var canonicalPath: String
+    var pathAliases: [String]
+    var contentFingerprint: String?
+    var linkedPlaceID: UUID?
+    var worldNodeID: UUID?
+    var routeID: UUID?
+    var cameraPose: WorldCameraPose?
+    var mapPoint: WorldMapPoint?
+    var mapPlacementStatus: GeneratedBackgroundMapPlacementStatus?
+    var mapPlacementConfirmedAt: Date?
+    var buildingAnchorNodeID: UUID?
+    var orientationState: GeneratedBackgroundOrientationState?
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        canonicalPath: String,
+        pathAliases: [String] = [],
+        contentFingerprint: String? = nil,
+        linkedPlaceID: UUID? = nil,
+        worldNodeID: UUID? = nil,
+        routeID: UUID? = nil,
+        cameraPose: WorldCameraPose? = nil,
+        mapPoint: WorldMapPoint? = nil,
+        mapPlacementStatus: GeneratedBackgroundMapPlacementStatus? = nil,
+        mapPlacementConfirmedAt: Date? = nil,
+        buildingAnchorNodeID: UUID? = nil,
+        orientationState: GeneratedBackgroundOrientationState? = nil,
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.canonicalPath = canonicalPath
+        self.pathAliases = pathAliases
+        self.contentFingerprint = contentFingerprint
+        self.linkedPlaceID = linkedPlaceID
+        self.worldNodeID = worldNodeID
+        self.routeID = routeID
+        self.cameraPose = cameraPose
+        self.mapPoint = mapPoint
+        self.mapPlacementStatus = mapPlacementStatus
+        self.mapPlacementConfirmedAt = mapPlacementConfirmedAt
+        self.buildingAnchorNodeID = buildingAnchorNodeID
+        self.orientationState = orientationState
+        self.updatedAt = updatedAt
+    }
+}
+
+struct PlacesWorldMapCanonLibrary: Codable, Sendable, Hashable {
+    var recordOverrides: [GeneratedBackgroundWorldMapCanonRecord]
+
+    init(recordOverrides: [GeneratedBackgroundWorldMapCanonRecord] = []) {
+        self.recordOverrides = recordOverrides
+    }
+}
+
+struct PlacesWorkflowLibrary: Codable, Sendable, Hashable {
+    var masterMapImagePath: String?
+    var landmarkReferences: [PlaceReferenceImage]
+    var landmarkProfiles: [PlaceLandmarkProfile]
+    var photorealConfig: PlaceWorkflowRenderConfig
+    var animatedConfig: PlaceWorkflowRenderConfig
+    var worldGraph: PlaceWorldGraph
+    var continuityReviews: [PlaceContinuityReview]
+    var worldGenerationBatches: [PlaceWorldGenerationBatch]
+    var generatedImageRecords: [GeneratedBackgroundLibraryRecord]
+    var pendingEditQueue: [PlaceImageEditQueueItem]
+    var editBatchJobs: [PlaceImageEditBatchJob]
+
+    enum CodingKeys: String, CodingKey {
+        case masterMapImagePath
+        case landmarkReferences
+        case landmarkProfiles
+        case photorealConfig
+        case animatedConfig
+        case worldGraph
+        case continuityReviews
+        case worldGenerationBatches
+        case generatedImageRecords
+        case pendingEditQueue
+        case editBatchJobs
+    }
+
+    init(
+        masterMapImagePath: String? = nil,
+        landmarkReferences: [PlaceReferenceImage] = [],
+        landmarkProfiles: [PlaceLandmarkProfile] = [],
+        photorealConfig: PlaceWorkflowRenderConfig = .photorealDefault,
+        animatedConfig: PlaceWorkflowRenderConfig = .animatedDefault,
+        worldGraph: PlaceWorldGraph = .init(),
+        continuityReviews: [PlaceContinuityReview] = [],
+        worldGenerationBatches: [PlaceWorldGenerationBatch] = [],
+        generatedImageRecords: [GeneratedBackgroundLibraryRecord] = [],
+        pendingEditQueue: [PlaceImageEditQueueItem] = [],
+        editBatchJobs: [PlaceImageEditBatchJob] = []
+    ) {
+        self.masterMapImagePath = masterMapImagePath
+        self.landmarkReferences = landmarkReferences
+        self.landmarkProfiles = landmarkProfiles
+        self.photorealConfig = photorealConfig
+        self.animatedConfig = animatedConfig
+        self.worldGraph = worldGraph
+        self.continuityReviews = continuityReviews
+        self.worldGenerationBatches = worldGenerationBatches
+        self.generatedImageRecords = generatedImageRecords
+        self.pendingEditQueue = pendingEditQueue
+        self.editBatchJobs = editBatchJobs
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        masterMapImagePath = try c.decodeIfPresent(String.self, forKey: .masterMapImagePath)
+        landmarkReferences = try c.decodeIfPresent([PlaceReferenceImage].self, forKey: .landmarkReferences) ?? []
+        landmarkProfiles = try c.decodeIfPresent([PlaceLandmarkProfile].self, forKey: .landmarkProfiles) ?? []
+        photorealConfig = try c.decodeIfPresent(PlaceWorkflowRenderConfig.self, forKey: .photorealConfig) ?? .photorealDefault
+        animatedConfig = try c.decodeIfPresent(PlaceWorkflowRenderConfig.self, forKey: .animatedConfig) ?? .animatedDefault
+        worldGraph = try c.decodeIfPresent(PlaceWorldGraph.self, forKey: .worldGraph) ?? .init()
+        continuityReviews = try c.decodeIfPresent([PlaceContinuityReview].self, forKey: .continuityReviews) ?? []
+        worldGenerationBatches = try c.decodeIfPresent([PlaceWorldGenerationBatch].self, forKey: .worldGenerationBatches) ?? []
+        generatedImageRecords = try c.decodeIfPresent([GeneratedBackgroundLibraryRecord].self, forKey: .generatedImageRecords) ?? []
+        pendingEditQueue = try c.decodeIfPresent([PlaceImageEditQueueItem].self, forKey: .pendingEditQueue) ?? []
+        editBatchJobs = try c.decodeIfPresent([PlaceImageEditBatchJob].self, forKey: .editBatchJobs) ?? []
     }
 }
 
@@ -977,10 +2158,18 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
     var angleImages: [PlaceAngleImage]
     var locationCategory: String
     var sceneUsage: [String]
+    var referenceImages: [PlaceReferenceImage]
+    var workflowPromptNotes: String
+    var animatedImagePaths: [String]
+    var animatedApprovedImagePath: String?
+    var buildingAnchorNodeID: UUID?
+    var linkedExteriorPlaceID: UUID?
 
     enum CodingKeys: String, CodingKey {
         case id, name, filename, notes, imagePaths, approvedImagePath
         case angleImages, locationCategory, sceneUsage
+        case referenceImages, workflowPromptNotes, animatedImagePaths, animatedApprovedImagePath
+        case buildingAnchorNodeID, linkedExteriorPlaceID
     }
 
     init(
@@ -993,7 +2182,13 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         sourceURL: URL? = nil,
         angleImages: [PlaceAngleImage] = [],
         locationCategory: String = "",
-        sceneUsage: [String] = []
+        sceneUsage: [String] = [],
+        referenceImages: [PlaceReferenceImage] = [],
+        workflowPromptNotes: String = "",
+        animatedImagePaths: [String] = [],
+        animatedApprovedImagePath: String? = nil,
+        buildingAnchorNodeID: UUID? = nil,
+        linkedExteriorPlaceID: UUID? = nil
     ) {
         self.id = id
         self.name = name
@@ -1005,6 +2200,12 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         self.angleImages = angleImages
         self.locationCategory = locationCategory
         self.sceneUsage = sceneUsage
+        self.referenceImages = referenceImages
+        self.workflowPromptNotes = workflowPromptNotes
+        self.animatedImagePaths = animatedImagePaths
+        self.animatedApprovedImagePath = animatedApprovedImagePath
+        self.buildingAnchorNodeID = buildingAnchorNodeID
+        self.linkedExteriorPlaceID = linkedExteriorPlaceID
     }
 
     init(from decoder: Decoder) throws {
@@ -1019,15 +2220,47 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         angleImages = try c.decodeIfPresent([PlaceAngleImage].self, forKey: .angleImages) ?? []
         locationCategory = try c.decodeIfPresent(String.self, forKey: .locationCategory) ?? ""
         sceneUsage = try c.decodeIfPresent([String].self, forKey: .sceneUsage) ?? []
+        referenceImages = try c.decodeIfPresent([PlaceReferenceImage].self, forKey: .referenceImages) ?? []
+        workflowPromptNotes = try c.decodeIfPresent(String.self, forKey: .workflowPromptNotes) ?? ""
+        animatedImagePaths = try c.decodeIfPresent([String].self, forKey: .animatedImagePaths) ?? []
+        animatedApprovedImagePath = try c.decodeIfPresent(String.self, forKey: .animatedApprovedImagePath)
+        buildingAnchorNodeID = try c.decodeIfPresent(UUID.self, forKey: .buildingAnchorNodeID)
+        linkedExteriorPlaceID = try c.decodeIfPresent(UUID.self, forKey: .linkedExteriorPlaceID)
     }
 
     var resolvedApprovedImagePath: String? {
         approvedImagePath ?? imagePaths.first
     }
 
+    var resolvedAnimatedApprovedImagePath: String? {
+        animatedApprovedImagePath ?? animatedImagePaths.first
+    }
+
+    func imagePaths(for workflow: PlaceWorkflowMode) -> [String] {
+        switch workflow {
+        case .photorealistic:
+            imagePaths
+        case .animated:
+            animatedImagePaths
+        }
+    }
+
+    func approvedImagePath(for workflow: PlaceWorkflowMode) -> String? {
+        switch workflow {
+        case .photorealistic:
+            resolvedApprovedImagePath
+        case .animated:
+            resolvedAnimatedApprovedImagePath
+        }
+    }
+
     /// All unique camera shot types present in angle images.
     var coveredCameraShots: Set<String> {
         Set(angleImages.compactMap(\.cameraShot))
+    }
+
+    var isExteriorLike: Bool {
+        locationCategory.caseInsensitiveCompare("Interior") != .orderedSame
     }
 }
 

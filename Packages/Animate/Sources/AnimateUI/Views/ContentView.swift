@@ -14,6 +14,7 @@ struct ContentView: View {
     @AppStorage("novotro.animate.inspector.width") private var inspectorWidth: Double = 320
     @State private var showAPISettings: Bool = false
     @State private var animateWorkspaceState = AnimateWorkspaceState()
+    @State private var placesViewMode: PlacesViewMode = .grid
 
     private var projectTitle: String {
         store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
@@ -235,15 +236,19 @@ struct ContentView: View {
         case .places:
             OperaChromeFlatPane(
                 headerPadding: OperaChromeSidebarMetrics.headerPadding
-            ) {
-                OperaChromePaneHeader(
-                    eyebrow: "ANIMATE",
-                    title: "Places",
-                    subtitle: "\(store.backgrounds.count) sets"
-                ) { EmptyView() }
-            } content: {
-                PlacesSidebarView(store: store)
-            }
+                ) {
+                    OperaChromePaneHeader(
+                        eyebrow: "ANIMATE",
+                        title: "Places",
+                        subtitle: "\(store.backgrounds.count) sets"
+                    ) { EmptyView() }
+                } content: {
+                    PlacesSidebarView(
+                        store: store,
+                        viewMode: $placesViewMode,
+                        allImageCount: store.allBackgroundHierarchyImagePaths().count
+                    )
+                }
         default:
             // All other pages show scenes in sidebar
             OperaChromeFlatPane(
@@ -268,7 +273,7 @@ struct ContentView: View {
         case .characters:
             CharactersPageView(store: store, showSidebar: false)
         case .places:
-            PlacesPageView(store: store, showSidebar: false)
+            PlacesPageView(store: store, viewMode: $placesViewMode, showSidebar: false)
         case .props:
             // Props has its own dedicated workspace; this fallback shows animate.
             AnimatePageView(store: store, workspaceState: animateWorkspaceState)

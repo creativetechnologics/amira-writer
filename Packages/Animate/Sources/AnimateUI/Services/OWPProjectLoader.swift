@@ -142,6 +142,8 @@ struct OWPProjectLoader: Sendable {
 
         while let fileURL = enumerator?.nextObject() as? URL {
             guard fileURL.pathExtension.lowercased() == "ows" else { continue }
+            // Skip SyncThing conflict files — matches Score, Write, and Mix behavior
+            if fileURL.lastPathComponent.contains(".sync-conflict-") { continue }
 
             let relativePath = "Songs/" + fileURL.path.replacingOccurrences(
                 of: songsURL.path + "/",

@@ -52,7 +52,7 @@ final class ViduAPIService: Sendable {
         endImageURL: String,
         prompt: String,
         duration: Int = 4,
-        resolution: String = "720p",
+        resolution: String = "1080p",
         movementAmplitude: String = "auto"
     ) async throws -> CreateTaskResponse {
         guard !apiKey.isEmpty else { throw ViduError.noAPIKey }

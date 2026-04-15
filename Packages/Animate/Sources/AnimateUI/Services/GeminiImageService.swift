@@ -18,6 +18,8 @@ final class GeminiImageService {
         case imageDecodingFailed
         case cancelled
         case rateLimitExceeded
+        case masterSwitchOff
+        case vertexNotConfigured(String)
 
         var errorDescription: String? {
             switch self {
@@ -28,6 +30,8 @@ final class GeminiImageService {
             case .imageDecodingFailed: "Failed to decode the generated image."
             case .cancelled: "Generation was cancelled."
             case .rateLimitExceeded: "Too many API calls in a short period. Wait a moment and try again."
+            case .masterSwitchOff: "Gemini API calls are disabled. Enable them in the Imagine > Inspector > Tools tab."
+            case .vertexNotConfigured(let msg): "Vertex AI backend is selected but not configured: \(msg)"
             }
         }
     }
@@ -37,7 +41,7 @@ final class GeminiImageService {
         var referenceImages: [ReferenceImage] = []
         var model: GeminiModel = .flash
         var aspectRatio: String = "3:4"
-        var imageSize: String = "1K"
+        var imageSize: String = "2K"
     }
 
     struct ReferenceImage {
@@ -101,9 +105,19 @@ final class GeminiImageService {
 
     // MARK: - Image Generation
 
+    /// Callers MUST check `AnimateStore.isGeminiAllowed()` before calling this method.
+    /// The Imagine inspector's Tools tab controls the master switch.
     /// Generate a single image from a text prompt with optional reference images.
+    ///
+    /// Backend selection is read from `ImageGenBackendStore.currentBackend()`:
+    /// - `.aiStudio` (default) — uses the provided `apiKey` as `x-goog-api-key`
+    /// - `.vertex` — shells out to gcloud for an OAuth token and hits Vertex AI;
+    ///   the `apiKey` argument is ignored in this mode.
     func generate(request: GenerationRequest, apiKey: String) async throws -> GenerationResult {
-        guard !apiKey.isEmpty else { throw ServiceError.noAPIKey }
+        let backend = ImageGenBackendStore.currentBackend()
+        if backend == .aiStudio {
+            guard !apiKey.isEmpty else { throw ServiceError.noAPIKey }
+        }
 
         // Circuit breaker: if too many consecutive failures, refuse ALL calls
         // until the app is restarted. This prevents runaway retry loops.
@@ -125,8 +139,34 @@ final class GeminiImageService {
             throw ServiceError.rateLimitExceeded
         }
 
-        guard let url = URL(string: "\(baseURL)/\(request.model.rawValue):generateContent") else {
-            throw ServiceError.invalidResponse
+        // Resolve the target URL + auth header based on the selected backend.
+        let (url, authHeaderName, authHeaderValue): (URL, String, String)
+        switch backend {
+        case .aiStudio:
+            guard let u = URL(string: "\(baseURL)/\(request.model.rawValue):generateContent") else {
+                throw ServiceError.invalidResponse
+            }
+            url = u
+            authHeaderName = "x-goog-api-key"
+            authHeaderValue = apiKey
+
+        case .vertex:
+            let settings = ImageGenBackendStore.currentVertexSettings()
+            guard !settings.projectID.isEmpty else {
+                throw ServiceError.vertexNotConfigured("missing project ID")
+            }
+            let client = VertexAIClient(projectID: settings.projectID, region: settings.region)
+            guard let u = client.generateContentURL(modelID: request.model.rawValue) else {
+                throw ServiceError.invalidResponse
+            }
+            url = u
+            do {
+                let token = try await client.accessToken()
+                authHeaderName = "Authorization"
+                authHeaderValue = "Bearer \(token)"
+            } catch {
+                throw ServiceError.vertexNotConfigured(error.localizedDescription)
+            }
         }
 
         var parts: [[String: Any]] = []
@@ -146,7 +186,10 @@ final class GeminiImageService {
 
         let requestBody: [String: Any] = [
             "contents": [
-                ["parts": parts]
+                // Vertex AI requires an explicit role on each content item;
+                // AI Studio accepts it as optional. Always set it so the same
+                // request body works on both backends.
+                ["role": "user", "parts": parts]
             ],
             "generationConfig": [
                 "responseModalities": ["TEXT", "IMAGE"],
@@ -160,7 +203,7 @@ final class GeminiImageService {
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        urlRequest.setValue(authHeaderValue, forHTTPHeaderField: authHeaderName)
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
         let data: Data
@@ -383,6 +426,7 @@ struct GeminiBatchSubmissionPlan: Sendable {
         var title: String
         var prompt: String
         var referencePaths: [String]
+        var recommendedLORACaption: String? = nil
     }
 
     var characterName: String
@@ -478,7 +522,13 @@ final class GeminiBatchService {
         }
     }
 
-    func launchWatchdog(metadataPath: URL, apiKey: String, pollSeconds: Int = 120, timeoutHours: Double = 2.0) throws {
+    /// Launches the batch watchdog Python process.
+    ///
+    /// IMPORTANT: `timeoutHours` controls an auto-cancellation safety net inside the
+    /// watchdog. Gemini image batches are documented to take up to **24 hours**, so the
+    /// default is 24. Do NOT drop this below 12 without a very good reason — a short
+    /// timeout will kill batches that are merely queued and would otherwise complete.
+    func launchWatchdog(metadataPath: URL, apiKey: String, pollSeconds: Int = 120, timeoutHours: Double = 24.0) throws {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw BatchError.missingAPIKey
         }
@@ -595,6 +645,7 @@ private extension GeminiBatchService {
             var title: String
             var prompt: String
             var reference_paths: [String]
+            var recommended_lora_caption: String?
         }
 
         var character_name: String
@@ -619,7 +670,8 @@ private extension GeminiBatchService {
                     id: $0.id,
                     title: $0.title,
                     prompt: $0.prompt,
-                    reference_paths: $0.referencePaths
+                    reference_paths: $0.referencePaths,
+                    recommended_lora_caption: $0.recommendedLORACaption
                 )
             }
         }

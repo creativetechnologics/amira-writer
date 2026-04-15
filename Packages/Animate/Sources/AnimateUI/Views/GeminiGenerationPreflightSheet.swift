@@ -53,11 +53,18 @@ struct GeminiGenerationDraft: Identifiable, Hashable, Sendable {
     var title: String
     var destinationDescription: String
     var prompt: String
+    var recommendedLORACaption: String? = nil
     var contextNote: String? = nil
     var model: GeminiModel
     var aspectRatio: String
     var imageSize: String
     var referenceItems: [GeminiGenerationReferenceDraft]
+    var linkedPlaceID: UUID? = nil
+    var routeID: UUID? = nil
+    var worldNodeID: UUID? = nil
+    var cameraPose: WorldCameraPose? = nil
+    var mapPoint: WorldMapPoint? = nil
+    var mapViewPreset: MapViewPreset? = nil
     var pricingMode: PricingMode = .standard
     var isSelected: Bool = true
     var overrideTelemetry: GeminiGenerationDraftOverrideTelemetry? = nil
@@ -87,7 +94,7 @@ struct GeminiGenerationPreflightSheet: View {
 
     @State private var selectedMode: GeminiGenerationDraft.PricingMode = .standard
 
-    private let aspectRatioOptions = ["1:1", "3:4", "4:3", "16:9", "21:9"]
+    private let aspectRatioOptions = ["1:1", "2:3", "3:4", "4:5", "4:3", "16:9", "21:9"]
     private let imageSizeOptions = ["1K", "2K", "4K"]
 
     private var usesSharedConfiguration: Bool {
@@ -348,6 +355,22 @@ struct GeminiGenerationPreflightSheet: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button {
+                        setSharedReferencesIncluded(true)
+                    } label: {
+                        Label("Select All", systemImage: "checkmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(sharedReferenceItems.isEmpty)
+                    Button {
+                        setSharedReferencesIncluded(false)
+                    } label: {
+                        Label("Select None", systemImage: "circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(sharedReferenceItems.isEmpty)
+                    Button {
                         addSharedReferenceImages()
                     } label: {
                         Label("Add Image", systemImage: "plus")
@@ -375,6 +398,21 @@ struct GeminiGenerationPreflightSheet: View {
         }
         .padding(16)
         .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func setSharedReferencesIncluded(_ included: Bool) {
+        for draftIndex in drafts.indices {
+            for refIndex in drafts[draftIndex].referenceItems.indices {
+                drafts[draftIndex].referenceItems[refIndex].isIncluded = included
+            }
+        }
+    }
+
+    private func setDraftReferencesIncluded(draftID: UUID, included: Bool) {
+        guard let draftIndex = drafts.firstIndex(where: { $0.id == draftID }) else { return }
+        for refIndex in drafts[draftIndex].referenceItems.indices {
+            drafts[draftIndex].referenceItems[refIndex].isIncluded = included
+        }
     }
 
     private func preflightMetric(title: String, value: String, icon: String, tint: Color) -> some View {
@@ -564,6 +602,22 @@ struct GeminiGenerationPreflightSheet: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
+                    Button {
+                        setDraftReferencesIncluded(draftID: draft.wrappedValue.id, included: true)
+                    } label: {
+                        Label("Select All", systemImage: "checkmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(draft.wrappedValue.referenceItems.isEmpty)
+                    Button {
+                        setDraftReferencesIncluded(draftID: draft.wrappedValue.id, included: false)
+                    } label: {
+                        Label("Select None", systemImage: "circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(draft.wrappedValue.referenceItems.isEmpty)
                     Button {
                         addReferenceImages(to: draft.wrappedValue.id)
                     } label: {

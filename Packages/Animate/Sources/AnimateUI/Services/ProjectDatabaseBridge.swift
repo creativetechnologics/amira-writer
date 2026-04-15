@@ -5,6 +5,7 @@ enum ProjectDatabaseBridge {
     static let animateMetadataPath = "Animate/animate.json"
     static let animateScenesPath = "Animate/scenes.json"
     static let animatePlacesPath = "Animate/places.json"
+    static let animatePlacesWorkflowPath = "Animate/places-workflow.json"
     static let characterPackageSelectionsPath = "Animate/character-package-selections.json"
     static let shotPresetsPath = "Animate/shot-presets.json"
     static let animate3DRegistryRootPath = "Animate/3d"
@@ -60,31 +61,86 @@ enum ProjectDatabaseBridge {
         return metadata
     }
 
+    private static func debugLog(_ message: String) {
+        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
+        NSLog("%@", message)
+        let logURL = URL(fileURLWithPath: "/tmp/animate-debug.log")
+        if let handle = try? FileHandle(forWritingTo: logURL) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            handle.closeFile()
+        } else {
+            try? Data(line.utf8).write(to: logURL)
+        }
+    }
+
     static func loadSavedScenesFromDisk(projectURL: URL) -> [String: AnimateSceneData] {
         let fileURL = projectURL.appendingPathComponent(animateScenesPath)
-        guard FileManager.default.fileExists(atPath: fileURL.path),
-              let data = try? Data(contentsOf: fileURL) else {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            debugLog("[Animate] loadSavedScenes: \(animateScenesPath) not found")
             return [:]
         }
 
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            debugLog("[Animate] loadSavedScenes: failed to read file: \(error.localizedDescription)")
+            return [:]
+        }
+
+        debugLog("[Animate] loadSavedScenes: read \(data.count) bytes from \(animateScenesPath)")
+
         let decoder = configuredDecoder()
-        if let array = try? decoder.decode([AnimateSceneData].self, from: data) {
-            return Dictionary(uniqueKeysWithValues: array.map { ($0.owsSongPath, $0) })
-        }
 
-        if let wrapped = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let sceneMap = wrapped["scenes"] as? [String: Any] {
-            return Dictionary(uniqueKeysWithValues: sceneMap.compactMap { key, value in
-                guard let entry = value as? [String: Any],
-                      let entryData = try? JSONSerialization.data(withJSONObject: entry),
-                      let sceneData = try? decoder.decode(AnimateSceneData.self, from: entryData) else {
-                    return nil
+        // Try full-array decode first
+        do {
+            let array = try decoder.decode([AnimateSceneData].self, from: data)
+            debugLog("[Animate] loadSavedScenes: decoded \(array.count) scenes (full array), total shots=\(array.reduce(0) { $0 + $1.shots.count })")
+            let result = Dictionary(uniqueKeysWithValues: array.map { ($0.owsSongPath, $0) })
+            for check in ["Songs/1.36.0 - The Window.ows", "Songs/1.15.0 - Scene - After The Incident.ows", "Songs/2.14.0 - Ancient Waters.ows"] {
+                if let s = result[check] {
+                    debugLog("[Animate] loadSavedScenes:   \(check) = \(s.shots.count) shots")
                 }
-                return (sceneData.owsSongPath.isEmpty ? key : sceneData.owsSongPath, sceneData)
-            })
+            }
+            return result
+        } catch {
+            debugLog("[Animate] loadSavedScenes: full-array decode FAILED: \(error)")
         }
 
-        return [:]
+        // Full-array decode failed — try per-scene decode to salvage what we can
+        debugLog("[Animate] loadSavedScenes: falling back to per-scene decode")
+        guard let rawArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            debugLog("[Animate] loadSavedScenes: not a JSON array, trying dict wrapper")
+            if let wrapped = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let sceneMap = wrapped["scenes"] as? [String: Any] {
+                return Dictionary(uniqueKeysWithValues: sceneMap.compactMap { key, value in
+                    guard let entry = value as? [String: Any],
+                          let entryData = try? JSONSerialization.data(withJSONObject: entry),
+                          let sceneData = try? decoder.decode(AnimateSceneData.self, from: entryData) else {
+                        return nil
+                    }
+                    return (sceneData.owsSongPath.isEmpty ? key : sceneData.owsSongPath, sceneData)
+                })
+            }
+            return [:]
+        }
+
+        // Decode each scene individually — one bad scene won't kill the rest
+        var result: [String: AnimateSceneData] = [:]
+        for (i, sceneDict) in rawArray.enumerated() {
+            let path = sceneDict["owsSongPath"] as? String ?? "idx_\(i)"
+            do {
+                let sceneData = try JSONSerialization.data(withJSONObject: sceneDict)
+                let scene = try decoder.decode(AnimateSceneData.self, from: sceneData)
+                result[scene.owsSongPath] = scene
+            } catch {
+                debugLog("[Animate] loadSavedScenes: scene \(i) (\(path)) decode FAILED: \(error)")
+            }
+        }
+
+        debugLog("[Animate] loadSavedScenes: per-scene fallback decoded \(result.count)/\(rawArray.count) scenes, total shots=\(result.values.reduce(0) { $0 + $1.shots.count })")
+        return result
     }
 
     static func loadCharacterPackageSelectionsFromDisk(projectURL: URL) -> CharacterPackageSelectionManifest? {
@@ -185,5 +241,24 @@ enum ProjectDatabaseBridge {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         return encoder
+    }
+
+    // MARK: - Gemini Master Switch
+
+    static func saveGeminiMasterSwitch(_ enabled: Bool, projectURL: URL) throws {
+        let url = projectURL.appendingPathComponent("Animate/imagine/gemini-switch.json")
+        let dir = url.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        let data = try JSONEncoder().encode(["enabled": enabled])
+        try data.write(to: url, options: .atomic)
+    }
+
+    static func loadGeminiMasterSwitch(projectURL: URL) -> Bool? {
+        let url = projectURL.appendingPathComponent("Animate/imagine/gemini-switch.json")
+        guard let data = try? Data(contentsOf: url),
+              let dict = try? JSONDecoder().decode([String: Bool].self, from: data) else { return nil }
+        return dict["enabled"]
     }
 }

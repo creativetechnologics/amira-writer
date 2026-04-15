@@ -2,6 +2,8 @@ import SwiftUI
 import AppKit
 import ProjectKit
 
+fileprivate let lyricIterationSlotRange = 1...10
+
 @available(macOS 26.0, *)
 struct ContentView: View {
     @Bindable var store: ScriptStore
@@ -10,6 +12,8 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage("novotro.write.showInspector") private var showInspector: Bool = true
     @AppStorage("novotro.write.showScratchpad") private var showScratchpad: Bool = true
+    @AppStorage("novotro.write.showLyricIterations") private var showLyricIterations: Bool = true
+    @AppStorage("novotro.write.lyricIterationSlot") private var selectedLyricIterationSlot: Int = 1
     @AppStorage("novotro.write.showSummaries") private var showSummaries: Bool = false
     @AppStorage("novotro.write.sidebarVisible") private var showSidebar: Bool = true
     @AppStorage("novotro.write.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
@@ -18,6 +22,23 @@ struct ContentView: View {
 
     private var projectTitle: String {
         store.projectURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
+    }
+
+    private var lyricIterationSelection: Binding<Int> {
+        Binding(
+            get: {
+                min(
+                    max(selectedLyricIterationSlot, lyricIterationSlotRange.lowerBound),
+                    lyricIterationSlotRange.upperBound
+                )
+            },
+            set: {
+                selectedLyricIterationSlot = min(
+                    max($0, lyricIterationSlotRange.lowerBound),
+                    lyricIterationSlotRange.upperBound
+                )
+            }
+        )
     }
 
     private var activeSceneTitle: String? {
@@ -142,6 +163,17 @@ struct ContentView: View {
                                 showsProgress: store.isAgentSyncInProgress
                             )
                         }
+                        if showLyricIterations {
+                            LyricIterationSlotPicker(selection: lyricIterationSelection)
+                        }
+                        OperaChromeActionButton(
+                            systemImage: "text.quote",
+                            isSelected: showLyricIterations
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showLyricIterations.toggle()
+                            }
+                        }
                         OperaChromeActionButton(
                             systemImage: "square.and.pencil",
                             isSelected: showScratchpad
@@ -159,7 +191,9 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     ScriptCenterView(
                         store: store,
-                        showScratchpad: showScratchpad
+                        showScratchpad: showScratchpad,
+                        showLyricIterations: showLyricIterations,
+                        selectedLyricIterationSlot: lyricIterationSelection.wrappedValue
                     )
                     OperaChromeDivider()
                     OperaChromeStatusBar(
@@ -253,6 +287,60 @@ private struct ScriptEditorModeButton: View {
             isSelected: isEditing,
             action: action
         )
+    }
+}
+
+@available(macOS 26.0, *)
+private struct LyricIterationSlotPicker: View {
+    @Binding var selection: Int
+
+    private let slotRange = lyricIterationSlotRange
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Draft")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(OperaChromeTheme.textTertiary)
+                .tracking(1)
+
+            HStack(spacing: 6) {
+                toolbarStepperButton(systemImage: "chevron.down") {
+                    selection -= 1
+                }
+                .disabled(selection <= slotRange.lowerBound)
+
+                Text("\(selection)")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(OperaChromeTheme.textPrimary)
+                    .frame(minWidth: 26)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(OperaChromeTheme.selection)
+                    )
+
+                toolbarStepperButton(systemImage: "chevron.up") {
+                    selection += 1
+                }
+                .disabled(selection >= slotRange.upperBound)
+            }
+            .help("Preview lyric iteration \(selection) of \(slotRange.upperBound)")
+        }
+    }
+
+    private func toolbarStepperButton(systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+                .frame(width: 24, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(OperaChromeTheme.raisedBackground.opacity(0.9))
+                )
+        }
+        .buttonStyle(.plain)
     }
 }
 

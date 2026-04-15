@@ -202,8 +202,26 @@ struct ScoreSidebarView: View {
 
     @State private var cachedDurations: [UUID: Double] = [:]
 
+    private var totalSeconds: Double {
+        cachedDurations.values.reduce(0, +)
+    }
+
     var body: some View {
         OperaChromeSidebarList {
+            if !cachedDurations.isEmpty {
+                OperaChromeSidebarRow {
+                    HStack {
+                        Text("Total")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                        Spacer()
+                        Text(formatTotalDuration(totalSeconds))
+                            .font(.caption.monospacedDigit())
+                            .fontWeight(.medium)
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                    }
+                }
+            }
             ForEach(store.midiAssets) { asset in
                 Button {
                     selectedSongID = asset.id
@@ -234,7 +252,8 @@ struct ScoreSidebarView: View {
             }
         }
         .onAppear { recomputeDurations() }
-        .onChange(of: store.midiAssets.map(\.id)) { _, _ in recomputeDurations() }
+        .onChange(of: store.songAssets.map(\.id)) { _, _ in recomputeDurations() }
+        .onChange(of: store.songAssets.map { $0.document.activeVersion()?.playback?.lengthTicks }) { _, _ in recomputeDurations() }
     }
 
     private func formatDuration(_ seconds: Double) -> String {
@@ -243,14 +262,30 @@ struct ScoreSidebarView: View {
         return "\(mins):\(String(format: "%02d", secs))"
     }
 
+    private func formatTotalDuration(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        return "\(h):\(String(format: "%02d", m)):\(String(format: "%02d", s))"
+    }
+
     private func recomputeDurations() {
         var result: [UUID: Double] = [:]
-        for asset in store.midiAssets {
-            guard let parsed = try? MIDIParser.parse(asset.data) else { continue }
+        for asset in store.songAssets {
+            guard let playback = asset.document.activeVersion()?.playback else {
+                let songID = asset.id
+                Task { @MainActor in
+                    let hydrated = await store.hydrateSongPlaybackIfNeeded(id: songID)
+                    guard hydrated else { return }
+                    recomputeDurations()
+                }
+                continue
+            }
             let secs = ScoreStore.ticksToSecondsStatic(
-                parsed.lengthTicks,
-                ticksPerQuarter: parsed.ticksPerQuarter,
-                tempoEvents: parsed.tempoEvents
+                playback.lengthTicks,
+                ticksPerQuarter: playback.ticksPerQuarter,
+                tempoEvents: playback.tempoEvents
             )
             result[asset.id] = secs
         }

@@ -39,12 +39,14 @@ final class VideoExporter {
     }
 
     enum ExportResolution: String, CaseIterable, Sendable {
+        case source = "Source"
         case hd720 = "720p"
         case hd1080 = "1080p"
         case uhd4k = "4K"
 
         var size: (width: Int, height: Int) {
             switch self {
+            case .source: (0, 0)
             case .hd720: (1280, 720)
             case .hd1080: (1920, 1080)
             case .uhd4k: (3840, 2160)

@@ -188,6 +188,10 @@ struct CharacterCostumeReferenceSet: Identifiable, Codable, Sendable, Hashable {
     var approvedSheetVariantID: UUID?
     var fullBodySlots: [CharacterPoseSlot]
     var accessorySlots: [CharacterAccessorySlot]
+    /// Paths to user-uploaded costume reference images (for CostumesPane variations workflow).
+    var costumeReferenceImagePaths: [String]
+    /// Paths to Gemini-generated character-in-costume variation images.
+    var generatedVariationImagePaths: [String]
 
     init(
         id: UUID = UUID(),
@@ -197,7 +201,9 @@ struct CharacterCostumeReferenceSet: Identifiable, Codable, Sendable, Hashable {
         sheetVariants: [CharacterLookDevelopmentVariant] = [],
         approvedSheetVariantID: UUID? = nil,
         fullBodySlots: [CharacterPoseSlot],
-        accessorySlots: [CharacterAccessorySlot]
+        accessorySlots: [CharacterAccessorySlot],
+        costumeReferenceImagePaths: [String] = [],
+        generatedVariationImagePaths: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -207,6 +213,8 @@ struct CharacterCostumeReferenceSet: Identifiable, Codable, Sendable, Hashable {
         self.approvedSheetVariantID = approvedSheetVariantID
         self.fullBodySlots = fullBodySlots
         self.accessorySlots = accessorySlots
+        self.costumeReferenceImagePaths = costumeReferenceImagePaths
+        self.generatedVariationImagePaths = generatedVariationImagePaths
     }
 
     init(from decoder: Decoder) throws {
@@ -219,6 +227,8 @@ struct CharacterCostumeReferenceSet: Identifiable, Codable, Sendable, Hashable {
         approvedSheetVariantID = try c.decodeIfPresent(UUID.self, forKey: .approvedSheetVariantID)
         fullBodySlots = try c.decodeIfPresent([CharacterPoseSlot].self, forKey: .fullBodySlots) ?? []
         accessorySlots = try c.decodeIfPresent([CharacterAccessorySlot].self, forKey: .accessorySlots) ?? []
+        costumeReferenceImagePaths = try c.decodeIfPresent([String].self, forKey: .costumeReferenceImagePaths) ?? []
+        generatedVariationImagePaths = try c.decodeIfPresent([String].self, forKey: .generatedVariationImagePaths) ?? []
     }
 
     var approvedSheetVariant: CharacterLookDevelopmentVariant? {

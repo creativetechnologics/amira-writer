@@ -141,6 +141,16 @@ if [[ -f "$PROJECT_DIR/Scripts/gemini_inspiration_batch.py" ]]; then
     cp "$PROJECT_DIR/Scripts/gemini_inspiration_batch.py" "$RESOURCES_DIR/gemini_inspiration_batch.py"
 fi
 
+# Embed the 3D map pipeline viewer so the Places → 3D Map tab works even on
+# machines without the dev server running. Source lives at
+# `Scripts/3d-map-pipeline/viewer/` and was populated by
+# `Scripts/3d-map-pipeline/run_all.sh` (phase F).
+if [[ -d "$PROJECT_DIR/Scripts/3d-map-pipeline/viewer" ]]; then
+    rm -rf "$RESOURCES_DIR/map3d-viewer"
+    cp -R "$PROJECT_DIR/Scripts/3d-map-pipeline/viewer" "$RESOURCES_DIR/map3d-viewer"
+    echo "Embedded 3D map viewer: $RESOURCES_DIR/map3d-viewer"
+fi
+
 # 3. Code sign
 # Prefer Developer ID when available. If that fails or is unavailable, fall back
 # to a stable ad-hoc signature with a fixed designated requirement so macOS TCC

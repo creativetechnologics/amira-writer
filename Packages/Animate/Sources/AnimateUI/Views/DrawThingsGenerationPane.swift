@@ -22,7 +22,7 @@ struct DrawThingsGenerationPane: View {
     @State private var customHeight: Int = 864
 
     // MARK: - Generation params
-    @State private var steps: Double = 28
+    @State private var steps: Double = 6
     @State private var cfgScale: Double = 7.5
     @State private var seedText: String = ""
 
@@ -69,7 +69,7 @@ struct DrawThingsGenerationPane: View {
         let res = resolvedResolution
         c.imageWidth = res.0
         c.imageHeight = res.1
-        c.steps = Int(steps)
+        c.steps = max(4, min(Int(steps), 8))
         c.cfgScale = cfgScale
         c.seed = Int(seedText)
         c.negativePrompt = negativePrompt
@@ -258,7 +258,7 @@ struct DrawThingsGenerationPane: View {
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
-                    Slider(value: $steps, in: 1...100, step: 1)
+                    Slider(value: $steps, in: 4...8, step: 1)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {

@@ -2,9 +2,11 @@ import SwiftUI
 import Observation
 import Metal
 import QuartzCore
+import ImageIO
 import ProjectKit
 import UniformTypeIdentifiers
 import CoreMedia
+import CryptoKit
 
 @MainActor
 private final class AnimateDisplayLinkProxy: NSObject {
@@ -24,11 +26,65 @@ private struct AnimateExternalFileSnapshot: Equatable, Sendable {
     let fileSize: Int64
 }
 
+private struct PlaceWorldGenerationBatchResultsSummary: Sendable {
+    var rowCount: Int
+    var successCount: Int
+    var errorCount: Int
+    var failures: [PlaceWorldGenerationBatchFailure]
+    var decodedImagePaths: [String]
+}
+
+private struct GeneratedBackgroundReviewStateRecord: Codable, Sendable {
+    var id: UUID = UUID()
+    var canonicalPath: String
+    var pathAliases: [String] = []
+    var contentFingerprint: String?
+    var rating: Int?
+    var isRejected: Bool = false
+    var rejectionNotes: String = ""
+    var draftEditNotes: String = ""
+    var updatedAt: Date = .now
+}
+
+private struct GeneratedBackgroundReviewStateLibrary: Codable, Sendable {
+    var recordOverrides: [GeneratedBackgroundReviewStateRecord] = []
+}
+
 struct StoredImageGenerationMetadata: Hashable, Sendable {
     let prompt: String
     let model: String
     let aspectRatio: String
     let imageSize: String
+    let placeID: UUID?
+    let routeID: UUID?
+    let worldNodeID: UUID?
+    let mapPoint: WorldMapPoint?
+    let cameraPose: WorldCameraPose?
+    let mapPlacementStatus: GeneratedBackgroundMapPlacementStatus?
+    let buildingAnchorNodeID: UUID?
+    let orientationState: GeneratedBackgroundOrientationState?
+}
+
+enum GeneratedBackgroundFlagFilterMode: String, CaseIterable, Sendable {
+    case all
+    case unflagged
+    case rejected
+
+    var displayName: String {
+        switch self {
+        case .all: "All"
+        case .unflagged: "Unflagged"
+        case .rejected: "Rejected"
+        }
+    }
+}
+
+enum GeneratedBackgroundWorkflowFilterMode: String, CaseIterable, Sendable {
+    case all = "All"
+    case photorealistic = "Photo"
+    case animated = "Animate"
+
+    var displayName: String { rawValue }
 }
 
 @available(macOS 26.0, *)
@@ -57,7 +113,7 @@ final class AnimateStore {
         (workingOWPURL ?? owpURL)?.appendingPathComponent("Animate")
     }
 
-    private var fileOWPURL: URL? {
+    var fileOWPURL: URL? {
         workingOWPURL ?? owpURL
     }
 
@@ -82,6 +138,32 @@ final class AnimateStore {
     nonisolated(unsafe) var mocapDWPoseTracker: DWPoseTracker? = nil
     var mocapTemporalFilter = TemporalFilterManager()
     var mocapTrackingMode: CaptureTrackingMode = .standard
+
+    // MARK: - Canvas Generation
+
+    struct CanvasGeneration: Identifiable, Codable, Hashable, Sendable {
+        var id: UUID = UUID()
+        var createdAt: Date = Date()
+        var prompt: String
+        var model: GeminiModel
+        var aspectRatio: String
+        var imageSize: String
+        var imagePath: String   // absolute path to .png on disk
+        var referenceCount: Int
+    }
+
+    var canvasGenerations: [CanvasGeneration] = []
+
+    // MARK: - Imagine State
+
+    var selectedImaginePage: ImaginePage = .characters
+    var imagineSceneGalleries: [UUID: [ImagineSceneShotGallery]] = [:]
+    var imagineBulkRunConfig: ImagineBulkRunConfig = .init()
+    var imagineBulkRunProgress: ImagineBulkRunProgress = .init()
+    var geminiMasterSwitch: Bool = false
+    var imagineSelectedShotIndex: Int? = nil
+    var imagineSelectedMoment: ImagineShotMoment = .beginning
+    var imaginePreviewImagePath: String? = nil
 
     // MARK: - Mocap Live Override
 
@@ -220,16 +302,24 @@ final class AnimateStore {
     var isRefreshingPlacesIndex: Bool = false
     var placeGenerationStatusByID: [UUID: String] = [:]
     var generatingPlaceIDs: Set<UUID> = []
-    var drawThingsPlaceConfig: DrawThingsPlaceConfig = .init() {
-        didSet {
-            guard !isHydratingDrawThingsPlacesConfig,
-                  drawThingsPlaceConfig != oldValue else { return }
-            scheduleDebouncedSave()
-        }
-    }
+    var placesWorkflowLibrary: PlacesWorkflowLibrary = .init()
+    var placesWorldMapCanonLibrary: PlacesWorldMapCanonLibrary = .init()
+    private var placesWorldMapCanonRawPayload: [String: Any] = [:]
+    private var placesGeneratedReviewStateLibrary: GeneratedBackgroundReviewStateLibrary = .init()
+    var drawThingsPlaceConfig: DrawThingsPlaceConfig = .init()
+    var selectedGeneratedBackgroundRecordID: UUID?
+    private var generatedBackgroundFingerprintCache: [String: (snapshot: AnimateExternalFileSnapshot, digest: String)] = [:]
 
     var selectedPlace: BackgroundPlate? {
         backgrounds.first { $0.id == selectedBackgroundID }
+    }
+
+    var selectedGeneratedBackgroundRecord: GeneratedBackgroundLibraryRecord? {
+        placesWorkflowLibrary.generatedImageRecords.first { $0.id == selectedGeneratedBackgroundRecordID }
+    }
+
+    var hasPendingGeneratedBackgroundEdits: Bool {
+        !placesWorkflowLibrary.pendingEditQueue.isEmpty
     }
 
     var selectedScenePlaceRequirement: PlacesScriptSceneRequirement? {
@@ -361,6 +451,20 @@ final class AnimateStore {
             viduCredentialStore.saveAPIKey(viduAPIKey)
         }
     }
+
+    @ObservationIgnored private var isHydratingRunPodSettings = false
+    var runPodAPIKey: String = "" {
+        didSet {
+            guard !isHydratingRunPodSettings else { return }
+            runPodCredentialStore.saveAPIKey(runPodAPIKey)
+            runPodAccountSummary = nil
+            runPodAccountStatusMessage = nil
+        }
+    }
+    var runPodAccountSummary: RunPodAccountService.AccountSummary?
+    var runPodAccountStatusMessage: String?
+    var isRefreshingRunPodAccountSummary: Bool = false
+    var runPodGPUPriceSummaries: [RunPodAccountService.GPUPriceSummary] = []
     var viduQueue: [ViduBatchQueueItem] = []
 
     var isGeneratingLLMPlan: Bool = false
@@ -444,6 +548,7 @@ final class AnimateStore {
     @ObservationIgnored private var isHydratingMiniMaxSettings = false
     @ObservationIgnored private var isHydratingViduSettings = false
     @ObservationIgnored private var isHydratingDrawThingsPlacesConfig = false
+    @ObservationIgnored private var isHydratingPlacesWorkflowLibrary = false
 
     // MARK: - Track Resolution Cache
     // Caches the result of timelineTrack(for:role:) and related lookups so
@@ -459,6 +564,8 @@ final class AnimateStore {
     private let geminiCredentialStore = GeminiCredentialStore()
     private let miniMaxCredentialStore = MiniMaxCredentialStore()
     private let viduCredentialStore = ViduCredentialStore()
+    private let runPodCredentialStore = RunPodCredentialStore()
+    private let runPodAccountService = RunPodAccountService()
     private let sceneAutomationPlanner = SceneAutomationPlanner()
     let audioPlayer = AnimationAudioPlayer()
     private var backgroundIndexRefreshTask: Task<Void, Never>?
@@ -499,6 +606,7 @@ final class AnimateStore {
         hydrateGeminiSettings()
         hydrateMiniMaxSettings()
         hydrateViduSettings()
+        hydrateRunPodSettings()
     }
 
     func setGeminiAPIKey(_ apiKey: String) {
@@ -527,12 +635,53 @@ final class AnimateStore {
         isHydratingMiniMaxSettings = false
     }
 
+    private func hydrateRunPodSettings() {
+        isHydratingRunPodSettings = true
+        runPodAPIKey = runPodCredentialStore.loadAPIKey()
+        isHydratingRunPodSettings = false
+    }
+
     func setMiniMaxAPIKey(_ apiKey: String) {
         miniMaxAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func clearMiniMaxAPIKey() {
         miniMaxAPIKey = ""
+    }
+
+    @MainActor
+    func refreshRunPodAccountSummary(using overrideAPIKey: String? = nil) async {
+        let apiKey = (overrideAPIKey ?? runPodAPIKey).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else {
+            runPodAccountSummary = nil
+            runPodAccountStatusMessage = "RunPod API key not set."
+            return
+        }
+
+        isRefreshingRunPodAccountSummary = true
+        defer { isRefreshingRunPodAccountSummary = false }
+
+        do {
+            async let summaryTask = runPodAccountService.fetchAccountSummary(apiKey: apiKey)
+            async let gpuPricesTask = runPodAccountService.fetchGPUPrices(apiKey: apiKey)
+            let summary = try await summaryTask
+            let gpuPrices = try await gpuPricesTask
+            runPodAccountSummary = summary
+            runPodGPUPriceSummaries = gpuPrices
+            if summary.underBalance {
+                runPodAccountStatusMessage = "RunPod reports the account is under the minimum balance threshold."
+            } else {
+                runPodAccountStatusMessage = nil
+            }
+        } catch {
+            runPodAccountSummary = nil
+            runPodGPUPriceSummaries = []
+            runPodAccountStatusMessage = error.localizedDescription
+        }
+    }
+
+    func runPodGPUPriceSummary(for displayName: String) -> RunPodAccountService.GPUPriceSummary? {
+        runPodGPUPriceSummaries.first { $0.displayName == displayName }
     }
 
     private func hydrateViduSettings() {
@@ -549,10 +698,23 @@ final class AnimateStore {
         viduAPIKey = ""
     }
 
+    private func normalizedDrawThingsPlacesConfig(_ config: DrawThingsPlaceConfig) -> DrawThingsPlaceConfig {
+        var normalized = config
+        normalized.steps = max(4, min(normalized.steps, 8))
+        return normalized
+    }
+
     private func hydrateDrawThingsPlacesConfig(_ config: DrawThingsPlaceConfig) {
         isHydratingDrawThingsPlacesConfig = true
-        drawThingsPlaceConfig = config
+        drawThingsPlaceConfig = normalizedDrawThingsPlacesConfig(config)
         isHydratingDrawThingsPlacesConfig = false
+    }
+
+    func updateDrawThingsPlacesConfig(_ config: DrawThingsPlaceConfig) {
+        let normalized = normalizedDrawThingsPlacesConfig(config)
+        guard drawThingsPlaceConfig != normalized else { return }
+        drawThingsPlaceConfig = normalized
+        save(writePlaces: true)
     }
 
     func sceneRequirement(for sceneID: UUID?) -> PlacesScriptSceneRequirement? {
@@ -578,6 +740,15 @@ final class AnimateStore {
 
     func placeGenerationStatus(for placeID: UUID) -> String? {
         placeGenerationStatusByID[placeID]
+    }
+
+    func workflowConfig(for mode: PlaceWorkflowMode) -> PlaceWorkflowRenderConfig {
+        switch mode {
+        case .photorealistic:
+            placesWorkflowLibrary.photorealConfig
+        case .animated:
+            placesWorkflowLibrary.animatedConfig
+        }
     }
 
     func selectPlacesScene(_ sceneID: UUID) {
@@ -1416,6 +1587,64 @@ final class AnimateStore {
     func replaceSelectedSceneShots(_ shots: [AnimationSceneShot]) {
         updateSelectedSceneShots { current in
             current = shots
+        }
+    }
+
+    /// Seed shots ONLY for scenes that have NO shots at all.
+    /// Scenes that already have shots (whether authored, manual, or previously seeded)
+    /// are never overwritten — their data loaded from Animate/scenes.json is preserved.
+    func seedShotsForAllScenes() async {
+        guard let owpURL = fileOWPURL else { return }
+        let shotService = AnimateSceneShotSeedingService(store: self)
+        var seededCount = 0
+
+        for index in scenes.indices {
+            // ONLY seed scenes with completely empty shots — never overwrite existing data
+            guard scenes[index].shots.isEmpty else { continue }
+
+            let scene = scenes[index]
+            guard let songData = await ProjectDatabaseBridge.hydrateSongData(
+                projectURL: owpURL,
+                relativePath: scene.owpSongPath
+            ) else { continue }
+
+            let lyrics = songData.extractLyrics().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !lyrics.isEmpty else { continue }
+
+            let parseResult = SceneDirectionParser.parse(lyrics)
+            let seeded = shotService.seededShots(
+                for: scene,
+                songData: songData,
+                parseResult: parseResult
+            )
+            guard !seeded.isEmpty else { continue }
+
+            scenes[index].shots = normalizedSceneShots(seeded)
+            seededCount += 1
+        }
+
+        if seededCount > 0 {
+            NSLog("[Animate] seedShots: seeded %d empty scenes from lyrics", seededCount)
+        }
+    }
+
+    /// Reload scene data from Animate/scenes.json on disk, preserving authored shot data.
+    func reloadScenesFromDisk() {
+        guard let projectURL = fileOWPURL else { return }
+        let savedScenes = ProjectDatabaseBridge.loadSavedScenesFromDisk(projectURL: projectURL)
+        var reloadedCount = 0
+
+        for index in scenes.indices {
+            guard let savedScene = savedScenes[scenes[index].owpSongPath] else { continue }
+            applySceneData(savedScene, to: &scenes[index])
+            reloadedCount += 1
+        }
+
+        syncSelectedSceneTimeline()
+        if reloadedCount > 0 {
+            save()
+            statusMessage = "Reloaded \(reloadedCount) scenes from disk"
+            NSLog("[Animate] reloadScenesFromDisk: refreshed %d scenes", reloadedCount)
         }
     }
 
@@ -2309,6 +2538,28 @@ final class AnimateStore {
         return normalized
     }
 
+    private func normalizedLandmarkImagePath(_ path: String?) -> String? {
+        guard let trimmed = normalizedMediaPath(path) else {
+            return nil
+        }
+        return normalizedCharacterAssetPath(trimmed) ?? trimmed
+    }
+
+    private func normalizedLandmarkImagePaths(_ paths: [String]) -> [String] {
+        var normalized: [String] = []
+        var seen: Set<String> = []
+
+        for path in paths {
+            guard let repaired = normalizedLandmarkImagePath(path),
+                  seen.insert(repaired).inserted else {
+                continue
+            }
+            normalized.append(repaired)
+        }
+
+        return normalized
+    }
+
     private func characterAssetExists(at path: String?) -> Bool {
         guard let normalizedPath = normalizedCharacterAssetPath(path) else { return false }
         if resolvedCharacterAssetURL(for: normalizedPath) != nil {
@@ -2356,6 +2607,235 @@ final class AnimateStore {
             updatedJob.autoImportedImagePaths = normalizedCharacterAssetPaths(job.autoImportedImagePaths)
             return updatedJob
         }
+    }
+
+    private func inspirationBatchJobKey(_ job: CharacterInspirationBatchJob) -> String {
+        let batchName = job.batchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !batchName.isEmpty {
+            return "batch:\(batchName)"
+        }
+        let metadataPath = (normalizedCharacterAssetPath(job.metadataPath) ?? job.metadataPath)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !metadataPath.isEmpty {
+            return "metadata:\(metadataPath)"
+        }
+        return "id:\(job.id.uuidString)"
+    }
+
+    private func dismissedInspirationBatchJobKeys(for character: AnimationCharacter) -> Set<String> {
+        guard let animateURL else { return [] }
+        return ImagineGallerySelectionState.load(
+            animateURL: animateURL,
+            characterSlug: character.assetFolderSlug
+        ).dismissedBatchJobKeys
+    }
+
+    private func persistDismissedInspirationBatchJobKeys(
+        _ keys: Set<String>,
+        for character: AnimationCharacter
+    ) {
+        guard let animateURL else { return }
+        var state = ImagineGallerySelectionState.load(
+            animateURL: animateURL,
+            characterSlug: character.assetFolderSlug
+        )
+        state.dismissedBatchJobKeys = keys
+        state.save(animateURL: animateURL, characterSlug: character.assetFolderSlug)
+    }
+
+    private func mergeInspirationBatchJobs(
+        existing: [CharacterInspirationBatchJob],
+        discovered: [CharacterInspirationBatchJob]
+    ) -> [CharacterInspirationBatchJob] {
+        var mergedByKey: [String: CharacterInspirationBatchJob] = [:]
+        var insertionOrder: [String] = []
+
+        func merge(_ job: CharacterInspirationBatchJob) {
+            let key = inspirationBatchJobKey(job)
+            if mergedByKey[key] == nil {
+                insertionOrder.append(key)
+                mergedByKey[key] = job
+                return
+            }
+
+            var updated = mergedByKey[key] ?? job
+            if !job.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updated.title = job.title
+            }
+            if !job.batchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updated.batchName = job.batchName
+            }
+            if !job.metadataPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updated.metadataPath = job.metadataPath
+            }
+            if !job.outputRootPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updated.outputRootPath = job.outputRootPath
+            }
+            if job.kind == .loraCandidate {
+                updated.kind = .loraCandidate
+            }
+            updated.state = job.state
+            if updated.promptCount == 0, job.promptCount > 0 {
+                updated.promptCount = job.promptCount
+            }
+            if let lastCheckedAt = job.lastCheckedAt {
+                updated.lastCheckedAt = lastCheckedAt
+            }
+            if let remoteUpdatedAt = job.remoteUpdatedAt {
+                updated.remoteUpdatedAt = remoteUpdatedAt
+            }
+            if let remoteStartedAt = job.remoteStartedAt {
+                updated.remoteStartedAt = remoteStartedAt
+            }
+            if let remoteFinishedAt = job.remoteFinishedAt {
+                updated.remoteFinishedAt = remoteFinishedAt
+            }
+            if let remoteSuccessfulCount = job.remoteSuccessfulCount {
+                updated.remoteSuccessfulCount = remoteSuccessfulCount
+            }
+            if let lastErrorMessage = job.lastErrorMessage,
+               !lastErrorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updated.lastErrorMessage = lastErrorMessage
+            }
+            updated.downloadedImagePaths = normalizedCharacterAssetPaths(
+                updated.downloadedImagePaths + job.downloadedImagePaths
+            )
+            updated.autoImportedImagePaths = normalizedCharacterAssetPaths(
+                updated.autoImportedImagePaths + job.autoImportedImagePaths
+            )
+            mergedByKey[key] = updated
+        }
+
+        existing.forEach(merge)
+        discovered.forEach(merge)
+
+        return insertionOrder.compactMap { mergedByKey[$0] }
+            .sorted { lhs, rhs in
+                if lhs.submittedAt == rhs.submittedAt {
+                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.submittedAt < rhs.submittedAt
+            }
+    }
+
+    private func discoveredInspirationBatchJobsOnDisk(for character: AnimationCharacter) -> [CharacterInspirationBatchJob] {
+        guard let animateURL else { return [] }
+        let batchesRoot = animateURL
+            .appendingPathComponent("characters")
+            .appendingPathComponent(character.assetFolderSlug)
+            .appendingPathComponent("inspiration-batches")
+        guard let enumerator = FileManager.default.enumerator(
+            at: batchesRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var discovered: [CharacterInspirationBatchJob] = []
+        for case let fileURL as URL in enumerator {
+            guard fileURL.lastPathComponent == "batch_submission.json",
+                  let relativeMetadataPath = projectRelativePath(for: fileURL, projectURL: fileOWPURL),
+                  let data = try? Data(contentsOf: fileURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+
+            let latestStatus = json["latest_status"] as? [String: Any]
+            let state = (latestStatus?["state"] as? String)
+                ?? (json["batch_state"] as? String)
+                ?? "JOB_STATE_PENDING"
+            let displayName = (json["display_name"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let folderName = fileURL.deletingLastPathComponent().lastPathComponent
+            let title = (displayName?.isEmpty == false ? displayName : nil) ?? folderName
+            let batchName = (json["batch_name"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let promptCount = json["prompt_count"] as? Int ?? 0
+            let submittedAt = batchStatusDate(json["submitted_at"])
+                ?? batchStatusDate(json["last_status_check"])
+                ?? (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? Date()
+            let outputRootRelativePath = projectRelativePath(
+                for: fileURL.deletingLastPathComponent(),
+                projectURL: fileOWPURL
+            ) ?? relativeMetadataPath
+            let decodedPaths = normalizedCharacterAssetPaths(
+                latestStatus?["decoded_images"] as? [String] ?? []
+            )
+            let kind: CharacterInspirationBatchJob.Kind = {
+                let haystacks = [folderName, title, batchName].map { $0.lowercased() }
+                return haystacks.contains(where: { $0.contains("lora-candidate") || $0.contains("lora_candidate") })
+                    ? .loraCandidate
+                    : .inspiration
+            }()
+            let remoteSuccessfulCount = ((latestStatus?["completion_stats"] as? [String: Any])?["successful_count"] as? Int)
+            let lastErrorMessage: String? = {
+                guard let error = latestStatus?["error"] as? [String: Any] else { return nil }
+                return (error["message"] as? String) ?? (error["details"] as? String)
+            }()
+
+            discovered.append(
+                CharacterInspirationBatchJob(
+                    kind: kind,
+                    title: title,
+                    batchName: batchName,
+                    metadataPath: relativeMetadataPath,
+                    outputRootPath: outputRootRelativePath,
+                    state: state,
+                    promptCount: promptCount,
+                    submittedAt: submittedAt,
+                    lastCheckedAt: batchStatusDate(json["last_status_check"]),
+                    remoteUpdatedAt: batchStatusDate(latestStatus?["update_time"]),
+                    remoteStartedAt: batchStatusDate(latestStatus?["start_time"]),
+                    remoteFinishedAt: batchStatusDate(latestStatus?["end_time"]),
+                    remoteSuccessfulCount: remoteSuccessfulCount,
+                    downloadedImagePaths: decodedPaths,
+                    autoImportedImagePaths: [],
+                    lastErrorMessage: lastErrorMessage
+                )
+            )
+        }
+
+        return discovered
+    }
+
+    private func characterSlugForRigRelativePath(_ path: String) -> String? {
+        let components = path.split(separator: "/").map(String.init)
+        guard components.count >= 4 else { return nil }
+        guard components[0] == "Animate",
+              components[1] == "characters",
+              components.last == "rig.json" else {
+            return nil
+        }
+        return components[2]
+    }
+
+    private func isCharacterBatchMetadataRelativePath(_ path: String) -> Bool {
+        let components = path.split(separator: "/").map(String.init)
+        guard components.count >= 6 else { return false }
+        return components[0] == "Animate"
+            && components[1] == "characters"
+            && components[3] == "inspiration-batches"
+            && components.last == "batch_submission.json"
+    }
+
+    private func isPlaceWorldBatchMetadataRelativePath(_ path: String) -> Bool {
+        let components = path.split(separator: "/").map(String.init)
+        guard components.count >= 6 else { return false }
+        return components[0] == "Animate"
+            && components[1] == "backgrounds"
+            && components[2] == "place-batches"
+            && components.last == "batch_submission.json"
+    }
+
+    private func isPlaceWorldBatchResultsRelativePath(_ path: String) -> Bool {
+        let components = path.split(separator: "/").map(String.init)
+        guard components.count >= 6 else { return false }
+        return components[0] == "Animate"
+            && components[1] == "backgrounds"
+            && components[2] == "place-batches"
+            && components.last == "batch_results.jsonl"
     }
 
     private func normalizedPoseSlots(_ slots: [CharacterPoseSlot]) -> [CharacterPoseSlot] {
@@ -2457,6 +2937,9 @@ final class AnimateStore {
             backstory: character.backstory,
             personality: character.personality,
             notes: character.notes,
+            activeLORAFilename: trimmedOrNil(character.activeLORAFilename),
+            activeLORATriggerWord: trimmedOrNil(character.activeLORATriggerWord),
+            activeLORAWeight: character.activeLORAWeight > 0 ? character.activeLORAWeight : 1.0,
             defaultWardrobeType: character.defaultWardrobeType,
             genderType: character.genderType,
             age: character.age,
@@ -2499,6 +2982,12 @@ final class AnimateStore {
         return candidate.isEmpty ? trimmedFallback : candidate
     }
 
+    private func trimmedOrNil(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     private func normalizedPersistedCharacterState(
         _ character: AnimationCharacter,
         fallbackSlug: String
@@ -2519,6 +3008,14 @@ final class AnimateStore {
             ? fallbackSlug
             : updated.owpSlug
         updated.storageSlug = normalizedStorageSlug(forName: resolvedName, fallback: updated.storageSlug ?? fallbackSlug)
+        updated.activeLORAFilename = trimmedOrNil(updated.activeLORAFilename)
+        updated.activeLORATriggerWord = trimmedOrNil(updated.activeLORATriggerWord)
+        if updated.activeLORAFilename == nil {
+            updated.activeLORATriggerWord = nil
+        }
+        if updated.activeLORAWeight <= 0 {
+            updated.activeLORAWeight = 1.0
+        }
         updated.masterReferenceSheetPrompt = updated.masterReferenceSheetPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? CharacterReferenceWorkflowCatalog.defaultMasterSheetPrompt(for: resolvedName, gender: updated.genderType)
             : updated.masterReferenceSheetPrompt
@@ -3188,6 +3685,43 @@ final class AnimateStore {
             }
         }
 
+        for rigURL in persistedCharacterRigURLsOnDisk() {
+            guard let snapshot = fileSnapshot(for: rigURL),
+                  let relativePath = projectRelativePath(for: rigURL, projectURL: projectURL) else {
+                continue
+            }
+            snapshots[relativePath] = snapshot
+        }
+
+        let batchEnumerator = FileManager.default.enumerator(
+            at: projectURL.appendingPathComponent("Animate/characters"),
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )
+        while let fileURL = batchEnumerator?.nextObject() as? URL {
+            guard fileURL.lastPathComponent == "batch_submission.json",
+                  let snapshot = fileSnapshot(for: fileURL) else {
+                continue
+            }
+            let relativePath = fileURL.path.replacingOccurrences(of: projectURL.path + "/", with: "")
+            snapshots[relativePath] = snapshot
+        }
+
+        let placeBatchEnumerator = FileManager.default.enumerator(
+            at: projectURL.appendingPathComponent("Animate/backgrounds/place-batches"),
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )
+        while let fileURL = placeBatchEnumerator?.nextObject() as? URL {
+            let filename = fileURL.lastPathComponent
+            guard filename == "batch_submission.json" || filename == "batch_results.jsonl",
+                  let snapshot = fileSnapshot(for: fileURL) else {
+                continue
+            }
+            let relativePath = fileURL.path.replacingOccurrences(of: projectURL.path + "/", with: "")
+            snapshots[relativePath] = snapshot
+        }
+
         return snapshots
     }
 
@@ -3249,9 +3783,27 @@ final class AnimateStore {
         Task { [weak self, scene] in
             guard let self else { return }
             await self.loadSongData(for: scene)
+            // Only seed shots if the scene currently has NONE — never overwrite authored data
+            if let sceneIndex = self.scenes.firstIndex(where: { $0.owpSongPath == relativePath }),
+               self.scenes[sceneIndex].shots.isEmpty,
+               let owpURL = self.fileOWPURL,
+               let songData = await ProjectDatabaseBridge.hydrateSongData(
+                   projectURL: owpURL, relativePath: relativePath
+               ) {
+                let lyrics = songData.extractLyrics().trimmingCharacters(in: .whitespacesAndNewlines)
+                if !lyrics.isEmpty {
+                    let parseResult = SceneDirectionParser.parse(lyrics)
+                    let shotService = AnimateSceneShotSeedingService(store: self)
+                    let seeded = shotService.seededShots(for: self.scenes[sceneIndex], songData: songData, parseResult: parseResult)
+                    if !seeded.isEmpty {
+                        self.scenes[sceneIndex].shots = self.normalizedSceneShots(seeded)
+                    }
+                }
+            }
             _ = await self.refreshPlacesFromScript()
             await MainActor.run {
                 self.markAgentUpdated(paths: [relativePath])
+                self.save()
                 self.statusMessage = "Reloaded external song data"
             }
         }
@@ -3287,6 +3839,9 @@ final class AnimateStore {
                     if let animateDir = self.animateURL {
                         let backgroundDir = animateDir.appendingPathComponent("backgrounds")
                         self.backgrounds = (try? self.loadPlaces(from: animateDir, backgroundDirectoryURL: backgroundDir)) ?? []
+                        self.placesWorkflowLibrary = self.hydratedPlacesWorkflowLibrary(
+                            self.loadPlacesWorkflowLibrary(from: animateDir)
+                        )
                     }
                     self.syncSelectedSceneTimeline()
                     self.markAgentUpdated()
@@ -3297,11 +3852,15 @@ final class AnimateStore {
                     }
                     Task { _ = await self.refreshPlacesFromScript() }
                 }
-            case ProjectDatabaseBridge.animatePlacesPath:
+            case ProjectDatabaseBridge.animatePlacesPath, ProjectDatabaseBridge.animatePlacesWorkflowPath:
                 await MainActor.run {
                     guard let animateDir = self.animateURL else { return }
                     let backgroundDir = animateDir.appendingPathComponent("backgrounds")
                     self.backgrounds = (try? self.loadPlaces(from: animateDir, backgroundDirectoryURL: backgroundDir)) ?? []
+                    self.placesWorkflowLibrary = self.hydratedPlacesWorkflowLibrary(
+                        self.loadPlacesWorkflowLibrary(from: animateDir)
+                    )
+                    self.refreshPlaceWorldGenerationBatches()
                     _ = self.applyScriptPlaceRequirements(self.scriptPlaceRequirements, persistChanges: false)
                     self.markAgentUpdated()
                     self.statusMessage = "Reloaded external project changes"
@@ -3347,6 +3906,32 @@ final class AnimateStore {
                 }
             default:
                 await MainActor.run {
+                    if let slug = self.characterSlugForRigRelativePath(path),
+                       let persisted = self.loadPersistedCharacterState(for: slug),
+                       let index = self.characters.firstIndex(where: {
+                           $0.assetFolderSlug == slug || $0.storageSlug == slug || $0.owpSlug == slug
+                       }) {
+                        self.characters[index] = persisted
+                        self.refreshInspirationBatchJobs()
+                        self.markAgentUpdated(paths: [path])
+                        self.statusMessage = "Reloaded character rig changes"
+                        return
+                    }
+
+                    if self.isCharacterBatchMetadataRelativePath(path) {
+                        self.refreshInspirationBatchJobs()
+                        self.markAgentUpdated(paths: [path])
+                        self.statusMessage = "Reloaded inspiration batch results"
+                        return
+                    }
+
+                    if self.isPlaceWorldBatchMetadataRelativePath(path) || self.isPlaceWorldBatchResultsRelativePath(path) {
+                        self.refreshPlaceWorldGenerationBatches()
+                        self.markAgentUpdated(paths: [path])
+                        self.statusMessage = "Reloaded place batch results"
+                        return
+                    }
+
                     self.markAgentUpdated()
                     self.statusMessage = "Reloaded external project changes"
                 }
@@ -4046,6 +4631,8 @@ final class AnimateStore {
 
             // 4. Load saved scene data from disk
             let savedScenesBySongPath = result.savedScenes
+            NSLog("[Animate] openOWP: %d saved scenes loaded, %d songs discovered",
+                  savedScenesBySongPath.count, result.songs.count)
 
             // 5. Sync scenes with OWP songs
             var newScenes: [AnimationScene] = []
@@ -4083,6 +4670,14 @@ final class AnimateStore {
             }
             scenes = newScenes
             selectedSceneID = scenes.first?.id
+
+            let matchedCount = newScenes.filter { !$0.shots.isEmpty }.count
+            let totalShots = newScenes.reduce(0) { $0 + $1.shots.count }
+            NSLog("[Animate] openOWP: built %d scenes, %d have shots (%d total shots)",
+                  newScenes.count, matchedCount, totalShots)
+            for scene in newScenes where scene.owpSongPath.contains("1.36") || scene.owpSongPath.contains("1.15") || scene.owpSongPath.contains("2.14") {
+                NSLog("[Animate] openOWP:   %@ = %d shots", scene.owpSongPath, scene.shots.count)
+            }
 
             // 6. Sync characters with OWP characters.json
             syncCharactersFromOWP(result.characters)
@@ -4132,6 +4727,10 @@ final class AnimateStore {
             } else {
                 backgrounds = []
             }
+            placesWorkflowLibrary = hydratedPlacesWorkflowLibrary(loadPlacesWorkflowLibrary(from: animateDir))
+            syncGeneratedBackgroundLibrary()
+            refreshPlaceWorldGenerationBatches()
+            refreshPlaceEditBatchJobs()
 
             let didRefreshPlaces = await refreshPlacesFromScript(persistChanges: false)
 
@@ -4144,6 +4743,9 @@ final class AnimateStore {
             }
             statusMessage = "Opened: \(projectName) (\(scenes.count) songs, \(characters.count) characters)"
             loadErrorMessage = nil
+            geminiMasterSwitch = ProjectDatabaseBridge.loadGeminiMasterSwitch(projectURL: effectiveProjectURL) ?? false
+            loadImagineGalleries()
+            loadCanvasGenerations()
             UserDefaults.standard.set(url.path, forKey: "lastProjectPath")
             markCurrentStateAsSaved()
             if !disableExternalFileWatch {
@@ -4169,18 +4771,18 @@ final class AnimateStore {
 
     /// Schedules a save after a short delay. Calling again resets the timer.
     /// Use this for text field/editor bindings to avoid saving (and re-rendering) on every keystroke.
-    func scheduleDebouncedSave() {
+    func scheduleDebouncedSave(writePlaces: Bool = false) {
         debouncedSaveTask?.cancel()
         debouncedSaveTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled else { return }
-            self?.save()
+            self?.save(writePlaces: writePlaces)
         }
     }
 
-    // MARK: - Save (writes only to Animate/ subdirectory)
+    // MARK: - Save (writes only to Animate/ subdirectory; places sidecars are explicit-only)
 
-    func save() {
+    func save(writePlaces: Bool = false) {
         let wasSyncingBeforeCheck = isAgentSyncInProgress
         checkForExternalProjectChanges()
         guard !wasSyncingBeforeCheck, !hasPendingAgentChanges else {
@@ -4250,12 +4852,96 @@ final class AnimateStore {
                 to: animateDir
             )
 
-            let placesData = try encoder.encode(backgrounds.map(persistedBackgroundPlate))
-            try placesData.write(to: animateDir.appendingPathComponent("places.json"))
-            try ProjectDatabaseBridge.saveDrawThingsPlacesConfigToDisk(
-                drawThingsPlaceConfig,
-                projectURL: workingOWPURL ?? owpURL ?? animateDir.deletingLastPathComponent()
-            )
+            let effectiveProjectURL = workingOWPURL ?? owpURL ?? animateDir.deletingLastPathComponent()
+            if writePlaces {
+                let placesData = try encoder.encode(backgrounds.map(persistedBackgroundPlate))
+                try writeProtectedData(placesData, to: animateDir.appendingPathComponent("places.json"))
+                let placesWorkflowData = try encoder.encode(persistedPlacesWorkflowLibrary(placesWorkflowLibrary))
+                try writeProtectedData(placesWorkflowData, to: animateDir.appendingPathComponent("places-workflow.json"))
+                let reviewStateLibrary = rebuiltGeneratedBackgroundReviewStateLibrary(
+                    from: placesWorkflowLibrary.generatedImageRecords,
+                    existing: self.placesGeneratedReviewStateLibrary
+                )
+                let normalizedReviewStateLibrary = persistedGeneratedBackgroundReviewStateLibrary(reviewStateLibrary)
+                let reviewStateURL = placesGeneratedReviewStateURL(in: animateDir)
+                let reviewStateData = try encoder.encode(normalizedReviewStateLibrary)
+                try writeProtectedData(reviewStateData, to: reviewStateURL)
+                let worldMapCanonLibrary = rebuiltPlacesWorldMapCanonLibrary(
+                    from: placesWorkflowLibrary.generatedImageRecords,
+                    existing: self.placesWorldMapCanonLibrary
+                )
+                let normalizedCanonLibrary = persistedPlacesWorldMapCanonLibrary(worldMapCanonLibrary)
+                var canonPayload = placesWorldMapCanonRawPayload
+                canonPayload["schemaVersion"] = 1
+                canonPayload["updatedAt"] = ISO8601DateFormatter().string(from: Date())
+
+                var generatedRecordsPayload: [String: [String: Any]] = [:]
+                for override in normalizedCanonLibrary.recordOverrides {
+                    guard let key = stableWorldMapCanonKey(for: override.canonicalPath) else { continue }
+                    var entry: [String: Any] = [
+                        "stablePath": override.canonicalPath,
+                        "filenameStem": URL(fileURLWithPath: override.canonicalPath).deletingPathExtension().lastPathComponent,
+                        "updatedAt": ISO8601DateFormatter().string(from: override.updatedAt),
+                    ]
+                    if let fingerprint = trimmedOrNil(override.contentFingerprint) {
+                        entry["contentFingerprint"] = fingerprint
+                    }
+                    if let linkedPlaceID = override.linkedPlaceID {
+                        entry["linkedPlaceID"] = linkedPlaceID.uuidString.uppercased()
+                    }
+                    if let worldNodeID = override.worldNodeID {
+                        entry["worldNodeID"] = worldNodeID.uuidString.uppercased()
+                    }
+                    if let routeID = override.routeID {
+                        entry["routeID"] = routeID.uuidString.uppercased()
+                    }
+                    if let cameraPose = override.cameraPose {
+                        entry["cameraPose"] = [
+                            "yawDegrees": cameraPose.yawDegrees,
+                            "pitchDegrees": cameraPose.pitchDegrees,
+                            "rollDegrees": cameraPose.rollDegrees,
+                            "focalLengthMM": cameraPose.focalLengthMM,
+                            "horizontalFOVDegrees": cameraPose.horizontalFOVDegrees as Any,
+                            "verticalFOVDegrees": cameraPose.verticalFOVDegrees as Any,
+                        ].compactMapValues { $0 }
+                    }
+                    if let mapPoint = override.mapPoint?.clamped() {
+                        entry["mapPoint"] = ["x": mapPoint.x, "y": mapPoint.y]
+                    }
+                    if let status = override.mapPlacementStatus?.rawValue {
+                        entry["mapPlacementStatus"] = status
+                    }
+                    if let confirmedAt = override.mapPlacementConfirmedAt {
+                        entry["mapPlacementConfirmedAt"] = ISO8601DateFormatter().string(from: confirmedAt)
+                    }
+                    if let buildingAnchorNodeID = override.buildingAnchorNodeID {
+                        entry["buildingAnchorNodeID"] = buildingAnchorNodeID.uuidString.uppercased()
+                    }
+                    if let orientationState = override.orientationState?.rawValue {
+                        entry["orientationState"] = orientationState
+                    }
+                    generatedRecordsPayload[key] = entry
+                    generatedRecordsPayload[stableWorldMapCanonStemKey(for: override.canonicalPath)] = entry
+                }
+                canonPayload["generatedRecords"] = generatedRecordsPayload
+                if canonPayload["placeAnchors"] == nil {
+                    canonPayload["placeAnchors"] = [:]
+                }
+                let worldMapCanonData = try JSONSerialization.data(
+                    withJSONObject: canonPayload,
+                    options: [.prettyPrinted, .sortedKeys]
+                )
+                try writeProtectedData(worldMapCanonData, to: placesWorldMapCanonURL(in: animateDir))
+                self.placesWorldMapCanonRawPayload = canonPayload
+                self.placesWorldMapCanonLibrary = worldMapCanonLibrary
+                self.placesGeneratedReviewStateLibrary = reviewStateLibrary
+                try ProjectDatabaseBridge.saveDrawThingsPlacesConfigToDisk(
+                    drawThingsPlaceConfig,
+                    projectURL: effectiveProjectURL
+                )
+            }
+            try? ProjectDatabaseBridge.saveGeminiMasterSwitch(geminiMasterSwitch, projectURL: effectiveProjectURL)
+            saveImagineGalleries()
 
             // Write motion clips
             if !motionClips.isEmpty {
@@ -4700,6 +5386,48 @@ final class AnimateStore {
         showImageCropper = false
     }
 
+    /// Prepare a source image for use as a character's profile picture.
+    /// Duplicates the image into the character's `profile-staging/` folder,
+    /// then arms the image cropper so the next view showing the cropper sheet
+    /// will present it. The source file is never modified.
+    func prepareProfilePicCrop(from path: String, for characterID: UUID) {
+        guard let sourceURL = resolvedCharacterAssetURL(for: path) ?? (URL(fileURLWithPath: path) as URL?),
+              FileManager.default.fileExists(atPath: sourceURL.path),
+              let animateURL else {
+            NSLog("[prepareProfilePicCrop] source not found or no animate URL: \(path)")
+            return
+        }
+
+        let character = characters.first { $0.id == characterID }
+        let slug = character?.assetFolderSlug ?? "unknown"
+        let stagingDir = animateURL
+            .appendingPathComponent("characters")
+            .appendingPathComponent(slug)
+            .appendingPathComponent("profile-staging")
+
+        do {
+            try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        } catch {
+            NSLog("[prepareProfilePicCrop] failed to create staging dir: \(error.localizedDescription)")
+            return
+        }
+
+        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+        let ext = sourceURL.pathExtension.isEmpty ? "png" : sourceURL.pathExtension
+        let dupURL = stagingDir.appendingPathComponent("profile_\(timestamp).\(ext)")
+
+        do {
+            try FileManager.default.copyItem(at: sourceURL, to: dupURL)
+        } catch {
+            NSLog("[prepareProfilePicCrop] failed to copy to staging: \(error.localizedDescription)")
+            return
+        }
+
+        pendingCropImagePath = dupURL.path
+        pendingCropCharacterID = characterID
+        showImageCropper = true
+    }
+
     // MARK: - Variant Crop
 
     func openVariantCropTool(
@@ -5085,6 +5813,99 @@ final class AnimateStore {
         save()
     }
 
+    func setCharacterActiveLORA(
+        filename: String?,
+        triggerWord: String?,
+        weight: Double? = nil,
+        for characterID: UUID
+    ) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        let normalizedFilename = trimmedOrNil(filename)
+        characters[index].activeLORAFilename = normalizedFilename
+        characters[index].activeLORATriggerWord = normalizedFilename == nil
+            ? nil
+            : trimmedOrNil(triggerWord)
+        if let weight {
+            characters[index].activeLORAWeight = max(0.05, weight)
+        } else if characters[index].activeLORAWeight <= 0 {
+            characters[index].activeLORAWeight = 1.0
+        }
+        save()
+    }
+
+    func updateCharacterActiveLORATriggerWord(_ triggerWord: String, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }),
+              characters[index].activeLORAFilename != nil else { return }
+        characters[index].activeLORATriggerWord = trimmedOrNil(triggerWord)
+        save()
+    }
+
+    func updateCharacterActiveLORAWeight(_ weight: Double, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }),
+              characters[index].activeLORAFilename != nil else { return }
+        characters[index].activeLORAWeight = max(0.05, weight)
+        save()
+    }
+
+    func characterLoRADirectoryURL(
+        for characterID: UUID,
+        createIfNeeded: Bool = false
+    ) -> URL? {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }),
+              let animateURL else {
+            return nil
+        }
+
+        let directory = animateURL
+            .appendingPathComponent("characters")
+            .appendingPathComponent(characters[index].assetFolderSlug)
+            .appendingPathComponent("lora")
+
+        if createIfNeeded {
+            do {
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+            } catch {
+                statusMessage = "Failed to create LoRA folder"
+                return nil
+            }
+        }
+
+        return directory
+    }
+
+    func importCharacterLoRA(
+        from sourceURL: URL,
+        for characterID: UUID
+    ) throws -> URL {
+        guard let destinationDirectory = characterLoRADirectoryURL(
+            for: characterID,
+            createIfNeeded: true
+        ) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        let ext = sourceURL.pathExtension.lowercased()
+        guard ext == "safetensors" else {
+            throw CocoaError(.fileReadUnknown)
+        }
+
+        let destinationURL = destinationDirectory.appendingPathComponent(sourceURL.lastPathComponent)
+        let fileManager = FileManager.default
+
+        if sourceURL.standardizedFileURL == destinationURL.standardizedFileURL {
+            return destinationURL
+        }
+
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            try fileManager.removeItem(at: destinationURL)
+        }
+        try fileManager.copyItem(at: sourceURL, to: destinationURL)
+        return destinationURL
+    }
+
     // MARK: - Inspiration Images
 
     func addInspirationImage(_ imagePath: String, for characterID: UUID) {
@@ -5207,6 +6028,7 @@ final class AnimateStore {
         }
     }
 
+    @discardableResult
     func storeGeneratedInspirationImage(
         _ data: Data,
         prompt: String,
@@ -5214,10 +6036,12 @@ final class AnimateStore {
         filenameStem: String,
         for characterID: UUID,
         aspectRatio: String,
-        imageSize: String
-    ) throws {
+        imageSize: String,
+        recommendedLORACaption: String? = nil,
+        autoSelectForLoRA: Bool = false
+    ) throws -> String {
         let animateURL = try requireAnimateURL()
-        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return "" }
 
         let timestamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "")
@@ -5235,21 +6059,104 @@ final class AnimateStore {
             model: model,
             aspectRatio: aspectRatio,
             imageSize: imageSize,
+            recommendedLORACaption: recommendedLORACaption,
             to: storedURL
         )
         let storedPath = projectRelativeCharacterAssetPath(from: storedURL.path)
             ?? normalizedCharacterAssetPath(storedURL.path)
             ?? storedURL.path
-        guard !characters[charIndex].inspirationImagePaths.contains(storedPath) else { return }
+        guard !characters[charIndex].inspirationImagePaths.contains(storedPath) else { return storedPath }
         var updatedCharacter = characters[charIndex]
         updatedCharacter.inspirationImagePaths.append(storedPath)
         characters[charIndex] = updatedCharacter
         save()
+        if autoSelectForLoRA {
+            markInspirationImagesForLORATraining([storedPath], for: characterID)
+        }
+        return storedPath
+    }
+
+    func storeGeneratedPlaceImage(
+        _ data: Data,
+        prompt: String,
+        model: GeminiModel,
+        filenameStem: String,
+        for placeID: UUID,
+        workflow: PlaceWorkflowMode,
+        aspectRatio: String,
+        imageSize: String,
+        routeID: UUID? = nil,
+        worldNodeID: UUID? = nil,
+        mapPoint: WorldMapPoint? = nil,
+        cameraPose: WorldCameraPose? = nil
+    ) throws -> String {
+        let animateURL = try requireAnimateURL()
+        guard let placeIndex = backgrounds.firstIndex(where: { $0.id == placeID }) else { return "" }
+
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "")
+        let filename = "\(filenameStem)-\(timestamp).png"
+        let placeSlug = PlacesScriptIndexService.fileStem(for: backgrounds[placeIndex].name)
+        let category = workflow == .photorealistic ? "photoreal" : "animated"
+        let directory = animateURL
+            .appendingPathComponent("backgrounds")
+            .appendingPathComponent("places")
+            .appendingPathComponent(placeSlug)
+            .appendingPathComponent(category)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let storedURL = directory.appendingPathComponent(filename)
+        try data.write(to: storedURL)
+
+        try writeGenerationMetadata(
+            prompt: prompt,
+            model: model,
+            aspectRatio: aspectRatio,
+            imageSize: imageSize,
+            placeID: placeID,
+            routeID: routeID,
+            worldNodeID: worldNodeID,
+            mapPoint: mapPoint,
+            cameraPose: cameraPose,
+            to: storedURL
+        )
+
+        let storedPath = projectRelativeCharacterAssetPath(from: storedURL.path)
+            ?? normalizedCharacterAssetPath(storedURL.path)
+            ?? storedURL.path
+        appendPlaceImagePath(storedPath, to: &backgrounds[placeIndex], workflow: workflow)
+        syncGeneratedBackgroundLibrary()
+        if let recordID = generatedBackgroundRecord(for: storedPath)?.id {
+            attachGeneratedBackgroundRecord(
+                recordID,
+                toWorldNodeID: worldNodeID,
+                routeID: routeID,
+                placeID: placeID,
+                pose: cameraPose,
+                mapPoint: mapPoint,
+                canonStatus: .candidate
+            )
+        }
+        save(writePlaces: true)
+        return storedPath
     }
 
     func registerInspirationBatchJob(_ job: CharacterInspirationBatchJob, for characterID: UUID) {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
         let normalizedMetadataPath = normalizedCharacterAssetPath(job.metadataPath) ?? job.metadataPath
+        let dismissedKeys = dismissedInspirationBatchJobKeys(for: characters[charIndex])
+        let candidateKey = inspirationBatchJobKey(
+            CharacterInspirationBatchJob(
+                kind: job.kind,
+                title: job.title,
+                batchName: job.batchName,
+                metadataPath: normalizedMetadataPath,
+                outputRootPath: job.outputRootPath,
+                state: job.state,
+                promptCount: job.promptCount,
+                submittedAt: job.submittedAt
+            )
+        )
+        guard !dismissedKeys.contains(candidateKey) else { return }
         guard !characters[charIndex].inspirationBatchJobs.contains(where: { $0.metadataPath == normalizedMetadataPath || $0.batchName == job.batchName }) else {
             return
         }
@@ -5267,11 +6174,31 @@ final class AnimateStore {
         save()
     }
 
+    func dismissInspirationBatchJob(_ job: CharacterInspirationBatchJob, for characterID: UUID) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        let key = inspirationBatchJobKey(job)
+        var dismissedKeys = dismissedInspirationBatchJobKeys(for: characters[charIndex])
+        dismissedKeys.insert(key)
+        persistDismissedInspirationBatchJobKeys(dismissedKeys, for: characters[charIndex])
+        characters[charIndex].inspirationBatchJobs.removeAll { inspirationBatchJobKey($0) == key }
+        save()
+    }
+
     func refreshInspirationBatchJobs() {
         var didChange = false
 
         for charIndex in characters.indices {
-            var jobs = normalizedInspirationBatchJobs(characters[charIndex].inspirationBatchJobs)
+            let dismissedKeys = dismissedInspirationBatchJobKeys(for: characters[charIndex])
+            var jobs = mergeInspirationBatchJobs(
+                existing: normalizedInspirationBatchJobs(characters[charIndex].inspirationBatchJobs),
+                discovered: discoveredInspirationBatchJobsOnDisk(for: characters[charIndex])
+            )
+            if !dismissedKeys.isEmpty {
+                jobs.removeAll { dismissedKeys.contains(inspirationBatchJobKey($0)) }
+            }
+            if characters[charIndex].inspirationBatchJobs != jobs {
+                didChange = true
+            }
             guard !jobs.isEmpty else { continue }
 
             for jobIndex in jobs.indices {
@@ -5292,6 +6219,30 @@ final class AnimateStore {
                 }
 
                 jobs[jobIndex].lastCheckedAt = Date()
+
+                let remoteUpdatedAt = batchStatusDate(latestStatus?["update_time"])
+                if jobs[jobIndex].remoteUpdatedAt != remoteUpdatedAt {
+                    jobs[jobIndex].remoteUpdatedAt = remoteUpdatedAt
+                    didChange = true
+                }
+
+                let remoteStartedAt = batchStatusDate(latestStatus?["start_time"])
+                if jobs[jobIndex].remoteStartedAt != remoteStartedAt {
+                    jobs[jobIndex].remoteStartedAt = remoteStartedAt
+                    didChange = true
+                }
+
+                let remoteFinishedAt = batchStatusDate(latestStatus?["end_time"])
+                if jobs[jobIndex].remoteFinishedAt != remoteFinishedAt {
+                    jobs[jobIndex].remoteFinishedAt = remoteFinishedAt
+                    didChange = true
+                }
+
+                let remoteSuccessfulCount = ((latestStatus?["completion_stats"] as? [String: Any])?["successful_count"] as? Int)
+                if jobs[jobIndex].remoteSuccessfulCount != remoteSuccessfulCount {
+                    jobs[jobIndex].remoteSuccessfulCount = remoteSuccessfulCount
+                    didChange = true
+                }
 
                 if let error = latestStatus?["error"] as? [String: Any] {
                     let message = (error["message"] as? String)
@@ -5320,6 +6271,9 @@ final class AnimateStore {
                     if !characters[charIndex].inspirationImagePaths.contains(path) {
                         characters[charIndex].inspirationImagePaths.append(path)
                     }
+                    if jobs[jobIndex].kind.autoSelectForLoRA {
+                        markInspirationImagesForLORATraining([path], for: characters[charIndex].id)
+                    }
                 }
             }
 
@@ -5331,12 +6285,64 @@ final class AnimateStore {
         }
     }
 
+    private func batchStatusDate(_ rawValue: Any?) -> Date? {
+        guard let string = rawValue as? String,
+              !string.isEmpty
+        else {
+            return nil
+        }
+
+        if let date = batchStatusFractionalDateFormatter.date(from: string) {
+            return date
+        }
+        return batchStatusDateFormatter.date(from: string)
+    }
+
+    private var batchStatusFractionalDateFormatter: ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }
+
+    private var batchStatusDateFormatter: ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }
+
     // MARK: - Inspiration Reference Image
 
     func setInspirationReferenceImage(_ imagePath: String?, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[index].inspirationReferenceImagePath = normalizedCharacterAssetPath(imagePath)
         save()
+    }
+
+    func markInspirationImagesForLORATraining(_ paths: [String], for characterID: UUID) {
+        guard let animateURL,
+              let character = characters.first(where: { $0.id == characterID }) else { return }
+
+        let normalizedPaths = normalizedCharacterAssetPaths(paths)
+        guard !normalizedPaths.isEmpty else { return }
+
+        var state = ImagineGallerySelectionState.load(
+            animateURL: animateURL,
+            characterSlug: character.assetFolderSlug
+        )
+
+        var changed = false
+        for path in normalizedPaths {
+            if state.loraSelectedPaths.insert(path).inserted {
+                changed = true
+            }
+            if state.hiddenPaths.remove(path) != nil {
+                changed = true
+            }
+        }
+
+        if changed {
+            state.save(animateURL: animateURL, characterSlug: character.assetFolderSlug)
+        }
     }
 
     func setInspirationReferenceImageFromPicker(for characterID: UUID) {
@@ -6338,26 +7344,10 @@ final class AnimateStore {
 
     func masterReferenceSheetReferencePaths(for characterID: UUID, limit: Int = 8) -> [String] {
         guard let character = characters.first(where: { $0.id == characterID }) else { return [] }
-
-        var ordered: [String] = []
-        var seen: Set<String> = []
-
-        func append(_ path: String?) {
-            guard let path = normalizedCharacterAssetPath(path),
-                  seen.insert(path).inserted else { return }
-            ordered.append(path)
+        var ordered = preferredInspirationReferencePaths(for: character)
+        if !character.masterReferenceSourceImagePaths.isEmpty {
+            ordered.append(contentsOf: character.masterReferenceSourceImagePaths.compactMap { normalizedCharacterAssetPath($0) })
         }
-
-        // Curated picks always come first — they're the user's hand-selected references
-        append(character.inspirationReferenceImagePath)
-        character.curatedInspirationImagePaths.forEach { append($0) }
-
-        if character.masterReferenceSourceImagePaths.isEmpty {
-            character.inspirationImagePaths.prefix(3).forEach { append($0) }
-        } else {
-            character.masterReferenceSourceImagePaths.forEach { append($0) }
-        }
-
         return Array(ordered.prefix(limit))
     }
 
@@ -6559,17 +7549,69 @@ final class AnimateStore {
         model: GeminiModel,
         aspectRatio: String,
         imageSize: String,
+        recommendedLORACaption: String? = nil,
+        placeID: UUID? = nil,
+        routeID: UUID? = nil,
+        worldNodeID: UUID? = nil,
+        mapPoint: WorldMapPoint? = nil,
+        cameraPose: WorldCameraPose? = nil,
+        mapPlacementStatus: GeneratedBackgroundMapPlacementStatus? = nil,
+        buildingAnchorNodeID: UUID? = nil,
+        orientationState: GeneratedBackgroundOrientationState? = nil,
         to imageURL: URL
     ) throws {
-        let payload: [String: Any] = [
-            "request": [
-                "prompt": prompt,
-                "model_alias": model.displayName,
-                "model": model.rawValue,
-                "image_size": imageSize,
-                "aspect_ratio": aspectRatio,
-            ]
+        var requestPayload: [String: Any] = [
+            "prompt": prompt,
+            "model_alias": model.displayName,
+            "model": model.rawValue,
+            "image_size": imageSize,
+            "aspect_ratio": aspectRatio,
         ]
+        if let recommendedLORACaption,
+           !recommendedLORACaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            requestPayload["recommended_lora_caption"] = recommendedLORACaption
+        }
+        if let placeID {
+            requestPayload["place_id"] = placeID.uuidString
+        }
+        if let routeID {
+            requestPayload["route_id"] = routeID.uuidString
+        }
+        if let worldNodeID {
+            requestPayload["world_node_id"] = worldNodeID.uuidString
+        }
+        if let mapPoint {
+            let clampedMapPoint = mapPoint.clamped()
+            requestPayload["map_point"] = [
+                "x": clampedMapPoint.x,
+                "y": clampedMapPoint.y,
+            ]
+        }
+        if let cameraPose {
+            var posePayload: [String: Any] = [
+                "yaw_degrees": cameraPose.yawDegrees,
+                "pitch_degrees": cameraPose.pitchDegrees,
+                "roll_degrees": cameraPose.rollDegrees,
+                "focal_length_mm": cameraPose.focalLengthMM,
+            ]
+            if let horizontalFOVDegrees = cameraPose.horizontalFOVDegrees {
+                posePayload["horizontal_fov_degrees"] = horizontalFOVDegrees
+            }
+            if let verticalFOVDegrees = cameraPose.verticalFOVDegrees {
+                posePayload["vertical_fov_degrees"] = verticalFOVDegrees
+            }
+            requestPayload["camera_pose"] = posePayload
+        }
+        if let mapPlacementStatus {
+            requestPayload["map_placement_status"] = mapPlacementStatus.rawValue
+        }
+        if let buildingAnchorNodeID {
+            requestPayload["building_anchor_node_id"] = buildingAnchorNodeID.uuidString
+        }
+        if let orientationState {
+            requestPayload["orientation_state"] = orientationState.rawValue
+        }
+        let payload: [String: Any] = ["request": requestPayload]
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: imageURL.deletingPathExtension().appendingPathExtension("json"))
     }
@@ -6728,6 +7770,10 @@ final class AnimateStore {
     }
 
     private func defaultMasterReferenceSourcePaths(for character: AnimationCharacter) -> [String] {
+        Array(preferredInspirationReferencePaths(for: character).prefix(8))
+    }
+
+    func preferredInspirationReferencePaths(for character: AnimationCharacter) -> [String] {
         var ordered: [String] = []
         var seen = Set<String>()
 
@@ -6737,10 +7783,37 @@ final class AnimateStore {
             ordered.append(path)
         }
 
+        latestInspirationBatchImagePaths(for: character).forEach { append($0) }
         append(character.inspirationReferenceImagePath)
         character.curatedInspirationImagePaths.forEach { append($0) }
-        character.inspirationImagePaths.prefix(3).forEach { append($0) }
+        character.inspirationImagePaths.forEach { append($0) }
         return ordered
+    }
+
+    private func latestInspirationBatchImagePaths(for character: AnimationCharacter) -> [String] {
+        let inspirationJobs = character.inspirationBatchJobs
+            .filter { $0.kind == .inspiration }
+            .sorted { lhs, rhs in
+                if lhs.submittedAt != rhs.submittedAt {
+                    return lhs.submittedAt > rhs.submittedAt
+                }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+        let jobs = inspirationJobs.isEmpty
+            ? character.inspirationBatchJobs.sorted { lhs, rhs in
+                if lhs.submittedAt != rhs.submittedAt {
+                    return lhs.submittedAt > rhs.submittedAt
+                }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+            : inspirationJobs
+
+        guard let job = jobs.first(where: { !$0.downloadedImagePaths.isEmpty || !$0.autoImportedImagePaths.isEmpty }) else {
+            return []
+        }
+
+        let candidatePaths = job.downloadedImagePaths.isEmpty ? job.autoImportedImagePaths : job.downloadedImagePaths
+        return normalizedCharacterAssetPaths(candidatePaths)
     }
 
     private func masterReferenceImportMetadata(
@@ -6786,13 +7859,82 @@ final class AnimateStore {
         let imageSize = (request["image_size"] as? String)
             ?? (request["imageSize"] as? String)
             ?? "1K"
+        let placeID = (request["place_id"] as? String).flatMap(UUID.init(uuidString:))
+        let routeID = (request["route_id"] as? String).flatMap(UUID.init(uuidString:))
+        let worldNodeID = (request["world_node_id"] as? String).flatMap(UUID.init(uuidString:))
+        let mapPoint: WorldMapPoint? = {
+            guard let payload = request["map_point"] as? [String: Any],
+                  let x = payload["x"] as? Double,
+                  let y = payload["y"] as? Double else {
+                return nil
+            }
+            return WorldMapPoint(x: x, y: y).clamped()
+        }()
+        let cameraPose: WorldCameraPose? = {
+            guard let payload = request["camera_pose"] as? [String: Any] else { return nil }
+            let yaw = payload["yaw_degrees"] as? Double ?? 0
+            let pitch = payload["pitch_degrees"] as? Double ?? 0
+            let roll = payload["roll_degrees"] as? Double ?? 0
+            let focal = payload["focal_length_mm"] as? Double ?? 35
+            let horizontalFOVDegrees = payload["horizontal_fov_degrees"] as? Double
+            let verticalFOVDegrees = payload["vertical_fov_degrees"] as? Double
+            return WorldCameraPose(
+                yawDegrees: yaw,
+                pitchDegrees: pitch,
+                rollDegrees: roll,
+                focalLengthMM: focal,
+                horizontalFOVDegrees: horizontalFOVDegrees,
+                verticalFOVDegrees: verticalFOVDegrees
+            )
+        }()
+        let mapPlacementStatus = (request["map_placement_status"] as? String)
+            .flatMap(GeneratedBackgroundMapPlacementStatus.init(rawValue:))
+        let buildingAnchorNodeID = (request["building_anchor_node_id"] as? String).flatMap(UUID.init(uuidString:))
+        let orientationState = (request["orientation_state"] as? String)
+            .flatMap(GeneratedBackgroundOrientationState.init(rawValue:))
 
         return StoredImageGenerationMetadata(
             prompt: prompt,
             model: model,
             aspectRatio: aspectRatio,
-            imageSize: imageSize
+            imageSize: imageSize,
+            placeID: placeID,
+            routeID: routeID,
+            worldNodeID: worldNodeID,
+            mapPoint: mapPoint,
+            cameraPose: cameraPose,
+            mapPlacementStatus: mapPlacementStatus,
+            buildingAnchorNodeID: buildingAnchorNodeID,
+            orientationState: orientationState
         )
+    }
+
+    func imageResolutionDescription(for imagePath: String) -> String? {
+        let resolvedURL = resolvedCharacterAssetURL(for: imagePath)
+            ?? (imagePath.hasPrefix("/") ? URL(fileURLWithPath: imagePath) : nil)
+        guard let imageURL = resolvedURL else { return nil }
+
+        if let source = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let pixelWidth = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+           let pixelHeight = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+           pixelWidth > 0,
+           pixelHeight > 0 {
+            return "\(pixelWidth) × \(pixelHeight) px"
+        }
+
+        guard let image = NSImage(contentsOf: imageURL) else { return nil }
+        if let bitmapRep = image.representations
+            .compactMap({ $0 as? NSBitmapImageRep })
+            .max(by: { ($0.pixelsWide * $0.pixelsHigh) < ($1.pixelsWide * $1.pixelsHigh) }) {
+            return "\(bitmapRep.pixelsWide) × \(bitmapRep.pixelsHigh) px"
+        }
+
+        if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            return "\(cgImage.width) × \(cgImage.height) px"
+        }
+
+        return nil
     }
 
     // MARK: - Look Development Board
@@ -6959,7 +8101,7 @@ final class AnimateStore {
     // MARK: - Background Management
 
     @discardableResult
-    func refreshPlacesFromScript(persistChanges: Bool = true) async -> Bool {
+    func refreshPlacesFromScript(persistChanges: Bool = false) async -> Bool {
         guard let projectURL = fileOWPURL else {
             scriptPlaceRequirements = []
             return false
@@ -7090,7 +8232,7 @@ final class AnimateStore {
         }
 
         if didMutate && persistChanges {
-            save()
+            save(writePlaces: true)
         }
 
         return didMutate
@@ -7110,7 +8252,7 @@ final class AnimateStore {
             )
             backgrounds.append(place)
             selectedBackgroundID = place.id
-            save()
+            save(writePlaces: true)
         } catch {
             statusMessage = "Failed to import place image: \(error.localizedDescription)"
         }
@@ -7140,17 +8282,28 @@ final class AnimateStore {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         backgrounds[index].name = trimmed
-        save()
+        save(writePlaces: true)
     }
 
     func updatePlaceNotes(_ notes: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].notes != notes else { return }
         backgrounds[index].notes = notes
-        scheduleDebouncedSave()
+        save(writePlaces: true)
+    }
+
+    func updatePlaceWorkflowPromptNotes(_ notes: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].workflowPromptNotes != notes else { return }
+        backgrounds[index].workflowPromptNotes = notes
+        save(writePlaces: true)
     }
 
     func addImagesToPlaceFromPicker(placeID: UUID) {
+        addImagesToPlaceFromPicker(placeID: placeID, workflow: .photorealistic)
+    }
+
+    func addImagesToPlaceFromPicker(placeID: UUID, workflow: PlaceWorkflowMode) {
         let panel = NSOpenPanel()
         panel.title = "Add Images To Place"
         panel.canChooseFiles = true
@@ -7163,58 +8316,2413 @@ final class AnimateStore {
             Task { @MainActor in
                 guard let self else { return }
                 for url in panel.urls {
-                    self.addImageToPlace(from: url, placeID: placeID)
+                    self.addImageToPlace(from: url, placeID: placeID, workflow: workflow)
                 }
             }
         }
     }
 
     func addImageToPlace(from url: URL, placeID: UUID) {
+        addImageToPlace(from: url, placeID: placeID, workflow: .photorealistic)
+    }
+
+    func addImageToPlace(from url: URL, placeID: UUID, workflow: PlaceWorkflowMode) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               let animateDir = animateURL else { return }
 
         do {
             let storedURL = try assetManager.importBackgroundImage(from: url, animateURL: animateDir)
             let imagePath = normalizedCharacterAssetPath(storedURL.path) ?? storedURL.path
-            if !backgrounds[index].imagePaths.contains(imagePath) {
-                backgrounds[index].imagePaths.append(imagePath)
-            }
-            if backgrounds[index].approvedImagePath == nil {
-                backgrounds[index].approvedImagePath = imagePath
-            }
-            backgrounds[index].filename = URL(fileURLWithPath: backgrounds[index].approvedImagePath ?? imagePath).lastPathComponent
-            backgrounds[index].sourceURL = resolvedCharacterAssetURL(for: backgrounds[index].approvedImagePath ?? imagePath)
-            save()
+            appendPlaceImagePath(imagePath, to: &backgrounds[index], workflow: workflow)
+            syncGeneratedBackgroundLibrary()
+            save(writePlaces: true)
         } catch {
             statusMessage = "Failed to add place image: \(error.localizedDescription)"
         }
     }
 
+    func allBackgroundHierarchyImagePaths() -> [String] {
+        if placesWorkflowLibrary.generatedImageRecords.isEmpty {
+            syncGeneratedBackgroundLibrary()
+        }
+        let visible = visibleGeneratedBackgroundLibraryRecords()
+        if !visible.isEmpty {
+            return visible.map(\.activePath)
+        }
+        return scannedGeneratedBackgroundPaths()
+    }
+
+    func visibleGeneratedBackgroundLibraryRecords() -> [GeneratedBackgroundLibraryRecord] {
+        placesWorkflowLibrary.generatedImageRecords.sorted { lhs, rhs in
+            let lhsRank = generatedBackgroundLibrarySortRank(for: lhs.activePath)
+            let rhsRank = generatedBackgroundLibrarySortRank(for: rhs.activePath)
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            return lhs.activePath.localizedCaseInsensitiveCompare(rhs.activePath) == .orderedAscending
+        }
+    }
+
+    func generatedBackgroundRecords(
+        flagFilter: GeneratedBackgroundFlagFilterMode = .all,
+        minimumRating: Int? = nil,
+        workflowFilter: GeneratedBackgroundWorkflowFilterMode = .all,
+        searchText: String = ""
+    ) -> [GeneratedBackgroundLibraryRecord] {
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return visibleGeneratedBackgroundLibraryRecords().filter { record in
+            switch workflowFilter {
+            case .all:
+                break
+            case .photorealistic where record.workflow != .photorealistic:
+                return false
+            case .animated where record.workflow != .animated:
+                return false
+            default:
+                break
+            }
+
+            switch flagFilter {
+            case .all:
+                break
+            case .unflagged:
+                guard !record.isRejected else { return false }
+            case .rejected:
+                guard record.isRejected else { return false }
+            }
+
+            if let minimumRating {
+                guard (record.rating ?? 0) >= minimumRating else { return false }
+            }
+
+            guard !trimmedSearch.isEmpty else { return true }
+            let haystack = [
+                record.activePath,
+                record.summary,
+                record.sourcePrompt ?? "",
+                record.keywords.joined(separator: " ")
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            return haystack.contains(trimmedSearch)
+        }
+    }
+
+    func generatedBackgroundReferencePriority(for path: String) -> Int {
+        guard let record = generatedBackgroundRecord(for: path) else { return 0 }
+        if record.isRejected { return -100 }
+        return (record.rating ?? 0) * 10 + max(0, 5 - min(record.duplicatePaths.count, 5))
+    }
+
+    func preferredPlaceContinuityImagePath(for place: BackgroundPlate, workflow: PlaceWorkflowMode) -> String? {
+        let nodeCanon = worldNodes(placeID: place.id)
+            .compactMap { $0.approvedImagePath(for: workflow) }
+            .first
+        if let nodeCanon {
+            return nodeCanon
+        }
+
+        let approved = place.approvedImagePath(for: workflow)
+        let candidates = place.imagePaths(for: workflow)
+        let ranked = candidates.sorted { lhs, rhs in
+            let lhsPriority = generatedBackgroundReferencePriority(for: lhs)
+            let rhsPriority = generatedBackgroundReferencePriority(for: rhs)
+            if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+
+        if let approved,
+           generatedBackgroundReferencePriority(for: approved) >= 0 {
+            return approved
+        }
+
+        if let preferred = ranked.first(where: { generatedBackgroundReferencePriority(for: $0) >= 0 }) {
+            return preferred
+        }
+
+        return approved ?? ranked.first
+    }
+
+    func worldRoutes(for placeID: UUID? = nil) -> [PlaceWorldRoute] {
+        placesWorkflowLibrary.worldGraph.routes
+            .filter { placeID == nil || $0.placeID == placeID }
+            .sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+
+    func worldRoute(for routeID: UUID?) -> PlaceWorldRoute? {
+        guard let routeID else { return nil }
+        return placesWorkflowLibrary.worldGraph.routes.first { $0.id == routeID }
+    }
+
+    func worldNodes(routeID: UUID? = nil, placeID: UUID? = nil) -> [PlaceWorldNode] {
+        placesWorkflowLibrary.worldGraph.nodes
+            .filter { node in
+                (routeID == nil || node.routeID == routeID) &&
+                (placeID == nil || node.placeID == placeID)
+            }
+            .sorted { lhs, rhs in
+                if lhs.sequenceIndex != rhs.sequenceIndex {
+                    return lhs.sequenceIndex < rhs.sequenceIndex
+                }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+    }
+
+    func worldNode(for nodeID: UUID?) -> PlaceWorldNode? {
+        guard let nodeID else { return nil }
+        return placesWorkflowLibrary.worldGraph.nodes.first { $0.id == nodeID }
+    }
+
+    func placeWorldNodeCount(_ placeID: UUID) -> Int {
+        worldNodes(placeID: placeID).count
+    }
+
+    func placePendingReviewCount(_ placeID: UUID) -> Int {
+        pendingContinuityReviews()
+            .filter { review in worldNode(for: review.nodeID)?.placeID == placeID }
+            .count
+    }
+
+    func routeWorldNodeCount(_ routeID: UUID) -> Int {
+        worldNodes(routeID: routeID).count
+    }
+
+    func routePendingReviewCount(_ routeID: UUID, workflow: PlaceWorkflowMode? = nil) -> Int {
+        pendingContinuityReviews(routeID: routeID, workflow: workflow).count
+    }
+
+    func worldGenerationBatches(
+        routeID: UUID? = nil,
+        workflow: PlaceWorkflowMode? = nil,
+        placeID: UUID? = nil
+    ) -> [PlaceWorldGenerationBatch] {
+        placesWorkflowLibrary.worldGenerationBatches
+            .filter { batch in
+                (routeID == nil || batch.routeID == routeID) &&
+                (workflow == nil || batch.workflow == workflow) &&
+                (placeID == nil || batch.placeID == placeID)
+            }
+            .sorted { lhs, rhs in
+                if lhs.submittedAt != rhs.submittedAt {
+                    return lhs.submittedAt > rhs.submittedAt
+                }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+    }
+
+    func latestWorldGenerationBatch(
+        routeID: UUID? = nil,
+        workflow: PlaceWorkflowMode? = nil,
+        placeID: UUID? = nil
+    ) -> PlaceWorldGenerationBatch? {
+        worldGenerationBatches(routeID: routeID, workflow: workflow, placeID: placeID).first
+    }
+
+    func activeWorldGenerationBatchCount(
+        routeID: UUID? = nil,
+        workflow: PlaceWorkflowMode? = nil,
+        placeID: UUID? = nil
+    ) -> Int {
+        worldGenerationBatches(routeID: routeID, workflow: workflow, placeID: placeID)
+            .filter { !$0.state.uppercased().contains("SUCCEEDED") && !$0.state.uppercased().contains("FAILED") && !$0.state.uppercased().contains("CANCELLED") }
+            .count
+    }
+
+    func placeName(for placeID: UUID?) -> String {
+        guard let placeID else { return "Unassigned" }
+        return backgrounds.first(where: { $0.id == placeID })?.name ?? "Unknown Place"
+    }
+
+    func continuityReviews(
+        routeID: UUID? = nil,
+        workflow: PlaceWorkflowMode? = nil
+    ) -> [PlaceContinuityReview] {
+        placesWorkflowLibrary.continuityReviews
+            .filter { review in
+                (routeID == nil || review.routeID == routeID) &&
+                (workflow == nil || review.workflow == workflow)
+            }
+            .sorted { lhs, rhs in
+                if lhs.status != rhs.status { return lhs.status.rawValue < rhs.status.rawValue }
+                if lhs.overallScore != rhs.overallScore { return lhs.overallScore < rhs.overallScore }
+                return lhs.analyzedAt > rhs.analyzedAt
+            }
+    }
+
+    func pendingContinuityReviews(
+        routeID: UUID? = nil,
+        workflow: PlaceWorkflowMode? = nil
+    ) -> [PlaceContinuityReview] {
+        continuityReviews(routeID: routeID, workflow: workflow)
+            .filter { $0.status == .pending && !$0.flags.isEmpty }
+    }
+
+    func latestContinuityReview(
+        for nodeID: UUID,
+        workflow: PlaceWorkflowMode
+    ) -> PlaceContinuityReview? {
+        continuityReviews(workflow: workflow)
+            .filter { $0.nodeID == nodeID }
+            .sorted { $0.analyzedAt > $1.analyzedAt }
+            .first
+    }
+
+    func generatedBackgroundRecords(
+        linkedToWorldNode nodeID: UUID,
+        workflow: PlaceWorkflowMode? = nil
+    ) -> [GeneratedBackgroundLibraryRecord] {
+        visibleGeneratedBackgroundLibraryRecords()
+            .filter { record in
+                record.worldNodeID == nodeID && (workflow == nil || record.workflow == workflow)
+            }
+            .sorted { lhs, rhs in
+                if lhs.canonStatus != rhs.canonStatus {
+                    return lhs.canonStatus.rawValue > rhs.canonStatus.rawValue
+                }
+                return lhs.updatedAt > rhs.updatedAt
+            }
+    }
+
+    func preferredWorldNodeImagePath(
+        nodeID: UUID,
+        workflow: PlaceWorkflowMode
+    ) -> String? {
+        if let approved = worldNode(for: nodeID)?.approvedImagePath(for: workflow) {
+            return approved
+        }
+        return generatedBackgroundRecords(linkedToWorldNode: nodeID, workflow: workflow).first?.activePath
+    }
+
+    @discardableResult
+    func addWorldRoute(name: String? = nil, placeID: UUID? = nil) -> UUID {
+        let route = PlaceWorldRoute(
+            name: name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? name! : "Route \(placesWorkflowLibrary.worldGraph.routes.count + 1)",
+            placeID: placeID
+        )
+        placesWorkflowLibrary.worldGraph.routes.append(route)
+        save(writePlaces: true)
+        return route.id
+    }
+
+    func updateWorldRouteName(_ name: String, routeID: UUID) {
+        guard let index = placesWorkflowLibrary.worldGraph.routes.firstIndex(where: { $0.id == routeID }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        placesWorkflowLibrary.worldGraph.routes[index].name = trimmed
+        save(writePlaces: true)
+    }
+
+    func updateWorldRouteNotes(_ notes: String, routeID: UUID) {
+        guard let index = placesWorkflowLibrary.worldGraph.routes.firstIndex(where: { $0.id == routeID }) else { return }
+        placesWorkflowLibrary.worldGraph.routes[index].notes = notes
+        save(writePlaces: true)
+    }
+
+    func updateWorldRouteColor(_ colorHex: String, routeID: UUID) {
+        guard let index = placesWorkflowLibrary.worldGraph.routes.firstIndex(where: { $0.id == routeID }) else { return }
+        placesWorkflowLibrary.worldGraph.routes[index].colorHex = colorHex
+        save(writePlaces: true)
+    }
+
+    func deleteWorldRoute(_ routeID: UUID) {
+        let nodeIDs = Set(worldNodes(routeID: routeID).map(\.id))
+        placesWorkflowLibrary.worldGraph.routes.removeAll { $0.id == routeID }
+        placesWorkflowLibrary.worldGraph.nodes.removeAll { nodeIDs.contains($0.id) }
+        placesWorkflowLibrary.continuityReviews.removeAll { nodeIDs.contains($0.nodeID) || $0.routeID == routeID }
+        for index in placesWorkflowLibrary.generatedImageRecords.indices where nodeIDs.contains(placesWorkflowLibrary.generatedImageRecords[index].worldNodeID ?? UUID()) || placesWorkflowLibrary.generatedImageRecords[index].routeID == routeID {
+            placesWorkflowLibrary.generatedImageRecords[index].worldNodeID = nil
+            placesWorkflowLibrary.generatedImageRecords[index].routeID = nil
+            placesWorkflowLibrary.generatedImageRecords[index].continuityReviewIDs.removeAll()
+            placesWorkflowLibrary.generatedImageRecords[index].qaFlags.removeAll()
+            if placesWorkflowLibrary.generatedImageRecords[index].canonStatus == .canon {
+                placesWorkflowLibrary.generatedImageRecords[index].canonStatus = .candidate
+            }
+        }
+        save(writePlaces: true)
+    }
+
+    @discardableResult
+    func addWorldNode(
+        routeID: UUID? = nil,
+        placeID: UUID? = nil,
+        title: String? = nil,
+        mapPoint: WorldMapPoint = .init(),
+        role: PlaceWorldNodeRole = .traverse
+    ) -> UUID {
+        let nextSequenceIndex = (worldNodes(routeID: routeID).map(\.sequenceIndex).max() ?? -1) + 1
+        let node = PlaceWorldNode(
+            routeID: routeID,
+            placeID: placeID,
+            title: title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? title! : "Node \(nextSequenceIndex + 1)",
+            sequenceIndex: nextSequenceIndex,
+            role: role,
+            mapPoint: mapPoint
+        )
+        placesWorkflowLibrary.worldGraph.nodes.append(node)
+        save(writePlaces: true)
+        return node.id
+    }
+
+    func deleteWorldNode(_ nodeID: UUID) {
+        placesWorkflowLibrary.worldGraph.nodes.removeAll { $0.id == nodeID }
+        placesWorkflowLibrary.continuityReviews.removeAll { $0.nodeID == nodeID }
+        for index in placesWorkflowLibrary.generatedImageRecords.indices where placesWorkflowLibrary.generatedImageRecords[index].worldNodeID == nodeID {
+            placesWorkflowLibrary.generatedImageRecords[index].worldNodeID = nil
+            placesWorkflowLibrary.generatedImageRecords[index].continuityReviewIDs.removeAll()
+            placesWorkflowLibrary.generatedImageRecords[index].qaFlags.removeAll()
+            if placesWorkflowLibrary.generatedImageRecords[index].canonStatus == .canon {
+                placesWorkflowLibrary.generatedImageRecords[index].canonStatus = .candidate
+            }
+        }
+        for index in placesWorkflowLibrary.worldGraph.nodes.indices {
+            placesWorkflowLibrary.worldGraph.nodes[index].linkedNodeIDs.removeAll { $0 == nodeID }
+        }
+        save(writePlaces: true)
+    }
+
+    func updateWorldNodeTitle(_ title: String, nodeID: UUID) {
+        guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        placesWorkflowLibrary.worldGraph.nodes[index].title = trimmed
+        save(writePlaces: true)
+    }
+
+    func updateWorldNodeNotes(_ notes: String, nodeID: UUID) {
+        guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        placesWorkflowLibrary.worldGraph.nodes[index].notes = notes
+        save(writePlaces: true)
+    }
+
+    func updateWorldNodeRole(_ role: PlaceWorldNodeRole, nodeID: UUID) {
+        guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        placesWorkflowLibrary.worldGraph.nodes[index].role = role
+        save(writePlaces: true)
+    }
+
+    func updateWorldNodeMapPoint(_ mapPoint: WorldMapPoint, nodeID: UUID) {
+        guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        placesWorkflowLibrary.worldGraph.nodes[index].mapPoint = mapPoint
+        save(writePlaces: true)
+    }
+
+    func updateWorldNodeCameraPose(_ pose: WorldCameraPose, nodeID: UUID) {
+        guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        placesWorkflowLibrary.worldGraph.nodes[index].cameraPose = pose
+        save(writePlaces: true)
+    }
+
+    func updateWorldNodeLandmarkExpectations(
+        expectedTitles: [String],
+        forbiddenTitles: [String],
+        nodeID: UUID
+    ) {
+        guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        placesWorkflowLibrary.worldGraph.nodes[index].expectedLandmarkTitles = expectedTitles
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        placesWorkflowLibrary.worldGraph.nodes[index].forbiddenLandmarkTitles = forbiddenTitles
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        save(writePlaces: true)
+    }
+
+    func updateWorldNodePlace(_ placeID: UUID?, nodeID: UUID) {
+        guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        placesWorkflowLibrary.worldGraph.nodes[index].placeID = placeID
+        save(writePlaces: true)
+    }
+
+    @discardableResult
+    func upsertWorldPlaceAnchor(
+        placeID: UUID,
+        title: String,
+        mapPoint: WorldMapPoint,
+        role: PlaceWorldNodeRole = .landmark,
+        shouldSave: Bool = true
+    ) -> UUID {
+        if let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: {
+            $0.placeID == placeID && $0.routeID == nil && $0.role == .landmark
+        }) {
+            placesWorkflowLibrary.worldGraph.nodes[index].title = title
+            placesWorkflowLibrary.worldGraph.nodes[index].mapPoint = mapPoint
+            let nodeID = placesWorkflowLibrary.worldGraph.nodes[index].id
+            adoptGeneratedBackgroundRecords(for: placeID, nodeID: nodeID)
+            if shouldSave {
+                save(writePlaces: true)
+            }
+            return nodeID
+        }
+
+        let node = PlaceWorldNode(
+            routeID: nil,
+            placeID: placeID,
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Anchor" : title,
+            sequenceIndex: 0,
+            role: role,
+            mapPoint: mapPoint
+        )
+        placesWorkflowLibrary.worldGraph.nodes.append(node)
+        adoptGeneratedBackgroundRecords(for: placeID, nodeID: node.id)
+        if shouldSave {
+            save(writePlaces: true)
+        }
+        return node.id
+    }
+
+    func updateWorldNodeSequenceIndex(_ sequenceIndex: Int, nodeID: UUID) {
+        guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        placesWorkflowLibrary.worldGraph.nodes[index].sequenceIndex = max(0, sequenceIndex)
+        save(writePlaces: true)
+    }
+
+    private func adoptGeneratedBackgroundRecords(for placeID: UUID, nodeID: UUID) {
+        for index in placesWorkflowLibrary.generatedImageRecords.indices where placesWorkflowLibrary.generatedImageRecords[index].linkedPlaceID == placeID {
+            if placesWorkflowLibrary.generatedImageRecords[index].worldNodeID == nil {
+                placesWorkflowLibrary.generatedImageRecords[index].worldNodeID = nodeID
+            }
+        }
+    }
+
+    func setPlaceInteriorLink(
+        _ placeID: UUID,
+        linkedExteriorPlaceID: UUID?,
+        buildingAnchorNodeID: UUID?,
+        shouldSave: Bool = true
+    ) {
+        guard let placeIndex = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
+        backgrounds[placeIndex].linkedExteriorPlaceID = linkedExteriorPlaceID
+        backgrounds[placeIndex].buildingAnchorNodeID = buildingAnchorNodeID
+        if let buildingAnchorNodeID {
+            for recordIndex in placesWorkflowLibrary.generatedImageRecords.indices
+            where placesWorkflowLibrary.generatedImageRecords[recordIndex].linkedPlaceID == placeID
+                && placesWorkflowLibrary.generatedImageRecords[recordIndex].buildingAnchorNodeID == nil {
+                placesWorkflowLibrary.generatedImageRecords[recordIndex].buildingAnchorNodeID = buildingAnchorNodeID
+            }
+        }
+        if shouldSave {
+            save(writePlaces: true)
+        }
+    }
+
+    func linkWorldNodes(_ nodeIDs: [UUID]) {
+        let uniqueIDs = Array(Set(nodeIDs))
+        guard uniqueIDs.count >= 2 else { return }
+        for nodeID in uniqueIDs {
+            guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { continue }
+            let others = uniqueIDs.filter { $0 != nodeID }
+            placesWorkflowLibrary.worldGraph.nodes[index].linkedNodeIDs = Array(Set(placesWorkflowLibrary.worldGraph.nodes[index].linkedNodeIDs + others))
+        }
+        save(writePlaces: true)
+    }
+
+    func attachGeneratedBackgroundRecord(
+        _ recordID: UUID,
+        toWorldNodeID nodeID: UUID?,
+        routeID: UUID?,
+        placeID: UUID?,
+        pose: WorldCameraPose?,
+        mapPoint: WorldMapPoint?,
+        canonStatus: WorldCanonStatus = .candidate,
+        placementStatus: GeneratedBackgroundMapPlacementStatus? = nil,
+        buildingAnchorNodeID: UUID? = nil
+    ) {
+        guard let recordIndex = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].worldNodeID = nodeID
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].routeID = routeID
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].linkedPlaceID = placeID
+        if let pose {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].cameraPose = pose
+        }
+        if let mapPoint {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPoint = mapPoint.clamped()
+        }
+        if let buildingAnchorNodeID {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].buildingAnchorNodeID = buildingAnchorNodeID
+        }
+        if let placementStatus {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPlacementStatus = placementStatus
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPlacementConfirmedAt = placementStatus == .confirmed ? Date() : nil
+        } else if mapPoint != nil || pose != nil,
+                  placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPlacementStatus == .unplaced {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPlacementStatus = .inferred
+        }
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].canonStatus = canonStatus
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].updatedAt = Date()
+        save(writePlaces: true)
+    }
+
+    func updateGeneratedBackgroundPlacement(
+        _ recordID: UUID,
+        mapPoint: WorldMapPoint?,
+        pose: WorldCameraPose? = nil,
+        worldNodeID: UUID? = nil,
+        routeID: UUID? = nil,
+        placeID: UUID? = nil,
+        buildingAnchorNodeID: UUID? = nil,
+        status: GeneratedBackgroundMapPlacementStatus = .confirmed
+    ) {
+        guard let recordIndex = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        if let worldNodeID {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].worldNodeID = worldNodeID
+        }
+        if let routeID {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].routeID = routeID
+        }
+        if let placeID {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].linkedPlaceID = placeID
+        }
+        if let pose {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].cameraPose = pose
+        }
+        if let mapPoint {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPoint = mapPoint.clamped()
+        } else if status == .unplaced {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPoint = nil
+            if pose == nil {
+                placesWorkflowLibrary.generatedImageRecords[recordIndex].cameraPose = nil
+            }
+        }
+        if let buildingAnchorNodeID {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].buildingAnchorNodeID = buildingAnchorNodeID
+        }
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPlacementStatus = status
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPlacementConfirmedAt = status == .confirmed ? Date() : nil
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].updatedAt = Date()
+        save(writePlaces: true)
+    }
+
+    func confirmGeneratedBackgroundPlacement(
+        _ recordID: UUID,
+        mapPoint: WorldMapPoint,
+        pose: WorldCameraPose? = nil,
+        worldNodeID: UUID? = nil,
+        routeID: UUID? = nil,
+        placeID: UUID? = nil,
+        buildingAnchorNodeID: UUID? = nil
+    ) {
+        updateGeneratedBackgroundPlacement(
+            recordID,
+            mapPoint: mapPoint,
+            pose: pose,
+            worldNodeID: worldNodeID,
+            routeID: routeID,
+            placeID: placeID,
+            buildingAnchorNodeID: buildingAnchorNodeID,
+            status: .confirmed
+        )
+    }
+
+    func setGeneratedBackgroundOrientation(
+        _ orientationState: GeneratedBackgroundOrientationState,
+        for recordID: UUID
+    ) {
+        guard let recordIndex = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].orientationState = orientationState
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].updatedAt = Date()
+        save(writePlaces: true)
+    }
+
+    func linkGeneratedBackgroundRecord(
+        _ recordID: UUID,
+        toBuildingAnchorNodeID buildingAnchorNodeID: UUID?,
+        placeID: UUID? = nil
+    ) {
+        guard let recordIndex = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].buildingAnchorNodeID = buildingAnchorNodeID
+        if let placeID {
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].linkedPlaceID = placeID
+        }
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].updatedAt = Date()
+        save(writePlaces: true)
+    }
+
+    func generatedBackgroundPlacementCoverage(
+        placeID: UUID? = nil
+    ) -> (total: Int, placed: Int, confirmed: Int, anchored: Int, mirrored: Int) {
+        let records = placesWorkflowLibrary.generatedImageRecords.filter { record in
+            guard let placeID else { return true }
+            return record.linkedPlaceID == placeID
+        }
+        return (
+            total: records.count,
+            placed: records.count(where: { $0.mapPoint != nil }),
+            confirmed: records.count(where: { $0.mapPlacementStatus == .confirmed }),
+            anchored: records.count(where: { $0.buildingAnchorNodeID != nil }),
+            mirrored: records.count(where: { $0.orientationState == .mirrored })
+        )
+    }
+
+    func setCanonWorldNodeImage(
+        _ path: String,
+        nodeID: UUID,
+        workflow: PlaceWorkflowMode
+    ) {
+        guard let nodeIndex = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
+        let normalizedPath = normalizedCharacterAssetPath(path) ?? path
+        switch workflow {
+        case .photorealistic:
+            placesWorkflowLibrary.worldGraph.nodes[nodeIndex].approvedPhotorealImagePath = normalizedPath
+        case .animated:
+            placesWorkflowLibrary.worldGraph.nodes[nodeIndex].approvedAnimatedImagePath = normalizedPath
+        }
+
+        for index in placesWorkflowLibrary.generatedImageRecords.indices where placesWorkflowLibrary.generatedImageRecords[index].worldNodeID == nodeID && placesWorkflowLibrary.generatedImageRecords[index].workflow == workflow {
+            placesWorkflowLibrary.generatedImageRecords[index].canonStatus = placesWorkflowLibrary.generatedImageRecords[index].activePath == normalizedPath ? .canon : .candidate
+        }
+        save(writePlaces: true)
+    }
+
+    func updateContinuityReviewStatus(
+        _ status: PlaceContinuityReviewStatus,
+        reviewID: UUID
+    ) {
+        guard let reviewIndex = placesWorkflowLibrary.continuityReviews.firstIndex(where: { $0.id == reviewID }) else { return }
+        placesWorkflowLibrary.continuityReviews[reviewIndex].status = status
+        save(writePlaces: true)
+    }
+
+    func registerWorldGenerationBatch(_ batch: PlaceWorldGenerationBatch) {
+        let normalized = normalizePlaceWorldGenerationBatch(batch)
+        if let index = matchingWorldGenerationBatchIndex(for: normalized, in: placesWorkflowLibrary.worldGenerationBatches) {
+            placesWorkflowLibrary.worldGenerationBatches[index] = mergedPlaceWorldGenerationBatch(
+                existing: placesWorkflowLibrary.worldGenerationBatches[index],
+                incoming: normalized
+            )
+        } else {
+            placesWorkflowLibrary.worldGenerationBatches.append(normalized)
+        }
+        save(writePlaces: true)
+    }
+
+    func refreshPlaceWorldGenerationBatches() {
+        let existing = placesWorkflowLibrary.worldGenerationBatches.map(normalizePlaceWorldGenerationBatch)
+        var batches = mergePlaceWorldGenerationBatches(
+            existing: existing,
+            discovered: discoveredPlaceWorldGenerationBatchesOnDisk()
+        )
+
+        var didChange = batches != existing
+        var shouldResyncGeneratedLibrary = false
+
+        for index in batches.indices {
+            guard let metadataPath = batches[index].metadataPath,
+                  let metadataURL = resolvedCharacterAssetURL(for: metadataPath)
+                    ?? (metadataPath.hasPrefix("/") ? URL(fileURLWithPath: metadataPath) : nil),
+                  let data = try? Data(contentsOf: metadataURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+
+            let latestStatus = json["latest_status"] as? [String: Any]
+            let resultsSummary = placeWorldGenerationBatchResultsSummary(
+                from: json,
+                batch: batches[index]
+            )
+
+            let state = (latestStatus?["state"] as? String)
+                ?? (json["batch_state"] as? String)
+                ?? batches[index].state
+            if batches[index].state != state {
+                batches[index].state = state
+                didChange = true
+            }
+
+            let batchName = trimmedOrNil((latestStatus?["batch_name"] as? String) ?? (json["batch_name"] as? String))
+            if batches[index].batchName != batchName {
+                batches[index].batchName = batchName
+                didChange = true
+            }
+
+            let submittedAt = batchStatusDate(json["submitted_at"])
+                ?? batchStatusDate(json["last_status_check"])
+                ?? batches[index].submittedAt
+            if batches[index].submittedAt != submittedAt {
+                batches[index].submittedAt = submittedAt
+                didChange = true
+            }
+
+            let lastCheckedAt = batchStatusDate(json["last_status_check"]) ?? Date()
+            if batches[index].lastCheckedAt != lastCheckedAt {
+                batches[index].lastCheckedAt = lastCheckedAt
+                didChange = true
+            }
+
+            let remoteUpdatedAt = batchStatusDate(latestStatus?["update_time"])
+            if batches[index].remoteUpdatedAt != remoteUpdatedAt {
+                batches[index].remoteUpdatedAt = remoteUpdatedAt
+                didChange = true
+            }
+
+            let remoteStartedAt = batchStatusDate(latestStatus?["start_time"])
+            if batches[index].remoteStartedAt != remoteStartedAt {
+                batches[index].remoteStartedAt = remoteStartedAt
+                didChange = true
+            }
+
+            let remoteFinishedAt = batchStatusDate(latestStatus?["end_time"])
+            if batches[index].remoteFinishedAt != remoteFinishedAt {
+                batches[index].remoteFinishedAt = remoteFinishedAt
+                didChange = true
+            }
+
+            let promptCount = (json["prompt_count"] as? Int) ?? resultsSummary.rowCount
+            if batches[index].promptCount != promptCount {
+                batches[index].promptCount = promptCount
+                didChange = true
+            }
+
+            let imageSize = (json["image_size"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? batches[index].imageSize
+            if batches[index].imageSize != imageSize {
+                batches[index].imageSize = imageSize
+                didChange = true
+            }
+
+            let aspectRatio = trimmedOrNil(json["aspect_ratio"] as? String)
+            if batches[index].aspectRatio != aspectRatio {
+                batches[index].aspectRatio = aspectRatio
+                didChange = true
+            }
+
+            if let rawModel = (json["model"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               let model = GeminiModel(rawValue: rawModel),
+               batches[index].model != model {
+                batches[index].model = model
+                didChange = true
+            }
+
+            let displayName = trimmedOrNil((latestStatus?["display_name"] as? String) ?? (json["display_name"] as? String))
+            if let displayName, !displayName.isEmpty, batches[index].title != displayName {
+                batches[index].title = displayName
+                didChange = true
+            }
+
+            let generatedImagePaths = normalizedCharacterAssetPaths(resultsSummary.decodedImagePaths)
+            if batches[index].generatedImagePaths != generatedImagePaths {
+                batches[index].generatedImagePaths = generatedImagePaths
+                didChange = true
+                shouldResyncGeneratedLibrary = true
+            }
+
+            if batches[index].successCount != resultsSummary.successCount {
+                batches[index].successCount = resultsSummary.successCount
+                didChange = true
+            }
+
+            if batches[index].failureCount != resultsSummary.errorCount {
+                batches[index].failureCount = resultsSummary.errorCount
+                didChange = true
+            }
+
+            if batches[index].failures != resultsSummary.failures {
+                batches[index].failures = resultsSummary.failures
+                didChange = true
+            }
+
+            let lastErrorMessage = trimmedOrNil(
+                ((latestStatus?["error"] as? [String: Any])?["message"] as? String)
+                ?? ((latestStatus?["error"] as? [String: Any])?["details"] as? String)
+                ?? resultsSummary.failures.first?.message
+            )
+            if batches[index].lastErrorMessage != lastErrorMessage {
+                batches[index].lastErrorMessage = lastErrorMessage
+                didChange = true
+            }
+
+            if batches[index].placeID == nil {
+                let inferredPlaceID = batches[index].routeID.flatMap { worldRoute(for: $0)?.placeID }
+                    ?? batches[index].nodeIDs.compactMap { worldNode(for: $0)?.placeID }.first
+                if batches[index].placeID != inferredPlaceID {
+                    batches[index].placeID = inferredPlaceID
+                    didChange = true
+                }
+            }
+        }
+
+        if batches != placesWorkflowLibrary.worldGenerationBatches {
+            placesWorkflowLibrary.worldGenerationBatches = batches
+        }
+
+        if shouldResyncGeneratedLibrary {
+            syncGeneratedBackgroundLibrary()
+        }
+
+        let linkageChanged = reconcilePlaceWorldBatchGeneratedImageLinkage()
+        if didChange || linkageChanged {
+            save(writePlaces: true)
+        }
+    }
+
+    func analyzeWorldContinuity(
+        routeID: UUID,
+        workflow: PlaceWorkflowMode
+    ) async {
+        let nodes = worldNodes(routeID: routeID)
+        guard !nodes.isEmpty else { return }
+
+        let analyzer = PlaceWorldContinuityAnalyzer()
+        var newReviews: [PlaceContinuityReview] = []
+
+        for node in nodes {
+            guard let candidatePath = preferredWorldNodeImagePath(nodeID: node.id, workflow: workflow),
+                  let candidateURL = resolvedCharacterAssetURL(for: candidatePath)
+                    ?? (candidatePath.hasPrefix("/") ? URL(fileURLWithPath: candidatePath) : nil) else {
+                continue
+            }
+
+            let routeNeighbors = nodes.filter { other in
+                other.id != node.id && abs(other.sequenceIndex - node.sequenceIndex) <= 1
+            }
+            let linkedNeighbors = node.linkedNodeIDs.compactMap { linkedID in
+                worldNode(for: linkedID)
+            }
+            let neighbors = Array(Dictionary(uniqueKeysWithValues: (routeNeighbors + linkedNeighbors).map { ($0.id, $0) }).values)
+                .sorted { $0.sequenceIndex < $1.sequenceIndex }
+
+            let neighborInputs: [PlaceWorldContinuityAnalyzer.NeighborInput] = neighbors.compactMap { neighbor in
+                guard let path = preferredWorldNodeImagePath(nodeID: neighbor.id, workflow: workflow),
+                      let url = resolvedCharacterAssetURL(for: path)
+                        ?? (path.hasPrefix("/") ? URL(fileURLWithPath: path) : nil) else {
+                    return nil
+                }
+                return .init(
+                    nodeID: neighbor.id,
+                    imagePath: path,
+                    imageURL: url,
+                    pose: neighbor.cameraPose,
+                    mapPoint: neighbor.mapPoint
+                )
+            }
+
+            let analysis = await analyzer.analyze(
+                candidateURL: candidateURL,
+                candidatePath: candidatePath,
+                candidatePose: node.cameraPose,
+                candidatePoint: node.mapPoint,
+                expectedLandmarkTitles: node.expectedLandmarkTitles,
+                forbiddenLandmarkTitles: node.forbiddenLandmarkTitles,
+                neighbors: neighborInputs
+            )
+
+            let recordID = generatedBackgroundRecord(for: candidatePath)?.id
+            let review = PlaceContinuityReview(
+                nodeID: node.id,
+                routeID: routeID,
+                workflow: workflow,
+                candidateRecordID: recordID,
+                candidateImagePath: candidatePath,
+                comparedNodeIDs: analysis.comparedNodeIDs,
+                comparedImagePaths: analysis.comparedImagePaths,
+                similarityScore: analysis.similarityScore,
+                histogramScore: analysis.histogramScore,
+                metadataScore: analysis.metadataScore,
+                overallScore: analysis.overallScore,
+                flags: analysis.flags,
+                status: analysis.flags.isEmpty ? .approved : .pending,
+                analyzedAt: Date()
+            )
+            newReviews.append(review)
+        }
+
+        placesWorkflowLibrary.continuityReviews.removeAll { $0.routeID == routeID && $0.workflow == workflow }
+        placesWorkflowLibrary.continuityReviews.append(contentsOf: newReviews)
+
+        for review in newReviews {
+            if let nodeIndex = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == review.nodeID }) {
+                placesWorkflowLibrary.worldGraph.nodes[nodeIndex].lastReviewID = review.id
+            }
+            if let recordID = review.candidateRecordID,
+               let recordIndex = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) {
+                placesWorkflowLibrary.generatedImageRecords[recordIndex].qaFlags = review.flags
+                placesWorkflowLibrary.generatedImageRecords[recordIndex].continuityReviewIDs = [review.id]
+                if !review.flags.isEmpty, placesWorkflowLibrary.generatedImageRecords[recordIndex].canonStatus == .canon {
+                    placesWorkflowLibrary.generatedImageRecords[recordIndex].canonStatus = .candidate
+                }
+            }
+        }
+        save(writePlaces: true)
+    }
+
+    func generatedBackgroundRecord(for path: String) -> GeneratedBackgroundLibraryRecord? {
+        let normalized = normalizedCharacterAssetPath(path)
+            ?? projectRelativeCharacterAssetPath(from: path)
+            ?? path
+        return placesWorkflowLibrary.generatedImageRecords.first {
+            $0.activePath == normalized || $0.duplicatePaths.contains(normalized) || $0.priorVersions.contains(where: { $0.path == normalized })
+        }
+    }
+
+    func selectGeneratedBackgroundRecord(for path: String?) {
+        guard let path else {
+            selectedGeneratedBackgroundRecordID = nil
+            return
+        }
+        if let record = generatedBackgroundRecord(for: path) {
+            selectedGeneratedBackgroundRecordID = record.id
+        }
+    }
+
+    func syncGeneratedBackgroundLibrary() {
+        let discoveredPaths = scannedGeneratedBackgroundPaths()
+        guard !discoveredPaths.isEmpty else {
+            if !placesWorkflowLibrary.generatedImageRecords.isEmpty {
+                statusMessage = "Generated background scan found no files, so existing review state was preserved instead of being cleared."
+            }
+            return
+        }
+
+        var records = placesWorkflowLibrary.generatedImageRecords
+        let discoveredSet = Set(discoveredPaths)
+        let discoveredFingerprints = Set(discoveredPaths.compactMap { generatedBackgroundFingerprint(for: $0) })
+        var changed = false
+
+        for index in records.indices {
+            let normalizedActive = normalizedCharacterAssetPath(records[index].activePath) ?? records[index].activePath
+            if records[index].activePath != normalizedActive {
+                records[index].activePath = normalizedActive
+                changed = true
+            }
+            let dedupedDuplicates = Array(Set(records[index].duplicatePaths.compactMap { normalizedCharacterAssetPath($0) ?? $0 }))
+                .filter { $0 != records[index].activePath && discoveredSet.contains($0) }
+            if dedupedDuplicates.sorted() != records[index].duplicatePaths.sorted() {
+                records[index].duplicatePaths = dedupedDuplicates.sorted()
+                changed = true
+            }
+            let normalizedHistory = records[index].priorVersions.map { version -> GeneratedBackgroundVersionRecord in
+                var updated = version
+                updated.path = normalizedCharacterAssetPath(version.path) ?? version.path
+                return updated
+            }
+            if normalizedHistory != records[index].priorVersions {
+                records[index].priorVersions = normalizedHistory
+                changed = true
+            }
+            let fingerprint = generatedBackgroundFingerprint(for: records[index].activePath)
+            if records[index].contentFingerprint != fingerprint {
+                records[index].contentFingerprint = fingerprint
+                changed = true
+            }
+        }
+
+        let survivingRecords = records.filter { record in
+            if discoveredSet.contains(record.activePath) { return true }
+            if record.duplicatePaths.contains(where: { discoveredSet.contains($0) }) { return true }
+            if record.priorVersions.contains(where: { discoveredSet.contains($0.path) }) { return true }
+            if let fingerprint = record.contentFingerprint, discoveredFingerprints.contains(fingerprint) { return true }
+            if shouldPersistGeneratedBackgroundReviewStateRecord(record) { return true }
+            if shouldPersistPlacesWorldMapCanonRecord(record) { return true }
+            return false
+        }
+        if survivingRecords.count != records.count {
+            records = survivingRecords
+            changed = true
+        }
+
+        let mergedRecords = mergeGeneratedBackgroundRecords(records, discoveredSet: discoveredSet)
+        if mergedRecords != records {
+            records = mergedRecords
+            changed = true
+        }
+
+        for path in discoveredPaths {
+            if records.contains(where: { $0.activePath == path || $0.duplicatePaths.contains(path) || $0.priorVersions.contains(where: { $0.path == path }) }) {
+                continue
+            }
+
+            let fingerprint = generatedBackgroundFingerprint(for: path)
+            if let matchIndex = records.firstIndex(where: { $0.contentFingerprint != nil && $0.contentFingerprint == fingerprint }) {
+                let preferred = preferredGeneratedBackgroundPath(records[matchIndex].activePath, path)
+                if preferred == path && records[matchIndex].activePath != path {
+                    if !records[matchIndex].duplicatePaths.contains(records[matchIndex].activePath) {
+                        records[matchIndex].duplicatePaths.append(records[matchIndex].activePath)
+                    }
+                    records[matchIndex].duplicatePaths.removeAll { $0 == path }
+                    records[matchIndex].activePath = path
+                } else if !records[matchIndex].duplicatePaths.contains(path) {
+                    records[matchIndex].duplicatePaths.append(path)
+                }
+                records[matchIndex].updatedAt = Date()
+                changed = true
+                continue
+            }
+
+            let metadata = derivedGeneratedBackgroundMetadata(for: path)
+            let generationMetadata = generationMetadata(for: path)
+            records.append(
+                GeneratedBackgroundLibraryRecord(
+                    activePath: path,
+                    workflow: inferredGeneratedBackgroundWorkflow(for: path),
+                    duplicatePaths: [],
+                    priorVersions: [],
+                    contentFingerprint: fingerprint,
+                    rating: nil,
+                    isRejected: false,
+                    draftEditNotes: "",
+                    editHistory: [],
+                    summary: metadata.summary,
+                    keywords: metadata.keywords,
+                    sourcePrompt: metadata.prompt,
+                    linkedPlaceID: generationMetadata?.placeID,
+                    worldNodeID: generationMetadata?.worldNodeID,
+                    routeID: generationMetadata?.routeID,
+                    cameraPose: generationMetadata?.cameraPose,
+                    mapPoint: generationMetadata?.mapPoint,
+                    mapPlacementStatus: generationMetadata?.mapPlacementStatus
+                        ?? ((generationMetadata?.mapPoint != nil || generationMetadata?.cameraPose != nil) ? .inferred : .unplaced),
+                    buildingAnchorNodeID: generationMetadata?.buildingAnchorNodeID,
+                    orientationState: generationMetadata?.orientationState ?? .unknown,
+                    createdAt: Date(),
+                    updatedAt: Date()
+                )
+            )
+            changed = true
+        }
+
+        if hydrateGeneratedBackgroundSpatialMetadata(&records) {
+            changed = true
+        }
+        if applyGeneratedBackgroundReviewStateOverrides(placesGeneratedReviewStateLibrary, to: &records) {
+            changed = true
+        }
+        if applyPlacesWorldMapCanonOverrides(placesWorldMapCanonLibrary, to: &records) {
+            changed = true
+        }
+
+        if changed {
+            placesWorkflowLibrary.generatedImageRecords = records
+            placesGeneratedReviewStateLibrary = rebuiltGeneratedBackgroundReviewStateLibrary(
+                from: records,
+                existing: placesGeneratedReviewStateLibrary
+            )
+            placesWorldMapCanonLibrary = rebuiltPlacesWorldMapCanonLibrary(
+                from: records,
+                existing: placesWorldMapCanonLibrary
+            )
+            if let selectedGeneratedBackgroundRecordID,
+               !records.contains(where: { $0.id == selectedGeneratedBackgroundRecordID }) {
+                self.selectedGeneratedBackgroundRecordID = nil
+            }
+            save(writePlaces: true)
+        }
+    }
+
+    func setGeneratedBackgroundRating(_ rating: Int?, for recordID: UUID) {
+        guard let index = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let clamped = rating.map { min(max($0, 1), 5) }
+        placesWorkflowLibrary.generatedImageRecords[index].rating = clamped
+        placesWorkflowLibrary.generatedImageRecords[index].updatedAt = Date()
+        persistGeneratedBackgroundReviewStateNow()
+        appendGeneratedBackgroundReviewEvent(action: "set_rating", record: placesWorkflowLibrary.generatedImageRecords[index])
+        save(writePlaces: true)
+    }
+
+    func toggleGeneratedBackgroundRejected(_ recordID: UUID) {
+        guard let index = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        placesWorkflowLibrary.generatedImageRecords[index].isRejected.toggle()
+        placesWorkflowLibrary.generatedImageRecords[index].canonStatus = placesWorkflowLibrary.generatedImageRecords[index].isRejected ? .rejected : .candidate
+        placesWorkflowLibrary.generatedImageRecords[index].updatedAt = Date()
+        persistGeneratedBackgroundReviewStateNow()
+        appendGeneratedBackgroundReviewEvent(action: "toggle_rejected", record: placesWorkflowLibrary.generatedImageRecords[index])
+        save(writePlaces: true)
+    }
+
+    func updateGeneratedBackgroundRejectionNotes(_ notes: String, for recordID: UUID) {
+        guard let index = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        guard placesWorkflowLibrary.generatedImageRecords[index].rejectionNotes != notes else { return }
+        placesWorkflowLibrary.generatedImageRecords[index].rejectionNotes = notes
+        placesWorkflowLibrary.generatedImageRecords[index].updatedAt = Date()
+        persistGeneratedBackgroundReviewStateNow()
+        appendGeneratedBackgroundReviewEvent(action: "set_rejection_notes", record: placesWorkflowLibrary.generatedImageRecords[index])
+        scheduleDebouncedSave(writePlaces: true)
+    }
+
+    func updateGeneratedBackgroundEditNotes(_ notes: String, for recordID: UUID) {
+        guard let index = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        guard placesWorkflowLibrary.generatedImageRecords[index].draftEditNotes != notes else { return }
+        placesWorkflowLibrary.generatedImageRecords[index].draftEditNotes = notes
+        placesWorkflowLibrary.generatedImageRecords[index].updatedAt = Date()
+        persistGeneratedBackgroundReviewStateNow()
+        appendGeneratedBackgroundReviewEvent(action: "set_edit_notes", record: placesWorkflowLibrary.generatedImageRecords[index])
+        scheduleDebouncedSave(writePlaces: true)
+    }
+
+    func queueGeneratedBackgroundEdit(recordID: UUID, workflow: PlaceWorkflowMode) {
+        guard let record = placesWorkflowLibrary.generatedImageRecords.first(where: { $0.id == recordID }) else { return }
+        let instructions = record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instructions.isEmpty else { return }
+
+        if let queueIndex = placesWorkflowLibrary.pendingEditQueue.firstIndex(where: { $0.imageRecordID == recordID }) {
+            placesWorkflowLibrary.pendingEditQueue[queueIndex].instructions = instructions
+            placesWorkflowLibrary.pendingEditQueue[queueIndex].workflow = workflow
+            placesWorkflowLibrary.pendingEditQueue[queueIndex].sourcePath = record.activePath
+            placesWorkflowLibrary.pendingEditQueue[queueIndex].state = .queued
+            placesWorkflowLibrary.pendingEditQueue[queueIndex].lastErrorMessage = nil
+            placesWorkflowLibrary.pendingEditQueue[queueIndex].lastBatchJobID = nil
+        } else {
+            placesWorkflowLibrary.pendingEditQueue.append(
+                PlaceImageEditQueueItem(
+                    imageRecordID: recordID,
+                    sourcePath: record.activePath,
+                    workflow: workflow,
+                    instructions: instructions
+                )
+            )
+        }
+        save(writePlaces: true)
+    }
+
+    func removeGeneratedBackgroundEditQueueItem(_ itemID: UUID) {
+        placesWorkflowLibrary.pendingEditQueue.removeAll { $0.id == itemID }
+        save(writePlaces: true)
+    }
+
+    func pendingGeneratedBackgroundEditQueueItem(for recordID: UUID) -> PlaceImageEditQueueItem? {
+        placesWorkflowLibrary.pendingEditQueue.first { $0.imageRecordID == recordID }
+    }
+
+    func registerPlaceEditBatchJob(_ job: PlaceImageEditBatchJob) {
+        if !placesWorkflowLibrary.editBatchJobs.contains(where: { $0.metadataPath == job.metadataPath || $0.batchName == job.batchName }) {
+            placesWorkflowLibrary.editBatchJobs.append(job)
+            for queueID in job.queueItemIDs {
+                guard let queueIndex = placesWorkflowLibrary.pendingEditQueue.firstIndex(where: { $0.id == queueID }) else { continue }
+                placesWorkflowLibrary.pendingEditQueue[queueIndex].state = .submitted
+                placesWorkflowLibrary.pendingEditQueue[queueIndex].lastSubmittedAt = job.submittedAt
+                placesWorkflowLibrary.pendingEditQueue[queueIndex].lastBatchJobID = job.id
+                placesWorkflowLibrary.pendingEditQueue[queueIndex].lastErrorMessage = nil
+            }
+            save(writePlaces: true)
+        }
+    }
+
+    func dismissPlaceEditBatchJob(_ jobID: UUID) {
+        placesWorkflowLibrary.editBatchJobs.removeAll { $0.id == jobID }
+        save(writePlaces: true)
+    }
+
+    func refreshPlaceEditBatchJobs() {
+        var didChange = false
+        var jobs = placesWorkflowLibrary.editBatchJobs
+
+        for jobIndex in jobs.indices {
+            guard let metadataURL = resolvedCharacterAssetURL(for: jobs[jobIndex].metadataPath)
+                ?? (jobs[jobIndex].metadataPath.hasPrefix("/") ? URL(fileURLWithPath: jobs[jobIndex].metadataPath) : nil),
+                  let data = try? Data(contentsOf: metadataURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+
+            let latestStatus = json["latest_status"] as? [String: Any]
+            let state = (latestStatus?["state"] as? String)
+                ?? (json["batch_state"] as? String)
+                ?? jobs[jobIndex].state
+            if jobs[jobIndex].state != state {
+                jobs[jobIndex].state = state
+                didChange = true
+            }
+
+            jobs[jobIndex].lastCheckedAt = Date()
+            let remoteUpdatedAt = batchStatusDate(latestStatus?["update_time"])
+            if jobs[jobIndex].remoteUpdatedAt != remoteUpdatedAt {
+                jobs[jobIndex].remoteUpdatedAt = remoteUpdatedAt
+                didChange = true
+            }
+            let remoteStartedAt = batchStatusDate(latestStatus?["start_time"])
+            if jobs[jobIndex].remoteStartedAt != remoteStartedAt {
+                jobs[jobIndex].remoteStartedAt = remoteStartedAt
+                didChange = true
+            }
+            let remoteFinishedAt = batchStatusDate(latestStatus?["end_time"])
+            if jobs[jobIndex].remoteFinishedAt != remoteFinishedAt {
+                jobs[jobIndex].remoteFinishedAt = remoteFinishedAt
+                didChange = true
+            }
+
+            let remoteSuccessfulCount = ((latestStatus?["completion_stats"] as? [String: Any])?["successful_count"] as? Int)
+            if jobs[jobIndex].remoteSuccessfulCount != remoteSuccessfulCount {
+                jobs[jobIndex].remoteSuccessfulCount = remoteSuccessfulCount
+                didChange = true
+            }
+
+            if let error = latestStatus?["error"] as? [String: Any] {
+                let message = (error["message"] as? String) ?? (error["details"] as? String)
+                if jobs[jobIndex].lastErrorMessage != message {
+                    jobs[jobIndex].lastErrorMessage = message
+                    didChange = true
+                }
+                for queueID in jobs[jobIndex].queueItemIDs {
+                    guard let queueIndex = placesWorkflowLibrary.pendingEditQueue.firstIndex(where: { $0.id == queueID }) else { continue }
+                    placesWorkflowLibrary.pendingEditQueue[queueIndex].state = .failed
+                    placesWorkflowLibrary.pendingEditQueue[queueIndex].lastErrorMessage = message
+                    didChange = true
+                }
+            }
+
+            let decodedPaths = (latestStatus?["decoded_images"] as? [String] ?? [])
+                .compactMap { normalizedCharacterAssetPath($0) ?? $0 }
+            if jobs[jobIndex].downloadedImagePaths != decodedPaths {
+                jobs[jobIndex].downloadedImagePaths = normalizedCharacterAssetPaths(decodedPaths)
+                didChange = true
+            }
+
+            for path in jobs[jobIndex].downloadedImagePaths {
+                let stem = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+                guard let queueID = UUID(uuidString: stem),
+                      let queueIndex = placesWorkflowLibrary.pendingEditQueue.firstIndex(where: { $0.id == queueID }),
+                      let recordIndex = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == placesWorkflowLibrary.pendingEditQueue[queueIndex].imageRecordID }) else { continue }
+                let item = placesWorkflowLibrary.pendingEditQueue[queueIndex]
+                if item.state == .succeeded { continue }
+                let metadata = generationMetadata(for: path)
+                applyEditedGeneratedBackgroundPath(
+                    path,
+                    prompt: metadata?.prompt,
+                    instructions: item.instructions,
+                    to: placesWorkflowLibrary.generatedImageRecords[recordIndex].id,
+                    clearQueueItemID: queueID
+                )
+                didChange = true
+            }
+        }
+
+        if didChange {
+            placesWorkflowLibrary.editBatchJobs = jobs
+            save(writePlaces: true)
+        }
+    }
+
+    func storeGeneratedBackgroundEditImage(
+        _ data: Data,
+        prompt: String,
+        model: GeminiModel,
+        filenameStem: String,
+        recordID: UUID,
+        workflow: PlaceWorkflowMode,
+        aspectRatio: String,
+        imageSize: String
+    ) throws -> String {
+        let animateURL = try requireAnimateURL()
+        let directory = animateURL
+            .appendingPathComponent("backgrounds")
+            .appendingPathComponent("library-edits")
+            .appendingPathComponent(recordID.uuidString.lowercased())
+            .appendingPathComponent(workflow.rawValue)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+        let storedURL = directory.appendingPathComponent("\(filenameStem)-\(timestamp).png")
+        try data.write(to: storedURL)
+        try writeGenerationMetadata(
+            prompt: prompt,
+            model: model,
+            aspectRatio: aspectRatio,
+            imageSize: imageSize,
+            to: storedURL
+        )
+        let storedPath = projectRelativeCharacterAssetPath(from: storedURL.path)
+            ?? normalizedCharacterAssetPath(storedURL.path)
+            ?? storedURL.path
+        syncGeneratedBackgroundLibrary()
+        return storedPath
+    }
+
+    func submitGeneratedBackgroundEditImmediately(
+        recordID: UUID,
+        workflow: PlaceWorkflowMode? = nil
+    ) async throws {
+        guard isGeminiAllowed() else {
+            throw GeminiImageService.ServiceError.masterSwitchOff
+        }
+        guard let record = placesWorkflowLibrary.generatedImageRecords.first(where: { $0.id == recordID }) else {
+            return
+        }
+        let effectiveWorkflow = workflow ?? record.workflow
+        let instructions = record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instructions.isEmpty else { return }
+        guard let sourceURL = resolvedCharacterAssetURL(for: record.activePath)
+            ?? (record.activePath.hasPrefix("/") ? URL(fileURLWithPath: record.activePath) : nil),
+              let reference = GeminiImageService.referenceImage(from: sourceURL) else {
+            throw GeminiImageService.ServiceError.invalidResponse
+        }
+
+        let prompt = generatedBackgroundEditPrompt(
+            for: record,
+            workflow: effectiveWorkflow,
+            instructions: instructions,
+            useBatchLanguage: false
+        )
+        let aspectRatio = generationMetadata(for: record.activePath)?.aspectRatio ?? workflowConfig(for: effectiveWorkflow).aspectRatio
+        let service = GeminiImageService()
+        let request = GeminiImageService.GenerationRequest(
+            prompt: prompt,
+            referenceImages: [reference],
+            model: .flash,
+            aspectRatio: aspectRatio,
+            imageSize: "2K"
+        )
+        logGeminiAPICall(endpoint: "image-edit", source: "AnimateStore.submitGeneratedBackgroundEditImmediately()")
+        let result = try await service.generate(request: request, apiKey: geminiAPIKey)
+        let storedPath = try storeGeneratedBackgroundEditImage(
+            result.imageData,
+            prompt: prompt,
+            model: .flash,
+            filenameStem: "edit-\(recordID.uuidString.lowercased())",
+            recordID: recordID,
+            workflow: effectiveWorkflow,
+            aspectRatio: aspectRatio,
+            imageSize: "2K"
+        )
+        applyEditedGeneratedBackgroundPath(
+            storedPath,
+            prompt: prompt,
+            instructions: instructions,
+            to: recordID
+        )
+    }
+
+    func submitQueuedGeneratedBackgroundEditBatch(
+        workflow: PlaceWorkflowMode
+    ) async throws -> PlaceImageEditBatchJob {
+        guard isGeminiAllowed() else {
+            throw GeminiImageService.ServiceError.masterSwitchOff
+        }
+
+        let items = placesWorkflowLibrary.pendingEditQueue
+            .filter { $0.workflow == workflow && ($0.state == .queued || $0.state == .failed) }
+            .sorted { $0.queuedAt < $1.queuedAt }
+        guard !items.isEmpty else {
+            throw GeminiBatchService.BatchError.processFailed("No queued \(workflow.displayName.lowercased()) edits to submit.")
+        }
+
+        let animateURL = try requireAnimateURL()
+        let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+        let outputRoot = animateURL
+            .appendingPathComponent("backgrounds")
+            .appendingPathComponent("library-edits")
+            .appendingPathComponent("batches")
+            .appendingPathComponent("\(timestamp)-\(workflow.rawValue)-edits", isDirectory: true)
+        try FileManager.default.createDirectory(at: outputRoot, withIntermediateDirectories: true)
+
+        let prompts = try items.map { item -> GeminiBatchSubmissionPlan.PromptRequest in
+            guard let record = placesWorkflowLibrary.generatedImageRecords.first(where: { $0.id == item.imageRecordID }) else {
+                throw GeminiBatchService.BatchError.processFailed("Queued image record is missing.")
+            }
+            guard let sourceURL = resolvedCharacterAssetURL(for: record.activePath)
+                ?? (record.activePath.hasPrefix("/") ? URL(fileURLWithPath: record.activePath) : nil) else {
+                throw GeminiBatchService.BatchError.processFailed("Missing source image for queued edit.")
+            }
+            let sourcePath = projectRelativeCharacterAssetPath(from: sourceURL.path)
+                ?? normalizedCharacterAssetPath(sourceURL.path)
+                ?? sourceURL.path
+            return GeminiBatchSubmissionPlan.PromptRequest(
+                id: item.id.uuidString.lowercased(),
+                title: URL(fileURLWithPath: record.activePath).deletingPathExtension().lastPathComponent,
+                prompt: generatedBackgroundEditPrompt(
+                    for: record,
+                    workflow: workflow,
+                    instructions: item.instructions,
+                    useBatchLanguage: true
+                ),
+                referencePaths: [sourcePath]
+            )
+        }
+
+        let submissionPlan = GeminiBatchSubmissionPlan(
+            characterName: "Places Library",
+            characterSlug: "places-library",
+            displayName: "Places Library Edits (\(workflow.displayName))",
+            model: .flash,
+            aspectRatio: workflowConfig(for: workflow).aspectRatio,
+            imageSize: "2K",
+            outputRoot: outputRoot,
+            prompts: prompts
+        )
+
+        let service = GeminiBatchService()
+        let submission = try await service.submit(plan: submissionPlan, apiKey: geminiAPIKey)
+        try service.launchWatchdog(metadataPath: submission.metadataPath, apiKey: geminiAPIKey)
+
+        let metadataPath = projectRelativeCharacterAssetPath(from: submission.metadataPath.path)
+            ?? normalizedCharacterAssetPath(submission.metadataPath.path)
+            ?? submission.metadataPath.path
+        let outputRootPath = projectRelativeCharacterAssetPath(from: submission.outputRoot.path)
+            ?? normalizedCharacterAssetPath(submission.outputRoot.path)
+            ?? submission.outputRoot.path
+
+        let job = PlaceImageEditBatchJob(
+            title: "Places Library Edits (\(workflow.displayName))",
+            batchName: submission.batchName,
+            metadataPath: metadataPath,
+            outputRootPath: outputRootPath,
+            state: submission.state,
+            workflow: workflow,
+            promptCount: submission.promptCount,
+            submittedAt: submission.submittedAt,
+            queueItemIDs: items.map(\.id)
+        )
+        registerPlaceEditBatchJob(job)
+        refreshPlaceEditBatchJobs()
+        return job
+    }
+
+    func applyEditedGeneratedBackgroundPath(
+        _ newPath: String,
+        prompt: String?,
+        instructions: String,
+        to recordID: UUID,
+        clearQueueItemID: UUID? = nil
+    ) {
+        guard let recordIndex = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let normalizedNewPath = normalizedCharacterAssetPath(newPath)
+            ?? projectRelativeCharacterAssetPath(from: newPath)
+            ?? newPath
+        let oldPath = placesWorkflowLibrary.generatedImageRecords[recordIndex].activePath
+        guard oldPath != normalizedNewPath else { return }
+
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].priorVersions.insert(
+            GeneratedBackgroundVersionRecord(path: oldPath),
+            at: 0
+        )
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].activePath = normalizedNewPath
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].workflow = inferredGeneratedBackgroundWorkflow(for: normalizedNewPath)
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].updatedAt = Date()
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].editHistory.insert(
+            GeneratedBackgroundEditHistoryEntry(
+                instructions: instructions,
+                sourcePath: oldPath,
+                resultPath: normalizedNewPath,
+                prompt: prompt
+            ),
+            at: 0
+        )
+        if let prompt {
+            let metadata = derivedGeneratedBackgroundMetadata(for: normalizedNewPath, fallbackPrompt: prompt)
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].summary = metadata.summary
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].keywords = metadata.keywords
+            placesWorkflowLibrary.generatedImageRecords[recordIndex].sourcePrompt = prompt
+        }
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].draftEditNotes = ""
+        placesWorkflowLibrary.generatedImageRecords[recordIndex].contentFingerprint = generatedBackgroundFingerprint(for: normalizedNewPath)
+
+        replaceBackgroundReferences(from: oldPath, to: normalizedNewPath)
+
+        if let queueID = clearQueueItemID {
+            placesWorkflowLibrary.pendingEditQueue.removeAll { $0.id == queueID }
+        }
+
+        selectedGeneratedBackgroundRecordID = recordID
+        save(writePlaces: true)
+    }
+
+    private func scannedGeneratedBackgroundPaths() -> [String] {
+        guard let animateURL else { return [] }
+        let backgroundsRoot = animateURL.appendingPathComponent("backgrounds")
+        guard FileManager.default.fileExists(atPath: backgroundsRoot.path) else { return [] }
+
+        let urls = assetManager.listImages(in: backgroundsRoot)
+        var seen: Set<String> = []
+        var results: [String] = []
+
+        for url in urls {
+            let normalized = normalizedCharacterAssetPath(url.path)
+                ?? projectRelativeCharacterAssetPath(from: url.path)
+                ?? url.path
+            guard shouldIncludeInGeneratedBackgroundLibrary(normalized) else { continue }
+            guard seen.insert(normalized).inserted else { continue }
+            results.append(normalized)
+        }
+
+        return results.sorted { lhs, rhs in
+            let lhsRank = generatedBackgroundLibrarySortRank(for: lhs)
+            let rhsRank = generatedBackgroundLibrarySortRank(for: rhs)
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+    }
+
+    private func inferredGeneratedBackgroundWorkflow(for path: String) -> PlaceWorkflowMode {
+        let normalized = path.replacingOccurrences(of: "\\", with: "/").lowercased()
+        if normalized.contains("/animated/") || normalized.contains("-animated-") {
+            return .animated
+        }
+        return .photorealistic
+    }
+
+    private func preferredGeneratedBackgroundPath(_ lhs: String, _ rhs: String) -> String {
+        let lhsRank = generatedBackgroundLibrarySortRank(for: lhs)
+        let rhsRank = generatedBackgroundLibrarySortRank(for: rhs)
+        if lhsRank != rhsRank {
+            return lhsRank < rhsRank ? lhs : rhs
+        }
+        return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending ? lhs : rhs
+    }
+
+    private func generatedBackgroundFingerprint(for path: String) -> String? {
+        guard let resolvedURL = resolvedCharacterAssetURL(for: path)
+            ?? (path.hasPrefix("/") ? URL(fileURLWithPath: path) : nil),
+              let snapshot = fileSnapshot(for: resolvedURL),
+              FileManager.default.fileExists(atPath: resolvedURL.path) else {
+            return nil
+        }
+
+        if let cached = generatedBackgroundFingerprintCache[resolvedURL.path],
+           cached.snapshot == snapshot {
+            return cached.digest
+        }
+
+        guard let data = try? Data(contentsOf: resolvedURL) else { return nil }
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        generatedBackgroundFingerprintCache[resolvedURL.path] = (snapshot, digest)
+        return digest
+    }
+
+    private func derivedGeneratedBackgroundMetadata(
+        for path: String,
+        fallbackPrompt: String? = nil
+    ) -> (summary: String, keywords: [String], prompt: String?) {
+        let metadata = generationMetadata(for: path)
+        let prompt = fallbackPrompt ?? metadata?.prompt
+        let filename = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+
+        let summary: String
+        if let prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let trimmed = prompt.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            summary = String(trimmed.prefix(220))
+        } else {
+            summary = filename.replacingOccurrences(of: "-", with: " ")
+        }
+
+        let rawText = [filename, prompt ?? ""].joined(separator: " ").lowercased()
+        let stopWords: Set<String> = [
+            "the","and","with","from","that","this","into","there","their","about","after","before","while",
+            "photo","image","cinematic","still","frame","shot","create","make","show","realistic","animated",
+            "background","place","town","village","scene","view","using","preserve","same","look"
+        ]
+        let keywords = Array(
+            Set(
+                rawText
+                    .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                    .filter { $0.count > 2 && !stopWords.contains($0) }
+            )
+        )
+        .sorted()
+        .prefix(16)
+
+        return (summary, Array(keywords), prompt)
+    }
+
+    private func replaceBackgroundReferences(from oldPath: String, to newPath: String) {
+        let normalizedOld = normalizedCharacterAssetPath(oldPath) ?? oldPath
+        let normalizedNew = normalizedCharacterAssetPath(newPath) ?? newPath
+
+        if placesWorkflowLibrary.masterMapImagePath == normalizedOld {
+            placesWorkflowLibrary.masterMapImagePath = normalizedNew
+        }
+        for index in placesWorkflowLibrary.landmarkReferences.indices where placesWorkflowLibrary.landmarkReferences[index].imagePath == normalizedOld {
+            placesWorkflowLibrary.landmarkReferences[index].imagePath = normalizedNew
+        }
+
+        for index in backgrounds.indices {
+            backgrounds[index].imagePaths = backgrounds[index].imagePaths.map { $0 == normalizedOld ? normalizedNew : $0 }
+            backgrounds[index].animatedImagePaths = backgrounds[index].animatedImagePaths.map { $0 == normalizedOld ? normalizedNew : $0 }
+            if backgrounds[index].approvedImagePath == normalizedOld {
+                backgrounds[index].approvedImagePath = normalizedNew
+            }
+            if backgrounds[index].animatedApprovedImagePath == normalizedOld {
+                backgrounds[index].animatedApprovedImagePath = normalizedNew
+            }
+            for refIndex in backgrounds[index].referenceImages.indices where backgrounds[index].referenceImages[refIndex].imagePath == normalizedOld {
+                backgrounds[index].referenceImages[refIndex].imagePath = normalizedNew
+            }
+            for angleIndex in backgrounds[index].angleImages.indices where backgrounds[index].angleImages[angleIndex].imagePath == normalizedOld {
+                backgrounds[index].angleImages[angleIndex].imagePath = normalizedNew
+            }
+        }
+
+        for index in placesWorkflowLibrary.worldGraph.nodes.indices {
+            if placesWorkflowLibrary.worldGraph.nodes[index].approvedPhotorealImagePath == normalizedOld {
+                placesWorkflowLibrary.worldGraph.nodes[index].approvedPhotorealImagePath = normalizedNew
+            }
+            if placesWorkflowLibrary.worldGraph.nodes[index].approvedAnimatedImagePath == normalizedOld {
+                placesWorkflowLibrary.worldGraph.nodes[index].approvedAnimatedImagePath = normalizedNew
+            }
+        }
+
+        for index in placesWorkflowLibrary.continuityReviews.indices {
+            if placesWorkflowLibrary.continuityReviews[index].candidateImagePath == normalizedOld {
+                placesWorkflowLibrary.continuityReviews[index].candidateImagePath = normalizedNew
+            }
+            placesWorkflowLibrary.continuityReviews[index].comparedImagePaths = placesWorkflowLibrary.continuityReviews[index].comparedImagePaths.map {
+                $0 == normalizedOld ? normalizedNew : $0
+            }
+        }
+
+        for index in placesWorkflowLibrary.worldGenerationBatches.indices {
+            if placesWorkflowLibrary.worldGenerationBatches[index].metadataPath == normalizedOld {
+                placesWorkflowLibrary.worldGenerationBatches[index].metadataPath = normalizedNew
+            }
+            if placesWorkflowLibrary.worldGenerationBatches[index].outputRootPath == normalizedOld {
+                placesWorkflowLibrary.worldGenerationBatches[index].outputRootPath = normalizedNew
+            }
+            placesWorkflowLibrary.worldGenerationBatches[index].generatedImagePaths = placesWorkflowLibrary.worldGenerationBatches[index].generatedImagePaths.map {
+                $0 == normalizedOld ? normalizedNew : $0
+            }
+        }
+
+        for index in placesWorkflowLibrary.generatedImageRecords.indices {
+            if placesWorkflowLibrary.generatedImageRecords[index].activePath == normalizedOld {
+                placesWorkflowLibrary.generatedImageRecords[index].activePath = normalizedNew
+            }
+            placesWorkflowLibrary.generatedImageRecords[index].duplicatePaths = placesWorkflowLibrary.generatedImageRecords[index].duplicatePaths.map {
+                $0 == normalizedOld ? normalizedNew : $0
+            }
+            placesWorkflowLibrary.generatedImageRecords[index].priorVersions = placesWorkflowLibrary.generatedImageRecords[index].priorVersions.map { version in
+                var updated = version
+                if updated.path == normalizedOld {
+                    updated.path = normalizedNew
+                }
+                return updated
+            }
+        }
+    }
+
+    private func generatedBackgroundEditPrompt(
+        for record: GeneratedBackgroundLibraryRecord,
+        workflow: PlaceWorkflowMode,
+        instructions: String,
+        useBatchLanguage: Bool
+    ) -> String {
+        let config = workflowConfig(for: workflow)
+        let trimmedInstructions = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = record.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keywords = record.keywords.prefix(12).joined(separator: ", ")
+        let bridgeConstraint = generatedBackgroundBridgeConstraint(for: record)
+
+        let workflowLead: String
+        switch workflow {
+        case .photorealistic:
+            workflowLead = "Edit this photoreal cinematic background image. Keep it looking like a real full-frame production still, not a matte painting, illustration, or fantasy concept image."
+        case .animated:
+            workflowLead = "Edit this animated background frame. Preserve the same location continuity and staging while keeping the Amira animated look."
+        }
+
+        return [
+            useBatchLanguage ? "Create an edited replacement for the supplied image." : "Edit the supplied image.",
+            workflowLead,
+            "Preserve the same location, scale, geography, architectural layout, and overall composition unless the notes explicitly request a change.",
+            config.lensDescription.trimmingCharacters(in: .whitespacesAndNewlines),
+            summary.isEmpty ? "" : "Current image summary: \(summary).",
+            keywords.isEmpty ? "" : "Keywords: \(keywords).",
+            bridgeConstraint,
+            "Apply only these requested edits: \(trimmedInstructions)",
+            "Keep human/building/bridge scale believable. Do not introduce mirrored geography, duplicate settlements, or extra structures on the wrong side of the river.",
+            "Return a single final edited image."
+        ]
+        .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        .joined(separator: " ")
+    }
+
+    private func generatedBackgroundBridgeConstraint(for record: GeneratedBackgroundLibraryRecord) -> String {
+        let emphasis = [
+            record.activePath,
+            record.summary,
+            record.sourcePrompt ?? "",
+            record.keywords.joined(separator: " ")
+        ]
+        .joined(separator: " ")
+        .lowercased()
+
+        guard emphasis.contains("bridge") else { return "" }
+        return "Bridge continuity requirement: keep the entire top of the bridge completely flat and open. Remove any raised side stones, parapets, railings, curbs, guard edges, or protective walls from the bridge deck."
+    }
+
+    private func mergeGeneratedBackgroundRecords(
+        _ records: [GeneratedBackgroundLibraryRecord],
+        discoveredSet: Set<String>
+    ) -> [GeneratedBackgroundLibraryRecord] {
+        var merged: [GeneratedBackgroundLibraryRecord] = []
+        var indexByKey: [String: Int] = [:]
+
+        func preferredPlacementStatus(
+            _ lhs: GeneratedBackgroundMapPlacementStatus,
+            _ rhs: GeneratedBackgroundMapPlacementStatus
+        ) -> GeneratedBackgroundMapPlacementStatus {
+            let rank: [GeneratedBackgroundMapPlacementStatus: Int] = [
+                .unplaced: 0,
+                .inferred: 1,
+                .confirmed: 2,
+            ]
+            return (rank[lhs] ?? 0) >= (rank[rhs] ?? 0) ? lhs : rhs
+        }
+
+        func merge(_ incoming: GeneratedBackgroundLibraryRecord, into existing: inout GeneratedBackgroundLibraryRecord) {
+            let preferredPath = preferredGeneratedBackgroundPath(existing.activePath, incoming.activePath)
+            if preferredPath != existing.activePath {
+                var combinedDuplicates = existing.duplicatePaths
+                combinedDuplicates.append(existing.activePath)
+                combinedDuplicates.append(contentsOf: incoming.duplicatePaths)
+                combinedDuplicates.append(incoming.activePath)
+                existing.activePath = preferredPath
+                existing.duplicatePaths = Array(Set(combinedDuplicates))
+            } else {
+                existing.duplicatePaths = Array(Set(existing.duplicatePaths + incoming.duplicatePaths + [incoming.activePath]))
+            }
+
+            existing.duplicatePaths.removeAll { $0 == existing.activePath || !discoveredSet.contains($0) }
+            if existing.rating == nil || (incoming.updatedAt >= existing.updatedAt && incoming.rating != nil) {
+                existing.rating = incoming.rating
+            }
+            if incoming.updatedAt >= existing.updatedAt {
+                existing.isRejected = incoming.isRejected
+            }
+            if incoming.updatedAt >= existing.updatedAt {
+                existing.rejectionNotes = incoming.rejectionNotes
+                existing.draftEditNotes = incoming.draftEditNotes
+            } else {
+                if existing.rejectionNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   !incoming.rejectionNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    existing.rejectionNotes = incoming.rejectionNotes
+                }
+                if existing.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   !incoming.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    existing.draftEditNotes = incoming.draftEditNotes
+                }
+            }
+            if incoming.updatedAt > existing.updatedAt {
+                if !incoming.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    existing.summary = incoming.summary
+                }
+                if !incoming.keywords.isEmpty {
+                    existing.keywords = incoming.keywords
+                }
+                if let prompt = incoming.sourcePrompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    existing.sourcePrompt = prompt
+                }
+            }
+            let mergedPriorVersions = Dictionary(
+                (existing.priorVersions + incoming.priorVersions).map { ($0.path, $0) },
+                uniquingKeysWith: { lhs, rhs in
+                    lhs.supersededAt > rhs.supersededAt ? lhs : rhs
+                }
+            )
+            existing.priorVersions = Array(mergedPriorVersions.values)
+                .sorted { $0.supersededAt > $1.supersededAt }
+
+            var mergedEditHistory: [String: GeneratedBackgroundEditHistoryEntry] = [:]
+            for entry in existing.editHistory {
+                mergedEditHistory[(entry.resultPath ?? "") + "|" + entry.instructions] = entry
+            }
+            for entry in incoming.editHistory {
+                let key = (entry.resultPath ?? "") + "|" + entry.instructions
+                if let current = mergedEditHistory[key] {
+                    mergedEditHistory[key] = current.createdAt > entry.createdAt ? current : entry
+                } else {
+                    mergedEditHistory[key] = entry
+                }
+            }
+            existing.editHistory = Array(mergedEditHistory.values).sorted { $0.createdAt > $1.createdAt }
+            existing.keywords = Array(Set(existing.keywords + incoming.keywords)).sorted()
+            existing.updatedAt = max(existing.updatedAt, incoming.updatedAt)
+            existing.createdAt = min(existing.createdAt, incoming.createdAt)
+            existing.workflow = inferredGeneratedBackgroundWorkflow(for: existing.activePath)
+            existing.contentFingerprint = existing.contentFingerprint ?? incoming.contentFingerprint
+            existing.linkedPlaceID = existing.linkedPlaceID ?? incoming.linkedPlaceID
+            existing.worldNodeID = existing.worldNodeID ?? incoming.worldNodeID
+            existing.routeID = existing.routeID ?? incoming.routeID
+            let winningPlacementStatus = preferredPlacementStatus(existing.mapPlacementStatus, incoming.mapPlacementStatus)
+            if winningPlacementStatus != existing.mapPlacementStatus {
+                existing.mapPlacementStatus = winningPlacementStatus
+            }
+            if winningPlacementStatus == incoming.mapPlacementStatus {
+                existing.cameraPose = incoming.cameraPose ?? existing.cameraPose
+                existing.mapPoint = incoming.mapPoint?.clamped() ?? existing.mapPoint?.clamped()
+                existing.mapPlacementConfirmedAt = incoming.mapPlacementConfirmedAt ?? existing.mapPlacementConfirmedAt
+            } else {
+                existing.cameraPose = existing.cameraPose ?? incoming.cameraPose
+                existing.mapPoint = existing.mapPoint?.clamped() ?? incoming.mapPoint?.clamped()
+                existing.mapPlacementConfirmedAt = existing.mapPlacementConfirmedAt ?? incoming.mapPlacementConfirmedAt
+            }
+            existing.buildingAnchorNodeID = existing.buildingAnchorNodeID ?? incoming.buildingAnchorNodeID
+            if incoming.orientationState != .unknown,
+               (existing.orientationState == .unknown || incoming.updatedAt >= existing.updatedAt) {
+                existing.orientationState = incoming.orientationState
+            }
+            existing.qaFlags = Array(Set(existing.qaFlags + incoming.qaFlags))
+            existing.continuityReviewIDs = Array(Set(existing.continuityReviewIDs + incoming.continuityReviewIDs))
+            let statuses = [existing.canonStatus, incoming.canonStatus]
+            if statuses.contains(.canon) {
+                existing.canonStatus = .canon
+            } else if statuses.contains(.candidate) {
+                existing.canonStatus = .candidate
+            } else if statuses.contains(.rejected) {
+                existing.canonStatus = .rejected
+            } else {
+                existing.canonStatus = .unreviewed
+            }
+        }
+
+        for record in records {
+            let mergeKey = record.contentFingerprint ?? generatedBackgroundFingerprint(for: record.activePath) ?? record.activePath
+            if let existingIndex = indexByKey[mergeKey] {
+                var existing = merged[existingIndex]
+                merge(record, into: &existing)
+                merged[existingIndex] = existing
+            } else {
+                var normalized = record
+                normalized.duplicatePaths = normalized.duplicatePaths.filter { $0 != normalized.activePath && discoveredSet.contains($0) }
+                normalized.workflow = inferredGeneratedBackgroundWorkflow(for: normalized.activePath)
+                if normalized.contentFingerprint == nil {
+                    normalized.contentFingerprint = generatedBackgroundFingerprint(for: normalized.activePath)
+                }
+                merged.append(normalized)
+                indexByKey[mergeKey] = merged.count - 1
+            }
+        }
+
+        return merged
+    }
+
+    private func shouldIncludeInGeneratedBackgroundLibrary(_ path: String) -> Bool {
+        let normalized = path.replacingOccurrences(of: "\\", with: "/").lowercased()
+        guard normalized.contains("/backgrounds/") else { return false }
+
+        if normalized.contains("/backgrounds/inspiration/") {
+            return false
+        }
+        if normalized.contains("/backgrounds/continuity-pack/") {
+            return false
+        }
+        if normalized.contains("/backgrounds/pipeline/catalog/") ||
+            normalized.contains("/backgrounds/pipeline/catalog-snapshots/") ||
+            normalized.contains("/backgrounds/pipeline/matrix/") ||
+            normalized.contains("/backgrounds/pipeline/refs/") {
+            return false
+        }
+
+        if normalized.contains("/backgrounds/places/") ||
+            normalized.contains("/backgrounds/place-batches/") ||
+            normalized.contains("/backgrounds/chosen-references/") ||
+            normalized.contains("/backgrounds/pipeline/tests/") ||
+            normalized.contains("/backgrounds/pipeline/batches/") {
+            return !isCharacterCentricGeneratedBackgroundPath(normalized)
+        }
+
+        return false
+    }
+
+    private func isCharacterCentricGeneratedBackgroundPath(_ normalizedPath: String) -> Bool {
+        let searchable = normalizedPath
+            .replacingOccurrences(of: "_", with: "-")
+            .replacingOccurrences(of: " ", with: "-")
+
+        let explicitCharacterMarkers = [
+            "character-test",
+            "character-study",
+            "character-studies",
+            "costume-test",
+            "costume-study",
+            "portrait",
+            "headshot",
+            "close-up",
+            "closeup",
+            "waist-up",
+            "waistup",
+            "full-body",
+            "fullbody"
+        ]
+        if explicitCharacterMarkers.contains(where: searchable.contains) {
+            return true
+        }
+
+        let actionMarkers = [
+            "enters",
+            "walks",
+            "walking",
+            "runs",
+            "running",
+            "stands",
+            "standing",
+            "falls",
+            "falling",
+            "scene",
+            "continuity-test",
+            "character"
+        ]
+        let characterTerms = knownGeneratedBackgroundCharacterTerms()
+        guard !characterTerms.isEmpty else { return false }
+        guard characterTerms.contains(where: { searchable.contains($0) }) else { return false }
+        return actionMarkers.contains(where: searchable.contains)
+    }
+
+    private func knownGeneratedBackgroundCharacterTerms() -> [String] {
+        let rawTerms = characters.flatMap { [$0.name, $0.owpSlug, $0.assetFolderSlug] }
+        let cleaned = rawTerms
+            .map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                    .replacingOccurrences(of: "_", with: "-")
+                    .replacingOccurrences(of: " ", with: "-")
+            }
+            .filter { !$0.isEmpty }
+        return Array(Set(cleaned)).sorted()
+    }
+
+    private func hydrateGeneratedBackgroundSpatialMetadata(_ records: inout [GeneratedBackgroundLibraryRecord]) -> Bool {
+        var didChange = false
+
+        for index in records.indices {
+            let inferred = inferredGeneratedBackgroundSpatialContext(for: records[index])
+
+            if records[index].linkedPlaceID == nil, let placeID = inferred.placeID {
+                records[index].linkedPlaceID = placeID
+                didChange = true
+            }
+            if records[index].worldNodeID == nil, let worldNodeID = inferred.worldNodeID {
+                records[index].worldNodeID = worldNodeID
+                didChange = true
+            }
+            if records[index].routeID == nil, let routeID = inferred.routeID {
+                records[index].routeID = routeID
+                didChange = true
+            }
+            if records[index].cameraPose == nil, let cameraPose = inferred.cameraPose {
+                records[index].cameraPose = cameraPose
+                didChange = true
+            }
+            if records[index].mapPoint == nil, let mapPoint = inferred.mapPoint {
+                records[index].mapPoint = mapPoint.clamped()
+                if records[index].mapPlacementStatus == .unplaced {
+                    records[index].mapPlacementStatus = .inferred
+                }
+                didChange = true
+            } else if records[index].mapPoint != nil, records[index].mapPlacementStatus == .unplaced {
+                records[index].mapPlacementStatus = .inferred
+                didChange = true
+            }
+            if records[index].buildingAnchorNodeID == nil, let buildingAnchorNodeID = inferred.buildingAnchorNodeID {
+                records[index].buildingAnchorNodeID = buildingAnchorNodeID
+                didChange = true
+            }
+        }
+
+        return didChange
+    }
+
+    private func inferredGeneratedBackgroundSpatialContext(
+        for record: GeneratedBackgroundLibraryRecord
+    ) -> (
+        placeID: UUID?,
+        worldNodeID: UUID?,
+        routeID: UUID?,
+        cameraPose: WorldCameraPose?,
+        mapPoint: WorldMapPoint?,
+        buildingAnchorNodeID: UUID?
+    ) {
+        let candidatePaths = Array(
+            Set(
+                [record.activePath]
+                + record.duplicatePaths
+                + record.priorVersions.map(\.path)
+            )
+        )
+        .compactMap { normalizedCharacterAssetPath($0) ?? projectRelativeCharacterAssetPath(from: $0) ?? $0 }
+        let candidatePathSet = Set(candidatePaths)
+
+        let preferredPlaces: [BackgroundPlate]
+        if let linkedPlaceID = record.linkedPlaceID,
+           let place = backgrounds.first(where: { $0.id == linkedPlaceID }) {
+            preferredPlaces = [place] + backgrounds.filter { $0.id != linkedPlaceID }
+        } else {
+            preferredPlaces = backgrounds
+        }
+
+        for place in preferredPlaces {
+            if let angleImage = place.angleImages.first(where: { angleImage in
+                let normalized = normalizedCharacterAssetPath(angleImage.imagePath)
+                    ?? projectRelativeCharacterAssetPath(from: angleImage.imagePath)
+                    ?? angleImage.imagePath
+                return candidatePaths.contains(normalized)
+            }) {
+                let node = worldNode(for: angleImage.worldNodeID)
+                return (
+                    place.id,
+                    angleImage.worldNodeID ?? node?.id,
+                    angleImage.routeID ?? node?.routeID,
+                    angleImage.cameraPose ?? node?.cameraPose,
+                    angleImage.mapPoint ?? node?.mapPoint,
+                    place.buildingAnchorNodeID
+                        ?? place.linkedExteriorPlaceID.flatMap { exteriorID in
+                            backgrounds.first(where: { $0.id == exteriorID })?.buildingAnchorNodeID
+                        }
+                )
+            }
+
+            let placePaths = Set(
+                (
+                    place.imagePaths
+                    + place.animatedImagePaths
+                    + [place.approvedImagePath, place.animatedApprovedImagePath].compactMap { $0 }
+                )
+                .compactMap { normalizedCharacterAssetPath($0) ?? projectRelativeCharacterAssetPath(from: $0) ?? $0 }
+            )
+
+            guard !candidatePathSet.isDisjoint(with: placePaths) else { continue }
+            let node = worldNodes(placeID: place.id)
+                .sorted { $0.sequenceIndex < $1.sequenceIndex }
+                .first
+            return (
+                place.id,
+                node?.id,
+                node?.routeID,
+                node?.cameraPose,
+                node?.mapPoint,
+                place.buildingAnchorNodeID
+                    ?? place.linkedExteriorPlaceID.flatMap { exteriorID in
+                        backgrounds.first(where: { $0.id == exteriorID })?.buildingAnchorNodeID
+                    }
+            )
+        }
+
+        let semanticKind = semanticGeneratedBackgroundSceneKind(for: record)
+        if semanticKind != .mapReference,
+           let matchedPlace = semanticGeneratedBackgroundPlaceMatch(
+                for: record,
+                preferredPlaces: preferredPlaces,
+                sceneKind: semanticKind
+           ) {
+            let buildingAnchorNodeID = matchedPlace.buildingAnchorNodeID
+                ?? matchedPlace.linkedExteriorPlaceID.flatMap { exteriorID in
+                    backgrounds.first(where: { $0.id == exteriorID })?.buildingAnchorNodeID
+                }
+            let buildingAnchorNode = worldNode(for: buildingAnchorNodeID)
+            let placeNodes = worldNodes(placeID: matchedPlace.id)
+            let uniquePlaceNode = placeNodes.count == 1 ? placeNodes.first : nil
+            let spatialNode = semanticKind == .interior ? buildingAnchorNode : (uniquePlaceNode ?? buildingAnchorNode)
+
+            return (
+                matchedPlace.id,
+                semanticKind == .interior ? nil : spatialNode?.id,
+                semanticKind == .interior ? nil : spatialNode?.routeID,
+                spatialNode?.cameraPose,
+                spatialNode?.mapPoint,
+                buildingAnchorNodeID
+            )
+        }
+
+        let fallbackAnchorNodeID: UUID? = {
+            if let linkedPlaceID = record.linkedPlaceID,
+               let place = backgrounds.first(where: { $0.id == linkedPlaceID }) {
+                return place.buildingAnchorNodeID
+                    ?? place.linkedExteriorPlaceID.flatMap { exteriorID in
+                        backgrounds.first(where: { $0.id == exteriorID })?.buildingAnchorNodeID
+                    }
+            }
+            return record.buildingAnchorNodeID
+        }()
+
+        return (
+            record.linkedPlaceID,
+            record.worldNodeID,
+            record.routeID,
+            record.cameraPose,
+            record.mapPoint,
+            fallbackAnchorNodeID
+        )
+    }
+
+    private enum GeneratedBackgroundSemanticSceneKind {
+        case exterior
+        case interior
+        case mapReference
+        case designStudy
+        case ambiguous
+    }
+
+    private func semanticGeneratedBackgroundSceneKind(
+        for record: GeneratedBackgroundLibraryRecord
+    ) -> GeneratedBackgroundSemanticSceneKind {
+        let text = semanticGeneratedBackgroundText(for: record)
+        let mapTerms = [
+            "master map",
+            "world map",
+            "topdown",
+            "top-down",
+            "bird's-eye",
+            "birds-eye",
+            "satellite view",
+            "orthographic"
+        ]
+        if mapTerms.contains(where: text.contains) {
+            return .mapReference
+        }
+
+        let interiorTerms = [
+            "interior",
+            "room",
+            "back room",
+            "inside",
+            "entryway",
+            "threshold",
+            "home",
+            "clinic treatment",
+            "treatment area",
+            "operations tent",
+            "comms tent",
+            "briefing room",
+            "bunk",
+            "quiet moment"
+        ]
+        if interiorTerms.contains(where: text.contains) {
+            return .interior
+        }
+
+        let designTerms = [
+            "design",
+            "study",
+            "geometry",
+            "profile",
+            "documentary",
+            "hero wide"
+        ]
+        if designTerms.contains(where: text.contains) {
+            return .designStudy
+        }
+
+        return .exterior
+    }
+
+    private func semanticGeneratedBackgroundPlaceMatch(
+        for record: GeneratedBackgroundLibraryRecord,
+        preferredPlaces: [BackgroundPlate],
+        sceneKind: GeneratedBackgroundSemanticSceneKind
+    ) -> BackgroundPlate? {
+        let text = semanticGeneratedBackgroundText(for: record)
+        let stem = URL(fileURLWithPath: record.activePath)
+            .deletingPathExtension()
+            .lastPathComponent
+            .lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+
+        let scored = preferredPlaces.compactMap { place -> (BackgroundPlate, Double)? in
+            let aliases = semanticGeneratedBackgroundPlaceAliases(for: place)
+            let overlapScore = aliases.reduce(0.0) { partial, alias in
+                guard !alias.isEmpty else { return partial }
+                guard text.contains(alias) || stem.contains(alias) else { return partial }
+                return partial + (alias.contains(" ") ? 1.2 : 0.45)
+            }
+
+            var score = overlapScore
+            if sceneKind == .interior, !place.isExteriorLike {
+                score += 0.8
+            } else if sceneKind != .interior, place.isExteriorLike {
+                score += 0.35
+            }
+
+            let loweredPlaceName = place.name.lowercased()
+            if loweredPlaceName.contains("clinic"), text.contains("clinic") { score += 1.0 }
+            if loweredPlaceName.contains("bridge"), text.contains("bridge") { score += 1.0 }
+            if loweredPlaceName.contains("amira"), text.contains("amira") { score += 1.0 }
+            if loweredPlaceName.contains("gathering"), text.contains("gathering") { score += 1.0 }
+            if loweredPlaceName.contains("photo shop") || loweredPlaceName.contains("film shop"),
+               text.contains("photo shop") || text.contains("film shop") || text.contains("photo lab") {
+                score += 1.0
+            }
+
+            return score > 0 ? (place, score) : nil
+        }
+        .sorted { $0.1 > $1.1 }
+
+        guard let best = scored.first else { return nil }
+        let second = scored.dropFirst().first?.1 ?? 0
+        guard best.1 >= 1.2, best.1 >= second + 0.35 else { return nil }
+        return best.0
+    }
+
+    private func semanticGeneratedBackgroundPlaceAliases(for place: BackgroundPlate) -> [String] {
+        var rawValues = [
+            place.name,
+            place.filename,
+            place.notes,
+            place.workflowPromptNotes,
+            place.locationCategory
+        ]
+        rawValues.append(contentsOf: place.referenceImages.map(\.title))
+        rawValues.append(contentsOf: place.referenceImages.map(\.notes))
+
+        let specialAliases = semanticGeneratedBackgroundSpecialAliases(for: place.name)
+        rawValues.append(contentsOf: specialAliases)
+
+        return Array(
+            Set(
+                rawValues
+                    .flatMap { value in
+                        semanticGeneratedBackgroundAliasVariants(for: value)
+                    }
+                    .filter { !$0.isEmpty }
+            )
+        )
+        .sorted()
+    }
+
+    private func semanticGeneratedBackgroundSpecialAliases(for placeName: String) -> [String] {
+        let lowered = placeName.lowercased()
+        var aliases: [String] = []
+        if lowered.contains("amira") && lowered.contains("home") {
+            aliases.append(contentsOf: ["amira home", "amira's home", "home", "quiet moment"])
+        }
+        if lowered.contains("gathering") || lowered.contains("community center") || lowered.contains("mosque") {
+            aliases.append(contentsOf: ["gathering space", "community center", "mosque", "courtyard"])
+        }
+        if lowered.contains("clinic") {
+            aliases.append(contentsOf: ["clinic", "treatment area", "back room", "clinic doorway"])
+        }
+        if lowered.contains("photo shop") || lowered.contains("film shop") {
+            aliases.append(contentsOf: ["photo shop", "film shop", "developing room", "photo lab"])
+        }
+        if lowered.contains("bridge") {
+            aliases.append(contentsOf: ["bridge", "stone bridge", "midspan", "bridge ahead"])
+        }
+        if lowered.contains("shepherd") || lowered.contains("hut") {
+            aliases.append(contentsOf: ["shepherd", "huts", "hillside"])
+        }
+        return aliases
+    }
+
+    private func semanticGeneratedBackgroundAliasVariants(for raw: String) -> [String] {
+        let normalized = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+        guard !normalized.isEmpty else { return [] }
+
+        var variants: Set<String> = [normalized]
+        if normalized.contains("amira s") {
+            variants.insert(normalized.replacingOccurrences(of: "amira s", with: "amira's"))
+        }
+        variants.formUnion(
+            normalized
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+                .filter { $0.count >= 4 }
+        )
+        return Array(variants)
+    }
+
+    private func semanticGeneratedBackgroundText(for record: GeneratedBackgroundLibraryRecord) -> String {
+        [
+            record.activePath,
+            URL(fileURLWithPath: record.activePath).deletingPathExtension().lastPathComponent,
+            record.summary,
+            record.sourcePrompt ?? "",
+            record.keywords.joined(separator: " "),
+            record.rejectionNotes,
+            record.draftEditNotes
+        ]
+        .joined(separator: " ")
+        .lowercased()
+        .replacingOccurrences(of: "_", with: " ")
+        .replacingOccurrences(of: "-", with: " ")
+    }
+
+    private func generatedBackgroundLibrarySortRank(for path: String) -> Int {
+        let normalized = path.replacingOccurrences(of: "\\", with: "/").lowercased()
+        if normalized.contains("/backgrounds/chosen-references/") { return 0 }
+        if normalized.contains("/backgrounds/places/") { return 1 }
+        if normalized.contains("/backgrounds/place-batches/") { return 2 }
+        if normalized.contains("/backgrounds/pipeline/batches/") { return 3 }
+        if normalized.contains("/backgrounds/pipeline/tests/") { return 4 }
+        return 5
+    }
+
+    @discardableResult
+    func attachExistingImageToPlace(
+        path: String,
+        placeID: UUID,
+        workflow: PlaceWorkflowMode = .photorealistic
+    ) -> Bool {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return false }
+        let normalizedPath = normalizedCharacterAssetPath(path)
+            ?? projectRelativeCharacterAssetPath(from: path)
+            ?? path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedPath.isEmpty else { return false }
+
+        appendPlaceImagePath(normalizedPath, to: &backgrounds[index], workflow: workflow)
+        syncGeneratedBackgroundLibrary()
+        save(writePlaces: true)
+        return true
+    }
+
+    @discardableResult
+    func attachDroppedImagesToPlace(
+        urls: [URL],
+        placeID: UUID,
+        workflow: PlaceWorkflowMode = .photorealistic
+    ) -> Bool {
+        guard !urls.isEmpty else { return false }
+        var attachedAny = false
+        for url in urls {
+            let standardized = url.standardizedFileURL
+            if let normalized = normalizedCharacterAssetPath(standardized.path)
+                ?? projectRelativeCharacterAssetPath(from: standardized.path),
+               resolvedCharacterAssetURL(for: normalized) != nil {
+                if attachExistingImageToPlace(path: normalized, placeID: placeID, workflow: workflow) {
+                    attachedAny = true
+                }
+            } else {
+                addImageToPlace(from: standardized, placeID: placeID, workflow: workflow)
+                attachedAny = true
+            }
+        }
+        return attachedAny
+    }
+
     func setApprovedPlaceImage(_ imagePath: String, placeID: UUID) {
+        setApprovedPlaceImage(imagePath, placeID: placeID, workflow: .photorealistic)
+    }
+
+    func setApprovedPlaceImage(_ imagePath: String, placeID: UUID, workflow: PlaceWorkflowMode) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               let normalizedPath = normalizedCharacterAssetPath(imagePath) else { return }
-        backgrounds[index].approvedImagePath = normalizedPath
-        backgrounds[index].filename = URL(fileURLWithPath: normalizedPath).lastPathComponent
-        backgrounds[index].sourceURL = resolvedCharacterAssetURL(for: normalizedPath)
-        save()
+        switch workflow {
+        case .photorealistic:
+            backgrounds[index].approvedImagePath = normalizedPath
+            backgrounds[index].filename = URL(fileURLWithPath: normalizedPath).lastPathComponent
+            backgrounds[index].sourceURL = resolvedCharacterAssetURL(for: normalizedPath)
+        case .animated:
+            backgrounds[index].animatedApprovedImagePath = normalizedPath
+        }
+        save(writePlaces: true)
     }
 
     func removePlaceImage(at imageIndex: Int, placeID: UUID) {
-        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
-              backgrounds[index].imagePaths.indices.contains(imageIndex) else { return }
+        removePlaceImage(at: imageIndex, placeID: placeID, workflow: .photorealistic)
+    }
 
-        let removedPath = backgrounds[index].imagePaths.remove(at: imageIndex)
-        if backgrounds[index].approvedImagePath == removedPath {
-            backgrounds[index].approvedImagePath = backgrounds[index].imagePaths.first
+    func removePlaceImage(at imageIndex: Int, placeID: UUID, workflow: PlaceWorkflowMode) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
+        switch workflow {
+        case .photorealistic:
+            guard backgrounds[index].imagePaths.indices.contains(imageIndex) else { return }
+            let removedPath = backgrounds[index].imagePaths.remove(at: imageIndex)
+            if backgrounds[index].approvedImagePath == removedPath {
+                backgrounds[index].approvedImagePath = backgrounds[index].imagePaths.first
+            }
+            if let approvedPath = backgrounds[index].approvedImagePath {
+                backgrounds[index].filename = URL(fileURLWithPath: approvedPath).lastPathComponent
+                backgrounds[index].sourceURL = resolvedCharacterAssetURL(for: approvedPath)
+            } else {
+                backgrounds[index].filename = ""
+                backgrounds[index].sourceURL = nil
+            }
+        case .animated:
+            guard backgrounds[index].animatedImagePaths.indices.contains(imageIndex) else { return }
+            let removedPath = backgrounds[index].animatedImagePaths.remove(at: imageIndex)
+            if backgrounds[index].animatedApprovedImagePath == removedPath {
+                backgrounds[index].animatedApprovedImagePath = backgrounds[index].animatedImagePaths.first
+            }
         }
-        if let approvedPath = backgrounds[index].approvedImagePath {
-            backgrounds[index].filename = URL(fileURLWithPath: approvedPath).lastPathComponent
-            backgrounds[index].sourceURL = resolvedCharacterAssetURL(for: approvedPath)
-        } else {
-            backgrounds[index].filename = ""
-            backgrounds[index].sourceURL = nil
-        }
-        save()
+        save(writePlaces: true)
     }
 
     func deletePlace(_ placeID: UUID) {
@@ -7222,10 +10730,23 @@ final class AnimateStore {
         for sceneIndex in scenes.indices where scenes[sceneIndex].backgroundID == placeID {
             scenes[sceneIndex].backgroundID = nil
         }
+        let orphanedRouteIDs = Set(placesWorkflowLibrary.worldGraph.routes.filter { $0.placeID == placeID }.map(\.id))
+        let orphanedNodeIDs = Set(placesWorkflowLibrary.worldGraph.nodes.filter { $0.placeID == placeID || orphanedRouteIDs.contains($0.routeID ?? UUID()) }.map(\.id))
+        placesWorkflowLibrary.worldGraph.routes.removeAll { orphanedRouteIDs.contains($0.id) }
+        placesWorkflowLibrary.worldGraph.nodes.removeAll { orphanedNodeIDs.contains($0.id) }
+        placesWorkflowLibrary.continuityReviews.removeAll { orphanedNodeIDs.contains($0.nodeID) }
+        for index in placesWorkflowLibrary.generatedImageRecords.indices where placesWorkflowLibrary.generatedImageRecords[index].linkedPlaceID == placeID {
+            placesWorkflowLibrary.generatedImageRecords[index].linkedPlaceID = nil
+            if orphanedNodeIDs.contains(placesWorkflowLibrary.generatedImageRecords[index].worldNodeID ?? UUID()) {
+                placesWorkflowLibrary.generatedImageRecords[index].worldNodeID = nil
+                placesWorkflowLibrary.generatedImageRecords[index].routeID = nil
+                placesWorkflowLibrary.generatedImageRecords[index].continuityReviewIDs.removeAll()
+            }
+        }
         if selectedBackgroundID == placeID {
             selectedBackgroundID = backgrounds.first?.id
         }
-        save()
+        save(writePlaces: true)
     }
 
     // MARK: - Place Angle Images
@@ -7256,7 +10777,7 @@ final class AnimateStore {
                 backgrounds[index].filename = URL(fileURLWithPath: imagePath).lastPathComponent
                 backgrounds[index].sourceURL = resolvedCharacterAssetURL(for: imagePath)
             }
-            save()
+            save(writePlaces: true)
         } catch {
             statusMessage = "Failed to add angle image: \(error.localizedDescription)"
         }
@@ -7289,7 +10810,7 @@ final class AnimateStore {
         backgrounds[placeIndex].angleImages[angleIndex].angle = angle
         backgrounds[placeIndex].angleImages[angleIndex].timeOfDay = timeOfDay
         backgrounds[placeIndex].angleImages[angleIndex].notes = notes
-        save()
+        save(writePlaces: true)
     }
 
     func removeAngleImage(_ angleImageID: UUID, placeID: UUID) {
@@ -7297,19 +10818,743 @@ final class AnimateStore {
               let angleIndex = backgrounds[placeIndex].angleImages.firstIndex(where: { $0.id == angleImageID }) else { return }
 
         backgrounds[placeIndex].angleImages.remove(at: angleIndex)
-        save()
+        save(writePlaces: true)
     }
 
     func updatePlaceCategory(_ category: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
         backgrounds[index].locationCategory = category
-        save()
+        save(writePlaces: true)
     }
 
     func updatePlaceSceneUsage(_ usage: [String], placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
         backgrounds[index].sceneUsage = usage
-        save()
+        save(writePlaces: true)
+    }
+
+    func addPlaceReferenceImagesFromPicker(placeID: UUID, category: PlaceReferenceImage.Category = .misc) {
+        let panel = NSOpenPanel()
+        panel.title = "Add Place Reference Images"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .webP]
+        panel.begin { [weak self] response in
+            guard response == .OK else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                for url in panel.urls {
+                    self.addPlaceReferenceImage(from: url, placeID: placeID, category: category)
+                }
+            }
+        }
+    }
+
+    func addPlaceReferenceImage(from url: URL, placeID: UUID, category: PlaceReferenceImage.Category = .misc) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              let animateDir = animateURL else { return }
+        do {
+            let storedURL = try assetManager.importBackgroundImage(from: url, animateURL: animateDir)
+            let imagePath = normalizedCharacterAssetPath(storedURL.path) ?? storedURL.path
+            let title = url.deletingPathExtension().lastPathComponent
+            let item = PlaceReferenceImage(title: title, imagePath: imagePath, category: category)
+            if !backgrounds[index].referenceImages.contains(where: { $0.imagePath == imagePath }) {
+                backgrounds[index].referenceImages.append(item)
+            }
+            save(writePlaces: true)
+        } catch {
+            statusMessage = "Failed to add place reference: \(error.localizedDescription)"
+        }
+    }
+
+    func removePlaceReferenceImage(_ referenceID: UUID, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
+        backgrounds[index].referenceImages.removeAll { $0.id == referenceID }
+        save(writePlaces: true)
+    }
+
+    func setMasterPlaceMapFromPicker() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Master Place Map"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .webP, .pdf]
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.urls.first else { return }
+            Task { @MainActor in
+                self?.setMasterPlaceMap(from: url)
+            }
+        }
+    }
+
+    func setMasterPlaceMap(from url: URL) {
+        guard let animateDir = animateURL else { return }
+        do {
+            let storedURL = try assetManager.importBackgroundImage(from: url, animateURL: animateDir)
+            placesWorkflowLibrary.masterMapImagePath = normalizedCharacterAssetPath(storedURL.path) ?? storedURL.path
+            save(writePlaces: true)
+        } catch {
+            statusMessage = "Failed to set master map: \(error.localizedDescription)"
+        }
+    }
+
+    func clearMasterPlaceMap() {
+        placesWorkflowLibrary.masterMapImagePath = nil
+        save(writePlaces: true)
+    }
+
+    @MainActor
+    private func canonicalPlacesMasterMapPath() -> String? {
+        let candidate = "Animate/backgrounds/chosen-references/map/01-master_valley_topdown_map_4k_v5.png"
+        if let normalized = normalizedCharacterAssetPath(candidate),
+           resolvedCharacterAssetURL(for: normalized) != nil {
+            return normalized
+        }
+        return nil
+    }
+
+    @MainActor
+    func effectivePlacesMasterMapPath() -> String? {
+        if let explicit = normalizedCharacterAssetPath(placesWorkflowLibrary.masterMapImagePath) {
+            return explicit
+        }
+        if let canonical = canonicalPlacesMasterMapPath() {
+            return canonical
+        }
+        return inferredPlacesMasterMapRecord()?.activePath
+    }
+
+    @MainActor
+    func inferredPlacesMasterMapRecord() -> GeneratedBackgroundLibraryRecord? {
+        placesWorkflowLibrary.generatedImageRecords
+            .filter { !$0.isRejected }
+            .sorted { lhs, rhs in
+                let lhsScore = inferredPlacesMasterMapScore(lhs)
+                let rhsScore = inferredPlacesMasterMapScore(rhs)
+                if lhsScore != rhsScore {
+                    return lhsScore > rhsScore
+                }
+                if (lhs.rating ?? 0) != (rhs.rating ?? 0) {
+                    return (lhs.rating ?? 0) > (rhs.rating ?? 0)
+                }
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            .first(where: { inferredPlacesMasterMapScore($0) > 0 })
+    }
+
+    @MainActor
+    func useGeneratedImageAsMasterPlaceMap(_ path: String) {
+        let normalized = normalizedCharacterAssetPath(path) ?? path
+        guard !normalized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        placesWorkflowLibrary.masterMapImagePath = normalized
+        save(writePlaces: true)
+    }
+
+    @MainActor
+    private func inferredPlacesMasterMapScore(_ record: GeneratedBackgroundLibraryRecord) -> Int {
+        let path = record.activePath.lowercased()
+        let summary = record.summary.lowercased()
+        let prompt = (record.sourcePrompt ?? "").lowercased()
+        let keywords = Set(record.keywords.map { $0.lowercased() })
+
+        var score = 0
+        if path.contains("/backgrounds/chosen-references/map/") { score += 200 }
+        if path.contains("master_valley_topdown") || path.contains("topdown_map") { score += 120 }
+        if keywords.contains("map") { score += 80 }
+        if keywords.contains("master") { score += 40 }
+        if keywords.contains("topdown") { score += 35 }
+        if summary.contains("map") { score += 25 }
+        if summary.contains("master") { score += 20 }
+        if prompt.contains("topdown") || prompt.contains("master map") { score += 20 }
+        if path.contains("angled") || summary.contains("angled") { score -= 40 }
+        if path.contains("ultrawide") || summary.contains("ultrawide") { score -= 30 }
+        return score
+    }
+
+
+    func addGlobalPlaceReferenceImagesFromPicker(category: PlaceReferenceImage.Category = .landmark) {
+        let panel = NSOpenPanel()
+        panel.title = "Add Global Place References"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .webP]
+        panel.begin { [weak self] response in
+            guard response == .OK else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                for url in panel.urls {
+                    self.addGlobalPlaceReferenceImage(from: url, category: category)
+                }
+            }
+        }
+    }
+
+    func addGlobalPlaceReferenceImage(from url: URL, category: PlaceReferenceImage.Category = .landmark) {
+        guard let animateDir = animateURL else { return }
+        do {
+            let storedURL = try assetManager.importBackgroundImage(from: url, animateURL: animateDir)
+            let imagePath = normalizedCharacterAssetPath(storedURL.path) ?? storedURL.path
+            let item = PlaceReferenceImage(
+                title: url.deletingPathExtension().lastPathComponent,
+                imagePath: imagePath,
+                category: category
+            )
+            if !placesWorkflowLibrary.landmarkReferences.contains(where: { $0.imagePath == imagePath }) {
+                placesWorkflowLibrary.landmarkReferences.append(item)
+            }
+            save(writePlaces: true)
+        } catch {
+            statusMessage = "Failed to add global place reference: \(error.localizedDescription)"
+        }
+    }
+
+    func removeGlobalPlaceReference(_ referenceID: UUID) {
+        placesWorkflowLibrary.landmarkReferences.removeAll { $0.id == referenceID }
+        save(writePlaces: true)
+    }
+
+    @MainActor
+    func refreshSuggestedLandmarkProfiles() {
+        var profiles = placesWorkflowLibrary.landmarkProfiles.map(normalizePlaceLandmarkProfile)
+        var changed = false
+
+        for kind in PlaceLandmarkProfile.Kind.allCases where kind != .custom {
+            let relatedPlaces = landmarkCandidatePlaces(for: kind)
+            let relatedRecords = landmarkCandidateRecords(for: kind)
+            guard !relatedPlaces.isEmpty || !relatedRecords.isEmpty else { continue }
+
+            let profileIndex: Int
+            if let existingIndex = profiles.firstIndex(where: { $0.kind == kind }) {
+                profileIndex = existingIndex
+            } else {
+                profiles.append(
+                    PlaceLandmarkProfile(
+                        title: kind.displayName,
+                        kind: kind
+                    )
+                )
+                profileIndex = profiles.count - 1
+                changed = true
+            }
+
+            var profile = profiles[profileIndex]
+            if profile.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                profile.title = kind.displayName
+                changed = true
+            }
+
+            if profile.exteriorPlaceID == nil,
+               let suggestedExterior = bestExteriorPlace(for: kind)?.id {
+                profile.exteriorPlaceID = suggestedExterior
+                changed = true
+            }
+
+            if profile.exteriorImagePath == nil || profile.exteriorImagePath?.isEmpty == true,
+               let exteriorPath = suggestedExteriorImagePath(for: kind, placeID: profile.exteriorPlaceID) {
+                profile.exteriorImagePath = exteriorPath
+                changed = true
+            }
+
+            if profile.interiorPlaceID == nil,
+               let suggestedInterior = bestInteriorPlace(for: kind)?.id {
+                profile.interiorPlaceID = suggestedInterior
+                changed = true
+            }
+
+            if profile.interiorImagePath == nil || profile.interiorImagePath?.isEmpty == true,
+               let interiorPath = suggestedInteriorImagePath(for: kind, preferredPlaceID: profile.interiorPlaceID) {
+                profile.interiorImagePath = interiorPath
+                changed = true
+            }
+
+            let suggestedGalleryPaths = suggestedLandmarkGalleryImagePaths(for: kind, profile: profile)
+            if profile.galleryImagePaths.isEmpty, !suggestedGalleryPaths.isEmpty {
+                profile.galleryImagePaths = suggestedGalleryPaths
+                changed = true
+            } else {
+                let mergedGalleryPaths = normalizedLandmarkImagePaths(
+                    profile.galleryImagePaths
+                    + [profile.primaryImagePath, profile.exteriorImagePath, profile.interiorImagePath].compactMap { $0 }
+                )
+                if mergedGalleryPaths != profile.galleryImagePaths {
+                    profile.galleryImagePaths = mergedGalleryPaths
+                    changed = true
+                }
+            }
+
+            if (profile.primaryImagePath == nil || profile.primaryImagePath?.isEmpty == true),
+               let suggestedPrimary = profile.exteriorImagePath ?? profile.galleryImagePaths.first {
+                profile.primaryImagePath = suggestedPrimary
+                changed = true
+            }
+
+            if (profile.exteriorImagePath == nil || profile.exteriorImagePath?.isEmpty == true),
+               let fallbackExterior = profile.primaryImagePath ?? profile.galleryImagePaths.first {
+                profile.exteriorImagePath = fallbackExterior
+                changed = true
+            }
+
+            if (profile.mapPoint == nil || profile.anchorNodeID == nil),
+               let anchorPoint = suggestedLandmarkMapPoint(for: kind, profile: profile) {
+                if profile.mapPoint != anchorPoint {
+                    profile.mapPoint = anchorPoint
+                    changed = true
+                }
+                if let exteriorPlaceID = profile.exteriorPlaceID {
+                    let nodeID = upsertWorldPlaceAnchor(
+                        placeID: exteriorPlaceID,
+                        title: profile.title,
+                        mapPoint: anchorPoint,
+                        shouldSave: false
+                    )
+                    if profile.anchorNodeID != nodeID {
+                        profile.anchorNodeID = nodeID
+                        changed = true
+                    }
+                }
+            }
+
+            if let exteriorPlaceID = profile.exteriorPlaceID,
+               let anchorNodeID = profile.anchorNodeID {
+                for interiorPlace in relatedPlaces where isInteriorLandmarkPlace(interiorPlace, for: kind) {
+                    if interiorPlace.linkedExteriorPlaceID != exteriorPlaceID || interiorPlace.buildingAnchorNodeID != anchorNodeID {
+                        setPlaceInteriorLink(
+                            interiorPlace.id,
+                            linkedExteriorPlaceID: exteriorPlaceID,
+                            buildingAnchorNodeID: anchorNodeID,
+                            shouldSave: false
+                        )
+                        changed = true
+                    }
+                }
+            }
+
+            profiles[profileIndex] = normalizePlaceLandmarkProfile(profile)
+        }
+
+        if changed {
+            placesWorkflowLibrary.landmarkProfiles = profiles
+            save(writePlaces: true)
+        }
+    }
+
+    @MainActor
+    func addImagesToLandmarkFromPicker(landmarkID: UUID) {
+        let panel = NSOpenPanel()
+        panel.title = "Add Images To Landmark"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .webP]
+
+        panel.begin { [weak self] response in
+            guard response == .OK else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                for url in panel.urls {
+                    self.addImageToLandmark(from: url, landmarkID: landmarkID)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    func addImageToLandmark(from url: URL, landmarkID: UUID) {
+        guard let animateDir = animateURL else { return }
+
+        do {
+            let storedURL = try assetManager.importBackgroundImage(from: url, animateURL: animateDir)
+            let imagePath = normalizedLandmarkImagePath(storedURL.path) ?? storedURL.path
+            appendLandmarkImagePath(imagePath, landmarkID: landmarkID)
+        } catch {
+            statusMessage = "Failed to add landmark image: \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    func attachDroppedImagesToLandmark(urls: [URL], landmarkID: UUID) -> Bool {
+        guard !urls.isEmpty else { return false }
+        var attachedAny = false
+
+        for url in urls {
+            let standardized = url.standardizedFileURL
+            if let normalized = normalizedCharacterAssetPath(standardized.path)
+                ?? projectRelativeCharacterAssetPath(from: standardized.path)
+                ?? (FileManager.default.fileExists(atPath: standardized.path) ? standardized.path : nil) {
+                appendLandmarkImagePath(normalized, landmarkID: landmarkID)
+                attachedAny = true
+            } else {
+                addImageToLandmark(from: standardized, landmarkID: landmarkID)
+                attachedAny = true
+            }
+        }
+
+        return attachedAny
+    }
+
+    @MainActor
+    func updateLandmarkProfileNotes(_ notes: String, landmarkID: UUID) {
+        guard let index = placesWorkflowLibrary.landmarkProfiles.firstIndex(where: { $0.id == landmarkID }) else { return }
+        placesWorkflowLibrary.landmarkProfiles[index].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
+        save(writePlaces: true)
+    }
+
+    @MainActor
+    func setLandmarkProfileExteriorPlace(_ placeID: UUID?, landmarkID: UUID) {
+        guard let index = placesWorkflowLibrary.landmarkProfiles.firstIndex(where: { $0.id == landmarkID }) else { return }
+        placesWorkflowLibrary.landmarkProfiles[index].exteriorPlaceID = placeID
+        if let placeID,
+           let place = backgrounds.first(where: { $0.id == placeID }),
+           let approvedPath = place.approvedImagePath(for: .photorealistic) ?? place.approvedImagePath {
+            placesWorkflowLibrary.landmarkProfiles[index].exteriorImagePath = approvedPath
+            let currentPrimary = placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath
+            placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths = normalizedLandmarkImagePaths(
+                [approvedPath] + placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths
+            )
+            if currentPrimary == nil || currentPrimary?.isEmpty == true {
+                placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath = approvedPath
+            }
+        }
+        placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
+        refreshSuggestedLandmarkProfiles()
+    }
+
+    @MainActor
+    func setLandmarkProfileInteriorPlace(_ placeID: UUID?, landmarkID: UUID) {
+        guard let index = placesWorkflowLibrary.landmarkProfiles.firstIndex(where: { $0.id == landmarkID }) else { return }
+        placesWorkflowLibrary.landmarkProfiles[index].interiorPlaceID = placeID
+        if let placeID,
+           let place = backgrounds.first(where: { $0.id == placeID }),
+           let approvedPath = place.approvedImagePath(for: .photorealistic) ?? place.approvedImagePath {
+            placesWorkflowLibrary.landmarkProfiles[index].interiorImagePath = approvedPath
+            placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths = normalizedLandmarkImagePaths(
+                [approvedPath] + placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths
+            )
+            if placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath == nil {
+                placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath = approvedPath
+            }
+        }
+        placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
+        refreshSuggestedLandmarkProfiles()
+    }
+
+    @MainActor
+    func setLandmarkProfileExteriorImagePath(_ imagePath: String?, landmarkID: UUID) {
+        guard let index = placesWorkflowLibrary.landmarkProfiles.firstIndex(where: { $0.id == landmarkID }) else { return }
+        let normalizedPath = normalizedLandmarkImagePath(imagePath)
+        placesWorkflowLibrary.landmarkProfiles[index].exteriorImagePath = normalizedPath
+        if let normalizedPath {
+            placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths = normalizedLandmarkImagePaths(
+                [normalizedPath] + placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths
+            )
+            if placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath == nil {
+                placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath = normalizedPath
+            }
+        }
+        placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
+        refreshSuggestedLandmarkProfiles()
+    }
+
+    @MainActor
+    func setLandmarkProfileInteriorImagePath(_ imagePath: String?, landmarkID: UUID) {
+        guard let index = placesWorkflowLibrary.landmarkProfiles.firstIndex(where: { $0.id == landmarkID }) else { return }
+        let normalizedPath = normalizedLandmarkImagePath(imagePath)
+        placesWorkflowLibrary.landmarkProfiles[index].interiorImagePath = normalizedPath
+        if let normalizedPath {
+            placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths = normalizedLandmarkImagePaths(
+                [normalizedPath] + placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths
+            )
+            if placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath == nil {
+                placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath = normalizedPath
+            }
+        }
+        placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
+        refreshSuggestedLandmarkProfiles()
+    }
+
+    @MainActor
+    func setLandmarkProfilePrimaryImagePath(_ imagePath: String?, landmarkID: UUID) {
+        guard let index = placesWorkflowLibrary.landmarkProfiles.firstIndex(where: { $0.id == landmarkID }) else { return }
+        let normalizedPath = normalizedLandmarkImagePath(imagePath)
+        if let normalizedPath {
+            placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths = normalizedLandmarkImagePaths(
+                [normalizedPath] + placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths
+            )
+        }
+        placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath = normalizedPath
+        if normalizedPath != nil {
+            placesWorkflowLibrary.landmarkProfiles[index].exteriorImagePath = normalizedPath
+        }
+        placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
+        refreshSuggestedLandmarkProfiles()
+    }
+
+    @MainActor
+    func appendLandmarkImagePath(_ imagePath: String, landmarkID: UUID) {
+        guard let index = placesWorkflowLibrary.landmarkProfiles.firstIndex(where: { $0.id == landmarkID }) else { return }
+        let normalizedPath = normalizedLandmarkImagePath(imagePath) ?? imagePath
+        placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths = normalizedLandmarkImagePaths(
+            [normalizedPath] + placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths
+        )
+        if placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath == nil
+            || placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath?.isEmpty == true {
+            placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath = normalizedPath
+            placesWorkflowLibrary.landmarkProfiles[index].exteriorImagePath = normalizedPath
+        }
+        placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
+        save(writePlaces: true)
+    }
+
+    @MainActor
+    func removeLandmarkImage(at imageIndex: Int, landmarkID: UUID) {
+        guard let index = placesWorkflowLibrary.landmarkProfiles.firstIndex(where: { $0.id == landmarkID }),
+              placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths.indices.contains(imageIndex) else { return }
+
+        let removedPath = placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths.remove(at: imageIndex)
+        if placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath == removedPath {
+            placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath = placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths.first
+        }
+        if placesWorkflowLibrary.landmarkProfiles[index].exteriorImagePath == removedPath {
+            placesWorkflowLibrary.landmarkProfiles[index].exteriorImagePath = placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath
+        }
+        if placesWorkflowLibrary.landmarkProfiles[index].interiorImagePath == removedPath {
+            placesWorkflowLibrary.landmarkProfiles[index].interiorImagePath = nil
+        }
+        placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
+        save(writePlaces: true)
+    }
+
+    @MainActor
+    func removeLandmarkImages(at offsets: IndexSet, landmarkID: UUID) {
+        guard let index = placesWorkflowLibrary.landmarkProfiles.firstIndex(where: { $0.id == landmarkID }) else { return }
+
+        let removedPaths = offsets.compactMap { offset in
+            placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths.indices.contains(offset)
+                ? placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths[offset]
+                : nil
+        }
+        placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths.remove(atOffsets: offsets)
+        if let primary = placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath,
+           removedPaths.contains(primary) {
+            placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath = placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths.first
+        }
+        if let exterior = placesWorkflowLibrary.landmarkProfiles[index].exteriorImagePath,
+           removedPaths.contains(exterior) {
+            placesWorkflowLibrary.landmarkProfiles[index].exteriorImagePath = placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath
+        }
+        if let interior = placesWorkflowLibrary.landmarkProfiles[index].interiorImagePath,
+           removedPaths.contains(interior) {
+            placesWorkflowLibrary.landmarkProfiles[index].interiorImagePath = nil
+        }
+        placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
+        save(writePlaces: true)
+    }
+
+    @MainActor
+    private func landmarkCandidatePlaces(for kind: PlaceLandmarkProfile.Kind) -> [BackgroundPlate] {
+        backgrounds.filter { place in
+            landmarkKind(for: place.name) == kind
+        }
+    }
+
+    @MainActor
+    private func landmarkCandidateRecords(for kind: PlaceLandmarkProfile.Kind) -> [GeneratedBackgroundLibraryRecord] {
+        placesWorkflowLibrary.generatedImageRecords.filter { record in
+            landmarkKind(forRecord: record) == kind
+        }
+    }
+
+    private func landmarkKind(for placeName: String) -> PlaceLandmarkProfile.Kind? {
+        let lower = placeName.lowercased()
+        if lower.contains("amira") { return .amiraHome }
+        if lower.contains("clinic") { return .clinic }
+        if lower.contains("gathering") { return .gatheringSpace }
+        if lower.contains("bridge") { return .bridge }
+        if lower.contains("market") { return .marketplace }
+        if lower.contains("grave") || lower.contains("memorial") || lower.contains("riverbank") { return .memorial }
+        if lower.contains("riverside") || lower.contains("river road") { return .riverside }
+        if lower.contains("ridge") || lower.contains("mountain valley") { return .ridge }
+        return nil
+    }
+
+    private func landmarkKind(forRecord record: GeneratedBackgroundLibraryRecord) -> PlaceLandmarkProfile.Kind? {
+        let haystack = ([record.activePath, record.summary, record.sourcePrompt] + record.keywords)
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+        if haystack.contains("amira") || haystack.contains("home") { return .amiraHome }
+        if haystack.contains("clinic") { return .clinic }
+        if haystack.contains("gathering") { return .gatheringSpace }
+        if haystack.contains("bridge") { return .bridge }
+        if haystack.contains("market") { return .marketplace }
+        if haystack.contains("grave") || haystack.contains("memorial") || haystack.contains("riverbank") { return .memorial }
+        if haystack.contains("riverside") || haystack.contains("river road") { return .riverside }
+        if haystack.contains("ridge") || haystack.contains("mountain valley") { return .ridge }
+        return nil
+    }
+
+    private func placeNameHasExteriorCue(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return ["street", "road", "bridge", "riverside", "courtyard", "doorway", "market", "overlook", "lane", "edge", "outside", "village to", "valley", "ridge"]
+            .contains { lower.contains($0) }
+    }
+
+    private func placeNameHasInteriorCue(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return ["room", "back room", "tent", "bunk", "night", "later that same night", "quiet moment", "inside", "interior", "pre-dawn", "home", "clinic back room"]
+            .contains { lower.contains($0) }
+    }
+
+    @MainActor
+    private func isInteriorLandmarkPlace(_ place: BackgroundPlate, for kind: PlaceLandmarkProfile.Kind) -> Bool {
+        if placeNameHasInteriorCue(place.name) && !placeNameHasExteriorCue(place.name) {
+            return true
+        }
+        switch kind {
+        case .amiraHome:
+            return !placeNameHasExteriorCue(place.name)
+        case .clinic:
+            return !placeNameHasExteriorCue(place.name)
+        case .gatheringSpace:
+            return place.name.lowercased().contains("evening") || place.name.lowercased().contains("back alleys")
+        default:
+            return false
+        }
+    }
+
+    @MainActor
+    private func bestExteriorPlace(for kind: PlaceLandmarkProfile.Kind) -> BackgroundPlate? {
+        landmarkCandidatePlaces(for: kind)
+            .sorted { lhs, rhs in
+                landmarkExteriorPlaceScore(lhs) > landmarkExteriorPlaceScore(rhs)
+            }
+            .first
+    }
+
+    private func landmarkExteriorPlaceScore(_ place: BackgroundPlate) -> Int {
+        var score = 0
+        if place.approvedImagePath(for: .photorealistic) != nil || place.approvedImagePath != nil { score += 100 }
+        if placeNameHasExteriorCue(place.name) { score += 40 }
+        if placeNameHasInteriorCue(place.name) { score -= 60 }
+        return score
+    }
+
+    @MainActor
+    private func bestInteriorPlace(for kind: PlaceLandmarkProfile.Kind) -> BackgroundPlate? {
+        landmarkCandidatePlaces(for: kind)
+            .filter { isInteriorLandmarkPlace($0, for: kind) }
+            .sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            .first
+    }
+
+    @MainActor
+    private func suggestedExteriorImagePath(
+        for kind: PlaceLandmarkProfile.Kind,
+        placeID: UUID?
+    ) -> String? {
+        if let placeID,
+           let place = backgrounds.first(where: { $0.id == placeID }),
+           let approved = place.approvedImagePath(for: .photorealistic) ?? place.approvedImagePath {
+            return approved
+        }
+        return landmarkCandidateRecords(for: kind)
+            .sorted { lhs, rhs in landmarkRecordScore(lhs, preferredInterior: false) > landmarkRecordScore(rhs, preferredInterior: false) }
+            .first?.activePath
+    }
+
+    @MainActor
+    private func suggestedInteriorImagePath(
+        for kind: PlaceLandmarkProfile.Kind,
+        preferredPlaceID: UUID?
+    ) -> String? {
+        let candidates = landmarkCandidateRecords(for: kind)
+            .sorted { lhs, rhs in landmarkRecordScore(lhs, preferredInterior: true, preferredPlaceID: preferredPlaceID) > landmarkRecordScore(rhs, preferredInterior: true, preferredPlaceID: preferredPlaceID) }
+        return candidates.first?.activePath
+    }
+
+    @MainActor
+    private func suggestedLandmarkGalleryImagePaths(
+        for kind: PlaceLandmarkProfile.Kind,
+        profile: PlaceLandmarkProfile
+    ) -> [String] {
+        let rankedRecords = landmarkCandidateRecords(for: kind)
+            .sorted { lhs, rhs in
+                landmarkRecordScore(lhs, preferredInterior: false, preferredPlaceID: profile.exteriorPlaceID)
+                > landmarkRecordScore(rhs, preferredInterior: false, preferredPlaceID: profile.exteriorPlaceID)
+            }
+            .prefix(8)
+            .map(\.activePath)
+
+        return normalizedLandmarkImagePaths(
+            [profile.primaryImagePath, profile.exteriorImagePath, profile.interiorImagePath].compactMap { $0 }
+            + rankedRecords
+        )
+    }
+
+    private func landmarkRecordScore(
+        _ record: GeneratedBackgroundLibraryRecord,
+        preferredInterior: Bool,
+        preferredPlaceID: UUID? = nil
+    ) -> Int {
+        let lower = ([record.activePath, record.summary, record.sourcePrompt] + record.keywords)
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+        var score = 0
+        if !record.isRejected { score += 80 }
+        score += (record.rating ?? 0) * 20
+        if record.mapPlacementStatus == .confirmed { score += 60 }
+        if preferredPlaceID != nil && record.linkedPlaceID == preferredPlaceID { score += 35 }
+        let interiorCue = ["room", "back room", "lamplight", "treatment_room", "inside", "interior", "tent", "bunk"].contains { lower.contains($0) }
+        if preferredInterior {
+            score += interiorCue ? 50 : -20
+        } else {
+            score += interiorCue ? -40 : 20
+        }
+        return score
+    }
+
+    @MainActor
+    private func suggestedLandmarkMapPoint(
+        for kind: PlaceLandmarkProfile.Kind,
+        profile: PlaceLandmarkProfile
+    ) -> WorldMapPoint? {
+        if let exteriorImagePath = profile.exteriorImagePath,
+           let record = generatedBackgroundRecord(for: exteriorImagePath),
+           let point = record.mapPoint,
+           record.mapPlacementStatus == .confirmed {
+            return point
+        }
+
+        if let exteriorPlaceID = profile.exteriorPlaceID,
+           let place = backgrounds.first(where: { $0.id == exteriorPlaceID }),
+           let approved = place.approvedImagePath(for: .photorealistic) ?? place.approvedImagePath,
+           let record = generatedBackgroundRecord(for: approved),
+           let point = record.mapPoint,
+           record.mapPlacementStatus == .confirmed {
+            return point
+        }
+
+        return landmarkCandidateRecords(for: kind)
+            .filter { $0.mapPlacementStatus == .confirmed && $0.mapPoint != nil }
+            .sorted { lhs, rhs in landmarkRecordScore(lhs, preferredInterior: false) > landmarkRecordScore(rhs, preferredInterior: false) }
+            .first?.mapPoint
+    }
+
+    func updatePlaceWorkflowConfig(_ config: PlaceWorkflowRenderConfig, for workflow: PlaceWorkflowMode) {
+        switch workflow {
+        case .photorealistic:
+            placesWorkflowLibrary.photorealConfig = config
+        case .animated:
+            placesWorkflowLibrary.animatedConfig = config
+        }
+        save(writePlaces: true)
     }
 
     func generateDrawThingsPlaceImage(for placeID: UUID) {
@@ -7375,6 +11620,32 @@ final class AnimateStore {
 
     // MARK: - Private Helpers
 
+    private func appendPlaceImagePath(
+        _ imagePath: String,
+        to place: inout BackgroundPlate,
+        workflow: PlaceWorkflowMode
+    ) {
+        switch workflow {
+        case .photorealistic:
+            if !place.imagePaths.contains(imagePath) {
+                place.imagePaths.append(imagePath)
+            }
+            if place.approvedImagePath == nil {
+                place.approvedImagePath = imagePath
+            }
+            let effectivePath = place.approvedImagePath ?? imagePath
+            place.filename = URL(fileURLWithPath: effectivePath).lastPathComponent
+            place.sourceURL = resolvedCharacterAssetURL(for: effectivePath)
+        case .animated:
+            if !place.animatedImagePaths.contains(imagePath) {
+                place.animatedImagePaths.append(imagePath)
+            }
+            if place.animatedApprovedImagePath == nil {
+                place.animatedApprovedImagePath = imagePath
+            }
+        }
+    }
+
     private func loadBackgrounds(from directoryURL: URL) throws -> [BackgroundPlate] {
         let fm = FileManager.default
         let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "tiff", "webp"]
@@ -7426,11 +11697,1228 @@ final class AnimateStore {
         }
     }
 
+    private func loadPlacesWorkflowLibrary(from animateDir: URL) -> PlacesWorkflowLibrary {
+        let libraryURL = animateDir.appendingPathComponent("places-workflow.json")
+        placesWorldMapCanonLibrary = loadPlacesWorldMapCanonLibrary(from: animateDir)
+        placesGeneratedReviewStateLibrary = loadGeneratedBackgroundReviewStateLibrary(from: animateDir)
+        guard FileManager.default.fileExists(atPath: libraryURL.path),
+              let data = try? Data(contentsOf: libraryURL),
+              var decoded = try? JSONDecoder().decode(PlacesWorkflowLibrary.self, from: data) else {
+            return .init()
+        }
+
+        decoded.masterMapImagePath = normalizedCharacterAssetPath(decoded.masterMapImagePath)
+        decoded.landmarkReferences = decoded.landmarkReferences.map { reference in
+            var updated = reference
+            updated.imagePath = normalizedCharacterAssetPath(reference.imagePath) ?? reference.imagePath
+            return updated
+        }
+        decoded.landmarkProfiles = decoded.landmarkProfiles.map(normalizePlaceLandmarkProfile)
+        decoded.worldGraph = normalizePlaceWorldGraph(decoded.worldGraph)
+        decoded.continuityReviews = decoded.continuityReviews.map(normalizePlaceContinuityReview)
+        decoded.worldGenerationBatches = decoded.worldGenerationBatches.map(normalizePlaceWorldGenerationBatch)
+        decoded.generatedImageRecords = decoded.generatedImageRecords.map { normalizeGeneratedBackgroundRecord($0) }
+        _ = applyGeneratedBackgroundReviewStateOverrides(placesGeneratedReviewStateLibrary, to: &decoded.generatedImageRecords)
+        _ = applyPlacesWorldMapCanonOverrides(placesWorldMapCanonLibrary, to: &decoded.generatedImageRecords)
+        decoded.pendingEditQueue = decoded.pendingEditQueue.map { normalizePlaceEditQueueItem($0) }
+        decoded.editBatchJobs = decoded.editBatchJobs.map { normalizePlaceEditBatchJob($0) }
+        return decoded
+    }
+
+    private func hydratedPlacesWorkflowLibrary(_ library: PlacesWorkflowLibrary) -> PlacesWorkflowLibrary {
+        var updated = library
+        updated.masterMapImagePath = normalizedCharacterAssetPath(library.masterMapImagePath)
+        updated.landmarkReferences = library.landmarkReferences.map { reference in
+            var item = reference
+            item.imagePath = normalizedCharacterAssetPath(reference.imagePath) ?? reference.imagePath
+            return item
+        }
+        updated.landmarkProfiles = library.landmarkProfiles.map(normalizePlaceLandmarkProfile)
+        updated.worldGraph = normalizePlaceWorldGraph(library.worldGraph)
+        updated.continuityReviews = library.continuityReviews.map(normalizePlaceContinuityReview)
+        updated.worldGenerationBatches = library.worldGenerationBatches.map(normalizePlaceWorldGenerationBatch)
+        updated.generatedImageRecords = library.generatedImageRecords.map(normalizeGeneratedBackgroundRecord)
+        _ = applyGeneratedBackgroundReviewStateOverrides(placesGeneratedReviewStateLibrary, to: &updated.generatedImageRecords)
+        _ = applyPlacesWorldMapCanonOverrides(placesWorldMapCanonLibrary, to: &updated.generatedImageRecords)
+        updated.pendingEditQueue = library.pendingEditQueue.map(normalizePlaceEditQueueItem)
+        updated.editBatchJobs = library.editBatchJobs.map(normalizePlaceEditBatchJob)
+        return updated
+    }
+
+    private func persistedPlacesWorkflowLibrary(_ library: PlacesWorkflowLibrary) -> PlacesWorkflowLibrary {
+        var updated = library
+        updated.masterMapImagePath = normalizedCharacterAssetPath(library.masterMapImagePath)
+        updated.landmarkReferences = library.landmarkReferences.map { reference in
+            var item = reference
+            item.imagePath = normalizedCharacterAssetPath(reference.imagePath) ?? reference.imagePath
+            return item
+        }
+        updated.landmarkProfiles = library.landmarkProfiles.map(normalizePlaceLandmarkProfile)
+        updated.worldGraph = normalizePlaceWorldGraph(library.worldGraph)
+        updated.continuityReviews = library.continuityReviews.map(normalizePlaceContinuityReview)
+        updated.worldGenerationBatches = library.worldGenerationBatches.map(normalizePlaceWorldGenerationBatch)
+        updated.generatedImageRecords = library.generatedImageRecords.map(normalizeGeneratedBackgroundRecord)
+        updated.pendingEditQueue = library.pendingEditQueue.map(normalizePlaceEditQueueItem)
+        updated.editBatchJobs = library.editBatchJobs.map(normalizePlaceEditBatchJob)
+        return updated
+    }
+
+    private func placesGeneratedReviewStateURL(in animateDir: URL) -> URL {
+        animateDir.appendingPathComponent("places-generated-review-state.json")
+    }
+
+    private func normalizePlaceLandmarkProfile(_ profile: PlaceLandmarkProfile) -> PlaceLandmarkProfile {
+        var updated = profile
+        updated.title = updated.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.notes = updated.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.exteriorImagePath = normalizedLandmarkImagePath(updated.exteriorImagePath) ?? updated.exteriorImagePath
+        updated.interiorImagePath = normalizedLandmarkImagePath(updated.interiorImagePath) ?? updated.interiorImagePath
+        updated.primaryImagePath = normalizedLandmarkImagePath(updated.primaryImagePath) ?? updated.primaryImagePath
+        updated.galleryImagePaths = normalizedLandmarkImagePaths(
+            updated.galleryImagePaths
+            + [updated.primaryImagePath, updated.exteriorImagePath, updated.interiorImagePath].compactMap { $0 }
+        )
+        if (updated.primaryImagePath == nil || updated.primaryImagePath?.isEmpty == true) {
+            updated.primaryImagePath = updated.exteriorImagePath ?? updated.galleryImagePaths.first
+        }
+        if (updated.exteriorImagePath == nil || updated.exteriorImagePath?.isEmpty == true) {
+            updated.exteriorImagePath = updated.primaryImagePath ?? updated.galleryImagePaths.first
+        }
+        updated.mapPoint = updated.mapPoint?.clamped()
+        return updated
+    }
+
+    private func placesGeneratedReviewEventsURL(in animateDir: URL) -> URL {
+        animateDir.appendingPathComponent("places-generated-review-events.jsonl")
+    }
+
+    private func siblingPreviousJSONURL(for url: URL) -> URL {
+        let directory = url.deletingLastPathComponent()
+        let stem = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        let filename = ext.isEmpty ? "\(stem).previous" : "\(stem).previous.\(ext)"
+        return directory.appendingPathComponent(filename)
+    }
+
+    private func writeProtectedData(_ data: Data, to url: URL) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: url.path) {
+            let previousURL = siblingPreviousJSONURL(for: url)
+            try? fm.removeItem(at: previousURL)
+            try? fm.copyItem(at: url, to: previousURL)
+        }
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func loadGeneratedBackgroundReviewStateLibrary(from animateDir: URL) -> GeneratedBackgroundReviewStateLibrary {
+        let url = placesGeneratedReviewStateURL(in: animateDir)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(GeneratedBackgroundReviewStateLibrary.self, from: data) else {
+            return .init()
+        }
+        return hydratedGeneratedBackgroundReviewStateLibrary(decoded)
+    }
+
+    private func hydratedGeneratedBackgroundReviewStateLibrary(
+        _ library: GeneratedBackgroundReviewStateLibrary
+    ) -> GeneratedBackgroundReviewStateLibrary {
+        GeneratedBackgroundReviewStateLibrary(
+            recordOverrides: library.recordOverrides.map(normalizeGeneratedBackgroundReviewStateRecord)
+        )
+    }
+
+    private func persistedGeneratedBackgroundReviewStateLibrary(
+        _ library: GeneratedBackgroundReviewStateLibrary
+    ) -> GeneratedBackgroundReviewStateLibrary {
+        GeneratedBackgroundReviewStateLibrary(
+            recordOverrides: library.recordOverrides.map(normalizeGeneratedBackgroundReviewStateRecord)
+        )
+    }
+
+    private func placesWorldMapCanonURL(in animateDir: URL) -> URL {
+        animateDir.appendingPathComponent("places-world-map-canon.json")
+    }
+
+    private func loadPlacesWorldMapCanonLibrary(from animateDir: URL) -> PlacesWorldMapCanonLibrary {
+        let canonURL = placesWorldMapCanonURL(in: animateDir)
+        guard FileManager.default.fileExists(atPath: canonURL.path),
+              let data = try? Data(contentsOf: canonURL) else {
+            placesWorldMapCanonRawPayload = [:]
+            return .init()
+        }
+        if let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            placesWorldMapCanonRawPayload = raw
+            if let generatedRecords = raw["generatedRecords"] as? [String: Any] {
+                let overrides = generatedRecords.compactMap { _, value -> GeneratedBackgroundWorldMapCanonRecord? in
+                    guard let entry = value as? [String: Any],
+                          let canonicalPath = trimmedOrNil(entry["stablePath"] as? String)
+                            ?? trimmedOrNil(entry["canonicalPath"] as? String) else {
+                        return nil
+                    }
+                    return GeneratedBackgroundWorldMapCanonRecord(
+                        canonicalPath: canonicalPath,
+                        pathAliases: [],
+                        contentFingerprint: trimmedOrNil(entry["contentFingerprint"] as? String),
+                        linkedPlaceID: uuid(from: entry["linkedPlaceID"]),
+                        worldNodeID: uuid(from: entry["worldNodeID"]),
+                        routeID: uuid(from: entry["routeID"]),
+                        cameraPose: worldCameraPose(from: entry["cameraPose"]),
+                        mapPoint: worldMapPoint(from: entry["mapPoint"]),
+                        mapPlacementStatus: GeneratedBackgroundMapPlacementStatus(
+                            rawValue: trimmedOrNil(entry["mapPlacementStatus"] as? String) ?? ""
+                        ),
+                        mapPlacementConfirmedAt: isoDate(from: entry["mapPlacementConfirmedAt"]),
+                        buildingAnchorNodeID: uuid(from: entry["buildingAnchorNodeID"]),
+                        orientationState: GeneratedBackgroundOrientationState(
+                            rawValue: trimmedOrNil(entry["orientationState"] as? String) ?? ""
+                        ),
+                        updatedAt: isoDate(from: entry["updatedAt"]) ?? Date()
+                    )
+                }
+                let deduped = overrides.reduce(into: [String: GeneratedBackgroundWorldMapCanonRecord]()) { partial, item in
+                    let key = item.contentFingerprint?.lowercased() ?? item.canonicalPath.lowercased()
+                    if let existing = partial[key] {
+                        partial[key] = item.updatedAt > existing.updatedAt ? item : existing
+                    } else {
+                        partial[key] = item
+                    }
+                }.map(\.value)
+                return hydratedPlacesWorldMapCanonLibrary(
+                    PlacesWorldMapCanonLibrary(recordOverrides: deduped)
+                )
+            }
+        }
+        if let decoded = try? JSONDecoder().decode(PlacesWorldMapCanonLibrary.self, from: data) {
+            placesWorldMapCanonRawPayload = [:]
+            return hydratedPlacesWorldMapCanonLibrary(decoded)
+        }
+        placesWorldMapCanonRawPayload = [:]
+        return .init()
+    }
+
+    private func hydratedPlacesWorldMapCanonLibrary(_ library: PlacesWorldMapCanonLibrary) -> PlacesWorldMapCanonLibrary {
+        PlacesWorldMapCanonLibrary(
+            recordOverrides: library.recordOverrides.map(normalizeGeneratedBackgroundWorldMapCanonRecord)
+        )
+    }
+
+    private func persistedPlacesWorldMapCanonLibrary(_ library: PlacesWorldMapCanonLibrary) -> PlacesWorldMapCanonLibrary {
+        PlacesWorldMapCanonLibrary(
+            recordOverrides: library.recordOverrides.map(normalizeGeneratedBackgroundWorldMapCanonRecord)
+        )
+    }
+
+    private func uuid(from value: Any?) -> UUID? {
+        guard let string = trimmedOrNil(value as? String) else { return nil }
+        return UUID(uuidString: string)
+    }
+
+    private func isoDate(from value: Any?) -> Date? {
+        guard let string = trimmedOrNil(value as? String) else { return nil }
+        return ISO8601DateFormatter().date(from: string)
+    }
+
+    private func worldMapPoint(from value: Any?) -> WorldMapPoint? {
+        guard let payload = value as? [String: Any],
+              let x = payload["x"] as? Double ?? (payload["x"] as? NSNumber)?.doubleValue,
+              let y = payload["y"] as? Double ?? (payload["y"] as? NSNumber)?.doubleValue else {
+            return nil
+        }
+        return WorldMapPoint(x: x, y: y).clamped()
+    }
+
+    private func worldCameraPose(from value: Any?) -> WorldCameraPose? {
+        guard let payload = value as? [String: Any] else { return nil }
+        let yaw = payload["yawDegrees"] as? Double ?? (payload["yawDegrees"] as? NSNumber)?.doubleValue ?? 0
+        let pitch = payload["pitchDegrees"] as? Double ?? (payload["pitchDegrees"] as? NSNumber)?.doubleValue ?? 0
+        let roll = payload["rollDegrees"] as? Double ?? (payload["rollDegrees"] as? NSNumber)?.doubleValue ?? 0
+        let focal = payload["focalLengthMM"] as? Double ?? (payload["focalLengthMM"] as? NSNumber)?.doubleValue ?? 35
+        let horizontalFOV = payload["horizontalFOVDegrees"] as? Double ?? (payload["horizontalFOVDegrees"] as? NSNumber)?.doubleValue
+        let verticalFOV = payload["verticalFOVDegrees"] as? Double ?? (payload["verticalFOVDegrees"] as? NSNumber)?.doubleValue
+        return WorldCameraPose(
+            yawDegrees: yaw,
+            pitchDegrees: pitch,
+            rollDegrees: roll,
+            focalLengthMM: focal,
+            horizontalFOVDegrees: horizontalFOV,
+            verticalFOVDegrees: verticalFOV
+        )
+    }
+
+    private func stableWorldMapCanonKey(for path: String) -> String? {
+        guard let relativePath = projectRelativeCharacterAssetPath(from: path) ?? normalizedCharacterAssetPath(path) else {
+            return nil
+        }
+        let normalized = relativePath.lowercased()
+        let digest = Insecure.SHA1.hash(data: Data(normalized.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+            .prefix(12)
+        return "path::\(normalized)#\(digest)"
+    }
+
+    private func stableWorldMapCanonStemKey(for path: String) -> String {
+        "stem::\(URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent.lowercased())"
+    }
+
+    private func normalizeGeneratedBackgroundReviewStateRecord(
+        _ record: GeneratedBackgroundReviewStateRecord
+    ) -> GeneratedBackgroundReviewStateRecord {
+        var updated = record
+        updated.canonicalPath = normalizedCharacterAssetPath(record.canonicalPath) ?? record.canonicalPath
+        updated.pathAliases = Array(
+            Set(
+                record.pathAliases.compactMap { normalizedCharacterAssetPath($0) ?? $0 }
+                    .filter { !$0.isEmpty && $0 != updated.canonicalPath }
+            )
+        ).sorted()
+        updated.rejectionNotes = record.rejectionNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.draftEditNotes = record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let rating = updated.rating {
+            updated.rating = min(max(rating, 1), 5)
+        }
+        return updated
+    }
+
+    private func normalizeGeneratedBackgroundWorldMapCanonRecord(
+        _ record: GeneratedBackgroundWorldMapCanonRecord
+    ) -> GeneratedBackgroundWorldMapCanonRecord {
+        var updated = record
+        updated.canonicalPath = normalizedCharacterAssetPath(record.canonicalPath) ?? record.canonicalPath
+        updated.pathAliases = Array(
+            Set(
+                record.pathAliases.compactMap { normalizedCharacterAssetPath($0) ?? $0 }
+                    .filter { !$0.isEmpty && $0 != updated.canonicalPath }
+            )
+        ).sorted()
+        updated.mapPoint = record.mapPoint?.clamped()
+        if updated.mapPlacementStatus == .confirmed, updated.mapPlacementConfirmedAt == nil {
+            updated.mapPlacementConfirmedAt = updated.updatedAt
+        }
+        return updated
+    }
+
+    private func generatedBackgroundRecordPaths(_ record: GeneratedBackgroundLibraryRecord) -> [String] {
+        Array(
+            Set(
+                [record.activePath]
+                    + record.duplicatePaths
+                    + record.priorVersions.map(\.path)
+            )
+        )
+        .compactMap { normalizedCharacterAssetPath($0) ?? $0 }
+        .filter { !$0.isEmpty }
+        .sorted()
+    }
+
+    private func matchingGeneratedBackgroundReviewStateOverrideIndex(
+        for record: GeneratedBackgroundLibraryRecord,
+        in overrides: [GeneratedBackgroundReviewStateRecord]
+    ) -> Int? {
+        let recordFingerprint = record.contentFingerprint ?? generatedBackgroundFingerprint(for: record.activePath)
+        let recordPaths = Set(generatedBackgroundRecordPaths(record))
+        var bestIndex: Int?
+        var bestScore = Int.min
+        var bestUpdatedAt = Date.distantPast
+
+        for (index, override) in overrides.enumerated() {
+            let overrideFingerprint = override.contentFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let overridePaths = Set([override.canonicalPath] + override.pathAliases)
+            let pathMatches = !recordPaths.isEmpty && !recordPaths.isDisjoint(with: overridePaths)
+            let fingerprintMatches = overrideFingerprint != nil
+                && recordFingerprint != nil
+                && overrideFingerprint == recordFingerprint
+
+            if pathMatches,
+               let overrideFingerprint,
+               let recordFingerprint,
+               overrideFingerprint != recordFingerprint {
+                continue
+            }
+
+            let score: Int
+            if fingerprintMatches {
+                score = pathMatches ? 30 : 20
+            } else if pathMatches {
+                score = 10
+            } else {
+                continue
+            }
+
+            if score > bestScore || (score == bestScore && override.updatedAt > bestUpdatedAt) {
+                bestIndex = index
+                bestScore = score
+                bestUpdatedAt = override.updatedAt
+            }
+        }
+
+        return bestIndex
+    }
+
+    @discardableResult
+    private func applyGeneratedBackgroundReviewStateOverrides(
+        _ library: GeneratedBackgroundReviewStateLibrary,
+        to records: inout [GeneratedBackgroundLibraryRecord]
+    ) -> Bool {
+        guard !library.recordOverrides.isEmpty, !records.isEmpty else { return false }
+        var didChange = false
+
+        for index in records.indices {
+            guard let overrideIndex = matchingGeneratedBackgroundReviewStateOverrideIndex(
+                for: records[index],
+                in: library.recordOverrides
+            ) else { continue }
+            let override = library.recordOverrides[overrideIndex]
+            let recordHasReviewState = shouldPersistGeneratedBackgroundReviewStateRecord(records[index])
+            let shouldApplyReviewOverride = !recordHasReviewState || override.updatedAt >= records[index].updatedAt
+
+            if records[index].contentFingerprint == nil, let fingerprint = override.contentFingerprint {
+                records[index].contentFingerprint = fingerprint
+                didChange = true
+            }
+            if shouldApplyReviewOverride, records[index].rating != override.rating {
+                records[index].rating = override.rating
+                didChange = true
+            }
+            if shouldApplyReviewOverride, records[index].isRejected != override.isRejected {
+                records[index].isRejected = override.isRejected
+                didChange = true
+            }
+            if shouldApplyReviewOverride, records[index].rejectionNotes != override.rejectionNotes {
+                records[index].rejectionNotes = override.rejectionNotes
+                didChange = true
+            }
+            if shouldApplyReviewOverride, records[index].draftEditNotes != override.draftEditNotes {
+                records[index].draftEditNotes = override.draftEditNotes
+                didChange = true
+            }
+            if shouldApplyReviewOverride, override.updatedAt > records[index].updatedAt {
+                records[index].updatedAt = override.updatedAt
+                didChange = true
+            }
+        }
+
+        return didChange
+    }
+
+    private func shouldPersistGeneratedBackgroundReviewStateRecord(
+        _ record: GeneratedBackgroundLibraryRecord
+    ) -> Bool {
+        record.rating != nil
+            || record.isRejected
+            || !record.rejectionNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func shouldPersistGeneratedBackgroundReviewStateOverride(
+        _ record: GeneratedBackgroundReviewStateRecord
+    ) -> Bool {
+        record.rating != nil
+            || record.isRejected
+            || !record.rejectionNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func rebuiltGeneratedBackgroundReviewStateLibrary(
+        from records: [GeneratedBackgroundLibraryRecord],
+        existing: GeneratedBackgroundReviewStateLibrary
+    ) -> GeneratedBackgroundReviewStateLibrary {
+        let existingOverrides = existing.recordOverrides.map(normalizeGeneratedBackgroundReviewStateRecord)
+        var persisted: [GeneratedBackgroundReviewStateRecord] = []
+        var matchedOverrideIndices = Set<Int>()
+
+        for record in records {
+            if let match = matchingGeneratedBackgroundReviewStateOverrideIndex(
+                for: record,
+                in: existingOverrides
+            ) {
+                matchedOverrideIndices.insert(match)
+            }
+        }
+
+        for record in records where shouldPersistGeneratedBackgroundReviewStateRecord(record) {
+            let existingOverride = matchingGeneratedBackgroundReviewStateOverrideIndex(
+                for: record,
+                in: existingOverrides
+            ).map { existingOverrides[$0] }
+
+            let allPaths = Array(
+                Set(
+                    generatedBackgroundRecordPaths(record)
+                        + (existingOverride.map { [$0.canonicalPath] + $0.pathAliases } ?? [])
+                )
+            ).sorted()
+            let canonicalPath = allPaths.first(where: { $0 == record.activePath }) ?? record.activePath
+            let aliases = allPaths.filter { $0 != canonicalPath }
+
+            persisted.append(
+                GeneratedBackgroundReviewStateRecord(
+                    id: existingOverride?.id ?? UUID(),
+                    canonicalPath: canonicalPath,
+                    pathAliases: aliases,
+                    contentFingerprint: record.contentFingerprint ?? existingOverride?.contentFingerprint,
+                    rating: record.rating,
+                    isRejected: record.isRejected,
+                    rejectionNotes: record.rejectionNotes,
+                    draftEditNotes: record.draftEditNotes,
+                    updatedAt: record.updatedAt
+                )
+            )
+        }
+
+        for (index, override) in existingOverrides.enumerated()
+        where !matchedOverrideIndices.contains(index) && shouldPersistGeneratedBackgroundReviewStateOverride(override) {
+            persisted.append(override)
+        }
+
+        return GeneratedBackgroundReviewStateLibrary(
+            recordOverrides: persisted.map(normalizeGeneratedBackgroundReviewStateRecord)
+        )
+    }
+
+    private func persistGeneratedBackgroundReviewStateNow() {
+        guard let animateDir = animateURL else { return }
+        let reviewStateLibrary = rebuiltGeneratedBackgroundReviewStateLibrary(
+            from: placesWorkflowLibrary.generatedImageRecords,
+            existing: placesGeneratedReviewStateLibrary
+        )
+        let normalizedReviewStateLibrary = persistedGeneratedBackgroundReviewStateLibrary(reviewStateLibrary)
+        guard let data = try? JSONEncoder().encode(normalizedReviewStateLibrary) else { return }
+        do {
+            try writeProtectedData(data, to: placesGeneratedReviewStateURL(in: animateDir))
+            placesGeneratedReviewStateLibrary = reviewStateLibrary
+        } catch {
+            statusMessage = "Failed to persist generated review state: \(error.localizedDescription)"
+        }
+    }
+
+    private func appendGeneratedBackgroundReviewEvent(
+        action: String,
+        record: GeneratedBackgroundLibraryRecord
+    ) {
+        guard let animateDir = animateURL else { return }
+        let payload: [String: Any] = [
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "action": action,
+            "recordID": record.id.uuidString.uppercased(),
+            "activePath": record.activePath,
+            "contentFingerprint": record.contentFingerprint as Any,
+            "rating": record.rating as Any,
+            "isRejected": record.isRejected,
+            "rejectionNotes": record.rejectionNotes,
+            "draftEditNotes": record.draftEditNotes,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              var line = String(data: data, encoding: .utf8) else { return }
+        line.append("\n")
+        let url = placesGeneratedReviewEventsURL(in: animateDir)
+        if FileManager.default.fileExists(atPath: url.path),
+           let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            try? handle.seekToEnd()
+            try? handle.write(contentsOf: Data(line.utf8))
+        } else {
+            try? Data(line.utf8).write(to: url, options: .atomic)
+        }
+    }
+
+    private func matchingWorldMapCanonOverrideIndex(
+        for record: GeneratedBackgroundLibraryRecord,
+        in overrides: [GeneratedBackgroundWorldMapCanonRecord]
+    ) -> Int? {
+        let recordFingerprint = record.contentFingerprint ?? generatedBackgroundFingerprint(for: record.activePath)
+        let recordPaths = Set(generatedBackgroundRecordPaths(record))
+        var bestIndex: Int?
+        var bestScore = Int.min
+        var bestUpdatedAt = Date.distantPast
+
+        for (index, override) in overrides.enumerated() {
+            let overrideFingerprint = override.contentFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let overridePaths = Set([override.canonicalPath] + override.pathAliases)
+            let pathMatches = !recordPaths.isEmpty && !recordPaths.isDisjoint(with: overridePaths)
+            let fingerprintMatches = overrideFingerprint != nil
+                && recordFingerprint != nil
+                && overrideFingerprint == recordFingerprint
+
+            if pathMatches,
+               let overrideFingerprint,
+               let recordFingerprint,
+               overrideFingerprint != recordFingerprint {
+                continue
+            }
+
+            let score: Int
+            if fingerprintMatches {
+                score = pathMatches ? 30 : 20
+            } else if pathMatches {
+                score = 10
+            } else {
+                continue
+            }
+
+            if score > bestScore || (score == bestScore && override.updatedAt > bestUpdatedAt) {
+                bestIndex = index
+                bestScore = score
+                bestUpdatedAt = override.updatedAt
+            }
+        }
+
+        return bestIndex
+    }
+
+    @discardableResult
+    private func applyPlacesWorldMapCanonOverrides(
+        _ library: PlacesWorldMapCanonLibrary,
+        to records: inout [GeneratedBackgroundLibraryRecord]
+    ) -> Bool {
+        guard !library.recordOverrides.isEmpty, !records.isEmpty else { return false }
+        var didChange = false
+
+        for index in records.indices {
+            guard let overrideIndex = matchingWorldMapCanonOverrideIndex(
+                for: records[index],
+                in: library.recordOverrides
+            ) else { continue }
+            let override = library.recordOverrides[overrideIndex]
+
+            if records[index].contentFingerprint == nil, let fingerprint = override.contentFingerprint {
+                records[index].contentFingerprint = fingerprint
+                didChange = true
+            }
+
+            if let linkedPlaceID = override.linkedPlaceID, records[index].linkedPlaceID != linkedPlaceID {
+                records[index].linkedPlaceID = linkedPlaceID
+                didChange = true
+            }
+            if let worldNodeID = override.worldNodeID, records[index].worldNodeID != worldNodeID {
+                records[index].worldNodeID = worldNodeID
+                didChange = true
+            }
+            if let routeID = override.routeID, records[index].routeID != routeID {
+                records[index].routeID = routeID
+                didChange = true
+            }
+            if let cameraPose = override.cameraPose, records[index].cameraPose != cameraPose {
+                records[index].cameraPose = cameraPose
+                didChange = true
+            }
+            if let mapPoint = override.mapPoint?.clamped(), records[index].mapPoint != mapPoint {
+                records[index].mapPoint = mapPoint
+                didChange = true
+            }
+            if let status = override.mapPlacementStatus, records[index].mapPlacementStatus != status {
+                records[index].mapPlacementStatus = status
+                didChange = true
+            }
+            if let confirmedAt = override.mapPlacementConfirmedAt,
+               records[index].mapPlacementConfirmedAt != confirmedAt {
+                records[index].mapPlacementConfirmedAt = confirmedAt
+                didChange = true
+            }
+            if let buildingAnchorNodeID = override.buildingAnchorNodeID,
+               records[index].buildingAnchorNodeID != buildingAnchorNodeID {
+                records[index].buildingAnchorNodeID = buildingAnchorNodeID
+                didChange = true
+            }
+            if let orientationState = override.orientationState,
+               records[index].orientationState != orientationState {
+                records[index].orientationState = orientationState
+                didChange = true
+            }
+            if override.updatedAt > records[index].updatedAt {
+                records[index].updatedAt = override.updatedAt
+                didChange = true
+            }
+        }
+
+        return didChange
+    }
+
+    private func shouldPersistPlacesWorldMapCanonRecord(
+        _ record: GeneratedBackgroundLibraryRecord
+    ) -> Bool {
+        record.mapPlacementStatus == .confirmed
+            || record.mapPlacementConfirmedAt != nil
+            || record.orientationState != .unknown
+            || record.buildingAnchorNodeID != nil
+            || record.linkedPlaceID != nil
+            || record.worldNodeID != nil
+            || record.routeID != nil
+    }
+
+    private func rebuiltPlacesWorldMapCanonLibrary(
+        from records: [GeneratedBackgroundLibraryRecord],
+        existing: PlacesWorldMapCanonLibrary
+    ) -> PlacesWorldMapCanonLibrary {
+        let existingOverrides = existing.recordOverrides.map(normalizeGeneratedBackgroundWorldMapCanonRecord)
+        var persisted: [GeneratedBackgroundWorldMapCanonRecord] = []
+
+        for record in records where shouldPersistPlacesWorldMapCanonRecord(record) {
+            let existingOverride = matchingWorldMapCanonOverrideIndex(
+                for: record,
+                in: existingOverrides
+            ).map { existingOverrides[$0] }
+
+            let allPaths = Array(
+                Set(
+                    generatedBackgroundRecordPaths(record)
+                        + (existingOverride.map { [$0.canonicalPath] + $0.pathAliases } ?? [])
+                )
+            ).sorted()
+            let canonicalPath = allPaths.first(where: { $0 == record.activePath }) ?? record.activePath
+            let aliases = allPaths.filter { $0 != canonicalPath }
+
+            persisted.append(
+                GeneratedBackgroundWorldMapCanonRecord(
+                    id: existingOverride?.id ?? UUID(),
+                    canonicalPath: canonicalPath,
+                    pathAliases: aliases,
+                    contentFingerprint: record.contentFingerprint ?? existingOverride?.contentFingerprint,
+                    linkedPlaceID: record.linkedPlaceID ?? existingOverride?.linkedPlaceID,
+                    worldNodeID: record.worldNodeID ?? existingOverride?.worldNodeID,
+                    routeID: record.routeID ?? existingOverride?.routeID,
+                    cameraPose: record.cameraPose ?? existingOverride?.cameraPose,
+                    mapPoint: record.mapPoint ?? existingOverride?.mapPoint,
+                    mapPlacementStatus: record.mapPlacementStatus == .unplaced
+                        ? existingOverride?.mapPlacementStatus
+                        : record.mapPlacementStatus,
+                    mapPlacementConfirmedAt: record.mapPlacementConfirmedAt ?? existingOverride?.mapPlacementConfirmedAt,
+                    buildingAnchorNodeID: record.buildingAnchorNodeID ?? existingOverride?.buildingAnchorNodeID,
+                    orientationState: record.orientationState == .unknown
+                        ? existingOverride?.orientationState
+                        : record.orientationState,
+                    updatedAt: record.updatedAt
+                )
+            )
+        }
+
+        return PlacesWorldMapCanonLibrary(recordOverrides: persisted.map(normalizeGeneratedBackgroundWorldMapCanonRecord))
+    }
+
+    private func normalizePlaceWorldGraph(_ graph: PlaceWorldGraph) -> PlaceWorldGraph {
+        var updated = graph
+        updated.nodes = graph.nodes.map { node in
+            var item = node
+            item.approvedPhotorealImagePath = normalizedCharacterAssetPath(node.approvedPhotorealImagePath)
+                ?? node.approvedPhotorealImagePath
+            item.approvedAnimatedImagePath = normalizedCharacterAssetPath(node.approvedAnimatedImagePath)
+                ?? node.approvedAnimatedImagePath
+            return item
+        }
+        return updated
+    }
+
+    private func matchingWorldGenerationBatchIndex(
+        for batch: PlaceWorldGenerationBatch,
+        in batches: [PlaceWorldGenerationBatch]
+    ) -> Int? {
+        if let idMatch = batches.firstIndex(where: { $0.id == batch.id }) {
+            return idMatch
+        }
+
+        let incomingKey = placeWorldGenerationBatchMergeKey(batch)
+        return batches.firstIndex { placeWorldGenerationBatchMergeKey($0) == incomingKey }
+    }
+
+    private func placeWorldGenerationBatchMergeKey(_ batch: PlaceWorldGenerationBatch) -> String {
+        if let metadataPath = trimmedOrNil(batch.metadataPath) {
+            return "meta:\(normalizedCharacterAssetPath(metadataPath) ?? metadataPath)"
+        }
+        if let outputRootPath = trimmedOrNil(batch.outputRootPath) {
+            return "root:\(normalizedCharacterAssetPath(outputRootPath) ?? outputRootPath)"
+        }
+        if let batchName = trimmedOrNil(batch.batchName) {
+            return "batch:\(batchName.lowercased())"
+        }
+        return "title:\(batch.routeID?.uuidString ?? "nil")|\(batch.placeID?.uuidString ?? "nil")|\(batch.workflow.rawValue)|\(batch.title.lowercased())|\(Int(batch.submittedAt.timeIntervalSince1970))"
+    }
+
+    private func mergedPlaceWorldGenerationBatch(
+        existing: PlaceWorldGenerationBatch,
+        incoming: PlaceWorldGenerationBatch
+    ) -> PlaceWorldGenerationBatch {
+        var updated = existing
+        updated.routeID = incoming.routeID ?? existing.routeID
+        updated.placeID = incoming.placeID ?? existing.placeID
+        updated.workflow = incoming.workflow
+        if !incoming.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updated.title = incoming.title
+        }
+        if !incoming.state.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updated.state = incoming.state
+        }
+        if let batchName = trimmedOrNil(incoming.batchName) {
+            updated.batchName = batchName
+        }
+        if !incoming.nodeIDs.isEmpty {
+            updated.nodeIDs = incoming.nodeIDs
+        }
+        if incoming.promptCount > 0 || updated.promptCount == 0 {
+            updated.promptCount = incoming.promptCount
+        }
+        if !incoming.imageSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            updated.imageSize = incoming.imageSize
+        }
+        updated.aspectRatio = trimmedOrNil(incoming.aspectRatio) ?? updated.aspectRatio
+        updated.model = incoming.model
+        updated.submittedAt = min(existing.submittedAt, incoming.submittedAt)
+        updated.lastCheckedAt = incoming.lastCheckedAt ?? updated.lastCheckedAt
+        updated.remoteUpdatedAt = incoming.remoteUpdatedAt ?? updated.remoteUpdatedAt
+        updated.remoteStartedAt = incoming.remoteStartedAt ?? updated.remoteStartedAt
+        updated.remoteFinishedAt = incoming.remoteFinishedAt ?? updated.remoteFinishedAt
+        updated.successCount = max(existing.successCount, incoming.successCount)
+        updated.failureCount = max(existing.failureCount, incoming.failureCount)
+        if let lastErrorMessage = trimmedOrNil(incoming.lastErrorMessage) {
+            updated.lastErrorMessage = lastErrorMessage
+        }
+        if !incoming.failures.isEmpty {
+            updated.failures = incoming.failures
+        }
+        if let metadataPath = trimmedOrNil(incoming.metadataPath) {
+            updated.metadataPath = metadataPath
+        }
+        if let outputRootPath = trimmedOrNil(incoming.outputRootPath) {
+            updated.outputRootPath = outputRootPath
+        }
+        updated.generatedImagePaths = normalizedCharacterAssetPaths(
+            existing.generatedImagePaths + incoming.generatedImagePaths
+        )
+        return normalizePlaceWorldGenerationBatch(updated)
+    }
+
+    private func mergePlaceWorldGenerationBatches(
+        existing: [PlaceWorldGenerationBatch],
+        discovered: [PlaceWorldGenerationBatch]
+    ) -> [PlaceWorldGenerationBatch] {
+        var mergedByKey: [String: PlaceWorldGenerationBatch] = [:]
+        var insertionOrder: [String] = []
+
+        func merge(_ batch: PlaceWorldGenerationBatch) {
+            let key = placeWorldGenerationBatchMergeKey(batch)
+            guard let current = mergedByKey[key] else {
+                insertionOrder.append(key)
+                mergedByKey[key] = normalizePlaceWorldGenerationBatch(batch)
+                return
+            }
+            mergedByKey[key] = mergedPlaceWorldGenerationBatch(existing: current, incoming: batch)
+        }
+
+        existing.forEach(merge)
+        discovered.forEach(merge)
+
+        return insertionOrder.compactMap { mergedByKey[$0] }
+            .sorted { lhs, rhs in
+                if lhs.submittedAt != rhs.submittedAt {
+                    return lhs.submittedAt > rhs.submittedAt
+                }
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+    }
+
+    private func discoveredPlaceWorldGenerationBatchesOnDisk() -> [PlaceWorldGenerationBatch] {
+        guard let animateURL else { return [] }
+        let batchesRoot = animateURL
+            .appendingPathComponent("backgrounds")
+            .appendingPathComponent("place-batches")
+        guard let enumerator = FileManager.default.enumerator(
+            at: batchesRoot,
+            includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var discovered: [PlaceWorldGenerationBatch] = []
+        for case let fileURL as URL in enumerator {
+            guard fileURL.lastPathComponent == "batch_submission.json",
+                  let relativeMetadataPath = projectRelativePath(for: fileURL, projectURL: fileOWPURL),
+                  let data = try? Data(contentsOf: fileURL),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+
+            let latestStatus = json["latest_status"] as? [String: Any]
+            let displayName = trimmedOrNil((latestStatus?["display_name"] as? String) ?? (json["display_name"] as? String))
+            let title = displayName ?? fileURL.deletingLastPathComponent().lastPathComponent
+            let routeID = uuidValue(from: json["route_id"] ?? json["routeID"])
+            let placeID = uuidValue(from: json["place_id"] ?? json["placeID"])
+            let nodeIDs = uuidValues(from: json["node_ids"] ?? json["nodeIDs"])
+            let outputRootPath = projectRelativePath(
+                for: fileURL.deletingLastPathComponent(),
+                projectURL: fileOWPURL
+            ) ?? relativeMetadataPath
+            let model = GeminiModel(rawValue: (json["model"] as? String) ?? "") ?? .flash
+            let workflow = inferredPlaceWorldBatchWorkflow(from: fileURL, json: json)
+            let resultsSummary = placeWorldGenerationBatchResultsSummary(
+                from: json,
+                batch: PlaceWorldGenerationBatch(
+                    routeID: routeID,
+                    placeID: placeID,
+                    workflow: workflow,
+                    title: title,
+                    metadataPath: relativeMetadataPath,
+                    outputRootPath: outputRootPath
+                )
+            )
+
+            discovered.append(
+                PlaceWorldGenerationBatch(
+                    routeID: routeID,
+                    placeID: placeID,
+                    workflow: workflow,
+                    title: title,
+                    state: (latestStatus?["state"] as? String) ?? (json["batch_state"] as? String) ?? "JOB_STATE_PENDING",
+                    batchName: trimmedOrNil((latestStatus?["batch_name"] as? String) ?? (json["batch_name"] as? String)),
+                    nodeIDs: nodeIDs,
+                    promptCount: (json["prompt_count"] as? Int) ?? resultsSummary.rowCount,
+                    imageSize: (json["image_size"] as? String)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "1K",
+                    aspectRatio: trimmedOrNil(json["aspect_ratio"] as? String),
+                    model: model,
+                    submittedAt: batchStatusDate(json["submitted_at"])
+                        ?? batchStatusDate(json["last_status_check"])
+                        ?? (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                        ?? Date(),
+                    lastCheckedAt: batchStatusDate(json["last_status_check"]),
+                    remoteUpdatedAt: batchStatusDate(latestStatus?["update_time"]),
+                    remoteStartedAt: batchStatusDate(latestStatus?["start_time"]),
+                    remoteFinishedAt: batchStatusDate(latestStatus?["end_time"]),
+                    successCount: resultsSummary.successCount,
+                    failureCount: resultsSummary.errorCount,
+                    lastErrorMessage: trimmedOrNil(
+                        ((latestStatus?["error"] as? [String: Any])?["message"] as? String)
+                        ?? ((latestStatus?["error"] as? [String: Any])?["details"] as? String)
+                        ?? resultsSummary.failures.first?.message
+                    ),
+                    failures: resultsSummary.failures,
+                    metadataPath: relativeMetadataPath,
+                    outputRootPath: outputRootPath,
+                    generatedImagePaths: resultsSummary.decodedImagePaths
+                )
+            )
+        }
+
+        return discovered
+    }
+
+    private func inferredPlaceWorldBatchWorkflow(
+        from metadataURL: URL,
+        json: [String: Any]
+    ) -> PlaceWorkflowMode {
+        if let rawWorkflow = trimmedOrNil((json["workflow"] as? String) ?? (json["workflow_mode"] as? String)),
+           let workflow = PlaceWorkflowMode(rawValue: rawWorkflow) {
+            return workflow
+        }
+
+        let components = metadataURL.deletingLastPathComponent().pathComponents.map { $0.lowercased() }
+        if components.contains("animated") || components.contains("animation") {
+            return .animated
+        }
+        return .photorealistic
+    }
+
+    private func uuidValue(from rawValue: Any?) -> UUID? {
+        switch rawValue {
+        case let uuid as UUID:
+            return uuid
+        case let string as String:
+            return UUID(uuidString: string.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
+    }
+
+    private func uuidValues(from rawValue: Any?) -> [UUID] {
+        guard let values = rawValue as? [Any] else { return [] }
+        return values.compactMap { uuidValue(from: $0) }
+    }
+
+    private func placeWorldGenerationBatchResultsSummary(
+        from json: [String: Any],
+        batch: PlaceWorldGenerationBatch
+    ) -> PlaceWorldGenerationBatchResultsSummary {
+        let latestStatus = json["latest_status"] as? [String: Any]
+        let downloadedResultsFile = trimmedOrNil(latestStatus?["downloaded_results_file"] as? String)
+        let resultsURL = downloadedResultsFile.flatMap { path in
+            resolvedCharacterAssetURL(for: path) ?? (path.hasPrefix("/") ? URL(fileURLWithPath: path) : nil)
+        }
+        let parsedResultsFile = resultsURL.flatMap { parsedPlaceWorldGenerationBatchResultsFile(at: $0, batch: batch) }
+
+        let summary = latestStatus?["result_summary"] as? [String: Any]
+        let metadataFailures: [PlaceWorldGenerationBatchFailure] = (summary?["errors"] as? [[String: Any]] ?? []).map { item in
+            PlaceWorldGenerationBatchFailure(
+                key: (item["key"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "row",
+                message: (item["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Unknown batch error",
+                code: item["code"] as? Int
+            )
+        }
+
+        let decodedPaths = normalizedCharacterAssetPaths(
+            (latestStatus?["decoded_images"] as? [String] ?? [])
+                .compactMap { normalizedCharacterAssetPath($0) ?? $0 }
+        )
+
+        let successCount = (summary?["success_count"] as? Int)
+            ?? ((latestStatus?["completion_stats"] as? [String: Any])?["successful_count"] as? Int)
+            ?? parsedResultsFile?.successCount
+            ?? decodedPaths.count
+        let errorCount = (summary?["error_count"] as? Int)
+            ?? parsedResultsFile?.errorCount
+            ?? metadataFailures.count
+        let failures = metadataFailures.isEmpty ? (parsedResultsFile?.failures ?? []) : metadataFailures
+        let imagePaths = decodedPaths.isEmpty ? (parsedResultsFile?.decodedImagePaths ?? []) : decodedPaths
+        let rowCount = (summary?["row_count"] as? Int)
+            ?? parsedResultsFile?.rowCount
+            ?? max(batch.promptCount, successCount + errorCount)
+
+        return PlaceWorldGenerationBatchResultsSummary(
+            rowCount: rowCount,
+            successCount: successCount,
+            errorCount: errorCount,
+            failures: failures,
+            decodedImagePaths: imagePaths
+        )
+    }
+
+    private func parsedPlaceWorldGenerationBatchResultsFile(
+        at resultsURL: URL,
+        batch: PlaceWorldGenerationBatch
+    ) -> PlaceWorldGenerationBatchResultsSummary? {
+        guard let contents = try? String(contentsOf: resultsURL, encoding: .utf8) else {
+            return nil
+        }
+
+        let outputRootURL: URL? = {
+            guard let outputRootPath = batch.outputRootPath else { return nil }
+            return resolvedCharacterAssetURL(for: outputRootPath)
+                ?? (outputRootPath.hasPrefix("/") ? URL(fileURLWithPath: outputRootPath) : nil)
+        }()
+
+        var rowCount = 0
+        var successCount = 0
+        var failures: [PlaceWorldGenerationBatchFailure] = []
+        var decodedImagePaths: [String] = []
+
+        for line in contents.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  let data = trimmed.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+
+            rowCount += 1
+            let rowKey = ((json["key"] as? String) ?? "row")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if let error = json["error"] as? [String: Any] {
+                failures.append(
+                    PlaceWorldGenerationBatchFailure(
+                        key: rowKey,
+                        message: (error["message"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                            ?? (error["details"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                            ?? "Unknown batch error",
+                        code: error["code"] as? Int
+                    )
+                )
+                continue
+            }
+
+            guard json["response"] != nil else { continue }
+            successCount += 1
+
+            guard let outputRootURL else { continue }
+            let fileExtension = placeWorldGenerationBatchResultFileExtension(from: json)
+            let fileURL = outputRootURL
+                .appendingPathComponent("results")
+                .appendingPathComponent(rowKey)
+                .appendingPathExtension(fileExtension)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { continue }
+            decodedImagePaths.append(projectRelativeCharacterAssetPath(from: fileURL.path) ?? fileURL.path)
+        }
+
+        return PlaceWorldGenerationBatchResultsSummary(
+            rowCount: rowCount,
+            successCount: successCount,
+            errorCount: failures.count,
+            failures: failures,
+            decodedImagePaths: normalizedCharacterAssetPaths(decodedImagePaths)
+        )
+    }
+
+    private func placeWorldGenerationBatchResultFileExtension(from row: [String: Any]) -> String {
+        let response = row["response"] as? [String: Any]
+        let candidates = response?["candidates"] as? [[String: Any]]
+        let parts = (candidates?.first?["content"] as? [String: Any])?["parts"] as? [[String: Any]]
+        let mimeType = (parts?.first(where: { $0["inlineData"] != nil })?["inlineData"] as? [String: Any])?["mimeType"] as? String
+        let normalizedMimeType = mimeType?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        switch normalizedMimeType {
+        case "image/png":
+            return "png"
+        case "image/webp":
+            return "webp"
+        default:
+            return "jpg"
+        }
+    }
+
+    private func reconcilePlaceWorldBatchGeneratedImageLinkage() -> Bool {
+        var changed = false
+
+        for batch in placesWorkflowLibrary.worldGenerationBatches {
+            guard !batch.generatedImagePaths.isEmpty else { continue }
+            let promptKeyToNodeID = placeWorldBatchPromptKeyNodeLookup(for: batch)
+            let fallbackPlaceID = batch.placeID
+                ?? batch.routeID.flatMap { worldRoute(for: $0)?.placeID }
+                ?? batch.nodeIDs.compactMap { worldNode(for: $0)?.placeID }.first
+
+            for path in batch.generatedImagePaths {
+                guard let recordIndex = generatedBackgroundRecordIndex(for: path) else { continue }
+                let resultKey = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                let nodeID = promptKeyToNodeID[resultKey] ?? (batch.nodeIDs.count == 1 ? batch.nodeIDs[0] : nil)
+                let placeID = nodeID.flatMap { worldNode(for: $0)?.placeID } ?? fallbackPlaceID
+
+                if placesWorkflowLibrary.generatedImageRecords[recordIndex].routeID != batch.routeID {
+                    placesWorkflowLibrary.generatedImageRecords[recordIndex].routeID = batch.routeID
+                    changed = true
+                }
+                if placesWorkflowLibrary.generatedImageRecords[recordIndex].linkedPlaceID != placeID {
+                    placesWorkflowLibrary.generatedImageRecords[recordIndex].linkedPlaceID = placeID
+                    changed = true
+                }
+                if placesWorkflowLibrary.generatedImageRecords[recordIndex].worldNodeID != nodeID {
+                    placesWorkflowLibrary.generatedImageRecords[recordIndex].worldNodeID = nodeID
+                    changed = true
+                }
+                if let nodeID,
+                   let node = worldNode(for: nodeID) {
+                    if placesWorkflowLibrary.generatedImageRecords[recordIndex].cameraPose == nil {
+                        placesWorkflowLibrary.generatedImageRecords[recordIndex].cameraPose = node.cameraPose
+                        changed = true
+                    }
+                    if placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPoint == nil {
+                        placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPoint = node.mapPoint
+                        changed = true
+                    }
+                }
+            }
+        }
+
+        return changed
+    }
+
+    private func placeWorldBatchPromptKeyNodeLookup(for batch: PlaceWorldGenerationBatch) -> [String: UUID] {
+        guard !batch.nodeIDs.isEmpty,
+              let metadataPath = batch.metadataPath,
+              let metadataURL = resolvedCharacterAssetURL(for: metadataPath)
+                ?? (metadataPath.hasPrefix("/") ? URL(fileURLWithPath: metadataPath) : nil),
+              let data = try? Data(contentsOf: metadataURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let promptManifest = json["prompt_manifest"] as? [[String: Any]],
+              promptManifest.count == batch.nodeIDs.count else {
+            return [:]
+        }
+
+        var lookup: [String: UUID] = [:]
+        for (index, item) in promptManifest.enumerated() {
+            guard let key = trimmedOrNil(item["id"] as? String) else { continue }
+            lookup[key.lowercased()] = batch.nodeIDs[index]
+        }
+        return lookup
+    }
+
+    private func generatedBackgroundRecordIndex(for path: String) -> Int? {
+        let normalized = normalizedCharacterAssetPath(path)
+            ?? projectRelativeCharacterAssetPath(from: path)
+            ?? path
+        return placesWorkflowLibrary.generatedImageRecords.firstIndex {
+            $0.activePath == normalized
+            || $0.duplicatePaths.contains(normalized)
+            || $0.priorVersions.contains(where: { $0.path == normalized })
+        }
+    }
+
+    private func normalizePlaceContinuityReview(_ review: PlaceContinuityReview) -> PlaceContinuityReview {
+        var updated = review
+        updated.candidateImagePath = normalizedCharacterAssetPath(review.candidateImagePath) ?? review.candidateImagePath
+        updated.comparedImagePaths = normalizedCharacterAssetPaths(review.comparedImagePaths)
+        return updated
+    }
+
+    private func normalizePlaceWorldGenerationBatch(_ batch: PlaceWorldGenerationBatch) -> PlaceWorldGenerationBatch {
+        var updated = batch
+        updated.metadataPath = normalizedCharacterAssetPath(batch.metadataPath) ?? batch.metadataPath
+        updated.outputRootPath = normalizedCharacterAssetPath(batch.outputRootPath) ?? batch.outputRootPath
+        updated.generatedImagePaths = normalizedCharacterAssetPaths(batch.generatedImagePaths)
+        return updated
+    }
+
+    private func normalizeGeneratedBackgroundRecord(_ record: GeneratedBackgroundLibraryRecord) -> GeneratedBackgroundLibraryRecord {
+        var updated = record
+        updated.activePath = normalizedCharacterAssetPath(record.activePath) ?? record.activePath
+        updated.duplicatePaths = record.duplicatePaths.compactMap { normalizedCharacterAssetPath($0) ?? $0 }
+        updated.priorVersions = record.priorVersions.map { version in
+            var item = version
+            item.path = normalizedCharacterAssetPath(version.path) ?? version.path
+            return item
+        }
+        updated.editHistory = record.editHistory.map { entry in
+            var item = entry
+            item.sourcePath = normalizedCharacterAssetPath(entry.sourcePath) ?? entry.sourcePath
+            if let resultPath = entry.resultPath {
+                item.resultPath = normalizedCharacterAssetPath(resultPath) ?? resultPath
+            }
+            return item
+        }
+        updated.mapPoint = record.mapPoint?.clamped()
+        if updated.mapPlacementStatus == .unplaced, updated.mapPoint != nil || updated.cameraPose != nil {
+            updated.mapPlacementStatus = .inferred
+        }
+        if updated.mapPlacementStatus == .confirmed, updated.mapPlacementConfirmedAt == nil {
+            updated.mapPlacementConfirmedAt = updated.updatedAt
+        }
+        updated.canonStatus = record.canonStatus
+        return updated
+    }
+
+    private func normalizePlaceEditQueueItem(_ item: PlaceImageEditQueueItem) -> PlaceImageEditQueueItem {
+        var updated = item
+        updated.sourcePath = normalizedCharacterAssetPath(item.sourcePath) ?? item.sourcePath
+        return updated
+    }
+
+    private func normalizePlaceEditBatchJob(_ job: PlaceImageEditBatchJob) -> PlaceImageEditBatchJob {
+        var updated = job
+        updated.metadataPath = normalizedCharacterAssetPath(job.metadataPath) ?? job.metadataPath
+        updated.outputRootPath = normalizedCharacterAssetPath(job.outputRootPath) ?? job.outputRootPath
+        updated.downloadedImagePaths = normalizedCharacterAssetPaths(job.downloadedImagePaths)
+        return updated
+    }
+
     private func hydratedBackgroundPlate(_ background: BackgroundPlate) -> BackgroundPlate {
         var updated = background
         updated.imagePaths = normalizedCharacterAssetPaths(background.imagePaths)
         updated.approvedImagePath = normalizedCharacterAssetPath(background.approvedImagePath)
             ?? updated.imagePaths.first
+        updated.animatedImagePaths = normalizedCharacterAssetPaths(background.animatedImagePaths)
+        updated.animatedApprovedImagePath = normalizedCharacterAssetPath(background.animatedApprovedImagePath)
+            ?? updated.animatedImagePaths.first
+        updated.referenceImages = background.referenceImages.map { reference in
+            var item = reference
+            item.imagePath = normalizedCharacterAssetPath(reference.imagePath) ?? reference.imagePath
+            return item
+        }
+        updated.angleImages = background.angleImages.map { angleImage in
+            var item = angleImage
+            item.imagePath = normalizedCharacterAssetPath(angleImage.imagePath) ?? angleImage.imagePath
+            return item
+        }
         if updated.filename.isEmpty, let approvedPath = updated.approvedImagePath {
             updated.filename = URL(fileURLWithPath: approvedPath).lastPathComponent
         }
@@ -7443,6 +12931,19 @@ final class AnimateStore {
         updated.imagePaths = normalizedCharacterAssetPaths(background.imagePaths)
         updated.approvedImagePath = normalizedCharacterAssetPath(background.approvedImagePath)
             ?? updated.imagePaths.first
+        updated.animatedImagePaths = normalizedCharacterAssetPaths(background.animatedImagePaths)
+        updated.animatedApprovedImagePath = normalizedCharacterAssetPath(background.animatedApprovedImagePath)
+            ?? updated.animatedImagePaths.first
+        updated.referenceImages = background.referenceImages.map { reference in
+            var item = reference
+            item.imagePath = normalizedCharacterAssetPath(reference.imagePath) ?? reference.imagePath
+            return item
+        }
+        updated.angleImages = background.angleImages.map { angleImage in
+            var item = angleImage
+            item.imagePath = normalizedCharacterAssetPath(angleImage.imagePath) ?? angleImage.imagePath
+            return item
+        }
         if let approvedPath = updated.approvedImagePath {
             updated.filename = URL(fileURLWithPath: approvedPath).lastPathComponent
         }
@@ -7806,6 +13307,9 @@ final class AnimateStore {
                     backstory: persistedCharacter?.backstory ?? "",
                     personality: persistedCharacter?.personality ?? "",
                     notes: persistedCharacter?.notes ?? "",
+                    activeLORAFilename: persistedCharacter?.activeLORAFilename,
+                    activeLORATriggerWord: persistedCharacter?.activeLORATriggerWord,
+                    activeLORAWeight: persistedCharacter?.activeLORAWeight ?? 1.0,
                     defaultWardrobeType: persistedCharacter?.defaultWardrobeType ?? .soldier,
                     genderType: persistedCharacter?.genderType ?? .person,
                     age: persistedCharacter?.age,
@@ -7833,6 +13337,9 @@ final class AnimateStore {
                             backstory: persistedCharacter?.backstory ?? "",
                             personality: persistedCharacter?.personality ?? "",
                             notes: persistedCharacter?.notes ?? "",
+                            activeLORAFilename: persistedCharacter?.activeLORAFilename,
+                            activeLORATriggerWord: persistedCharacter?.activeLORATriggerWord,
+                            activeLORAWeight: persistedCharacter?.activeLORAWeight ?? 1.0,
                             defaultWardrobeType: persistedCharacter?.defaultWardrobeType ?? .soldier,
                             genderType: persistedCharacter?.genderType ?? .person,
                             age: persistedCharacter?.age,
@@ -8875,5 +14382,110 @@ extension AnimateStore {
     func importBVHFile(url: URL) throws {
         let clip = try BVHParser.parse(url: url)
         addMotionClip(clip)
+    }
+
+    // MARK: - Imagine Gallery Management
+
+    func loadImagineGalleries() {
+        guard let owpURL = fileOWPURL else { return }
+        let stored = ImagineProjectStorage.loadGalleries(owpURL: owpURL)
+        var byScene: [UUID: [ImagineSceneShotGallery]] = [:]
+        for gallery in stored {
+            byScene[gallery.sceneID, default: []].append(gallery)
+        }
+        imagineSceneGalleries = byScene
+    }
+
+    func saveImagineGalleries() {
+        guard let owpURL = fileOWPURL else { return }
+        let all = imagineSceneGalleries.values.flatMap { $0 }
+        try? ImagineProjectStorage.saveGalleries(Array(all), owpURL: owpURL)
+    }
+
+    func refreshImagineGalleryFromDisk(sceneID: UUID) {
+        guard let owpURL = fileOWPURL,
+              let scene = scenes.first(where: { $0.id == sceneID }) else { return }
+        let sceneSlug = scene.name.lowercased().replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "/", with: "-")
+        var galleries: [ImagineSceneShotGallery] = []
+        for (index, shot) in scene.shots.enumerated() {
+            let gallery = ImagineProjectStorage.scanShotGallery(
+                owpURL: owpURL,
+                sceneSlug: sceneSlug,
+                shotIndex: index,
+                shotID: shot.id,
+                sceneID: sceneID
+            )
+            galleries.append(gallery)
+        }
+        imagineSceneGalleries[sceneID] = galleries
+    }
+
+    func ensureImagineDirectories(for sceneID: UUID) {
+        guard let owpURL = fileOWPURL,
+              let scene = scenes.first(where: { $0.id == sceneID }) else { return }
+        let sceneSlug = scene.name.lowercased().replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "/", with: "-")
+        try? ImagineProjectStorage.ensureDirectories(owpURL: owpURL, sceneSlug: sceneSlug, shotCount: scene.shots.count)
+    }
+
+    func imagineGallery(for sceneID: UUID, shotIndex: Int) -> ImagineSceneShotGallery? {
+        guard let galleries = imagineSceneGalleries[sceneID],
+              shotIndex < galleries.count else { return nil }
+        return galleries[shotIndex]
+    }
+
+    func isGeminiAllowed() -> Bool {
+        geminiMasterSwitch
+    }
+
+    // MARK: - Canvas Persistence
+
+    private var canvasDir: URL? {
+        animateURL?.appendingPathComponent("debug/canvas")
+    }
+
+    private var canvasIndexURL: URL? {
+        canvasDir?.appendingPathComponent("_index.json")
+    }
+
+    /// Reads `_index.json` from the canvas directory and populates `canvasGenerations`.
+    /// Called during project load. Silently skips if the file does not exist yet.
+    func loadCanvasGenerations() {
+        guard let indexURL = canvasIndexURL,
+              FileManager.default.fileExists(atPath: indexURL.path),
+              let data = try? Data(contentsOf: indexURL) else {
+            canvasGenerations = []
+            return
+        }
+        canvasGenerations = (try? JSONDecoder().decode([CanvasGeneration].self, from: data)) ?? []
+    }
+
+    /// Appends a new generation record and rewrites `_index.json`.
+    func appendCanvasGeneration(_ gen: CanvasGeneration) {
+        canvasGenerations.append(gen)
+        persistCanvasIndex()
+    }
+
+    /// Removes a generation record by id, deletes the image file, and rewrites `_index.json`.
+    func deleteCanvasGeneration(_ id: UUID) {
+        guard let idx = canvasGenerations.firstIndex(where: { $0.id == id }) else { return }
+        let gen = canvasGenerations[idx]
+        canvasGenerations.remove(at: idx)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: gen.imagePath) {
+            try? fm.removeItem(atPath: gen.imagePath)
+        }
+        persistCanvasIndex()
+    }
+
+    private func persistCanvasIndex() {
+        guard let dir = canvasDir, let indexURL = canvasIndexURL else { return }
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: dir.path) {
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        guard let data = try? JSONEncoder().encode(canvasGenerations) else { return }
+        try? data.write(to: indexURL, options: .atomic)
     }
 }

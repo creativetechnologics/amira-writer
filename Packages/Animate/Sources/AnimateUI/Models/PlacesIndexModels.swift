@@ -62,11 +62,11 @@ struct DrawThingsPlaceConfig: Codable, Hashable, Sendable {
     var promptSuffix: String
 
     init(
-        apiHost: String = "http://127.0.0.1",
+        apiHost: String = "http://Garys-Server.local",
         apiPort: Int = 7860,
-        imageWidth: Int = 1536,
-        imageHeight: Int = 864,
-        steps: Int = 28,
+        imageWidth: Int = 1920,
+        imageHeight: Int = 1088,
+        steps: Int = 6,
         cfgScale: Double = 7.5,
         seed: Int? = nil,
         negativePrompt: String = "",

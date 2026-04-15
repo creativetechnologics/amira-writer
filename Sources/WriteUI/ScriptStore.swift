@@ -145,6 +145,18 @@ struct ProjectTextFile: Identifiable, Hashable, Sendable {
     }
 }
 
+struct SongLyricIterationFile: Identifiable, Hashable, Sendable {
+    let id: UUID
+    var songRelativePath: String
+    var slot: Int
+    var relativePath: String
+    var content: String
+
+    var hasContent: Bool {
+        !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 struct MidiAsset: Identifiable, Hashable, Sendable {
     let id: UUID
     var relativePath: String
@@ -821,6 +833,7 @@ final class ScriptStore {
 
     var synopsisText: String = ""
     var scratchpadFiles: [ProjectTextFile] = []
+    var lyricIterationFiles: [SongLyricIterationFile] = []
     private(set) var scratchpadDocumentText: String = ""
 
     private var fileProjectURL: URL? {
@@ -848,6 +861,8 @@ final class ScriptStore {
     var previewingSongPath: String?
     private static let maxProjectHistoryEntries: Int = 120
     private static let externalWatchInterval: TimeInterval = 0.5
+    private static let lyricIterationSlots = 1...10
+    private static let lyricIterationFolderSuffix = ".lyric-iterations"
     private static let scratchpadMarkerPattern: NSRegularExpression = {
         try! NSRegularExpression(pattern: #"(?m)^\{\{\{SCENE:(.+?)\}\}\}\s*$"#)
     }()
@@ -954,6 +969,7 @@ final class ScriptStore {
             self.songAssets = []
             self.librettoFiles = []
             self.scratchpadFiles = []
+            self.lyricIterationFiles = []
             self.scratchpadDocumentText = ""
             self.isScratchpadDirty = false
             self.projectHistoryEntries = filteredProjectHistoryEntries(previousHistoryState.entries)
@@ -1028,13 +1044,16 @@ final class ScriptStore {
             loadSynopsis(from: effectiveProjectURL)
 
             await loadScratchpad(from: effectiveProjectURL)
+            await loadLyricIterations(from: effectiveProjectURL)
 
             // Ensure CLAUDE.md exists with synopsis instructions
             ensureClaudeMD(in: effectiveProjectURL)
 
             if !externallyChangedPaths.isEmpty {
                 let changedSongPaths = externallyChangedPaths.filter {
-                    $0 != OWPProjectIO.synopsisFile && $0 != ProjectDatabaseBridge.scratchpadPath
+                    $0 != OWPProjectIO.synopsisFile
+                        && $0 != ProjectDatabaseBridge.scratchpadPath
+                        && !Self.isLyricIterationRelativePath($0)
                 }
                 for path in changedSongPaths {
                     externalChangeTimes[path] = Date()
@@ -1637,6 +1656,97 @@ final class ScriptStore {
         }
     }
 
+    func lyricIterationText(forPath path: String, slot: Int) -> String {
+        let normalizedSlot = Self.clampedLyricIterationSlot(slot)
+        return lyricIterationFiles.first(where: {
+            $0.songRelativePath == path && $0.slot == normalizedSlot
+        })?.content ?? ""
+    }
+
+    func lyricIterationRelativePath(forPath path: String, slot: Int) -> String {
+        Self.lyricIterationRelativePath(forSongPath: path, slot: slot)
+    }
+
+    private static func clampedLyricIterationSlot(_ slot: Int) -> Int {
+        min(max(slot, lyricIterationSlots.lowerBound), lyricIterationSlots.upperBound)
+    }
+
+    private static func lyricIterationKey(forSongPath path: String, slot: Int) -> String {
+        "\(path)#\(clampedLyricIterationSlot(slot))"
+    }
+
+    static func lyricIterationRelativePath(forSongPath songPath: String, slot: Int) -> String {
+        let normalizedSlot = clampedLyricIterationSlot(slot)
+        let nsPath = songPath as NSString
+        let directory = nsPath.deletingLastPathComponent
+        let songName = (nsPath.lastPathComponent as NSString).deletingPathExtension
+        let folderName = "\(songName)\(lyricIterationFolderSuffix)"
+
+        if directory.isEmpty || directory == "." {
+            return "\(folderName)/iteration-\(normalizedSlot).txt"
+        }
+        return "\(directory)/\(folderName)/iteration-\(normalizedSlot).txt"
+    }
+
+    static func isLyricIterationRelativePath(_ path: String) -> Bool {
+        path.contains("\(lyricIterationFolderSuffix)/iteration-") && path.hasSuffix(".txt")
+    }
+
+    private func lyricIterationFileURL(forSongPath songPath: String, slot: Int, projectURL: URL) -> URL {
+        let normalizedSlot = Self.clampedLyricIterationSlot(slot)
+        if projectURL.pathExtension.lowercased() == "ows" {
+            let songName = projectURL.deletingPathExtension().lastPathComponent
+            return projectURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("\(songName)\(Self.lyricIterationFolderSuffix)")
+                .appendingPathComponent("iteration-\(normalizedSlot).txt")
+        }
+
+        return projectURL.appendingPathComponent(
+            Self.lyricIterationRelativePath(forSongPath: songPath, slot: normalizedSlot)
+        )
+    }
+
+    private func normalizeLyricIterationFiles() {
+        let idsByKey = Dictionary(uniqueKeysWithValues: lyricIterationFiles.map {
+            (Self.lyricIterationKey(forSongPath: $0.songRelativePath, slot: $0.slot), $0.id)
+        })
+        let contentByKey = Dictionary(uniqueKeysWithValues: lyricIterationFiles.map {
+            (Self.lyricIterationKey(forSongPath: $0.songRelativePath, slot: $0.slot), $0.content)
+        })
+
+        lyricIterationFiles = librettoFiles.flatMap { file in
+            Self.lyricIterationSlots.map { slot in
+                let key = Self.lyricIterationKey(forSongPath: file.relativePath, slot: slot)
+                return SongLyricIterationFile(
+                    id: idsByKey[key] ?? UUID(),
+                    songRelativePath: file.relativePath,
+                    slot: slot,
+                    relativePath: Self.lyricIterationRelativePath(forSongPath: file.relativePath, slot: slot),
+                    content: contentByKey[key] ?? ""
+                )
+            }
+        }
+    }
+
+    private func loadLyricIterations(from projectURL: URL) async {
+        normalizeLyricIterationFiles()
+
+        for index in lyricIterationFiles.indices {
+            let fileURL = lyricIterationFileURL(
+                forSongPath: lyricIterationFiles[index].songRelativePath,
+                slot: lyricIterationFiles[index].slot,
+                projectURL: projectURL
+            )
+            if let data = try? Data(contentsOf: fileURL),
+               let text = String(data: data, encoding: .utf8) {
+                lyricIterationFiles[index].content = text
+            } else {
+                lyricIterationFiles[index].content = ""
+            }
+        }
+    }
+
     /// Write a CLAUDE.md in the project directory and its parent so external
     /// Claude sessions know how to find and follow the project instructions.
     private func ensureClaudeMD(in projectURL: URL) {
@@ -1881,6 +1991,18 @@ final class ScriptStore {
             lastKnownModDates["__scratchpad__"] = snapshot.modificationDate
             lastKnownFileSnapshots[ProjectDatabaseBridge.scratchpadPath] = snapshot
         }
+
+        for file in lyricIterationFiles {
+            let fileURL = lyricIterationFileURL(
+                forSongPath: file.songRelativePath,
+                slot: file.slot,
+                projectURL: projectURL
+            )
+            if let snapshot = fileSnapshot(for: fileURL) {
+                lastKnownModDates[file.relativePath] = snapshot.modificationDate
+                lastKnownFileSnapshots[file.relativePath] = snapshot
+            }
+        }
     }
 
     private func currentSongStubs(for projectURL: URL) -> [SongStub] {
@@ -1945,6 +2067,7 @@ final class ScriptStore {
         }
 
         normalizeScratchpadFiles()
+        normalizeLyricIterationFiles()
         resetTrackedFileSnapshots()
         isDirty = hasUnsavedChanges
         refreshSaveIndicator()
@@ -2052,6 +2175,66 @@ final class ScriptStore {
                 }
             }
         }
+
+        checkLyricIterationExternalChanges(for: url)
+    }
+
+    private func checkLyricIterationExternalChanges(for projectURL: URL) {
+        var changedRelativePaths: [String] = []
+        var startedSync = false
+
+        for index in lyricIterationFiles.indices {
+            let relativePath = lyricIterationFiles[index].relativePath
+            let fileURL = lyricIterationFileURL(
+                forSongPath: lyricIterationFiles[index].songRelativePath,
+                slot: lyricIterationFiles[index].slot,
+                projectURL: projectURL
+            )
+            let snapshot = fileSnapshot(for: fileURL)
+            let lastKnown = lastKnownFileSnapshots[relativePath]
+
+            guard snapshot != lastKnown else { continue }
+
+            if let snapshot {
+                lastKnownModDates[relativePath] = snapshot.modificationDate
+                lastKnownFileSnapshots[relativePath] = snapshot
+            } else {
+                lastKnownModDates.removeValue(forKey: relativePath)
+                lastKnownFileSnapshots.removeValue(forKey: relativePath)
+            }
+
+            let newText: String
+            if let data = try? Data(contentsOf: fileURL),
+               let text = String(data: data, encoding: .utf8) {
+                newText = text
+            } else {
+                newText = ""
+            }
+
+            guard newText != lyricIterationFiles[index].content else { continue }
+
+            if !startedSync {
+                beginAgentSync()
+                startedSync = true
+            }
+
+            lyricIterationFiles[index].content = newText
+            changedRelativePaths.append(relativePath)
+        }
+
+        guard !changedRelativePaths.isEmpty else { return }
+
+        appendProjectHistory(
+            kind: .externalReload,
+            title: "Reloaded lyric iterations from disk",
+            message: summarizeTrackedPaths(changedRelativePaths),
+            relativePaths: changedRelativePaths
+        )
+        refreshGitHistory()
+        markAgentUpdated()
+        statusMessage = changedRelativePaths.count == 1
+            ? "Lyric iteration reloaded (external change)"
+            : "Lyric iterations reloaded (external changes)"
     }
 
     private func reloadExternallyChanged(stub: SongStub, modDate: Date) {
@@ -2091,6 +2274,7 @@ final class ScriptStore {
                     librettoFiles[libIdx].content = version.lyrics
                 }
                 normalizeScratchpadFiles()
+                normalizeLyricIterationFiles()
 
                 let latestLyrics = asset.document.activeVersion()?.lyrics ?? ""
                 let detail = promotedLatestVersion
@@ -2235,6 +2419,20 @@ final class ScriptStore {
         let scratchpadURL = scratchpadFileURL(for: projectURL)
         if let snapshot = fileSnapshot(for: scratchpadURL) {
             snapshots[ProjectDatabaseBridge.scratchpadPath] = snapshot
+        }
+
+        for stub in stubs {
+            for slot in Self.lyricIterationSlots {
+                let relativePath = Self.lyricIterationRelativePath(forSongPath: stub.relativePath, slot: slot)
+                let fileURL = lyricIterationFileURL(
+                    forSongPath: stub.relativePath,
+                    slot: slot,
+                    projectURL: projectURL
+                )
+                if let snapshot = fileSnapshot(for: fileURL) {
+                    snapshots[relativePath] = snapshot
+                }
+            }
         }
 
         return snapshots

@@ -49,6 +49,16 @@ public final class MixWorkspaceController: ObservableObject {
         return try await store.flattenSceneAudio(scenePath: scenePath, projectURL: projectURL)
     }
 
+    /// Returns the relative paths of all scenes that have Mix sessions with at least one clip.
+    public func scenesWithClips() -> [String] {
+        store.scenesWithClips()
+    }
+
+    /// Whether the Mix store has a loaded project.
+    public var hasLoadedProject: Bool {
+        store.projectURL != nil
+    }
+
     public func setSelectionRestorePending(_ isPending: Bool) {
         isSelectionRestorePending = isPending
     }

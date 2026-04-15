@@ -1569,19 +1569,7 @@ struct CharacterReferenceWorkflowSheet: View {
     }
 
     private func masterSheetSourceCandidates(for character: AnimationCharacter) -> [String] {
-        var ordered: [String] = []
-        var seen = Set<String>()
-
-        func append(_ path: String?) {
-            guard let path, seen.insert(path).inserted else { return }
-            ordered.append(path)
-        }
-
-        // Curated picks first so they appear at the top of the source list
-        append(character.inspirationReferenceImagePath)
-        character.curatedInspirationImagePaths.forEach { append($0) }
-        character.inspirationImagePaths.forEach { append($0) }
-        return ordered
+        store.preferredInspirationReferencePaths(for: character)
     }
 
     private func importExistingMasterSheet() {

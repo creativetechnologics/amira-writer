@@ -31,15 +31,23 @@ struct InspectorView: View {
         var id: UUID { variant.id }
     }
 
-    private enum InspectorTab: String { case assets, properties, llm, batch }
-    @AppStorage("animate.inspector.selectedTab.v2") private var selectedTab = InspectorTab.assets.rawValue
+    private enum InspectorTab: String { case details, assets, properties, gemini, llm, batch }
+    @AppStorage("animate.inspector.selectedTab.v3") private var selectedTab = InspectorTab.details.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                tabButton("Assets", tab: .assets, icon: "shippingbox.fill")
-                tabButton("Properties", tab: .properties, icon: "slider.horizontal.3")
-                tabButton("LLM", tab: .llm, icon: "bubble.left.and.text.bubble.right")
+                if currentPage == .places {
+                    tabButton("Details", tab: .details, icon: "info.circle")
+                    tabButton("Assets", tab: .assets, icon: "photo.stack")
+                    tabButton("Properties", tab: .properties, icon: "slider.horizontal.3")
+                    tabButton("Gemini", tab: .gemini, icon: "sparkles")
+                } else {
+                    tabButton("Details", tab: .details, icon: "info.circle")
+                    tabButton("Assets", tab: .assets, icon: "shippingbox.fill")
+                    tabButton("Properties", tab: .properties, icon: "slider.horizontal.3")
+                    tabButton("LLM", tab: .llm, icon: "bubble.left.and.text.bubble.right")
+                }
                 if currentPage == .characters {
                     tabButton("Batch", tab: .batch, icon: "tray.full")
                 }
@@ -51,14 +59,36 @@ struct InspectorView: View {
 
             if selectedTab == InspectorTab.batch.rawValue, currentPage == .characters {
                 batchQueueContent
+            } else if selectedTab == InspectorTab.details.rawValue {
+                detailsContent
             } else if selectedTab == InspectorTab.assets.rawValue {
                 assetsContent
+            } else if selectedTab == InspectorTab.gemini.rawValue, currentPage == .places {
+                inspectorScrollContainer { PlaceGeminiBatchInspectorSection(store: store) }
             } else if selectedTab == InspectorTab.llm.rawValue {
                 AnimateLLMInspectorView(store: store)
             } else {
                 propertiesContent
             }
         }
+    }
+
+    private var detailsContent: some View {
+        Group {
+            switch currentPage {
+            case .places:
+                inspectorScrollContainer { PlaceGeneratedImageDetailsInspectorSection(store: store) }
+            case .script, .animate:
+                AnimatePageView(
+                    store: store,
+                    workspaceState: animateWorkspaceState,
+                    presentation: .assets
+                )
+            case .characters, .props, .timeline:
+                assetsContent
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func tabButton(_ title: String, tab: InspectorTab, icon: String) -> some View {
@@ -69,15 +99,17 @@ struct InspectorView: View {
                 .font(.caption)
                 .fontWeight(selectedTab == tab.rawValue ? .semibold : .regular)
                 .foregroundStyle(selectedTab == tab.rawValue ? .primary : .secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, minHeight: 32)
+                .padding(.horizontal, 10)
                 .background(
                     selectedTab == tab.rawValue
                         ? AnyShapeStyle(Color.accentColor.opacity(0.12))
                         : AnyShapeStyle(Color.clear),
                     in: RoundedRectangle(cornerRadius: 8)
                 )
+                .contentShape(Rectangle())
         }
+        .frame(maxWidth: .infinity)
         .buttonStyle(.plain)
     }
 
@@ -90,7 +122,9 @@ struct InspectorView: View {
                     workspaceState: animateWorkspaceState,
                     presentation: .assets
                 )
-            case .characters, .places, .props, .timeline:
+            case .places:
+                inspectorScrollContainer { PlaceAssetsInspectorSection(store: store) }
+            case .characters, .props, .timeline:
                 propertiesContent
             }
         }
@@ -174,51 +208,7 @@ struct InspectorView: View {
 
     @ViewBuilder
     private var placeInspector: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Draw Things", systemImage: "sparkles")
-                .font(.headline)
-
-            if let place = store.selectedPlace {
-                VStack(alignment: .leading, spacing: 8) {
-                    LabeledContent("Selected Location") {
-                        Text(place.name)
-                    }
-                    LabeledContent("Scenes Using It") {
-                        Text("\(store.sceneReferences(for: place.id).count)")
-                    }
-                    if let approved = place.resolvedApprovedImagePath {
-                        LabeledContent("Approved Image") {
-                            Text(URL(fileURLWithPath: approved).lastPathComponent)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-            } else {
-                Text("Select a script location in the middle pane to generate imagery for it.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Group {
-                labeledTextField("Host", text: drawThingsBinding(\.apiHost))
-                labeledIntegerField("Port", value: drawThingsBinding(\.apiPort))
-
-                HStack(spacing: 8) {
-                    labeledIntegerField("Width", value: drawThingsBinding(\.imageWidth))
-                    labeledIntegerField("Height", value: drawThingsBinding(\.imageHeight))
-                }
-
-                HStack(spacing: 8) {
-                    labeledIntegerField("Steps", value: drawThingsBinding(\.steps))
-                    labeledDoubleField("CFG", value: drawThingsBinding(\.cfgScale))
-                }
-
-                labeledOptionalIntegerField("Seed", value: drawThingsBinding(\.seed))
-                labeledTextField("Prompt Prefix", text: drawThingsBinding(\.promptPrefix), axis: .vertical)
-                labeledTextField("Prompt Suffix", text: drawThingsBinding(\.promptSuffix), axis: .vertical)
-                labeledTextField("Negative Prompt", text: drawThingsBinding(\.negativePrompt), axis: .vertical)
-            }
-        }
+        PlaceGeminiInspectorSection(store: store)
     }
 
     // MARK: - Props Inspector
@@ -1774,7 +1764,7 @@ struct InspectorView: View {
             set: { newValue in
                 var updated = store.drawThingsPlaceConfig
                 updated[keyPath: keyPath] = newValue
-                store.drawThingsPlaceConfig = updated
+                store.updateDrawThingsPlacesConfig(updated)
             }
         )
     }
@@ -1803,7 +1793,7 @@ struct InspectorView: View {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField(title, value: value, format: .number)
+        TextField(title, value: value, format: IntegerFormatStyle<Int>().grouping(.never))
                 .textFieldStyle(.roundedBorder)
         }
     }
@@ -1990,4 +1980,800 @@ struct InspectorView: View {
             .foregroundStyle(color)
     }
 
+}
+
+@available(macOS 26.0, *)
+private struct PlaceAssetsInspectorSection: View {
+    @Bindable var store: AnimateStore
+    @AppStorage("animate.places.workflowMode.v1") private var workflowModeRawValue = PlaceWorkflowMode.photorealistic.rawValue
+
+    private var workflowMode: PlaceWorkflowMode {
+        get { PlaceWorkflowMode(rawValue: workflowModeRawValue) ?? .photorealistic }
+        nonmutating set { workflowModeRawValue = newValue.rawValue }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Place Assets", systemImage: "photo.on.rectangle.angled")
+                .font(.headline)
+
+            Picker("Workflow", selection: Binding(
+                get: { workflowMode },
+                set: { workflowMode = $0 }
+            )) {
+                ForEach(PlaceWorkflowMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if let place = store.selectedPlace {
+                VStack(alignment: .leading, spacing: 10) {
+                    LabeledContent("Selected Place") { Text(place.name) }
+                    LabeledContent("\(workflowMode.shortLabel) Images") { Text("\(place.imagePaths(for: workflowMode).count)") }
+                    LabeledContent("Approved") {
+                        Text(place.approvedImagePath(for: workflowMode).map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None")
+                            .lineLimit(1)
+                    }
+                    LabeledContent("Local Refs") { Text("\(place.referenceImages.count)") }
+                    LabeledContent("Angle Images") { Text("\(place.angleImages.count)") }
+                    LabeledContent("Landmark Refs") { Text("\(store.placesWorkflowLibrary.landmarkReferences.count)") }
+                }
+
+                assetPreviewCard(
+                    title: "\(workflowMode.displayName) Approved",
+                    path: place.approvedImagePath(for: workflowMode)
+                )
+
+                assetPreviewCard(
+                    title: "Master Map",
+                    path: store.placesWorkflowLibrary.masterMapImagePath
+                )
+
+                HStack(spacing: 8) {
+                    Button {
+                        store.addImagesToPlaceFromPicker(placeID: place.id, workflow: workflowMode)
+                    } label: {
+                        Label("Import \(workflowMode.shortLabel)", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        store.addPlaceReferenceImagesFromPicker(placeID: place.id)
+                    } label: {
+                        Label("Add Refs", systemImage: "photo.badge.plus")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button {
+                    store.addAngleImagesToPlaceFromPicker(placeID: place.id)
+                } label: {
+                    Label("Add Angle Images", systemImage: "rectangle.stack.badge.plus")
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Text("Select a place to inspect its approved image, references, and import actions.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                assetPreviewCard(title: "Master Map", path: store.placesWorkflowLibrary.masterMapImagePath)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func assetPreviewCard(title: String, path: String?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let path,
+               let url = store.resolvedCharacterAssetURL(for: path),
+               let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(height: 110)
+                    .overlay {
+                        Text("No asset")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+            }
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct PlaceGeminiInspectorSection: View {
+    @Bindable var store: AnimateStore
+    @AppStorage("animate.places.workflowMode.v1") private var workflowModeRawValue = PlaceWorkflowMode.photorealistic.rawValue
+
+    private var workflowMode: PlaceWorkflowMode {
+        get { PlaceWorkflowMode(rawValue: workflowModeRawValue) ?? .photorealistic }
+        nonmutating set { workflowModeRawValue = newValue.rawValue }
+    }
+
+    private var config: PlaceWorkflowRenderConfig {
+        store.workflowConfig(for: workflowMode)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Gemini Places Workflow", systemImage: "sparkles")
+                .font(.headline)
+
+            Picker("Workflow", selection: Binding(
+                get: { workflowMode },
+                set: { workflowMode = $0 }
+            )) {
+                ForEach(PlaceWorkflowMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if let place = store.selectedPlace {
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent("Selected Place") { Text(place.name) }
+                    LabeledContent("Scenes Using It") { Text("\(store.sceneReferences(for: place.id).count)") }
+                    LabeledContent("\(workflowMode.shortLabel) Images") { Text("\(place.imagePaths(for: workflowMode).count)") }
+                    LabeledContent("Approved") {
+                        Text(place.approvedImagePath(for: workflowMode).map { URL(fileURLWithPath: $0).lastPathComponent } ?? "None")
+                            .lineLimit(1)
+                    }
+                    if let mapPath = store.placesWorkflowLibrary.masterMapImagePath {
+                        LabeledContent("Master Map") {
+                            Text(URL(fileURLWithPath: mapPath).lastPathComponent)
+                                .lineLimit(1)
+                        }
+                    }
+                    LabeledContent("Landmark Refs") { Text("\(store.placesWorkflowLibrary.landmarkReferences.count)") }
+                }
+            } else {
+                Text("Select a place in the middle pane to configure Gemini generation for it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            Group {
+                labeledModelPicker
+                labeledChoicePicker(
+                    "Aspect Ratio",
+                    selection: configBinding(\.aspectRatio),
+                    options: ["1:1", "2:3", "3:4", "4:5", "4:3", "16:9", "21:9"]
+                )
+                labeledChoicePicker(
+                    "Image Size",
+                    selection: configBinding(\.imageSize),
+                    options: ["1K", "2K", "4K"]
+                )
+                labeledTextField("Lens / Camera Guidance", text: configBinding(\.lensDescription), axis: .vertical)
+                labeledTextField("Prompt Prefix", text: configBinding(\.promptPrefix), axis: .vertical)
+                labeledTextField("Prompt Suffix", text: configBinding(\.promptSuffix), axis: .vertical)
+            }
+
+            Text("The Places page now previews Gemini prompts before submit. Immediate generations run directly; batch generations launch the Gemini watchdog-backed batch workflow.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var labeledModelPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Model")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("Model", selection: Binding(
+                get: { config.model },
+                set: { newValue in
+                    var updated = config
+                    updated.model = newValue
+                    store.updatePlaceWorkflowConfig(updated, for: workflowMode)
+                }
+            )) {
+                ForEach(GeminiModel.allCases, id: \.self) { model in
+                    Text(model.displayName).tag(model)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+    }
+
+    private func configBinding(_ keyPath: WritableKeyPath<PlaceWorkflowRenderConfig, String>) -> Binding<String> {
+        Binding(
+            get: { config[keyPath: keyPath] },
+            set: { newValue in
+                var updated = config
+                updated[keyPath: keyPath] = newValue
+                store.updatePlaceWorkflowConfig(updated, for: workflowMode)
+            }
+        )
+    }
+
+    private func labeledTextField(
+        _ title: String,
+        text: Binding<String>,
+        axis: Axis = .horizontal
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(title, text: text, axis: axis)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(axis == .vertical ? 3...6 : 1...1)
+        }
+    }
+
+    private func labeledChoicePicker(
+        _ title: String,
+        selection: Binding<String>,
+        options: [String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker(title, selection: selection) {
+                // Preserve any custom/legacy value that isn't in the hard-coded
+                // option list so existing configs survive the UI change.
+                if !options.contains(selection.wrappedValue) && !selection.wrappedValue.isEmpty {
+                    Text("\(selection.wrappedValue) (custom)").tag(selection.wrappedValue)
+                }
+                ForEach(options, id: \.self) { option in
+                    Text(option).tag(option)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+struct PlaceGeneratedImageDetailsInspectorSection: View {
+    @Bindable var store: AnimateStore
+    @AppStorage("animate.places.workflowMode.v1") private var workflowModeRawValue = PlaceWorkflowMode.photorealistic.rawValue
+    @State private var isSubmittingImmediate = false
+    @State private var inlineErrorMessage: String?
+
+    private var workflowMode: PlaceWorkflowMode {
+        get { PlaceWorkflowMode(rawValue: workflowModeRawValue) ?? .photorealistic }
+        nonmutating set { workflowModeRawValue = newValue.rawValue }
+    }
+
+    private var record: GeneratedBackgroundLibraryRecord? {
+        store.selectedGeneratedBackgroundRecord
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Details", systemImage: "info.circle")
+                .font(.headline)
+
+            if let record {
+                previewCard(for: record)
+                ratingSection(for: record)
+                rejectionNotesEditor(for: record)
+                Divider()
+                notesEditor(for: record)
+
+                if let queueItem = store.pendingGeneratedBackgroundEditQueueItem(for: record.id) {
+                    queueStateCard(queueItem)
+                }
+
+                metadataSection(for: record)
+                versionHistorySection(for: record)
+                editHistorySection(for: record)
+            } else if let place = store.selectedPlace {
+                Text("Select an image in All Generated Background Images to inspect it here. Current place: \(place.name).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Select a generated background image to see its preview, notes, rating, metadata, and Gemini edit history.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func previewCard(for record: GeneratedBackgroundLibraryRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(URL(fileURLWithPath: record.activePath).lastPathComponent)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(2)
+                Spacer()
+                if record.isRejected {
+                    Text("Rejected")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.red.opacity(0.14), in: Capsule())
+                        .foregroundStyle(.red)
+                }
+            }
+
+            if let url = store.resolvedCharacterAssetURL(for: record.activePath),
+               let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 180, maxHeight: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(height: 180)
+                    .overlay {
+                        Text("Preview unavailable")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+            }
+
+            if !record.summary.isEmpty {
+                Text(record.summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(.background.opacity(0.5), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func ratingSection(for record: GeneratedBackgroundLibraryRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Rating")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                ForEach(1...5, id: \.self) { rating in
+                    Button {
+                        store.setGeneratedBackgroundRating(record.rating == rating ? nil : rating, for: record.id)
+                    } label: {
+                        Image(systemName: (record.rating ?? 0) >= rating ? "star.fill" : "star")
+                            .foregroundStyle(.yellow)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Divider()
+                    .frame(height: 18)
+
+                Button(record.isRejected ? "Unreject" : "Reject") {
+                    store.toggleGeneratedBackgroundRejected(record.id)
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                Text(record.workflow.displayName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func notesEditor(for record: GeneratedBackgroundLibraryRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Edit Notes")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: Binding(
+                get: { store.selectedGeneratedBackgroundRecord?.draftEditNotes ?? "" },
+                set: { store.updateGeneratedBackgroundEditNotes($0, for: record.id) }
+            ))
+            .font(.system(.body, design: .default))
+            .frame(minHeight: 120)
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+            )
+
+            HStack(spacing: 8) {
+                Button {
+                    queueGeneratedBackgroundEdit(record)
+                } label: {
+                    Label("Add to Batch", systemImage: "tray.and.arrow.down")
+                }
+                .buttonStyle(.bordered)
+                .disabled(record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Button {
+                    runImmediateEdit(record)
+                } label: {
+                    if isSubmittingImmediate {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("Edit Now", systemImage: "sparkles")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isSubmittingImmediate || record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Spacer()
+
+                if let queueItem = store.pendingGeneratedBackgroundEditQueueItem(for: record.id) {
+                    Text(queueItem.state.rawValue.capitalized)
+                        .font(.caption)
+                        .foregroundStyle(queueItem.state == .failed ? .orange : .secondary)
+                }
+            }
+
+            if let inlineErrorMessage, !inlineErrorMessage.isEmpty {
+                Text(inlineErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private func rejectionNotesEditor(for record: GeneratedBackgroundLibraryRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Rejection Notes")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if record.isRejected {
+                    Text("Rejected")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.red.opacity(0.14), in: Capsule())
+                        .foregroundStyle(.red)
+                }
+            }
+
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.red.opacity(record.isRejected ? 0.09 : 0.05))
+
+                if (store.selectedGeneratedBackgroundRecord?.rejectionNotes ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Why are we rejecting this image?")
+                        .font(.system(.body, design: .default))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 16)
+                        .allowsHitTesting(false)
+                }
+
+                TextEditor(text: Binding(
+                    get: { store.selectedGeneratedBackgroundRecord?.rejectionNotes ?? "" },
+                    set: { store.updateGeneratedBackgroundRejectionNotes($0, for: record.id) }
+                ))
+                .font(.system(.body, design: .default))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .background(Color.clear)
+            }
+            .frame(minHeight: 110)
+        }
+    }
+
+    @ViewBuilder
+    private func queueStateCard(_ item: PlaceImageEditQueueItem) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Queued Gemini Edit")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(item.instructions)
+                .font(.caption)
+            if let error = item.lastErrorMessage, !error.isEmpty {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func metadataSection(for record: GeneratedBackgroundLibraryRecord) -> some View {
+        let metadata = store.generationMetadata(for: record.activePath)
+        let resolution = store.imageResolutionDescription(for: record.activePath)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Metadata")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            metadataRow("Keywords", value: record.keywords.isEmpty ? "None" : record.keywords.joined(separator: ", "))
+            if let metadata {
+                metadataRow("Model", value: metadata.model)
+                metadataRow("Aspect", value: metadata.aspectRatio)
+                metadataRow("Size", value: metadata.imageSize)
+            }
+            if let resolution, !resolution.isEmpty {
+                metadataRow("Resolution", value: resolution)
+            }
+            if let prompt = record.sourcePrompt, !prompt.isEmpty {
+                metadataRow("Prompt", value: prompt)
+            }
+            if record.duplicatePaths.count > 0 {
+                metadataRow("Duplicates", value: "\(record.duplicatePaths.count) hidden duplicates")
+            }
+            metadataRow("Used for future refs", value: record.isRejected ? "No" : "Yes (prefer \(record.rating ?? 0)-star priority)")
+        }
+    }
+
+    @ViewBuilder
+    private func versionHistorySection(for record: GeneratedBackgroundLibraryRecord) -> some View {
+        if !record.priorVersions.isEmpty {
+            DisclosureGroup("Older Versions (\(record.priorVersions.count))") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(record.priorVersions) { version in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(URL(fileURLWithPath: version.path).lastPathComponent)
+                                    .font(.caption.weight(.medium))
+                                Text(version.supersededAt.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Reveal") {
+                                reveal(version.path)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func editHistorySection(for record: GeneratedBackgroundLibraryRecord) -> some View {
+        if !record.editHistory.isEmpty {
+            DisclosureGroup("Edit History (\(record.editHistory.count))") {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(record.editHistory) { entry in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption.weight(.semibold))
+                            Text(entry.instructions)
+                                .font(.caption)
+                            if let prompt = entry.prompt, !prompt.isEmpty {
+                                Text(prompt)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(4)
+                            }
+                        }
+                        .padding(10)
+                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+
+    private func metadataRow(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func queueGeneratedBackgroundEdit(_ record: GeneratedBackgroundLibraryRecord) {
+        store.queueGeneratedBackgroundEdit(recordID: record.id, workflow: workflowMode)
+        inlineErrorMessage = nil
+    }
+
+    private func runImmediateEdit(_ record: GeneratedBackgroundLibraryRecord) {
+        inlineErrorMessage = nil
+        isSubmittingImmediate = true
+        Task { @MainActor in
+            defer { isSubmittingImmediate = false }
+            do {
+                try await store.submitGeneratedBackgroundEditImmediately(recordID: record.id, workflow: workflowMode)
+            } catch {
+                inlineErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func reveal(_ path: String) {
+        guard let url = store.resolvedCharacterAssetURL(for: path)
+            ?? (path.hasPrefix("/") ? URL(fileURLWithPath: path) : nil) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+}
+
+@available(macOS 26.0, *)
+struct PlaceGeminiBatchInspectorSection: View {
+    @Bindable var store: AnimateStore
+    var showsHeading: Bool = true
+    @State private var submittingWorkflow: PlaceWorkflowMode?
+    @State private var inlineErrorMessage: String?
+
+    private var groupedQueue: [PlaceWorkflowMode: [PlaceImageEditQueueItem]] {
+        Dictionary(grouping: store.placesWorkflowLibrary.pendingEditQueue) { $0.workflow }
+    }
+
+    private var jobs: [PlaceImageEditBatchJob] {
+        store.placesWorkflowLibrary.editBatchJobs.sorted { $0.submittedAt > $1.submittedAt }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if showsHeading {
+                Label("Gemini Edit Queue", systemImage: "sparkles")
+                    .font(.headline)
+            }
+
+            HStack(spacing: 8) {
+                ForEach(PlaceWorkflowMode.allCases, id: \.self) { mode in
+                    let count = groupedQueue[mode, default: []].filter { $0.state == .queued || $0.state == .failed }.count
+                    Button {
+                        submitBatch(for: mode)
+                    } label: {
+                        if submittingWorkflow == mode {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(minWidth: 80)
+                        } else {
+                            Label(
+                                count > 0 ? "Submit \(mode.shortLabel) (\(count))" : "Submit \(mode.shortLabel)",
+                                systemImage: "tray.and.arrow.up"
+                            )
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(count == 0 || submittingWorkflow != nil)
+                }
+
+                Spacer()
+
+                Button("Refresh") {
+                    store.refreshPlaceEditBatchJobs()
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if let inlineErrorMessage, !inlineErrorMessage.isEmpty {
+                Text(inlineErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            if store.placesWorkflowLibrary.pendingEditQueue.isEmpty {
+                Text("No queued image edits yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Queued Images")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(store.placesWorkflowLibrary.pendingEditQueue.sorted { $0.queuedAt > $1.queuedAt }) { item in
+                        queueRow(item)
+                    }
+                }
+            }
+
+            if !jobs.isEmpty {
+                Divider()
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Batch Jobs")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(jobs) { job in
+                        jobRow(job)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            store.refreshPlaceEditBatchJobs()
+        }
+    }
+
+    @ViewBuilder
+    private func queueRow(_ item: PlaceImageEditQueueItem) -> some View {
+        let record = store.placesWorkflowLibrary.generatedImageRecords.first { $0.id == item.imageRecordID }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.map { URL(fileURLWithPath: $0.activePath).lastPathComponent } ?? "Missing Image")
+                        .font(.caption.weight(.semibold))
+                    Text("\(item.workflow.displayName) • \(item.state.rawValue.capitalized)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(role: .destructive) {
+                    store.removeGeneratedBackgroundEditQueueItem(item.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(item.instructions)
+                .font(.caption)
+                .lineLimit(4)
+
+            if let error = item.lastErrorMessage, !error.isEmpty {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func jobRow(_ job: PlaceImageEditBatchJob) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(job.title)
+                        .font(.caption.weight(.semibold))
+                    Text(job.state)
+                        .font(.caption2)
+                        .foregroundStyle(job.isTerminal ? AnyShapeStyle(.secondary) : AnyShapeStyle(.blue))
+                }
+                Spacer()
+                if job.isTerminal {
+                    Button("Dismiss") {
+                        store.dismissPlaceEditBatchJob(job.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            Text("\(job.promptCount) images • submitted \(job.submittedAt.formatted(date: .abbreviated, time: .shortened))")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if let error = job.lastErrorMessage, !error.isEmpty {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func submitBatch(for workflow: PlaceWorkflowMode) {
+        inlineErrorMessage = nil
+        submittingWorkflow = workflow
+        Task { @MainActor in
+            defer { submittingWorkflow = nil }
+            do {
+                _ = try await store.submitQueuedGeneratedBackgroundEditBatch(workflow: workflow)
+            } catch {
+                inlineErrorMessage = error.localizedDescription
+            }
+        }
+    }
 }

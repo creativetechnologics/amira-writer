@@ -17,7 +17,12 @@ import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
+
+from PIL import Image
+
+Image.MAX_IMAGE_PIXELS = None
 
 
 warnings.filterwarnings(
@@ -156,6 +161,30 @@ TERMINAL_STATES = {
 }
 
 
+def _notify_user(title: str, message: str) -> None:
+    escaped_title = title.replace('"', '\\"')
+    escaped_message = message.replace('"', '\\"')
+    script = f'display notification "{escaped_message}" with title "{escaped_title}"'
+    try:
+        subprocess.run(["osascript", "-e", script], check=False, capture_output=True, text=True)
+    except Exception:
+        pass
+
+
+def _write_watchdog_status(output_root: Path, filename: str, message: str) -> None:
+    target = output_root / filename
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(message.rstrip() + "\n", encoding="utf-8")
+
+
+def _mirror_output_root(output_root: Path, mirror_root: str | None) -> None:
+    if not mirror_root:
+        return
+    destination = Path(mirror_root).expanduser().resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["rsync", "-a", f"{output_root}/", f"{destination}/"], check=False, capture_output=True, text=True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Submit and watch arbitrary Gemini inspiration-image batch jobs.",
@@ -188,6 +217,7 @@ class PromptRequest:
     title: str
     prompt: str
     reference_paths: list[str]
+    recommended_lora_caption: str | None = None
 
 
 @dataclass
@@ -197,16 +227,40 @@ class BatchPlan:
     display_name: str
     model: str
     aspect_ratio: str
-    image_size: str
+    image_size: str | None
     output_root: Path
     prompts: list[PromptRequest]
 
 
 def load_api_key(explicit: str | None) -> str:
-    key = (explicit or os.environ.get("GEMINI_API_KEY") or "").strip()
-    if not key:
-        raise RuntimeError("Gemini API key is required.")
-    return key
+    if explicit:
+        key = explicit.strip()
+        if key:
+            return key
+
+    for env_name in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"):
+        env_value = (os.environ.get(env_name) or "").strip()
+        if env_value:
+            return env_value
+
+    result = subprocess.run(
+        [
+            "security",
+            "find-generic-password",
+            "-w",
+            "-s",
+            "com.amira.writer.animate",
+            "-a",
+            "gemini-api-key",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    key = result.stdout.strip()
+    if key:
+        return key
+    raise RuntimeError("Gemini API key is required.")
 
 
 def load_plan(path: Path) -> BatchPlan:
@@ -217,6 +271,7 @@ def load_plan(path: Path) -> BatchPlan:
             title=item.get("title") or item["id"],
             prompt=item["prompt"],
             reference_paths=item.get("reference_paths") or [],
+            recommended_lora_caption=item.get("recommended_lora_caption"),
         )
         for item in payload["prompts"]
     ]
@@ -226,7 +281,7 @@ def load_plan(path: Path) -> BatchPlan:
         display_name=payload["display_name"],
         model=payload["model"],
         aspect_ratio=payload["aspect_ratio"],
-        image_size=payload["image_size"],
+        image_size=payload.get("image_size"),
         output_root=Path(payload["output_root"]).expanduser().resolve(),
         prompts=prompts,
     )
@@ -277,6 +332,27 @@ def _resolve_reference_path(reference_path: str, output_root: Path) -> Path:
             return expanded.resolve()
 
     raise FileNotFoundError(f"Reference image not found: {raw}")
+
+
+def _prepare_reference_for_upload(reference_path: Path, staging_root: Path) -> Path:
+    image_suffixes = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".tif", ".tiff"}
+    if reference_path.suffix.lower() not in image_suffixes:
+        return reference_path
+
+    try:
+        image = Image.open(reference_path).convert("RGB")
+    except Exception:
+        return reference_path
+
+    max_dim = 1800
+    width, height = image.size
+    scale = min(1.0, max_dim / max(width, height))
+    if scale < 1.0:
+        image = image.resize((max(1, int(width * scale)), max(1, int(height * scale))), Image.LANCZOS)
+
+    staged_path = staging_root / f"{reference_path.stem}-batchref.jpg"
+    image.save(staged_path, format="JPEG", quality=84, optimize=True)
+    return staged_path
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -331,7 +407,13 @@ def _fetch_batch_payload(client: genai.Client, batch_name: str) -> tuple[object,
     payload = {
         "batch_name": batch_name,
         "state": state,
+        "done": getattr(batch_job, "done", None),
         "display_name": getattr(batch_job, "display_name", None),
+        "create_time": getattr(batch_job, "create_time", None).isoformat() if getattr(batch_job, "create_time", None) else None,
+        "update_time": getattr(batch_job, "update_time", None).isoformat() if getattr(batch_job, "update_time", None) else None,
+        "start_time": getattr(batch_job, "start_time", None).isoformat() if getattr(batch_job, "start_time", None) else None,
+        "end_time": getattr(batch_job, "end_time", None).isoformat() if getattr(batch_job, "end_time", None) else None,
+        "completion_stats": batch_job.completion_stats.model_dump(by_alias=True, exclude_none=True) if getattr(batch_job, "completion_stats", None) else None,
         "dest": batch_job.dest.model_dump(by_alias=True, exclude_none=True) if getattr(batch_job, "dest", None) else None,
         "error": batch_job.error.model_dump(by_alias=True, exclude_none=True) if getattr(batch_job, "error", None) else None,
     }
@@ -341,19 +423,21 @@ def _fetch_batch_payload(client: genai.Client, batch_name: str) -> tuple[object,
 def _save_status(metadata_path: Path, status_payload: dict) -> None:
     metadata = _load_metadata(metadata_path)
     metadata["last_status_check"] = _now_iso()
+    metadata["batch_state"] = status_payload.get("state", metadata.get("batch_state"))
     metadata["latest_status"] = status_payload
     _write_json(metadata_path, metadata)
 
 
-def _sidecar_payload(*, prompt: str, model: str, image_size: str, aspect_ratio: str) -> dict:
-    return {
-        "request": {
-            "prompt": prompt,
-            "model": model,
-            "image_size": image_size,
-            "aspect_ratio": aspect_ratio,
-        }
+def _sidecar_payload(*, prompt: str, model: str, image_size: str, aspect_ratio: str, recommended_lora_caption: str | None = None) -> dict:
+    request_payload = {
+        "prompt": prompt,
+        "model": model,
+        "image_size": image_size,
+        "aspect_ratio": aspect_ratio,
     }
+    if recommended_lora_caption:
+        request_payload["recommended_lora_caption"] = recommended_lora_caption
+    return {"request": request_payload}
 
 
 def _decode_result_file(result_path: Path, output_root: Path, metadata: dict) -> list[str]:
@@ -395,11 +479,46 @@ def _decode_result_file(result_path: Path, output_root: Path, metadata: dict) ->
                     model=model,
                     image_size=image_size,
                     aspect_ratio=aspect_ratio,
+                    recommended_lora_caption=prompt_info.get("recommended_lora_caption"),
                 ),
             )
             break
 
     return decoded_paths
+
+
+def _summarize_result_file(result_path: Path) -> dict:
+    summary = {
+        "row_count": 0,
+        "success_count": 0,
+        "error_count": 0,
+        "errors": [],
+    }
+    if not result_path.exists():
+        return summary
+
+    for line in result_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        summary["row_count"] += 1
+        row = json.loads(line)
+        if row.get("error"):
+            summary["error_count"] += 1
+            summary["errors"].append(
+                {
+                    "key": row.get("key"),
+                    "message": row["error"].get("message"),
+                    "code": row["error"].get("code"),
+                }
+            )
+            continue
+
+        response = row.get("response") or {}
+        candidates = response.get("candidates") or []
+        if candidates:
+            summary["success_count"] += 1
+
+    return summary
 
 
 def submit_batch(args: argparse.Namespace) -> int:
@@ -419,13 +538,14 @@ def submit_batch(args: argparse.Namespace) -> int:
             parts: list[dict] = [{"text": prompt.prompt}]
             for reference_path in prompt.reference_paths:
                 ref_path = _resolve_reference_path(reference_path, plan.output_root)
-                upload = uploaded_refs.get(str(ref_path))
+                upload_path = _prepare_reference_for_upload(ref_path, staging_root)
+                upload = uploaded_refs.get(str(upload_path))
                 if upload is None:
                     upload = client.files.upload(
-                        file=str(ref_path),
-                        config=types.UploadFileConfig(display_name=ref_path.stem),
+                        file=str(upload_path),
+                        config=types.UploadFileConfig(display_name=upload_path.stem),
                     )
-                    uploaded_refs[str(ref_path)] = upload
+                    uploaded_refs[str(upload_path)] = upload
                 parts.append(
                     types.Part.from_uri(
                         file_uri=upload.uri,
@@ -433,18 +553,27 @@ def submit_batch(args: argparse.Namespace) -> int:
                     ).model_dump(by_alias=True, exclude_none=True)
                 )
 
+            image_config_kwargs: dict[str, str] = {
+                "aspect_ratio": plan.aspect_ratio,
+            }
+            if plan.image_size and not plan.model.startswith("gemini-2.5-flash-image"):
+                image_config_kwargs["image_size"] = plan.image_size
+
+            generation_config: dict[str, object] = {
+                "responseModalities": ["IMAGE"],
+                "imageConfig": {
+                    "aspectRatio": image_config_kwargs["aspect_ratio"],
+                },
+            }
+            if "image_size" in image_config_kwargs:
+                generation_config["imageConfig"]["imageSize"] = image_config_kwargs["image_size"]
+
             request_lines.append(
                 {
                     "key": prompt.id,
                     "request": {
                         "contents": [{"role": "user", "parts": parts}],
-                        "generationConfig": types.GenerateContentConfig(
-                            response_modalities=["IMAGE"],
-                            image_config=types.ImageConfig(
-                                aspect_ratio=plan.aspect_ratio,
-                                image_size=plan.image_size,
-                            ),
-                        ).model_dump(by_alias=True, exclude_none=True),
+                        "generationConfig": generation_config,
                     },
                 }
             )
@@ -455,6 +584,7 @@ def submit_batch(args: argparse.Namespace) -> int:
                     "title": prompt.title,
                     "prompt": prompt.prompt,
                     "reference_paths": prompt.reference_paths,
+                    "recommended_lora_caption": prompt.recommended_lora_caption,
                 }
             )
 
@@ -535,6 +665,7 @@ def check_status(args: argparse.Namespace) -> int:
     batch_job, payload = _fetch_batch_payload(client, metadata["batch_name"])
 
     decoded_paths: list[str] = []
+    result_summary: dict | None = None
     if args.download_results and payload["state"] == "JOB_STATE_SUCCEEDED":
         output_root = metadata_path.parent
         dest = getattr(batch_job, "dest", None)
@@ -544,16 +675,23 @@ def check_status(args: argparse.Namespace) -> int:
             result_path = output_root / "batch_results.jsonl"
             result_path.write_bytes(result_bytes)
             decoded_paths = _decode_result_file(result_path, output_root, metadata)
+            result_summary = _summarize_result_file(result_path)
             payload["downloaded_results_file"] = str(result_path)
             payload["decoded_images"] = decoded_paths
+            payload["result_summary"] = result_summary
 
     _save_status(metadata_path, payload)
     print(json.dumps(payload))
+    if result_summary and result_summary.get("error_count"):
+        return 2
     return 0
 
 
 def watch_batch(args: argparse.Namespace) -> int:
     metadata_path = args.metadata.expanduser().resolve()
+    output_root = metadata_path.parent
+    metadata = _load_metadata(metadata_path)
+    desktop_mirror = metadata.get("desktop_mirror")
     timeout_seconds = args.timeout_hours * 3600
     start_time = time.monotonic()
     while True:
@@ -571,8 +709,33 @@ def watch_batch(args: argparse.Namespace) -> int:
         if payload["state"] in TERMINAL_STATES:
             if payload["state"] == "JOB_STATE_SUCCEEDED":
                 status_args.download_results = True
-                check_status(status_args)
-            return 0
+                status_code = check_status(status_args)
+                refreshed_metadata = _load_metadata(metadata_path)
+                latest_status = refreshed_metadata.get("latest_status") or {}
+                result_summary = latest_status.get("result_summary") or {}
+                success_count = result_summary.get("success_count", 0)
+                error_count = result_summary.get("error_count", 0)
+                prompt_count = refreshed_metadata.get("prompt_count", 0)
+                if status_code == 0 and success_count:
+                    message = f"Batch finished successfully: {success_count}/{prompt_count} images decoded."
+                    _write_watchdog_status(output_root, "WATCHDOG-SUCCESS.txt", message)
+                    _mirror_output_root(output_root, desktop_mirror)
+                    _notify_user("Amira batch complete", message)
+                    return 0
+
+                message = (
+                    f"Batch completed but had request failures: "
+                    f"{success_count} succeeded, {error_count} failed out of {prompt_count}."
+                )
+                _write_watchdog_status(output_root, "WATCHDOG-FAILURE.txt", message)
+                _mirror_output_root(output_root, desktop_mirror)
+                _notify_user("Amira batch problem", message)
+                return 2
+            message = f"Batch ended in terminal state {payload['state']}."
+            _write_watchdog_status(output_root, "WATCHDOG-FAILURE.txt", message)
+            _mirror_output_root(output_root, desktop_mirror)
+            _notify_user("Amira batch failed", message)
+            return 1
 
         # Safety timeout: auto-cancel if the batch has been running too long.
         elapsed = time.monotonic() - start_time
@@ -591,6 +754,10 @@ def watch_batch(args: argparse.Namespace) -> int:
             payload["state"] = "JOB_STATE_CANCELLED"
             payload["cancel_reason"] = f"Watchdog timeout after {elapsed / 3600:.1f} hours"
             _save_status(metadata_path, payload)
+            message = f"Batch auto-cancelled after {elapsed / 3600:.1f} hours to prevent runaway cost."
+            _write_watchdog_status(output_root, "WATCHDOG-FAILURE.txt", message)
+            _mirror_output_root(output_root, desktop_mirror)
+            _notify_user("Amira batch timed out", message)
             return 1
 
         time.sleep(max(30, args.poll_seconds))

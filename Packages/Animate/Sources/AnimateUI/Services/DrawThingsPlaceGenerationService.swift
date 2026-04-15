@@ -56,6 +56,7 @@ struct DrawThingsPlaceGenerationService {
         config: DrawThingsPlaceConfig,
         outputURL: URL
     ) async throws {
+        let clampedSteps = max(4, min(config.steps, 8))
         guard var components = URLComponents(string: config.apiHost) else {
             throw ServiceError.invalidBaseURL
         }
@@ -78,7 +79,7 @@ struct DrawThingsPlaceGenerationService {
                 negative_prompt: config.negativePrompt,
                 width: config.imageWidth,
                 height: config.imageHeight,
-                steps: config.steps,
+                steps: clampedSteps,
                 cfg_scale: config.cfgScale,
                 seed: config.seed
             )
@@ -117,6 +118,7 @@ struct DrawThingsPlaceGenerationService {
         config: DrawThingsPlaceConfig,
         outputURL: URL
     ) async throws {
+        let clampedSteps = max(4, min(config.steps, 8))
         guard var components = URLComponents(string: config.apiHost) else {
             throw ServiceError.invalidBaseURL
         }
@@ -144,7 +146,7 @@ struct DrawThingsPlaceGenerationService {
                 denoising_strength: denoisingStrength,
                 width: config.imageWidth,
                 height: config.imageHeight,
-                steps: config.steps,
+                steps: clampedSteps,
                 cfg_scale: config.cfgScale,
                 seed: config.seed
             )

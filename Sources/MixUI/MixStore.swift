@@ -627,6 +627,13 @@ final class MixStore {
         document.sceneSessions[scene.relativePath]
     }
 
+    /// Returns relative paths of all scenes that have Mix sessions with at least one clip.
+    func scenesWithClips() -> [String] {
+        document.sceneSessions.compactMap { path, session in
+            session.clips.isEmpty ? nil : path
+        }
+    }
+
     var currentTracks: [MixTrack] {
         currentSession?.tracks ?? []
     }
@@ -838,7 +845,12 @@ final class MixStore {
             index += 1
         }
 
-        return summaries.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+        let sorted = summaries.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+        return sorted.enumerated().map { index, scene in
+            var s = scene
+            s.orderIndex = index
+            return s
+        }
     }
 
     func selectScene(_ sceneID: UUID) {
@@ -1482,6 +1494,7 @@ final class MixStore {
         Self.repairSelection(in: &session)
         document.sceneSessions[scene.relativePath] = session
         scheduleSave()
+        refreshBrowser()
         statusMessage = "Score export registered: \(clip.name) in \(scene.displayTitle)."
         NSLog("[Mix] Registered score export: %@ in scene %@", clip.name, scene.relativePath)
     }
@@ -2946,9 +2959,8 @@ final class MixStore {
     /// Fast scan of project-local paths only (no Desktop traversal) for use when speed matters.
     nonisolated private static func projectBrowserRootsSync(workingProjectURL: URL) -> [MixBrowserNode] {
         let projectCandidates = [
-            workingProjectURL.appendingPathComponent("suno", isDirectory: true),
             workingProjectURL.appendingPathComponent("Suno", isDirectory: true),
-            workingProjectURL.appendingPathComponent("Audio", isDirectory: true),
+            workingProjectURL.appendingPathComponent("Mix", isDirectory: true).appendingPathComponent("exports", isDirectory: true),
             workingProjectURL.appendingPathComponent("Mixes", isDirectory: true),
             workingProjectURL.appendingPathComponent("Renders", isDirectory: true),
             workingProjectURL.appendingPathComponent("Exports", isDirectory: true),
@@ -2977,9 +2989,8 @@ final class MixStore {
 
         if let workingProjectURL {
             let projectCandidates = [
-                workingProjectURL.appendingPathComponent("suno", isDirectory: true),
                 workingProjectURL.appendingPathComponent("Suno", isDirectory: true),
-                workingProjectURL.appendingPathComponent("Audio", isDirectory: true),
+                workingProjectURL.appendingPathComponent("Mix", isDirectory: true).appendingPathComponent("exports", isDirectory: true),
                 workingProjectURL.appendingPathComponent("Mixes", isDirectory: true),
                 workingProjectURL.appendingPathComponent("Renders", isDirectory: true),
                 workingProjectURL.appendingPathComponent("Exports", isDirectory: true),
@@ -3011,8 +3022,14 @@ final class MixStore {
         let isDirectory = (st.st_mode & S_IFMT) == S_IFDIR
 
         if isDirectory {
+            let displayName: String
+            if url.lastPathComponent.lowercased() == "exports" && url.deletingLastPathComponent().lastPathComponent == "Mix" {
+                displayName = "Score"
+            } else {
+                displayName = url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent
+            }
             guard depth < 6 else {
-                return MixBrowserNode(name: url.lastPathComponent, path: url.path, kind: kind, children: [], fileSize: nil)
+                return MixBrowserNode(name: displayName, path: url.path, kind: kind, children: [], fileSize: nil)
             }
             let contents = (try? fm.contentsOfDirectory(
                 at: url,
@@ -3036,7 +3053,7 @@ final class MixStore {
 
             guard kind == .root || children.isEmpty == false else { return nil }
             return MixBrowserNode(
-                name: url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent,
+                name: displayName,
                 path: url.path,
                 kind: kind,
                 children: children,

@@ -28,6 +28,7 @@ public struct PlacesWorkspace: View {
 private struct PlacesWorkspaceContent: View {
     @Bindable var store: AnimateStore
     @State private var animateWorkspaceState = AnimateWorkspaceState()
+    @State private var placesViewMode: PlacesViewMode = .grid
 
     @AppStorage("novotro.places.sidebarVisible") private var sidebarVisible = true
     @AppStorage("novotro.places.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
@@ -75,7 +76,11 @@ private struct PlacesWorkspaceContent: View {
                         .help("Import Place")
                     }
                 } content: {
-                    PlacesSidebarView(store: store)
+                    PlacesSidebarView(
+                        store: store,
+                        viewMode: $placesViewMode,
+                        allImageCount: store.allBackgroundHierarchyImagePaths().count
+                    )
                 }
                 .frame(width: sidebarWidth)
 
@@ -87,24 +92,14 @@ private struct PlacesWorkspaceContent: View {
 
             OperaChromeFlatPane {
                 HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("PLACES")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .tracking(1.2)
-                            .foregroundStyle(OperaChromeTheme.textTertiary)
-                        Text(store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(OperaChromeTheme.textPrimary)
-                            .lineLimit(1)
-                        Text(store.selectedPlace?.name ?? "Background plates and locations")
-                            .font(.system(size: 11))
-                            .foregroundStyle(OperaChromeTheme.textSecondary)
-                            .lineLimit(1)
-                    }
+                    Text(centerPaneTitle)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(OperaChromeTheme.textPrimary)
+                        .lineLimit(1)
                     Spacer(minLength: 10)
                 }
             } content: {
-                PlacesPageView(store: store, showSidebar: false)
+                PlacesPageView(store: store, viewMode: $placesViewMode, showSidebar: false)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -139,6 +134,26 @@ private struct PlacesWorkspaceContent: View {
         .background(OperaChromeTheme.workspaceBackground)
     }
 
+
+    private var centerPaneTitle: String {
+        switch placesViewMode {
+        case .world:
+            return "World Map"
+        case .map3d:
+            return "3D Map"
+        case .landmarks:
+            return "Landmarks"
+        case .review:
+            return "Review Queue"
+        case .library:
+            return "All Images"
+        case .detail:
+            return store.selectedPlace?.name ?? "Places"
+        case .grid:
+            return "Places"
+        }
+    }
+
     private func resizeSidebar(_ delta: CGFloat) {
         sidebarWidth = min(
             max(sidebarWidth + Double(delta), OperaChromeSidebarMetrics.minWidth),
@@ -148,8 +163,8 @@ private struct PlacesWorkspaceContent: View {
 
     private func resizeInspector(_ delta: CGFloat) {
         inspectorWidth = min(
-            max(inspectorWidth - Double(delta), 250),
-            600
+            max(inspectorWidth - Double(delta), 280),
+            900
         )
     }
 }

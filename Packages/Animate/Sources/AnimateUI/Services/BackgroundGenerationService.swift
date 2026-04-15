@@ -146,7 +146,7 @@ final class BackgroundGenerationService {
             prompt: prompt,
             model: .flash,
             aspectRatio: "16:9",
-            imageSize: "1K"
+            imageSize: "2K"
         )
         do {
             print("[BackgroundGenerationService] Gemini API call — image-generation for location: \(location.slug)")

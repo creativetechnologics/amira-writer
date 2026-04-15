@@ -12,6 +12,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
     case write
     case score
     case mix
+    case imagine
     case characters
     case places
     case props
@@ -24,6 +25,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .write: return "Write"
         case .score: return "Score"
         case .mix: return "Mix"
+        case .imagine: return "Imagine"
         case .characters: return "Characters"
         case .places: return "Places"
         case .props: return "Props"
@@ -36,6 +38,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .write: return "Libretto and scene drafting"
         case .score: return "Playback, orchestration, and export"
         case .mix: return "DAW timeline, Suno comping, and polish"
+        case .imagine: return "Character and scene image generation"
         case .characters: return "Character design, reference workflow, and asset generation"
         case .places: return "Background plates, locations, and set imagery"
         case .props: return "Scene objects, vehicles, and interactive props"
@@ -48,6 +51,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .write: return "text.book.closed"
         case .score: return "music.note.list"
         case .mix: return "slider.horizontal.3"
+        case .imagine: return "sparkles"
         case .characters: return "person.2"
         case .places: return "map"
         case .props: return "shippingbox"
@@ -226,6 +230,7 @@ struct OperaShellView: View {
     @AppStorage("novotro.places.sidebar.visible") private var placesSidebarVisible: Bool = true
     @AppStorage("novotro.props.sidebarVisible") private var propsSidebarVisible: Bool = true
     @AppStorage("novotro.mix.sidebarVisible") private var mixSidebarVisible: Bool = true
+    @AppStorage("novotro.imagine.sidebarVisible") private var imagineSidebarVisible: Bool = true
 
     // Inspector visibility (per-mode, shared with each mode's ContentView via same AppStorage key)
     @AppStorage("novotro.write.showInspector") private var writeInspectorVisible: Bool = true
@@ -243,7 +248,7 @@ struct OperaShellView: View {
     var body: some View {
         VStack(spacing: 0) {
             tabBar
-                .padding(.leading, 60)
+                .padding(.leading, 76)
                 .padding(.trailing, 12)
 
             OperaChromeDivider()
@@ -284,8 +289,12 @@ struct OperaShellView: View {
             }
         }
         .task {
+            // Bridge Animate→Mix: flatten Mix audio for a scene and attach to Animate.
+            await bridgeAnimateMixAudioRequests()
+        }
+        .task {
             // File-based remote control for diagnostics via SSH
-            let commandPath = "/tmp/opera-command.txt"
+            let commandPath = "/Volumes/Storage VIII/Programming/opera-command.txt"
             let fm = FileManager.default
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(500))
@@ -299,10 +308,17 @@ struct OperaShellView: View {
                     case "write":  selectedMode = .write
                     case "score":  selectedMode = .score
                     case "mix": selectedMode = .mix
+                    case "imagine": selectedMode = .imagine
                     case "characters": selectedMode = .characters
                     case "places": selectedMode = .places
                     case "props": selectedMode = .props
                     case "animate": selectedMode = .animate
+                    case "diag-drawthings":
+                        let host = animateController.drawThingsHost
+                        let port = animateController.drawThingsPort
+                        Task { await runDrawThingsDiagnostic(host: host, port: port) }
+                    case "diag-codex":
+                        Task { await runCodexDiagnostic() }
                     default: break
                     }
                 }
@@ -391,6 +407,7 @@ struct OperaShellView: View {
         case .write: return writeController.saveIndicator
         case .score: return scoreController.saveIndicator
         case .mix: return mixController.saveIndicator
+        case .imagine: return animateController.saveIndicator
         case .characters: return animateController.saveIndicator
         case .places: return animateController.saveIndicator
         case .props: return animateController.saveIndicator
@@ -403,10 +420,64 @@ struct OperaShellView: View {
         case .write: return writeSidebarVisible
         case .score: return scoreSidebarVisible
         case .mix: return mixSidebarVisible
+        case .imagine: return imagineSidebarVisible
         case .characters: return charactersSidebarVisible
         case .places: return placesSidebarVisible
         case .props: return propsSidebarVisible
         case .animate: return animateSidebarVisible
+        }
+    }
+
+    @MainActor
+    private func bridgeAnimateMixAudioRequests() async {
+        for await note in NotificationCenter.default.notifications(named: Notification.Name("Animate.RequestMixAudioFlatten")) {
+            guard let sceneID = note.userInfo?["sceneID"] as? UUID else {
+                NSLog("[Opera] Mix→Animate: no sceneID in notification")
+                continue
+            }
+            guard let scenePath = animateController.songPath(for: sceneID) else {
+                NSLog("[Opera] Mix→Animate: no songPath for sceneID %@", sceneID.uuidString)
+                continue
+            }
+            NSLog("[Opera] Mix→Animate: flattening scene %@", scenePath)
+            await flattenAndAttachMixAudio(sceneID: sceneID, scenePath: scenePath)
+        }
+    }
+
+    private func flattenAndAttachMixAudio(sceneID: UUID, scenePath: String) async {
+        guard mixController.hasLoadedProject else {
+            NSLog("[Opera] Mix→Animate: Mix project not loaded")
+            return
+        }
+        do {
+            let wavURL = try await mixController.flattenSceneAudio(scenePath: scenePath)
+            let projectPath = mixController.activeProjectPath ?? ""
+            let relativePath = wavURL.path.replacingOccurrences(of: projectPath + "/", with: "")
+            animateController.setDefaultAudioPath(relativePath, for: sceneID)
+            NSLog("[Opera] Mix→Animate: attached %@ to scene %@", relativePath, scenePath)
+        } catch {
+            NSLog("[Opera] Mix→Animate flatten failed for scene %@: %@", scenePath, error.localizedDescription)
+        }
+    }
+
+    /// Auto-populate Animate audio from Mix for all scenes that have Mix sessions with clips.
+    private func autoPopulateAnimateAudioFromMix() async {
+        guard mixController.hasLoadedProject else { return }
+        let scenesWithClips = Set(mixController.scenesWithClips())
+        let sceneStatus = animateController.sceneAudioStatus()
+        var populatedCount = 0
+
+        for entry in sceneStatus {
+            // Skip scenes that already have audio attached
+            guard !entry.hasAudio else { continue }
+            guard scenesWithClips.contains(entry.songPath) else { continue }
+
+            await flattenAndAttachMixAudio(sceneID: entry.id, scenePath: entry.songPath)
+            populatedCount += 1
+        }
+
+        if populatedCount > 0 {
+            NSLog("[Opera] Auto-populated %d Animate scenes with Mix audio", populatedCount)
         }
     }
 
@@ -416,6 +487,7 @@ struct OperaShellView: View {
             case .write: writeSidebarVisible.toggle()
             case .score: scoreSidebarVisible.toggle()
             case .mix: mixSidebarVisible.toggle()
+            case .imagine: imagineSidebarVisible.toggle()
             case .characters: charactersSidebarVisible.toggle()
             case .places: placesSidebarVisible.toggle()
             case .props: propsSidebarVisible.toggle()
@@ -429,6 +501,7 @@ struct OperaShellView: View {
         case .write: return writeInspectorVisible
         case .score: return scoreInspectorVisible
         case .mix: return mixInspectorVisible
+        case .imagine: return charactersInspectorVisible
         case .characters: return charactersInspectorVisible
         case .places: return placesInspectorVisible
         case .props: return propsInspectorVisible
@@ -442,6 +515,7 @@ struct OperaShellView: View {
             case .write: writeInspectorVisible.toggle()
             case .score: scoreInspectorVisible.toggle()
             case .mix: mixInspectorVisible.toggle()
+            case .imagine: charactersInspectorVisible.toggle()
             case .characters: charactersInspectorVisible.toggle()
             case .places: placesInspectorVisible.toggle()
             case .props: propsInspectorVisible.toggle()
@@ -457,6 +531,21 @@ struct OperaShellView: View {
             Spacer(minLength: 4)
 
             HStack(spacing: 8) {
+                // RunPod status indicator
+                if animateController.isRunPodActive {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 8, height: 8)
+                        Text("RunPod")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.green)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.green.opacity(0.1), in: Capsule())
+                }
+
                 ForEach(OperaMode.allCases) { mode in
                     OperaModeButton(
                         mode: mode,
@@ -510,6 +599,8 @@ struct OperaShellView: View {
             ScoreWorkspace(controller: scoreController)
         case .mix:
             MixWorkspace(controller: mixController)
+        case .imagine:
+            ImagineWorkspace(controller: animateController)
         case .characters:
             CharactersWorkspace(controller: animateController)
         case .places:
@@ -674,6 +765,95 @@ struct OperaShellView: View {
     }
 
     @MainActor
+    private func runCodexDiagnostic() async {
+        let resultPath = "/Volumes/Storage VIII/Programming/opera-diag-result.txt"
+        var lines: [String] = []
+        lines.append("=== Codex CLI Diagnostic ===")
+        lines.append("Time: \(Date())")
+
+        do {
+            let response = try await AnimateWorkspaceController.runCodexDiagnostic()
+            lines.append("RESULT: SUCCESS")
+            lines.append("")
+            lines.append("Response:")
+            lines.append(response)
+        } catch {
+            lines.append("RESULT: FAILED")
+            lines.append("Error: \(error.localizedDescription)")
+        }
+
+        try? lines.joined(separator: "\n").write(toFile: resultPath, atomically: true, encoding: .utf8)
+    }
+
+    private func runDrawThingsDiagnostic(host: String, port: Int) async {
+        let resultPath = "/Volumes/Storage VIII/Programming/opera-diag-result.txt"
+        var lines: [String] = []
+        lines.append("=== DrawThings Diagnostic ===")
+        lines.append("Time: \(Date())")
+        lines.append("Host: \(host)")
+        lines.append("Port: \(port)")
+
+        // DNS resolution
+        let hostOnly = host
+            .replacingOccurrences(of: "http://", with: "")
+            .replacingOccurrences(of: "https://", with: "")
+        lines.append("Hostname to resolve: \(hostOnly)")
+
+        // URLSession test
+        guard var components = URLComponents(string: host) else {
+            lines.append("URL PARSE FAILED for: \(host)")
+            try? lines.joined(separator: "\n").write(toFile: resultPath, atomically: true, encoding: .utf8)
+            return
+        }
+        if components.scheme == nil { components.scheme = "http" }
+        components.port = port
+        components.path = "/sdapi/v1/options"
+        guard let url = components.url else {
+            lines.append("URL BUILD FAILED")
+            try? lines.joined(separator: "\n").write(toFile: resultPath, atomically: true, encoding: .utf8)
+            return
+        }
+        lines.append("Test URL: \(url.absoluteString)")
+
+        do {
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 10
+            let (data, response) = try await URLSession.shared.data(for: req)
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            lines.append("HTTP Status: \(statusCode)")
+            lines.append("Response size: \(data.count) bytes")
+            lines.append("RESULT: SUCCESS")
+        } catch {
+            let nsError = error as NSError
+            lines.append("CONNECTION ERROR: \(error.localizedDescription)")
+            lines.append("Error domain: \(nsError.domain)")
+            lines.append("Error code: \(nsError.code)")
+            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+                lines.append("Underlying: \(underlying.domain) code=\(underlying.code) \(underlying.localizedDescription)")
+            }
+            lines.append("RESULT: FAILED")
+        }
+
+        // Also try direct IP fallback
+        lines.append("")
+        lines.append("--- Direct IP test ---")
+        let directURL = URL(string: "http://192.168.28.54:7860/sdapi/v1/options")!
+        do {
+            var req = URLRequest(url: directURL)
+            req.timeoutInterval = 10
+            let (data, response) = try await URLSession.shared.data(for: req)
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            lines.append("Direct IP HTTP Status: \(statusCode)")
+            lines.append("Direct IP Response size: \(data.count) bytes")
+            lines.append("Direct IP RESULT: SUCCESS")
+        } catch {
+            lines.append("Direct IP ERROR: \(error.localizedDescription)")
+            lines.append("Direct IP RESULT: FAILED")
+        }
+
+        try? lines.joined(separator: "\n").write(toFile: resultPath, atomically: true, encoding: .utf8)
+    }
+
     private func handleModeSelectionChange(_ newMode: OperaMode) async {
         guard didInitialize else { return }
         guard let activeProjectURL else {
@@ -689,6 +869,7 @@ struct OperaShellView: View {
         case .write: writeController.suspendBackgroundWork()
         case .score: scoreController.suspendBackgroundWork()
         case .mix: mixController.suspendBackgroundWork()
+        case .imagine: animateController.suspendBackgroundWork()
         case .characters: animateController.suspendBackgroundWork()
         case .places: animateController.suspendBackgroundWork()
         case .props: animateController.suspendBackgroundWork()
@@ -730,6 +911,13 @@ struct OperaShellView: View {
         case .success:
             finishSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
             renderedMode = newMode
+            // When switching to Animate, ensure Mix is loaded then auto-populate audio
+            if newMode == .animate {
+                Task {
+                    _ = await load(mode: .mix, projectURL: activeProjectURL)
+                    await autoPopulateAnimateAudioFromMix()
+                }
+            }
         case let .failure(error):
             clearSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
             activeProjectLoadError = error
@@ -756,6 +944,8 @@ struct OperaShellView: View {
             return await scoreController.ensureProjectLoaded(projectURL)
         case .mix:
             return await mixController.ensureProjectLoaded(projectURL)
+        case .imagine:
+            return await animateController.ensureProjectLoaded(projectURL)
         case .characters:
             return await animateController.ensureProjectLoaded(projectURL)
         case .places:
@@ -773,7 +963,7 @@ struct OperaShellView: View {
         projectURL: URL,
         onBackgroundCompletion: (@MainActor (String?) -> Void)? = nil
     ) async -> OperaModeLoadResult {
-        guard mode == .animate || mode == .characters || mode == .places || mode == .props || mode == .mix else {
+        guard mode == .animate || mode == .characters || mode == .places || mode == .props || mode == .mix || mode == .imagine else {
             if let error = await load(mode: mode, projectURL: projectURL) {
                 return .failure(error)
             }
@@ -899,6 +1089,8 @@ struct OperaShellView: View {
             return scoreController.activeProjectPath
         case .mix:
             return mixController.activeProjectPath
+        case .imagine:
+            return animateController.activeProjectPath
         case .characters:
             return animateController.activeProjectPath
         case .places:
@@ -918,6 +1110,8 @@ struct OperaShellView: View {
             return scoreController.currentSelectionPath()
         case .mix:
             return mixController.currentSelectionPath()
+        case .imagine:
+            return animateController.currentSelectionPath()
         case .characters:
             return animateController.currentSelectionPath()
         case .places:
@@ -938,6 +1132,8 @@ struct OperaShellView: View {
             return scoreController.applySelectionPath(relativePath)
         case .mix:
             return mixController.applySelectionPath(relativePath)
+        case .imagine:
+            return animateController.applySelectionPath(relativePath)
         case .characters:
             return animateController.applySelectionPath(relativePath)
         case .places:
@@ -955,6 +1151,8 @@ struct OperaShellView: View {
             return
         case .mix:
             mixController.setSelectionRestorePending(isPending)
+        case .imagine:
+            animateController.setSelectionRestorePending(isPending)
         case .characters:
             animateController.setSelectionRestorePending(isPending)
         case .places:
@@ -1056,6 +1254,8 @@ struct OperaShellView: View {
             return "Loading playback and orchestration data from local files."
         case .mix:
             return "Loading mix sessions, Suno file browser, and arrangement lanes from local files."
+        case .imagine:
+            return "Loading character and scene image generation data."
         case .characters:
             return "Loading character data, inspiration images, and reference workflow assets."
         case .places:
@@ -1075,6 +1275,8 @@ struct OperaShellView: View {
             return scoreController.loadStatusMessage
         case .mix:
             return mixController.loadStatusMessage
+        case .imagine:
+            return animateController.loadStatusMessage
         case .characters:
             return animateController.loadStatusMessage
         case .places:
@@ -1094,6 +1296,8 @@ struct OperaShellView: View {
             return Color(red: 0.72, green: 0.78, blue: 0.46)
         case .mix:
             return Color(red: 0.77, green: 0.49, blue: 0.26)
+        case .imagine:
+            return Color(red: 0.72, green: 0.58, blue: 0.82)
         case .characters:
             return Color(red: 0.55, green: 0.72, blue: 0.82)
         case .places:
@@ -1115,6 +1319,8 @@ struct OperaShellView: View {
             scoreController.save()
         case .mix:
             mixController.save()
+        case .imagine:
+            animateController.save()
         case .characters:
             animateController.save()
         case .places:
