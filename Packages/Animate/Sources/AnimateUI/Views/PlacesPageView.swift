@@ -2170,6 +2170,12 @@ struct PlacesPageView: View {
                 onPreview: { index, paths in openQuickLook(for: paths, startingAt: index) },
                 onCopy: { path in copyImage(at: path) },
                 onShowInFinder: { path in showInFinder(at: path) },
+                onMoveToTrash: { path in
+                    store.movePlaceImageToTrash(path: path, placeID: place.id, workflow: workflowMode)
+                },
+                onEditWithGemini: { path in
+                    beginEditWithGemini(for: place, imagePath: path, workflow: workflowMode)
+                },
                 showsHeader: true,
                 selectedPaths: $workflowSelectedPaths,
                 lastClickedPath: $workflowLastClickedPath
@@ -2446,6 +2452,48 @@ struct PlacesPageView: View {
     }
 
     // MARK: - Generation Logic
+
+    /// Right-click "Edit with Gemini…" on a gallery image → opens the existing
+    /// preflight sheet with a single draft that uses this image as the first
+    /// (included) reference. Metadata sidecar drives the default prompt/model/
+    /// aspect/size when present.
+    private func beginEditWithGemini(for place: BackgroundPlate, imagePath: String, workflow: PlaceWorkflowMode) {
+        let config = store.workflowConfig(for: workflow)
+        let metadata = store.generationMetadata(for: imagePath)
+        let filename = URL(fileURLWithPath: imagePath).lastPathComponent
+
+        var refs = generationReferenceDrafts(for: place, workflow: workflow)
+        let sourceLabel = "Source: \(filename)"
+        if !refs.contains(where: { $0.path == imagePath }) {
+            refs.insert(GeminiGenerationReferenceDraft(label: sourceLabel, path: imagePath, isIncluded: true),
+                        at: 0)
+        } else if let idx = refs.firstIndex(where: { $0.path == imagePath }) {
+            refs[idx].isIncluded = true
+            refs.swapAt(0, idx)
+        }
+
+        let draft = GeminiGenerationDraft(
+            title: "Edit \(filename)",
+            destinationDescription: "\(place.name) • \(workflow.displayName)",
+            prompt: metadata?.prompt ?? "",
+            contextNote: "Editing existing image — refine the prompt and references, then regenerate.",
+            model: metadata.flatMap { GeminiModel(rawValue: $0.model) } ?? config.model,
+            aspectRatio: metadata?.aspectRatio ?? config.aspectRatio,
+            imageSize: metadata?.imageSize ?? config.imageSize,
+            referenceItems: refs,
+            pricingMode: .standard
+        )
+        placeGenerationDrafts = [draft]
+        placePendingPlan = PendingPlaceGenerationPlan(
+            placeID: place.id,
+            workflow: workflow,
+            routeID: nil,
+            nodeIDs: [],
+            count: 1,
+            title: "Edit \(filename)",
+            confirmTitle: "Regenerate"
+        )
+    }
 
     private func prepareGenerationPlan(for place: BackgroundPlate, count: Int) {
         let specs = Array(generationSpecs(for: place).prefix(max(1, count)))

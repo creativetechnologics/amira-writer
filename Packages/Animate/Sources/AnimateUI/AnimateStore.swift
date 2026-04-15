@@ -10783,6 +10783,46 @@ final class AnimateStore {
         save(writePlaces: true)
     }
 
+    /// Remove a place image by path AND move the underlying file to macOS
+    /// Trash (recoverable). Used by right-click Move File to Trash in the
+    /// Places photorealistic / animated gallery.
+    @discardableResult
+    func movePlaceImageToTrash(path: String, placeID: UUID, workflow: PlaceWorkflowMode) -> Bool {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return false }
+        let absoluteURL = resolvedCharacterAssetURL(for: path)
+        switch workflow {
+        case .photorealistic:
+            backgrounds[index].imagePaths.removeAll(where: { $0 == path })
+            if backgrounds[index].approvedImagePath == path {
+                backgrounds[index].approvedImagePath = backgrounds[index].imagePaths.first
+            }
+            if let approvedPath = backgrounds[index].approvedImagePath {
+                backgrounds[index].filename = URL(fileURLWithPath: approvedPath).lastPathComponent
+                backgrounds[index].sourceURL = resolvedCharacterAssetURL(for: approvedPath)
+            } else {
+                backgrounds[index].filename = ""
+                backgrounds[index].sourceURL = nil
+            }
+        case .animated:
+            backgrounds[index].animatedImagePaths.removeAll(where: { $0 == path })
+            if backgrounds[index].animatedApprovedImagePath == path {
+                backgrounds[index].animatedApprovedImagePath = backgrounds[index].animatedImagePaths.first
+            }
+        }
+        save(writePlaces: true)
+
+        if let url = absoluteURL, FileManager.default.fileExists(atPath: url.path) {
+            do {
+                var resultingURL: NSURL? = nil
+                try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
+            } catch {
+                AppLog.log("STORE", "trashItem failed for place image \(url.path): \(error.localizedDescription)")
+                return false
+            }
+        }
+        return true
+    }
+
     func deletePlace(_ placeID: UUID) {
         backgrounds.removeAll { $0.id == placeID }
         for sceneIndex in scenes.indices where scenes[sceneIndex].backgroundID == placeID {

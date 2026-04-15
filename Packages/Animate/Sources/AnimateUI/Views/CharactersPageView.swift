@@ -1269,6 +1269,8 @@ struct ImageGallerySection: View {
     let onSetAsProfilePic: ((String) -> Void)?
     let onShowPrompt: ((String) -> Void)?
     let onToggleCurated: ((String) -> Void)?
+    let onMoveToTrash: ((String) -> Void)?
+    let onEditWithGemini: ((String) -> Void)?
     var curatedPaths: Set<String>
     var showsHeader: Bool
     @Binding var selectedPaths: Set<String>
@@ -1295,6 +1297,8 @@ struct ImageGallerySection: View {
         onSetAsProfilePic: ((String) -> Void)? = nil,
         onShowPrompt: ((String) -> Void)? = nil,
         onToggleCurated: ((String) -> Void)? = nil,
+        onMoveToTrash: ((String) -> Void)? = nil,
+        onEditWithGemini: ((String) -> Void)? = nil,
         curatedPaths: Set<String> = [],
         showsHeader: Bool = true,
         selectedPaths: Binding<Set<String>>,
@@ -1316,6 +1320,8 @@ struct ImageGallerySection: View {
         self.onSetAsProfilePic = onSetAsProfilePic
         self.onShowPrompt = onShowPrompt
         self.onToggleCurated = onToggleCurated
+        self.onMoveToTrash = onMoveToTrash
+        self.onEditWithGemini = onEditWithGemini
         self.curatedPaths = curatedPaths
         self.showsHeader = showsHeader
         self._selectedPaths = selectedPaths
@@ -1553,7 +1559,9 @@ struct ImageGallerySection: View {
                     onShowInFinder: { onShowInFinder(path) },
                     onSetAsProfilePic: onSetAsProfilePic == nil ? nil : { onSetAsProfilePic?(path) },
                     onShowPrompt: onShowPrompt == nil ? nil : { onShowPrompt?(path) },
-                    onToggleCurated: onToggleCurated == nil ? nil : { onToggleCurated?(path) }
+                    onToggleCurated: onToggleCurated == nil ? nil : { onToggleCurated?(path) },
+                    onMoveToTrash: onMoveToTrash == nil ? nil : { onMoveToTrash?(path) },
+                    onEditWithGemini: onEditWithGemini == nil ? nil : { onEditWithGemini?(path) }
                 )
             }
         }
@@ -1595,6 +1603,8 @@ struct ImageGalleryThumbnail: View {
     let onSetAsProfilePic: (() -> Void)?
     let onShowPrompt: (() -> Void)?
     let onToggleCurated: (() -> Void)?
+    let onMoveToTrash: (() -> Void)?
+    let onEditWithGemini: (() -> Void)?
 
     private var imageBoxHeight: CGFloat {
         max(88, tileWidth * 0.68)
@@ -1634,6 +1644,12 @@ struct ImageGalleryThumbnail: View {
                     Button("Quick Look", systemImage: "eye") {
                         onPreview()
                     }
+                    if let onEditWithGemini {
+                        Divider()
+                        Button("Edit with Gemini…", systemImage: "wand.and.sparkles") {
+                            onEditWithGemini()
+                        }
+                    }
                     Divider()
                     if selectedCount > 1, isSelected {
                         Button("Remove \(selectedCount) Selected", systemImage: "trash", role: .destructive) {
@@ -1642,6 +1658,11 @@ struct ImageGalleryThumbnail: View {
                     } else {
                         Button("Remove Image", systemImage: "trash", role: .destructive) {
                             onRemove()
+                        }
+                    }
+                    if let onMoveToTrash {
+                        Button("Move File to Trash", systemImage: "trash.slash", role: .destructive) {
+                            onMoveToTrash()
                         }
                     }
                 }
