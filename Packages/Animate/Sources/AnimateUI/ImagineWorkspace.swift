@@ -105,7 +105,7 @@ private struct ImagineWorkspaceContent: View {
                         }
                     }
 
-                    EmptyView()
+                    GeminiStatusBadge(store: store)
                 }
             } content: {
                 pageContent

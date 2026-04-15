@@ -10783,6 +10783,77 @@ final class AnimateStore {
         save(writePlaces: true)
     }
 
+    // MARK: - Gemini Activity Queue
+    //
+    // Global, cross-workspace tracker for in-flight Gemini image generations.
+    // Surfaces in the title-bar GeminiStatusBadge; callers register an entry
+    // before firing the API call and update it when complete or failed.
+
+    /// A single registered Gemini generation (immediate or batch-submitted).
+    struct GeminiActivityEntry: Identifiable, Sendable, Hashable {
+        enum Kind: String, Codable, Sendable { case immediate, batch }
+        enum Status: String, Codable, Sendable { case queued, running, completed, failed }
+
+        let id: UUID
+        var kind: Kind
+        var title: String          // user-facing (e.g. "Hero Establishing")
+        var source: String         // e.g. "Places • Valley Town" or "Imagine • Luke Hart"
+        var status: Status
+        var startedAt: Date
+        var completedAt: Date?
+        var errorMessage: String?
+        var outputFilename: String?
+    }
+
+    /// Most-recent-first capped log (keeps last N entries including completed).
+    var geminiActivityLog: [GeminiActivityEntry] = []
+    private let geminiActivityLogMaxEntries = 60
+
+    /// Number of entries still queued or running.
+    var geminiActivityActiveCount: Int {
+        geminiActivityLog.reduce(0) { $0 + (($1.status == .queued || $1.status == .running) ? 1 : 0) }
+    }
+
+    @discardableResult
+    func registerGeminiActivity(kind: GeminiActivityEntry.Kind, title: String, source: String) -> UUID {
+        let id = UUID()
+        let entry = GeminiActivityEntry(
+            id: id,
+            kind: kind,
+            title: title,
+            source: source,
+            status: .running,
+            startedAt: Date()
+        )
+        geminiActivityLog.insert(entry, at: 0)
+        if geminiActivityLog.count > geminiActivityLogMaxEntries {
+            geminiActivityLog = Array(geminiActivityLog.prefix(geminiActivityLogMaxEntries))
+        }
+        AppLog.log("GEMINI", "register \(kind.rawValue) — \(source) — \(title)")
+        return id
+    }
+
+    func updateGeminiActivity(
+        _ id: UUID,
+        status: GeminiActivityEntry.Status,
+        outputFilename: String? = nil,
+        errorMessage: String? = nil
+    ) {
+        guard let idx = geminiActivityLog.firstIndex(where: { $0.id == id }) else { return }
+        geminiActivityLog[idx].status = status
+        if let outputFilename { geminiActivityLog[idx].outputFilename = outputFilename }
+        if let errorMessage { geminiActivityLog[idx].errorMessage = errorMessage }
+        if status == .completed || status == .failed {
+            geminiActivityLog[idx].completedAt = Date()
+        }
+        let title = geminiActivityLog[idx].title
+        AppLog.log("GEMINI", "update \(status.rawValue) — \(title)\(errorMessage.map { " (err: \($0))" } ?? "")")
+    }
+
+    func clearCompletedGeminiActivity() {
+        geminiActivityLog.removeAll { $0.status == .completed || $0.status == .failed }
+    }
+
     /// Get the star rating (0-5) for a specific place image. 0 = unrated.
     func placeImageRating(path: String, placeID: UUID) -> Int {
         guard let idx = backgrounds.firstIndex(where: { $0.id == placeID }) else { return 0 }

@@ -97,6 +97,7 @@ private struct PlacesWorkspaceContent: View {
                         .foregroundStyle(OperaChromeTheme.textPrimary)
                         .lineLimit(1)
                     Spacer(minLength: 10)
+                    GeminiStatusBadge(store: store)
                 }
             } content: {
                 PlacesPageView(store: store, viewMode: $placesViewMode, showSidebar: false)

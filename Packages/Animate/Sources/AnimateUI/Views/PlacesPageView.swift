@@ -2825,29 +2825,43 @@ struct PlacesPageView: View {
             do {
                 for (index, draft) in drafts.enumerated() {
                     store.placeGenerationStatusByID[place.id] = "Generating \(index + 1) of \(drafts.count)…"
+                    let activityID = store.registerGeminiActivity(
+                        kind: .immediate,
+                        title: draft.title,
+                        source: "Places • \(place.name) • \(workflow.displayName)"
+                    )
                     let request = GeminiImageService.GenerationRequest(
-                        prompt: draft.prompt,
+                        prompt: draft.effectivePrompt,
                         referenceImages: buildReferenceImages(from: draft.referenceItems),
                         model: draft.model,
                         aspectRatio: draft.aspectRatio,
                         imageSize: draft.imageSize
                     )
                     store.logGeminiAPICall(endpoint: "image-generation", source: "PlacesPageView.runPlaceGeneration()")
-                    let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
-                    _ = try store.storeGeneratedPlaceImage(
-                        result.imageData,
-                        prompt: draft.prompt,
-                        model: draft.model,
-                        filenameStem: sanitizedFilenameStem(for: draft.title),
-                        for: draft.linkedPlaceID ?? place.id,
-                        workflow: workflow,
-                        aspectRatio: draft.aspectRatio,
-                        imageSize: draft.imageSize,
-                        routeID: draft.routeID,
-                        worldNodeID: draft.worldNodeID,
-                        mapPoint: draft.mapPoint,
-                        cameraPose: draft.cameraPose
-                    )
+                    do {
+                        let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
+                        let storedPath = try store.storeGeneratedPlaceImage(
+                            result.imageData,
+                            prompt: draft.prompt,
+                            model: draft.model,
+                            filenameStem: sanitizedFilenameStem(for: draft.title),
+                            for: draft.linkedPlaceID ?? place.id,
+                            workflow: workflow,
+                            aspectRatio: draft.aspectRatio,
+                            imageSize: draft.imageSize,
+                            routeID: draft.routeID,
+                            worldNodeID: draft.worldNodeID,
+                            mapPoint: draft.mapPoint,
+                            cameraPose: draft.cameraPose
+                        )
+                        _ = storedPath
+                        store.updateGeminiActivity(activityID, status: .completed,
+                                                   outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent)
+                    } catch {
+                        store.updateGeminiActivity(activityID, status: .failed,
+                                                   errorMessage: error.localizedDescription)
+                        throw error
+                    }
                 }
                 store.placeGenerationStatusByID[place.id] = "Finished \(drafts.count) \(workflow.displayName.lowercased()) draft\(drafts.count == 1 ? "" : "s")."
                 store.statusMessage = "Generated \(drafts.count) \(workflow.displayName.lowercased()) place image\(drafts.count == 1 ? "" : "s") for \(place.name)"

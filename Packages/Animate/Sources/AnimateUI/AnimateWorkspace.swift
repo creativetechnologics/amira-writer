@@ -308,6 +308,8 @@ private struct AnimateWorkspaceContent: View {
 
                     Spacer(minLength: 10)
 
+                    GeminiStatusBadge(store: store)
+
                     if !inspectorVisible {
                         OperaChromeActionButton(systemImage: "sidebar.right") {
                             withAnimation(.easeInOut(duration: 0.2)) {
