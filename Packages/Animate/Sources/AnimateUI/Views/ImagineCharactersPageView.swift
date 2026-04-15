@@ -177,13 +177,15 @@ struct ImagineCharactersPageView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Button {
-                showLORATraining = true
-            } label: {
-                Label("Train LORA", systemImage: "cpu")
+            if loraEnabled {
+                Button {
+                    showLORATraining = true
+                } label: {
+                    Label("Train LORA", systemImage: "cpu")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
 
             Spacer()
         }
@@ -237,22 +239,25 @@ struct ImagineCharactersPageView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
-                // Train LORA with LORA-selected images
-                Button {
-                    flushGalleryStateSaveImmediately(for: character)
-                    loadGalleryState(for: character)
-                    showLORATraining = true
-                } label: {
-                    Label(
-                        galleryState.loraSelectedPaths.isEmpty
-                            ? "Train LORA"
-                            : "Train LORA (\(galleryState.loraSelectedPaths.count))",
-                        systemImage: "cpu"
-                    )
+                // Train LORA with LORA-selected images — hidden when LoRA
+                // features are disabled in Global Settings.
+                if loraEnabled {
+                    Button {
+                        flushGalleryStateSaveImmediately(for: character)
+                        loadGalleryState(for: character)
+                        showLORATraining = true
+                    } label: {
+                        Label(
+                            galleryState.loraSelectedPaths.isEmpty
+                                ? "Train LORA"
+                                : "Train LORA (\(galleryState.loraSelectedPaths.count))",
+                            systemImage: "cpu"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!runpodService.hasAPIKey)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(!runpodService.hasAPIKey)
             }
             .sheet(isPresented: $showLORATraining) {
                 LORATrainingSheet(
@@ -1733,6 +1738,12 @@ struct ImagineCharactersPageView: View {
                     inspirationGenerationStatus = "Generating \(index + 1) of \(drafts.count)…"
                     inspirationGenerationProgress = Double(index) / total
 
+                    let activityID = store.registerGeminiActivity(
+                        kind: .immediate,
+                        title: draft.title,
+                        source: "Imagine • \(character.name)"
+                    )
+
                     let request = GeminiImageService.GenerationRequest(
                         prompt: draft.effectivePrompt,
                         referenceImages: buildReferenceImages(from: draft.referenceItems),
@@ -1742,7 +1753,13 @@ struct ImagineCharactersPageView: View {
                     )
 
                     store.logGeminiAPICall(endpoint: "image-generation", source: "ImagineCharactersPageView.runInspirationGeneration()")
-                    let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
+                    let result: GeminiImageService.GenerationResult
+                    do {
+                        result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
+                    } catch {
+                        store.updateGeminiActivity(activityID, status: .failed, errorMessage: error.localizedDescription)
+                        throw error
+                    }
 
                     let storedPath = try store.storeGeneratedInspirationImage(
                         result.imageData,
@@ -1758,6 +1775,8 @@ struct ImagineCharactersPageView: View {
                     if autoSelectForLoRA, !storedPath.isEmpty {
                         galleryState.loraSelectedPaths.insert(storedPath)
                     }
+                    store.updateGeminiActivity(activityID, status: .completed,
+                                               outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent)
                     refreshPreloadedPaths(character: character)
                 }
 
