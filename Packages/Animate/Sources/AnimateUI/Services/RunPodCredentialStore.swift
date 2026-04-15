@@ -7,12 +7,20 @@ struct RunPodCredentialStore: Sendable {
     private let account = "runpod-api-key"
 
     func loadAPIKey() -> String {
+        // 1. Env override (unchanged — CI / scripted runs can inject).
         if let fromEnvironment = ProcessInfo.processInfo.environment["RUNPOD_API_KEY"]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !fromEnvironment.isEmpty {
             return fromEnvironment
         }
 
+        // 2. Project-local JSON (synced between machines).
+        if ProjectCredentialStore.shared.isActive() {
+            let fromProject = ProjectCredentialStore.shared.runPodAPIKey()
+            if !fromProject.isEmpty { return fromProject }
+        }
+
+        // 3. Legacy `.lora-maker` credential file.
         let localFile = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".lora-maker/runpod_api_key")
         if let data = try? Data(contentsOf: localFile),
@@ -22,6 +30,7 @@ struct RunPodCredentialStore: Sendable {
             return fromFile
         }
 
+        // 4. Keychain fallback.
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -40,7 +49,10 @@ struct RunPodCredentialStore: Sendable {
 
     func saveAPIKey(_ apiKey: String) {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        deleteAPIKey()
+        if ProjectCredentialStore.shared.isActive() {
+            ProjectCredentialStore.shared.setRunPodAPIKey(trimmed)
+        }
+        deleteKeychainEntry()
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -52,6 +64,13 @@ struct RunPodCredentialStore: Sendable {
     }
 
     func deleteAPIKey() {
+        if ProjectCredentialStore.shared.isActive() {
+            ProjectCredentialStore.shared.setRunPodAPIKey("")
+        }
+        deleteKeychainEntry()
+    }
+
+    private func deleteKeychainEntry() {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

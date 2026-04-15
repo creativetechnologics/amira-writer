@@ -4596,6 +4596,17 @@ final class AnimateStore {
             owpIndexFile = result.indexFile
             owpInstrumentMappings = result.instrumentMappings
 
+            // 1b. Activate the project-local credential store so API keys
+            //     are read from / written to <project>/config/api-credentials.json
+            //     instead of the macOS Keychain. First open migrates existing
+            //     Keychain values into the JSON file.
+            ProjectCredentialStore.shared.setActiveProject(effectiveProjectURL)
+            AppLog.log("STARTUP", "Credentials: project store active at \(effectiveProjectURL.appendingPathComponent("config/api-credentials.json").path)")
+            hydrateGeminiSettings()
+            hydrateMiniMaxSettings()
+            hydrateViduSettings()
+            hydrateRunPodSettings()
+
             // 2. Ensure Animate/ directory exists
             let animateDir = effectiveProjectURL.appendingPathComponent("Animate")
             if hasLocalMirror, !fm.fileExists(atPath: animateDir.path) {
