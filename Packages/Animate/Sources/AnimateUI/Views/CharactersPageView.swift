@@ -1271,6 +1271,9 @@ struct ImageGallerySection: View {
     let onToggleCurated: ((String) -> Void)?
     let onMoveToTrash: ((String) -> Void)?
     let onEditWithGemini: ((String) -> Void)?
+    let ratingFor: ((String) -> Int)?        // nil = rating UI disabled
+    let onSetRating: ((String, Int) -> Void)?
+    let showsInlineRemoveButton: Bool
     var curatedPaths: Set<String>
     var showsHeader: Bool
     @Binding var selectedPaths: Set<String>
@@ -1299,6 +1302,9 @@ struct ImageGallerySection: View {
         onToggleCurated: ((String) -> Void)? = nil,
         onMoveToTrash: ((String) -> Void)? = nil,
         onEditWithGemini: ((String) -> Void)? = nil,
+        ratingFor: ((String) -> Int)? = nil,
+        onSetRating: ((String, Int) -> Void)? = nil,
+        showsInlineRemoveButton: Bool = false,
         curatedPaths: Set<String> = [],
         showsHeader: Bool = true,
         selectedPaths: Binding<Set<String>>,
@@ -1322,6 +1328,9 @@ struct ImageGallerySection: View {
         self.onToggleCurated = onToggleCurated
         self.onMoveToTrash = onMoveToTrash
         self.onEditWithGemini = onEditWithGemini
+        self.ratingFor = ratingFor
+        self.onSetRating = onSetRating
+        self.showsInlineRemoveButton = showsInlineRemoveButton
         self.curatedPaths = curatedPaths
         self.showsHeader = showsHeader
         self._selectedPaths = selectedPaths
@@ -1561,7 +1570,10 @@ struct ImageGallerySection: View {
                     onShowPrompt: onShowPrompt == nil ? nil : { onShowPrompt?(path) },
                     onToggleCurated: onToggleCurated == nil ? nil : { onToggleCurated?(path) },
                     onMoveToTrash: onMoveToTrash == nil ? nil : { onMoveToTrash?(path) },
-                    onEditWithGemini: onEditWithGemini == nil ? nil : { onEditWithGemini?(path) }
+                    onEditWithGemini: onEditWithGemini == nil ? nil : { onEditWithGemini?(path) },
+                    currentRating: ratingFor.map { $0(path) },
+                    onSetRating: onSetRating == nil ? nil : { rating in onSetRating?(path, rating) },
+                    showsInlineRemoveButton: showsInlineRemoveButton
                 )
             }
         }
@@ -1605,6 +1617,9 @@ struct ImageGalleryThumbnail: View {
     let onToggleCurated: (() -> Void)?
     let onMoveToTrash: (() -> Void)?
     let onEditWithGemini: (() -> Void)?
+    let currentRating: Int?           // nil = rating UI disabled
+    let onSetRating: ((Int) -> Void)?
+    let showsInlineRemoveButton: Bool
 
     private var imageBoxHeight: CGFloat {
         max(88, tileWidth * 0.68)
@@ -1730,12 +1745,26 @@ struct ImageGalleryThumbnail: View {
     private var thumbnailImage: some View {
         AsyncThumbnailView(store: store, path: path, tileWidth: tileWidth, imageBoxHeight: imageBoxHeight, isSelected: isSelected)
         .overlay(alignment: .topTrailing) {
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(.white, Color.accentColor)
-                    .padding(6)
+            HStack(spacing: 4) {
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white, Color.accentColor)
+                }
+                if showsInlineRemoveButton {
+                    Button {
+                        onRemove()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white, Color.red.opacity(0.82))
+                            .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove from this place (file stays on disk)")
+                }
             }
+            .padding(6)
         }
         .overlay(alignment: .topLeading) {
             if isCurated {
@@ -1745,6 +1774,38 @@ struct ImageGalleryThumbnail: View {
                     .padding(6)
             }
         }
+        .overlay(alignment: .bottom) {
+            if currentRating != nil, let onSetRating {
+                StarRatingRow(rating: currentRating ?? 0, onSet: onSetRating)
+                    .padding(.bottom, 4)
+            }
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct StarRatingRow: View {
+    let rating: Int
+    let onSet: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(1...5, id: \.self) { star in
+                Button {
+                    // Click again on current rating to clear.
+                    onSet(rating == star ? 0 : star)
+                } label: {
+                    Image(systemName: star <= rating ? "star.fill" : "star")
+                        .font(.system(size: 11))
+                        .foregroundStyle(star <= rating ? .yellow : .white.opacity(0.75))
+                        .shadow(color: .black.opacity(0.6), radius: 1.5, x: 0, y: 0.5)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(Color.black.opacity(0.35), in: Capsule())
     }
 }
 

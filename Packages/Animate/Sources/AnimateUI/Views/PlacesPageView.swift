@@ -2176,6 +2176,11 @@ struct PlacesPageView: View {
                 onEditWithGemini: { path in
                     beginEditWithGemini(for: place, imagePath: path, workflow: workflowMode)
                 },
+                ratingFor: { path in store.placeImageRating(path: path, placeID: place.id) },
+                onSetRating: { path, rating in
+                    store.setPlaceImageRating(path: path, rating: rating, placeID: place.id)
+                },
+                showsInlineRemoveButton: true,
                 showsHeader: true,
                 selectedPaths: $workflowSelectedPaths,
                 lastClickedPath: $workflowLastClickedPath

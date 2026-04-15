@@ -2169,12 +2169,15 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
     var animatedApprovedImagePath: String?
     var buildingAnchorNodeID: UUID?
     var linkedExteriorPlaceID: UUID?
+    /// 1-5 star rating per image path. 0 or missing = unrated.
+    var imageRatings: [String: Int] = [:]
 
     enum CodingKeys: String, CodingKey {
         case id, name, filename, notes, imagePaths, approvedImagePath
         case angleImages, locationCategory, sceneUsage
         case referenceImages, workflowPromptNotes, animatedImagePaths, animatedApprovedImagePath
         case buildingAnchorNodeID, linkedExteriorPlaceID
+        case imageRatings
     }
 
     init(
@@ -2231,6 +2234,7 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         animatedApprovedImagePath = try c.decodeIfPresent(String.self, forKey: .animatedApprovedImagePath)
         buildingAnchorNodeID = try c.decodeIfPresent(UUID.self, forKey: .buildingAnchorNodeID)
         linkedExteriorPlaceID = try c.decodeIfPresent(UUID.self, forKey: .linkedExteriorPlaceID)
+        imageRatings = try c.decodeIfPresent([String: Int].self, forKey: .imageRatings) ?? [:]
     }
 
     var resolvedApprovedImagePath: String? {

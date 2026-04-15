@@ -10783,6 +10783,24 @@ final class AnimateStore {
         save(writePlaces: true)
     }
 
+    /// Get the star rating (0-5) for a specific place image. 0 = unrated.
+    func placeImageRating(path: String, placeID: UUID) -> Int {
+        guard let idx = backgrounds.firstIndex(where: { $0.id == placeID }) else { return 0 }
+        return backgrounds[idx].imageRatings[path] ?? 0
+    }
+
+    /// Set the star rating (0-5) for a place image. 0 clears the rating.
+    func setPlaceImageRating(path: String, rating: Int, placeID: UUID) {
+        guard let idx = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
+        let clamped = max(0, min(5, rating))
+        if clamped == 0 {
+            backgrounds[idx].imageRatings.removeValue(forKey: path)
+        } else {
+            backgrounds[idx].imageRatings[path] = clamped
+        }
+        save(writePlaces: true)
+    }
+
     /// Remove a place image by path AND move the underlying file to macOS
     /// Trash (recoverable). Used by right-click Move File to Trash in the
     /// Places photorealistic / animated gallery.
