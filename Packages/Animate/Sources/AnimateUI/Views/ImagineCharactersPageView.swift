@@ -1368,6 +1368,10 @@ struct ImagineCharactersPageView: View {
                     store.prepareProfilePicCrop(from: path, for: charID)
                 }
                 Divider()
+                Button("Edit with Gemini…", systemImage: "wand.and.sparkles") {
+                    beginEditWithGemini(characterID: charID, imagePath: path)
+                }
+                Divider()
                 Button("Move to Trash", role: .destructive) {
                     store.deleteInspirationImageToTrash(path: path, for: charID)
                     if let refreshed = store.characters.first(where: { $0.id == charID }) {
@@ -1376,6 +1380,44 @@ struct ImagineCharactersPageView: View {
                 }
             }
         }
+    }
+
+    /// Right-click "Edit with Gemini…" on an Imagine inspiration thumbnail →
+    /// opens the preflight sheet with a single draft that uses this image as
+    /// the first included reference. Pulls prompt/model/aspect/size from the
+    /// image's JSON metadata sidecar when present.
+    private func beginEditWithGemini(characterID: UUID, imagePath: String) {
+        guard let character = store.characters.first(where: { $0.id == characterID }) else { return }
+        let metadata = store.generationMetadata(for: imagePath)
+        let filename = URL(fileURLWithPath: imagePath).lastPathComponent
+
+        let sourceLabel = "Source: \(filename)"
+        let ref = GeminiGenerationReferenceDraft(label: sourceLabel, path: imagePath, isIncluded: true)
+
+        let promptText = metadata?.prompt ?? ""
+        let aspectRatio = metadata?.aspectRatio ?? CharacterInspirationPromptCatalog.defaultAspectRatio
+        let imageSize = metadata?.imageSize ?? CharacterInspirationPromptCatalog.defaultImageSize
+        let model = metadata.flatMap { GeminiModel(rawValue: $0.model) } ?? store.selectedGeminiModel
+
+        let draft = GeminiGenerationDraft(
+            title: "Edit \(filename)",
+            destinationDescription: "\(character.name) • inspiration edit",
+            prompt: promptText,
+            contextNote: "Editing existing inspiration image — refine the prompt, adjust refs, then regenerate.",
+            model: model,
+            aspectRatio: aspectRatio,
+            imageSize: imageSize,
+            referenceItems: [ref],
+            pricingMode: .standard
+        )
+        inspirationDrafts = [draft]
+        inspirationActiveWardrobe = character.defaultWardrobeType
+        inspirationPendingPlan = PendingInspirationGenerationPlan(
+            title: "Edit \(filename)",
+            confirmTitle: "Regenerate",
+            mode: .immediate,
+            wardrobe: character.defaultWardrobeType
+        )
     }
 
     @ViewBuilder
