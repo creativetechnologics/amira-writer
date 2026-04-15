@@ -98,6 +98,7 @@ private struct PlacesWorkspaceContent: View {
                         .lineLimit(1)
                     Spacer(minLength: 10)
                     GeminiStatusBadge(store: store)
+                    GlobalSettingsGear(store: store)
                 }
             } content: {
                 PlacesPageView(store: store, viewMode: $placesViewMode, showSidebar: false)

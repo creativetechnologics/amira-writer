@@ -106,6 +106,7 @@ private struct ImagineWorkspaceContent: View {
                     }
 
                     GeminiStatusBadge(store: store)
+                    GlobalSettingsGear(store: store)
                 }
             } content: {
                 pageContent

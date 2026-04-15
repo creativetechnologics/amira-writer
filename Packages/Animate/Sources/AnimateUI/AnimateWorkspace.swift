@@ -309,6 +309,7 @@ private struct AnimateWorkspaceContent: View {
                     Spacer(minLength: 10)
 
                     GeminiStatusBadge(store: store)
+                    GlobalSettingsGear(store: store)
 
                     if !inspectorVisible {
                         OperaChromeActionButton(systemImage: "sidebar.right") {

@@ -12,6 +12,7 @@ struct ImagineCharactersPageView: View {
     @State private var galleryState: ImagineGallerySelectionState = .init()
     @State private var focusedIndex: Int = 0
     @State private var preloadedPaths: [String] = []
+    @AppStorage("animate.features.loraEnabled") private var loraEnabled: Bool = true
     @AppStorage("imagineChars.galleryThumbnailSize") private var thumbnailBaseSize: Double = 120
     @AppStorage("imagineChars.galleryFilter") private var galleryFilterRawValue: String = GalleryFilter.all.rawValue
     /// Default preview pane height.
@@ -1285,31 +1286,34 @@ struct ImagineCharactersPageView: View {
                 }
                 .help("Gemini reference (G=pick, F=unpick)")
             }
-            // LORA checkbox — TOP RIGHT (purple)
+            // LORA checkbox — TOP RIGHT (purple). Hidden when LoRA features
+            // are disabled in Global Settings.
             .overlay(alignment: .topTrailing) {
-                ZStack {
-                    Image(systemName: isLoraPicked ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 18))
-                        .foregroundStyle(isLoraPicked ? Color.purple : Color.white.opacity(0.85))
-                        .shadow(color: .black.opacity(0.6), radius: 2, x: 0, y: 1)
-                    Text("L")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(isLoraPicked ? .white : Color.purple)
-                }
-                .padding(5)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    galleryKeyboardFocused = true
-                    hasShownFocusHighlight = true
-                    if isLoraPicked {
-                        galleryState.loraSelectedPaths.remove(selectionKey)
-                    } else {
-                        galleryState.loraSelectedPaths.insert(selectionKey)
+                if loraEnabled {
+                    ZStack {
+                        Image(systemName: isLoraPicked ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 18))
+                            .foregroundStyle(isLoraPicked ? Color.purple : Color.white.opacity(0.85))
+                            .shadow(color: .black.opacity(0.6), radius: 2, x: 0, y: 1)
+                        Text("L")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(isLoraPicked ? .white : Color.purple)
                     }
-                    syncFocusedIndex(preferredPath: path)
-                    flushGalleryStateSaveImmediately(for: character)
+                    .padding(5)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        galleryKeyboardFocused = true
+                        hasShownFocusHighlight = true
+                        if isLoraPicked {
+                            galleryState.loraSelectedPaths.remove(selectionKey)
+                        } else {
+                            galleryState.loraSelectedPaths.insert(selectionKey)
+                        }
+                        syncFocusedIndex(preferredPath: path)
+                        flushGalleryStateSaveImmediately(for: character)
+                    }
+                    .help("LORA training (L=pick, K=unpick)")
                 }
-                .help("LORA training (L=pick, K=unpick)")
             }
             // Hidden indicator (bottom-center)
             .overlay(alignment: .bottom) {
