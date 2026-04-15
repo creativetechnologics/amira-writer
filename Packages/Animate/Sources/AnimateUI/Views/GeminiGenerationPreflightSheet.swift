@@ -65,6 +65,10 @@ struct GeminiGenerationDraft: Identifiable, Hashable, Sendable {
     var cameraPose: WorldCameraPose? = nil
     var mapPoint: WorldMapPoint? = nil
     var mapViewPreset: MapViewPreset? = nil
+    /// When non-nil, the draft is in "edit an existing image" mode. The
+    /// preflight sheet shows an "Adjustments" text field in addition to the
+    /// base prompt; effectivePrompt composes an edit-style instruction.
+    var editInstructions: String? = nil
     var pricingMode: PricingMode = .standard
     var isSelected: Bool = true
     var overrideTelemetry: GeminiGenerationDraftOverrideTelemetry? = nil
@@ -82,14 +86,31 @@ struct GeminiGenerationDraft: Identifiable, Hashable, Sendable {
         referenceItems.filter(\.isIncluded)
     }
 
-    /// The prompt that actually gets submitted to Gemini: the user-authored
-    /// `prompt` plus a camera-brief preamble when a Map View preset has been
-    /// attached. All submission call sites should use this instead of `prompt`.
+    /// The prompt that actually gets submitted to Gemini.
+    ///
+    /// Composition order (when all pieces are present):
+    ///   1. Map View camera preamble (if mapViewPreset attached)
+    ///   2. User prompt
+    ///   3. Edit-instructions block (when editInstructions non-nil and non-empty)
+    ///
+    /// Callers should use this instead of `prompt` so Map View presets and
+    /// edit-mode adjustments actually reach the API.
     var effectivePrompt: String {
-        guard let preset = mapViewPreset else { return prompt }
-        let preamble = preset.formattedPromptPreamble()
-        if preamble.isEmpty { return prompt }
-        return preamble + "\n\n" + prompt
+        var parts: [String] = []
+        if let preset = mapViewPreset {
+            let preamble = preset.formattedPromptPreamble()
+            if !preamble.isEmpty { parts.append(preamble) }
+        }
+        if !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(prompt)
+        }
+        if let adj = editInstructions?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !adj.isEmpty {
+            parts.append(
+                "[EDIT INSTRUCTIONS]\nUsing the attached reference image as the starting point, apply these adjustments: \(adj). Preserve everything else about the image exactly (composition, lighting, style, subject) unless the instructions above explicitly change it."
+            )
+        }
+        return parts.joined(separator: "\n\n")
     }
 }
 
@@ -211,6 +232,31 @@ struct GeminiGenerationPreflightSheet: View {
                     onCancel: { cameraPickerDraftID = nil }
                 )
             }
+        }
+    }
+
+    @ViewBuilder
+    private func editInstructionsField(for draft: Binding<GeminiGenerationDraft>) -> some View {
+        let instructionsBinding = Binding<String>(
+            get: { draft.wrappedValue.editInstructions ?? "" },
+            set: { draft.wrappedValue.editInstructions = $0 }
+        )
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Adjustments", systemImage: "slider.horizontal.3")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                Spacer()
+                Text("Editing existing image — describe only what to change.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            TextEditor(text: instructionsBinding)
+                .font(.callout)
+                .frame(minHeight: 70)
+                .padding(8)
+                .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.accentColor.opacity(0.3)))
         }
     }
 
@@ -609,8 +655,12 @@ struct GeminiGenerationPreflightSheet: View {
 
             mapViewRow(for: draft)
 
+            if draft.wrappedValue.editInstructions != nil {
+                editInstructionsField(for: draft)
+            }
+
             VStack(alignment: .leading, spacing: 8) {
-                Text("Prompt")
+                Text(draft.wrappedValue.editInstructions == nil ? "Prompt" : "Base prompt (reference context)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 TextEditor(text: draft.prompt)

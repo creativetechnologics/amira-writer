@@ -2477,17 +2477,18 @@ struct PlacesPageView: View {
             refs.swapAt(0, idx)
         }
 
-        let draft = GeminiGenerationDraft(
+        var draft = GeminiGenerationDraft(
             title: "Edit \(filename)",
             destinationDescription: "\(place.name) • \(workflow.displayName)",
             prompt: metadata?.prompt ?? "",
-            contextNote: "Editing existing image — refine the prompt and references, then regenerate.",
+            contextNote: "Editing existing image — describe only what to change in the Adjustments box below.",
             model: metadata.flatMap { GeminiModel(rawValue: $0.model) } ?? config.model,
             aspectRatio: metadata?.aspectRatio ?? config.aspectRatio,
             imageSize: metadata?.imageSize ?? config.imageSize,
             referenceItems: refs,
             pricingMode: .standard
         )
+        draft.editInstructions = ""
         placeGenerationDrafts = [draft]
         placePendingPlan = PendingPlaceGenerationPlan(
             placeID: place.id,

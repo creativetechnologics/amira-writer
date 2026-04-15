@@ -1403,17 +1403,18 @@ struct ImagineCharactersPageView: View {
         let imageSize = metadata?.imageSize ?? CharacterInspirationPromptCatalog.defaultImageSize
         let model = metadata.flatMap { GeminiModel(rawValue: $0.model) } ?? store.selectedGeminiModel
 
-        let draft = GeminiGenerationDraft(
+        var draft = GeminiGenerationDraft(
             title: "Edit \(filename)",
             destinationDescription: "\(character.name) • inspiration edit",
             prompt: promptText,
-            contextNote: "Editing existing inspiration image — refine the prompt, adjust refs, then regenerate.",
+            contextNote: "Editing existing inspiration image — describe only what to change in the Adjustments box below.",
             model: model,
             aspectRatio: aspectRatio,
             imageSize: imageSize,
             referenceItems: [ref],
             pricingMode: .standard
         )
+        draft.editInstructions = ""
         inspirationDrafts = [draft]
         inspirationActiveWardrobe = character.defaultWardrobeType
         inspirationPendingPlan = PendingInspirationGenerationPlan(
