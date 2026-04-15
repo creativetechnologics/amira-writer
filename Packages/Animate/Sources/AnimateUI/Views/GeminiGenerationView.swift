@@ -379,7 +379,7 @@ struct GeminiGenerationView: View {
             generationProgress = Double(index) / total
 
             let request = GeminiImageService.GenerationRequest(
-                prompt: draft.prompt,
+                prompt: draft.effectivePrompt,
                 referenceImages: buildReferenceImages(from: draft.referenceItems),
                 model: draft.model,
                 aspectRatio: draft.aspectRatio,

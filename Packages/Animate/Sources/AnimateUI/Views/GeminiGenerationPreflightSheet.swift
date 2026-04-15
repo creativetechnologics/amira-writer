@@ -81,6 +81,16 @@ struct GeminiGenerationDraft: Identifiable, Hashable, Sendable {
     var includedReferenceItems: [GeminiGenerationReferenceDraft] {
         referenceItems.filter(\.isIncluded)
     }
+
+    /// The prompt that actually gets submitted to Gemini: the user-authored
+    /// `prompt` plus a camera-brief preamble when a Map View preset has been
+    /// attached. All submission call sites should use this instead of `prompt`.
+    var effectivePrompt: String {
+        guard let preset = mapViewPreset else { return prompt }
+        let preamble = preset.formattedPromptPreamble()
+        if preamble.isEmpty { return prompt }
+        return preamble + "\n\n" + prompt
+    }
 }
 
 @available(macOS 26.0, *)
@@ -93,6 +103,7 @@ struct GeminiGenerationPreflightSheet: View {
     let onCancel: () -> Void
 
     @State private var selectedMode: GeminiGenerationDraft.PricingMode = .standard
+    @State private var cameraPickerDraftID: UUID? = nil
 
     private let aspectRatioOptions = ["1:1", "2:3", "3:4", "4:5", "4:3", "16:9", "21:9"]
     private let imageSizeOptions = ["1K", "2K", "4K"]
@@ -184,6 +195,62 @@ struct GeminiGenerationPreflightSheet: View {
             for index in drafts.indices {
                 drafts[index].pricingMode = newMode
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { cameraPickerDraftID != nil },
+            set: { if !$0 { cameraPickerDraftID = nil } }
+        )) {
+            if let id = cameraPickerDraftID,
+               let idx = drafts.firstIndex(where: { $0.id == id }) {
+                Map3DCameraPickerSheet(
+                    initialPreset: drafts[idx].mapViewPreset,
+                    onSave: { preset in
+                        drafts[idx].mapViewPreset = preset
+                        cameraPickerDraftID = nil
+                    },
+                    onCancel: { cameraPickerDraftID = nil }
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func mapViewRow(for draft: Binding<GeminiGenerationDraft>) -> some View {
+        HStack(spacing: 8) {
+            if let preset = draft.wrappedValue.mapViewPreset {
+                Label(preset.summaryLine, systemImage: "camera.viewfinder")
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.blue.opacity(0.15), in: Capsule())
+                Button {
+                    cameraPickerDraftID = draft.wrappedValue.id
+                } label: {
+                    Label("Change", systemImage: "camera.rotate")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button {
+                    draft.wrappedValue.mapViewPreset = nil
+                } label: {
+                    Label("Clear", systemImage: "xmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            } else {
+                Button {
+                    cameraPickerDraftID = draft.wrappedValue.id
+                } label: {
+                    Label("Add Map View", systemImage: "mountain.2")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Text("Attach a 3D-map camera angle so Gemini renders from that viewpoint.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
         }
     }
 
@@ -540,6 +607,8 @@ struct GeminiGenerationPreflightSheet: View {
                 }
             }
 
+            mapViewRow(for: draft)
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("Prompt")
                     .font(.caption)
@@ -683,6 +752,8 @@ struct GeminiGenerationPreflightSheet: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            mapViewRow(for: draft)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Prompt")
