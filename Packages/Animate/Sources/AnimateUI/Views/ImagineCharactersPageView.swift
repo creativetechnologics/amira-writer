@@ -1321,6 +1321,18 @@ struct ImagineCharactersPageView: View {
                         .padding(4)
                 }
             }
+            // "New / unreviewed" dot — BOTTOM LEFT (green)
+            .overlay(alignment: .bottomLeading) {
+                if !character.reviewedInspirationImagePaths.contains(path) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 10, height: 10)
+                        .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1.5))
+                        .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+                        .padding(6)
+                        .help("New — not yet reviewed")
+                }
+            }
         .contentShape(Rectangle())
         // Single-tap = instant selection. We intentionally do NOT use a
         // double-tap + .exclusively(before:) combo here because SwiftUI has to
@@ -1331,6 +1343,7 @@ struct ImagineCharactersPageView: View {
             galleryKeyboardFocused = true
             hasShownFocusHighlight = true
             focusedIndex = index
+            store.markInspirationImageReviewed(path: path, for: character.id)
         }
         .contextMenu {
             Button("Quick Look") {

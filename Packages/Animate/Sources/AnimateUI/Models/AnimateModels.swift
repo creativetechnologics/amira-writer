@@ -624,6 +624,10 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
     var age: Int?
     var inspirationImagePaths: [String]
     var curatedInspirationImagePaths: [String]
+    /// Paths already reviewed by the user. Any path in inspirationImagePaths
+    /// that is NOT in this set is treated as "new" and flagged with a green
+    /// dot in the gallery until the user interacts with the thumbnail.
+    var reviewedInspirationImagePaths: Set<String> = []
     var inspirationReferenceImagePath: String?
     var inspirationBatchJobs: [CharacterInspirationBatchJob]
     var referenceImagePaths: [String]
@@ -742,6 +746,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         age = try c.decodeIfPresent(Int.self, forKey: .age)
         inspirationImagePaths = try c.decodeIfPresent([String].self, forKey: .inspirationImagePaths) ?? []
         curatedInspirationImagePaths = try c.decodeIfPresent([String].self, forKey: .curatedInspirationImagePaths) ?? []
+        reviewedInspirationImagePaths = Set(try c.decodeIfPresent([String].self, forKey: .reviewedInspirationImagePaths) ?? [])
         inspirationReferenceImagePath = try c.decodeIfPresent(String.self, forKey: .inspirationReferenceImagePath)
         inspirationBatchJobs = try c.decodeIfPresent([CharacterInspirationBatchJob].self, forKey: .inspirationBatchJobs) ?? []
         referenceImagePaths = try c.decodeIfPresent([String].self, forKey: .referenceImagePaths) ?? []

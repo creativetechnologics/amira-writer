@@ -5954,6 +5954,25 @@ final class AnimateStore {
         save()
     }
 
+    /// Mark an inspiration image as reviewed so the "new" green dot in the
+    /// gallery goes away. Idempotent.
+    func markInspirationImageReviewed(path: String, for characterID: UUID) {
+        guard let idx = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        if characters[idx].reviewedInspirationImagePaths.contains(path) { return }
+        characters[idx].reviewedInspirationImagePaths.insert(path)
+        save()
+    }
+
+    /// Mark EVERY inspiration image on a character as reviewed at once.
+    /// Useful for a "Mark all reviewed" bulk action.
+    func markAllInspirationImagesReviewed(for characterID: UUID) {
+        guard let idx = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        let all = Set(characters[idx].inspirationImagePaths)
+        if characters[idx].reviewedInspirationImagePaths == all { return }
+        characters[idx].reviewedInspirationImagePaths = all
+        save()
+    }
+
     /// Remove an inspiration image by path and move the underlying file to the
     /// macOS Trash. Used by right-click Delete in the Imagine gallery.
     /// Returns `true` on success. If the file is missing, still removes the
