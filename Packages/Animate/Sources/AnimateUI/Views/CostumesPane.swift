@@ -74,7 +74,7 @@ struct CostumesPane: View {
             HStack(spacing: 6) {
                 Image(systemName: "tshirt")
                     .font(.caption)
-                Text(costume.title.isEmpty ? "Untitled" : costume.title)
+                Text(costume.name.isEmpty ? "Untitled" : costume.name)
                     .font(.callout.weight(isSelected ? .semibold : .regular))
                     .lineLimit(1)
                 Text("\(costume.fullBodySlots.count)")
