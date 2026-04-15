@@ -16,6 +16,7 @@ struct CharactersPageView: View {
     @AppStorage("charactersPage.showCharacterNotesPane") private var showCharacterNotesPane: Bool = true
     @AppStorage("charactersPage.showLookDevelopmentPane") private var showLookDevelopmentPane: Bool = true
     @AppStorage("charactersPage.showReferenceWorkflowPane") private var showReferenceWorkflowPane: Bool = true
+    @AppStorage("charactersPage.showCostumesPane") private var showCostumesPane: Bool = true
     // 3D Sidecars pane archived
     @AppStorage("charactersPage.showActionImagesPane") private var showActionImagesPane: Bool = false
     @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
@@ -362,6 +363,17 @@ struct CharactersPageView: View {
                     }
 
                     // Character Packages archived 2026-04-05 — Vidu pipeline replaces SceneKit
+
+                    collapsiblePane(
+                        title: "Costumes",
+                        icon: "tshirt",
+                        counterText: "\(character.costumeReferenceSets.count) costumes",
+                        isExpanded: $showCostumesPane
+                    ) {
+                        if showCostumesPane {
+                            CostumesPane(store: store, characterID: character.id)
+                        }
+                    }
 
                     collapsiblePane(
                         title: "Action Images",
