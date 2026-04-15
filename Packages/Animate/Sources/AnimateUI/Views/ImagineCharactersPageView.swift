@@ -1354,6 +1354,13 @@ struct ImagineCharactersPageView: View {
                 Button("Set as Profile Pic") {
                     store.prepareProfilePicCrop(from: path, for: charID)
                 }
+                Divider()
+                Button("Move to Trash", role: .destructive) {
+                    store.deleteInspirationImageToTrash(path: path, for: charID)
+                    if let refreshed = store.characters.first(where: { $0.id == charID }) {
+                        refreshPreloadedPaths(character: refreshed)
+                    }
+                }
             }
         }
     }

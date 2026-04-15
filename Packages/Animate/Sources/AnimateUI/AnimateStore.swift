@@ -5954,6 +5954,38 @@ final class AnimateStore {
         save()
     }
 
+    /// Remove an inspiration image by path and move the underlying file to the
+    /// macOS Trash. Used by right-click Delete in the Imagine gallery.
+    /// Returns `true` on success. If the file is missing, still removes the
+    /// path from the character's lists and returns `true`.
+    @discardableResult
+    func deleteInspirationImageToTrash(path: String, for characterID: UUID) -> Bool {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return false }
+        // Resolve the on-disk location before mutating state in case something
+        // downstream needs it (e.g. subsequent undo plumbing).
+        let absoluteURL = resolvedCharacterAssetURL(for: path)
+
+        // Scrub the path from every list it might appear in.
+        characters[charIndex].inspirationImagePaths.removeAll(where: { $0 == path })
+        if characters[charIndex].inspirationReferenceImagePath == path {
+            characters[charIndex].inspirationReferenceImagePath = nil
+        }
+        characters[charIndex].curatedInspirationImagePaths.removeAll(where: { $0 == path })
+        save()
+
+        // Move the underlying file to Trash. If it's already gone, that's fine.
+        if let url = absoluteURL, FileManager.default.fileExists(atPath: url.path) {
+            do {
+                var resultingURL: NSURL? = nil
+                try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
+            } catch {
+                print("[AnimateStore] trashItem failed for \(url.path): \(error.localizedDescription)")
+                return false
+            }
+        }
+        return true
+    }
+
     func toggleCuratedInspirationImage(_ path: String, for characterID: UUID) {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
         if let index = characters[charIndex].curatedInspirationImagePaths.firstIndex(of: path) {
