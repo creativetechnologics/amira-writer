@@ -9,3 +9,21 @@ __pycache__/
 *.pyc
 tmp/
 .playwright-mcp/
+
+# Xcode build output (previously tracked by accident)
+build/
+build.out
+build.err
+
+# Heavy research / demo outputs — kept on disk, not in git
+3D\ Research/
+Research/
+demos/
+Scripts/3d-map-pipeline/work/
+
+# Ephemeral demo screenshots dumped at repo root
+/amira-world-map-demo*.png
+/world-map-demo*.png
+
+# Local server / pipeline logs
+*.log
