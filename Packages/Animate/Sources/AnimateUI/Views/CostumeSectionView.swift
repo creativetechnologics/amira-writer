@@ -593,25 +593,34 @@ struct CostumeSectionView: View {
         onAdjustCrop: @escaping () -> Void
     ) -> some View {
         Group {
-            if let variant, let image = store.thumbnailImage(for: variant.imagePath, maxSize: 360) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(height: 150)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .contextMenu {
-                        Button("View Prompt", systemImage: "eye.circle") { onShowPrompt() }
-                        Button("Edit", systemImage: "slider.horizontal.3") { onEdit() }
-                        Button("Show in Finder", systemImage: "folder") { showInFinder(at: variant.imagePath) }
-                        Button("Copy Image", systemImage: "doc.on.doc") { copyImage(at: variant.imagePath) }
-                        Divider()
-                        Button("Adjust Crop", systemImage: "crop") { onAdjustCrop() }
-                        Button("Quick Look", systemImage: "eye") { openQuickLook(for: [variant.imagePath], startingAt: 0) }
-                    }
-                    .overlay {
-                        if isGenerating { generationOverlay(statusText: statusText) }
-                    }
+            if let variant {
+                AsyncStoreThumbnailImage.rounded(
+                    store: store,
+                    path: variant.imagePath,
+                    maxSize: 360,
+                    width: nil,
+                    height: 150,
+                    cornerRadius: 14
+                )
+                // Single-tap → Inspector Details; double-tap → Quick Look.
+                .onTapGesture(count: 2) {
+                    openQuickLook(for: [variant.imagePath], startingAt: 0)
+                }
+                .onTapGesture(count: 1) {
+                    store.imaginePreviewImagePath = variant.imagePath
+                }
+                .contextMenu {
+                    Button("View Prompt", systemImage: "eye.circle") { onShowPrompt() }
+                    Button("Edit", systemImage: "slider.horizontal.3") { onEdit() }
+                    Button("Show in Finder", systemImage: "folder") { showInFinder(at: variant.imagePath) }
+                    Button("Copy Image", systemImage: "doc.on.doc") { copyImage(at: variant.imagePath) }
+                    Divider()
+                    Button("Adjust Crop", systemImage: "crop") { onAdjustCrop() }
+                    Button("Quick Look", systemImage: "eye") { openQuickLook(for: [variant.imagePath], startingAt: 0) }
+                }
+                .overlay {
+                    if isGenerating { generationOverlay(statusText: statusText) }
+                }
             } else {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(.quaternary.opacity(0.22))

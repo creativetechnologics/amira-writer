@@ -3,23 +3,21 @@ import SwiftUI
 @available(macOS 26.0, *)
 struct ImagineInspectorView: View {
     @Bindable var store: AnimateStore
-    @State private var showAPISettings = false
-    @State private var drawThingsStatus: String?
-    @State private var drawThingsStatusIcon: String = "network"
 
     @State private var showLORATraining = false
     @ObservedObject private var runpodService = RunPodLORAService.shared
 
-    private enum InspectorTab: String { case tools, bulk, lora, properties }
-    @AppStorage("imagine.inspector.selectedTab") private var selectedTab = InspectorTab.tools.rawValue
+    private enum InspectorTab: String { case details, bulk, lora, properties }
+    @AppStorage("imagine.inspector.selectedTab.v3") private var selectedTab = InspectorTab.details.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                tabButton("Tools", tab: .tools, icon: "gearshape.fill")
+                tabButton("Details", tab: .details, icon: "info.circle")
                 tabButton("Bulk", tab: .bulk, icon: "tray.full")
-                tabButton("LORA", tab: .lora, icon: "cpu")
-                tabButton("Props", tab: .properties, icon: "slider.horizontal.3")
+                // LORA and Props tabs removed 2026-04-15 — LORA training lives
+                // on the Imagine page itself, and Props metadata is already
+                // surfaced in the Details pane.
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -27,138 +25,27 @@ struct ImagineInspectorView: View {
             Divider()
 
             ScrollView {
-                switch InspectorTab(rawValue: selectedTab) ?? .tools {
-                case .tools:
-                    toolsContent
+                // Resolve the tab, falling back to Details if an older
+                // persisted value (lora/properties) is still selected.
+                let activeTab: InspectorTab = {
+                    switch InspectorTab(rawValue: selectedTab) ?? .details {
+                    case .details: return .details
+                    case .bulk: return .bulk
+                    case .lora, .properties: return .details
+                    }
+                }()
+                switch activeTab {
+                case .details:
+                    VStack(alignment: .leading, spacing: 16) {
+                        UnifiedDetailsInspectorSection(selection: CharacterImageSelection(store: store))
+                    }
+                    .padding()
                 case .bulk:
                     bulkContent
-                case .lora:
-                    loraContent
-                case .properties:
-                    propertiesContent
+                case .lora, .properties:
+                    EmptyView()
                 }
             }
-        }
-    }
-
-    // MARK: - Tools Tab
-
-    private var toolsContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle(isOn: $store.geminiMasterSwitch) {
-                        Label("Gemini API Calls", systemImage: "bolt.fill")
-                            .font(.headline)
-                    }
-                    .toggleStyle(.switch)
-
-                    Text(store.geminiMasterSwitch
-                         ? "Gemini API calls are ENABLED. Image generation via Gemini is allowed."
-                         : "Gemini API calls are BLOCKED. No Gemini requests will be sent.")
-                        .font(.caption)
-                        .foregroundStyle(store.geminiMasterSwitch ? .green : .red)
-                }
-            } label: {
-                Label("API Control", systemImage: "shield.checkered")
-                    .font(.subheadline.weight(.semibold))
-            }
-
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    LabeledContent("Host") {
-                        TextField("http://127.0.0.1", text: Binding(
-                            get: { store.drawThingsPlaceConfig.apiHost },
-                            set: { newValue in
-                                var updated = store.drawThingsPlaceConfig
-                                updated.apiHost = newValue
-                                store.updateDrawThingsPlacesConfig(updated)
-                            }
-                        ))
-                            .font(.caption.monospaced())
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 180)
-                    }
-                    LabeledContent("Port") {
-                        TextField("7860", value: Binding(
-                            get: { store.drawThingsPlaceConfig.apiPort },
-                            set: { newValue in
-                                var updated = store.drawThingsPlaceConfig
-                                updated.apiPort = newValue
-                                store.updateDrawThingsPlacesConfig(updated)
-                            }
-                        ), format: IntegerFormatStyle<Int>().grouping(.never))
-                            .font(.caption.monospaced())
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 80)
-                    }
-
-                    Button {
-                        checkDrawThingsConnection()
-                    } label: {
-                        Label(drawThingsStatus ?? "Check Connection", systemImage: drawThingsStatusIcon)
-                    }
-                    .controlSize(.small)
-                }
-            } label: {
-                Label("Draw Things", systemImage: "paintbrush.pointed")
-                    .font(.subheadline.weight(.semibold))
-            }
-
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    LabeledContent("API Key") {
-                        Text(store.geminiAPIKey.isEmpty ? "Not set" : "Configured")
-                            .font(.caption)
-                            .foregroundStyle(store.geminiAPIKey.isEmpty ? .red : .green)
-                    }
-                    LabeledContent("Model") {
-                        Text(store.selectedGeminiModel.displayName)
-                            .font(.caption)
-                    }
-                }
-            } label: {
-                Label("Gemini", systemImage: "sparkle")
-                    .font(.subheadline.weight(.semibold))
-            }
-
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    LabeledContent("API Key") {
-                        Text(store.miniMaxAPIKey.isEmpty ? "Not set" : "Configured")
-                            .font(.caption)
-                            .foregroundStyle(store.miniMaxAPIKey.isEmpty ? .red : .green)
-                    }
-                }
-            } label: {
-                Label("MiniMax", systemImage: "text.bubble")
-                    .font(.subheadline.weight(.semibold))
-            }
-
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    LabeledContent("API Key") {
-                        Text(store.runPodAPIKey.isEmpty ? "Not set" : "Configured")
-                            .font(.caption)
-                            .foregroundStyle(store.runPodAPIKey.isEmpty ? .red : .green)
-                    }
-                }
-            } label: {
-                Label("RunPod", systemImage: "server.rack")
-                    .font(.subheadline.weight(.semibold))
-            }
-
-            Button("Open API Settings…") {
-                showAPISettings = true
-            }
-            .controlSize(.small)
-        }
-        .padding()
-        .sheet(isPresented: $showAPISettings) {
-            GeminiSettingsSheet(
-                store: store,
-                onDismiss: { showAPISettings = false }
-            )
         }
     }
 
@@ -465,41 +352,4 @@ struct ImagineInspectorView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - DrawThings Connection Check
-
-    private func checkDrawThingsConnection() {
-        drawThingsStatus = "Checking…"
-        drawThingsStatusIcon = "arrow.triangle.2.circlepath"
-        let config = store.drawThingsPlaceConfig
-        guard var components = URLComponents(string: config.apiHost) else {
-            drawThingsStatus = "Invalid host"
-            drawThingsStatusIcon = "xmark.circle.fill"
-            return
-        }
-        if components.scheme == nil { components.scheme = "http" }
-        components.port = config.apiPort
-        components.path = "/sdapi/v1/options"
-        guard let url = components.url else {
-            drawThingsStatus = "Invalid URL"
-            drawThingsStatusIcon = "xmark.circle.fill"
-            return
-        }
-        Task {
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 5
-            do {
-                let (_, response) = try await URLSession.shared.data(for: request)
-                if let http = response as? HTTPURLResponse, http.statusCode == 200 {
-                    drawThingsStatus = "Connected"
-                    drawThingsStatusIcon = "checkmark.circle.fill"
-                } else {
-                    drawThingsStatus = "Error (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))"
-                    drawThingsStatusIcon = "xmark.circle.fill"
-                }
-            } catch {
-                drawThingsStatus = "Offline — \(error.localizedDescription)"
-                drawThingsStatusIcon = "xmark.circle.fill"
-            }
-        }
-    }
 }

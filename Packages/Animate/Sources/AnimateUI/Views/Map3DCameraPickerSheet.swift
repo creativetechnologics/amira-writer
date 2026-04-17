@@ -33,9 +33,15 @@ struct Map3DCameraPickerSheet: View {
             Divider()
 
             Map3DPickerWebView(onCameraSave: onSave)
-                .frame(minWidth: 720, minHeight: 560)
+                .frame(minWidth: 720, idealWidth: 1160, maxWidth: .infinity, minHeight: 560, idealHeight: 760, maxHeight: .infinity)
         }
-        .frame(minWidth: 900, minHeight: 640)
+        .frame(minWidth: 900, idealWidth: 1160, maxWidth: .infinity, minHeight: 640, idealHeight: 780, maxHeight: .infinity)
+        .background(
+            ResizableSheetWindowAccessor(
+                minSize: NSSize(width: 900, height: 640),
+                initialSize: NSSize(width: 1160, height: 780)
+            )
+        )
     }
 }
 
@@ -69,8 +75,15 @@ private struct Map3DPickerWebView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.userContentController.add(context.coordinator, name: "amiraMapCamera")
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        // ES-module imports under `file://` fail with a CORS error in
+        // WKWebView without these. See PlacesMap3DView.swift for the full
+        // write-up — same viewer, same requirement.
+        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        config.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
         let web = WKWebView(frame: .zero, configuration: config)
-        web.setValue(false, forKey: "drawsBackground")
+        // Do NOT set drawsBackground=false — the viewer's body background
+        // must paint during load, otherwise the picker appears solid black.
         if let url = Self.resolveViewerURL() {
             if url.scheme == "file" {
                 web.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())

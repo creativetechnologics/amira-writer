@@ -19,6 +19,7 @@ struct AnimateApp: App {
             ContentView(store: store)
                 .task {
                     await restoreLastProjectIfNeeded()
+                    AnimateAPIServer.startIfNeeded(store: store)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: AnimateAppSignals.openFileNotification)) { notification in
                     guard let url = notification.userInfo?["url"] as? URL else { return }

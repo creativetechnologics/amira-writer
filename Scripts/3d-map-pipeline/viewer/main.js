@@ -1,5 +1,35 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+// Use explicit relative paths rather than the import map — WKWebView under
+// file:// has historically failed to resolve import-map specifiers for
+// type="module" scripts, producing a silent black screen with no visible
+// error. Explicit paths work identically when served from the dev server
+// AND from a bundled file:// origin.
+// ?v=2 cache-bust: an earlier build shipped a broken OrbitControls.js that
+// used the bare 'three' specifier; WKWebView cached the failed module graph
+// for the lifetime of the app process. Bumping this query string forces a
+// fresh fetch that picks up the patched vendored files.
+import * as THREE from './vendor/three/three.module.js?v=2';
+import { OrbitControls } from './vendor/three/addons/controls/OrbitControls.js?v=2';
+
+// Beacon: confirms the top-level imports above resolved successfully.
+// If this log never appears in the Swift diagnostics pane but the HTML
+// loaded (js bridge installed message did), a module import silently
+// failed — check the WKWebView's module resolver.
+console.log('[map3d] main.js imports resolved; THREE r' + (THREE.REVISION ?? '?'));
+
+// Surface any bootstrap-time error into the #info panel so the user sees
+// something useful instead of a blank canvas.
+function reportBootError(err) {
+  const info = document.getElementById('info');
+  const msg = (err && (err.stack || err.message)) || String(err);
+  if (info) {
+    info.style.color = '#ff8080';
+    info.innerText = 'Viewer error: ' + msg;
+  }
+  try { window.webkit?.messageHandlers?.map3dLog?.postMessage('error: ' + msg); } catch {}
+  console.error('[map3d]', err);
+}
+window.addEventListener('error', (e) => reportBootError(e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => reportBootError(e.reason));
 
 const state = {
   scene: null,
@@ -40,12 +70,28 @@ async function init() {
   bindHUD();
 
   setInfo('Loading scene.json…');
+  // WKWebView under `file://` returns `status=0` for successful fetches of
+  // sibling files (there is no HTTP status line), which would fail the
+  // `.ok` check even though the file is present. Treat status=0 as "try to
+  // parse anyway"; if the file really is missing, `fetch()` throws a
+  // TypeError before we get here, which the caller's try/catch surfaces.
   const sceneResp = await fetch('scene.json');
-  if (!sceneResp.ok) { setInfo('scene.json not found — run 04_compose_scene.py first.'); return; }
-  state.sceneData = await sceneResp.json();
+  console.log('[map3d] scene.json fetch: ok=' + sceneResp.ok + ' status=' + sceneResp.status + ' type=' + sceneResp.type);
+  if (!sceneResp.ok && sceneResp.status !== 0) {
+    setInfo('scene.json not found — run 04_compose_scene.py first.');
+    return;
+  }
+  try {
+    state.sceneData = await sceneResp.json();
+  } catch (err) {
+    setInfo('scene.json parse failed: ' + err.message);
+    console.error('scene.json parse failed', err);
+    return;
+  }
 
   setInfo('Loading textures…');
   const loader = new THREE.TextureLoader();
+  loader.crossOrigin = '';  // file:// URLs hang with 'anonymous' in WKWebView
   const [tex, hmapImg] = await Promise.all([
     loadTexture(loader, state.sceneData.assets.texture_url),
     loadImageData(state.sceneData.assets.heightmap_url),
@@ -78,7 +124,7 @@ function loadTexture(loader, url) {
 function loadImageData(url) {
   return new Promise((res, rej) => {
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    img.crossOrigin = '';  // file:// URLs hang with 'anonymous' in WKWebView
     img.onload = () => {
       const canvas = document.createElement('canvas');
       canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
@@ -371,6 +417,23 @@ function buildWater(sc) {
 }
 
 function bindHUD() {
+  const hud = document.getElementById('hud');
+  const hudToggle = document.getElementById('toggleHud');
+  const applyHudCollapsedState = (collapsed) => {
+    if (!hud) return;
+    hud.classList.toggle('collapsed', collapsed);
+    if (hudToggle) {
+      hudToggle.textContent = collapsed ? 'Show map controls' : 'Hide map controls';
+      hudToggle.setAttribute('aria-expanded', String(!collapsed));
+    }
+  };
+  applyHudCollapsedState(true);
+  if (hudToggle) {
+    hudToggle.addEventListener('click', () => {
+      applyHudCollapsedState(!hud.classList.contains('collapsed'));
+    });
+  }
+
   for (const cb of document.querySelectorAll('[data-layer]')) {
     cb.addEventListener('change', (e) => {
       const name = e.target.dataset.layer;
@@ -591,19 +654,21 @@ function buildGroundingCardMetadata(slug, displayName) {
   } catch { /* raycast is best-effort */ }
 
   const promptLines = [
-    `Generate a photograph of the Amira valley scene taken from this exact camera position.`,
+    `Generate a grounded photograph of a rugged high-altitude valley settlement from this exact camera position.`,
     `The camera stands at world coordinates (X=${camPos.x.toFixed(0)}, Y=${camPos.y.toFixed(0)}, Z=${camPos.z.toFixed(0)}) — approximately ${(camPos.y - terrainUnderCam).toFixed(0)} m above local ground, at an elevation of ${camPos.y.toFixed(0)} m ASL.`,
     `Looking toward (X=${lookAt.x.toFixed(0)}, Y=${lookAt.y.toFixed(0)}, Z=${lookAt.z.toFixed(0)}), compass heading ${headingDeg.toFixed(0)}° (${headingName}), field of view ${cam.fov}°.`,
-    `Scene context: Himalayan-style valley, world width ≈ ${(sc.world.world_width_m / 1000).toFixed(1)} km, peak mountain ≈ ${Math.round(sc.world.peak_alt_m)} m above the river.`,
+    `Scene context: weathered stone and mud-brick buildings, ochre dirt, scrubby mountain vegetation, and cold blue river water inside a steep Himalayan-style valley about ${(sc.world.world_width_m / 1000).toFixed(1)} km wide with peaks rising roughly ${Math.round(sc.world.peak_alt_m)} m above the river.`,
+    `Use any uploaded map or reference images as the only source of geography, architecture, terrain, and river placement. Do not rely on unseen scene names, labels, or internal project names.`,
   ];
   if (visibleBuildings.length) {
-    const names = visibleBuildings.slice(0, 6).map(b => `${b.label} (${b.distance_m}m)`).join(', ');
-    promptLines.push(`In frame — buildings (closest first): ${names}.`);
+    const nearest = visibleBuildings[0]?.distance_m ?? 0;
+    promptLines.push(`In frame: ${visibleBuildings.length} visible buildings or roof masses, with the nearest structure roughly ${nearest} m from camera.`);
   }
   if (visibleWater.length) {
-    promptLines.push(`Water in frame: ${visibleWater.slice(0, 3).map(w => `${w.label} @ ~${w.distance_m}m`).join(', ')}.`);
+    const nearestWater = visibleWater[0]?.distance_m ?? 0;
+    promptLines.push(`Water is visible in frame, with the nearest river surface roughly ${nearestWater} m from camera.`);
   }
-  promptLines.push(`Match the existing master-map aesthetic (weathered stone houses, ochre dirt, blue glacial meltwater, scrubby mountain vegetation).`);
+  promptLines.push(`Match the existing master-map aesthetic: weathered stone and mud-brick architecture, ochre dirt, glacial-blue meltwater, and scrubby mountain vegetation.`);
 
   return {
     schema_version: 1,

@@ -37,15 +37,16 @@ struct InspectorView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
+                // Properties tab removed 2026-04-15 — the per-page grids /
+                // Details pane already surface the same information without
+                // a separate tab.
                 if currentPage == .places {
                     tabButton("Details", tab: .details, icon: "info.circle")
                     tabButton("Assets", tab: .assets, icon: "photo.stack")
-                    tabButton("Properties", tab: .properties, icon: "slider.horizontal.3")
                     tabButton("Gemini", tab: .gemini, icon: "sparkles")
                 } else {
                     tabButton("Details", tab: .details, icon: "info.circle")
                     tabButton("Assets", tab: .assets, icon: "shippingbox.fill")
-                    tabButton("Properties", tab: .properties, icon: "slider.horizontal.3")
                     tabButton("LLM", tab: .llm, icon: "bubble.left.and.text.bubble.right")
                 }
                 if currentPage == .characters {
@@ -57,18 +58,28 @@ struct InspectorView: View {
 
             Divider()
 
-            if selectedTab == InspectorTab.batch.rawValue, currentPage == .characters {
+            // Effective tab: if an older persisted value (.properties) is
+            // still stored, fall back to Details so we never dispatch to a
+            // hidden tab.
+            let effectiveTab: String = {
+                if selectedTab == InspectorTab.properties.rawValue {
+                    return InspectorTab.details.rawValue
+                }
+                return selectedTab
+            }()
+
+            if effectiveTab == InspectorTab.batch.rawValue, currentPage == .characters {
                 batchQueueContent
-            } else if selectedTab == InspectorTab.details.rawValue {
+            } else if effectiveTab == InspectorTab.details.rawValue {
                 detailsContent
-            } else if selectedTab == InspectorTab.assets.rawValue {
+            } else if effectiveTab == InspectorTab.assets.rawValue {
                 assetsContent
-            } else if selectedTab == InspectorTab.gemini.rawValue, currentPage == .places {
+            } else if effectiveTab == InspectorTab.gemini.rawValue, currentPage == .places {
                 inspectorScrollContainer { PlaceGeminiBatchInspectorSection(store: store) }
-            } else if selectedTab == InspectorTab.llm.rawValue {
+            } else if effectiveTab == InspectorTab.llm.rawValue {
                 AnimateLLMInspectorView(store: store)
             } else {
-                propertiesContent
+                detailsContent
             }
         }
     }
@@ -77,14 +88,26 @@ struct InspectorView: View {
         Group {
             switch currentPage {
             case .places:
-                inspectorScrollContainer { PlaceGeneratedImageDetailsInspectorSection(store: store) }
+                inspectorScrollContainer {
+                    UnifiedDetailsInspectorSection(selection: PlaceImageSelection(store: store)) {
+                        PlaceDetailsExtraActionsSection(store: store)
+                    }
+                }
+            case .characters:
+                inspectorScrollContainer {
+                    UnifiedDetailsInspectorSection(selection: CharacterImageSelection(store: store))
+                }
+            case .props:
+                inspectorScrollContainer {
+                    UnifiedDetailsInspectorSection(selection: PropImageSelection(store: store))
+                }
             case .script, .animate:
                 AnimatePageView(
                     store: store,
                     workspaceState: animateWorkspaceState,
                     presentation: .assets
                 )
-            case .characters, .props, .timeline:
+            case .timeline:
                 assetsContent
             }
         }
@@ -2174,20 +2197,16 @@ private struct PlaceGeminiInspectorSection: View {
             Text("Model")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Picker("Model", selection: Binding(
-                get: { config.model },
-                set: { newValue in
-                    var updated = config
-                    updated.model = newValue
-                    store.updatePlaceWorkflowConfig(updated, for: workflowMode)
-                }
-            )) {
+            Picker("Model", selection: $store.selectedGeminiModel) {
                 ForEach(GeminiModel.allCases, id: \.self) { model in
                     Text(model.displayName).tag(model)
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            Text("Places follows the master Gemini default model.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
     }
 
@@ -2330,6 +2349,9 @@ struct PlaceGeneratedImageDetailsInspectorSection: View {
                 Text(record.summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(12)
@@ -2504,6 +2526,7 @@ struct PlaceGeneratedImageDetailsInspectorSection: View {
             if let resolution, !resolution.isEmpty {
                 metadataRow("Resolution", value: resolution)
             }
+            metadataRow("Created", value: record.createdAt.formatted(date: .abbreviated, time: .shortened))
             if let prompt = record.sourcePrompt, !prompt.isEmpty {
                 metadataRow("Prompt", value: prompt)
             }
@@ -2557,7 +2580,8 @@ struct PlaceGeneratedImageDetailsInspectorSection: View {
                                 Text(prompt)
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
-                                    .lineLimit(4)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                         .padding(10)
@@ -2577,6 +2601,8 @@ struct PlaceGeneratedImageDetailsInspectorSection: View {
             Text(value)
                 .font(.caption)
                 .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

@@ -122,6 +122,13 @@ struct GeminiGenerationPreflightSheet: View {
     let confirmTitle: String
     let onConfirm: ([GeminiGenerationDraft], GeminiGenerationDraft.PricingMode) -> Void
     let onCancel: () -> Void
+    /// Optional — when provided, a refresh button appears next to each draft's
+    /// title. Tapping it asks the parent to swap the prompt/title for the next
+    /// pose spec (e.g. cycle through the 27 CharacterInspirationPromptCatalog
+    /// specs). The parent owns the catalog + character context, so the sheet
+    /// stays generic. Pass `nil` for free-form drafts where no spec cycle
+    /// exists (e.g. Edit-with-Gemini, photoreal freeform).
+    var onRefreshSpec: ((UUID) -> Void)? = nil
 
     @State private var selectedMode: GeminiGenerationDraft.PricingMode = .standard
     @State private var cameraPickerDraftID: UUID? = nil
@@ -155,6 +162,12 @@ struct GeminiGenerationPreflightSheet: View {
 
     private var selectedLockedOverrideCount: Int {
         selectedDrafts.filter { $0.overrideTelemetry?.isLocked == true }.count
+    }
+
+    private var showsVertexTrafficNote: Bool {
+        ImageGenBackendStore.currentBackend() == .vertex
+            && selectedMode == .standard
+            && selectedDrafts.count > 1
     }
 
     private var selectedProviderOverrideCount: Int {
@@ -206,7 +219,13 @@ struct GeminiGenerationPreflightSheet: View {
 
             footer
         }
-        .frame(minWidth: 960, minHeight: 720)
+        .frame(minWidth: 960, idealWidth: 1280, maxWidth: .infinity, minHeight: 720, idealHeight: 900, maxHeight: .infinity)
+        .background(
+            ResizableSheetWindowAccessor(
+                minSize: NSSize(width: 960, height: 720),
+                initialSize: NSSize(width: 1280, height: 900)
+            )
+        )
         .onAppear {
             if let first = drafts.first {
                 selectedMode = first.pricingMode
@@ -627,6 +646,15 @@ struct GeminiGenerationPreflightSheet: View {
                                 .font(.headline)
                         }
                         .toggleStyle(.checkbox)
+                        if let onRefresh = onRefreshSpec {
+                            Button {
+                                onRefresh(draft.wrappedValue.id)
+                            } label: {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Swap to the next pose prompt (cycles through all 27 poses).")
+                        }
                     }
                     Text(draft.wrappedValue.destinationDescription)
                         .font(.caption)
@@ -777,6 +805,15 @@ struct GeminiGenerationPreflightSheet: View {
                                 .font(.headline)
                         }
                         .toggleStyle(.checkbox)
+                        if let onRefresh = onRefreshSpec {
+                            Button {
+                                onRefresh(draft.wrappedValue.id)
+                            } label: {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Swap to the next pose prompt (cycles through all 27 poses).")
+                        }
                     }
                     Text(draft.wrappedValue.destinationDescription)
                         .font(.caption)
@@ -891,40 +928,32 @@ struct GeminiGenerationPreflightSheet: View {
 
     @ViewBuilder
     private func referenceThumbnail(path: String) -> some View {
-        if let image = store.thumbnailImage(for: path, maxSize: 120) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 120, height: 120)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else if let absURL = resolvedAbsoluteURL(for: path),
-                  let image = store.thumbnailImage(for: absURL.path, maxSize: 120) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 120, height: 120)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.quaternary.opacity(0.25))
-                .frame(width: 120, height: 120)
-                .overlay {
-                    Image(systemName: "photo")
-                        .foregroundStyle(.tertiary)
-                }
-        }
+        GeminiPreflightReferenceThumbnail(
+            store: store,
+            path: path,
+            fallbackAbsolutePath: resolvedAbsoluteURL(for: path)?.path
+        )
     }
 
     private var footer: some View {
         HStack {
-            if store.geminiAPIKey.isEmpty {
-                Label("Set a Gemini API key before generating.", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .font(.callout)
-            } else if !selectedDrafts.isEmpty {
-                Text(selectionSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                if store.geminiAPIKey.isEmpty {
+                    Label("Set a Gemini API key before generating.", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.callout)
+                } else if !selectedDrafts.isEmpty {
+                    Text(selectionSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if showsVertexTrafficNote {
+                    Text("Vertex immediate runs are automatically paced and retried because HTTP 429 RESOURCE_EXHAUSTED is shared-capacity contention, not a fixed per-project batch cap.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer()
@@ -1077,5 +1106,57 @@ struct GeminiGenerationPreflightSheet: View {
     private func resolvedAbsoluteURL(for path: String) -> URL? {
         guard path.hasPrefix("/") else { return nil }
         return URL(fileURLWithPath: path)
+    }
+}
+
+// MARK: - Async thumbnail for preflight references
+
+private struct GeminiPreflightReferenceThumbnail: View {
+    let store: AnimateStore
+    let path: String
+    let fallbackAbsolutePath: String?
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 120, height: 120)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.quaternary.opacity(0.25))
+                    .frame(width: 120, height: 120)
+                    .overlay {
+                        Image(systemName: "photo")
+                            .foregroundStyle(.tertiary)
+                    }
+            }
+        }
+        .task(id: path) {
+            // Immediate: cache-only lookup on the main actor so we don't flash a placeholder
+            // for thumbnails that have already been decoded.
+            if let cached = store.cachedThumbnailImage(for: path, maxSize: 120) {
+                image = cached
+                return
+            }
+            if let fallback = fallbackAbsolutePath,
+               let cached = store.cachedThumbnailImage(for: fallback, maxSize: 120) {
+                image = cached
+                return
+            }
+            // Cache miss: decode off the main thread.
+            if let decoded = await store.thumbnailImageAsync(for: path, maxSize: 120) {
+                image = decoded
+                return
+            }
+            if let fallback = fallbackAbsolutePath,
+               let decoded = await store.thumbnailImageAsync(for: fallback, maxSize: 120) {
+                image = decoded
+            }
+        }
     }
 }

@@ -82,7 +82,7 @@ struct APISettingsSheet: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("API Settings")
                 .font(.title3.weight(.semibold))
-            Text("Manage API keys for AI services used by Animate. Keys are stored locally in your macOS Keychain.")
+            Text("Manage API keys for AI services used by Animate. Keys are stored in the project folder (config/api-credentials.json) and synced between machines by Syncthing.")
                 .font(.callout)
                 .foregroundStyle(OperaChromeTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)

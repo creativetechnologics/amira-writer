@@ -151,6 +151,19 @@ struct GeminiActivityPopover: View {
                     .foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
+
+            if entry.status == .queued || entry.status == .running {
+                Button {
+                    store.cancelGeminiActivity(entry.id)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Cancel this generation")
+                .padding(.top, 1)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)

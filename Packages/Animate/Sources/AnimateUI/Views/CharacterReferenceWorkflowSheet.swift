@@ -710,6 +710,11 @@ struct CharacterReferenceWorkflowSheet: View {
                 onAdjustCrop: onAdjustCrop
             )
             .onTapGesture(count: 2, perform: onQuickLookApproved)
+            .onTapGesture(count: 1) {
+                if let path = approvedVariant?.imagePath {
+                    store.imaginePreviewImagePath = path
+                }
+            }
 
             HStack(spacing: 6) {
                 Text("\(variants.count) variant\(variants.count == 1 ? "" : "s")")
@@ -785,40 +790,49 @@ struct CharacterReferenceWorkflowSheet: View {
         onShowPrompt: @escaping () -> Void,
         onAdjustCrop: @escaping () -> Void
     ) -> some View {
-        if let variant,
-           let image = store.thumbnailImage(for: variant.imagePath, maxSize: 360) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(height: 150)
-                .frame(maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .contextMenu {
-                    Button("View Prompt", systemImage: "eye.circle") {
-                        onShowPrompt()
-                    }
-                    Button("Edit", systemImage: "slider.horizontal.3") {
-                        onEdit()
-                    }
-                    Button("Show in Finder", systemImage: "folder") {
-                        showInFinder(at: variant.imagePath)
-                    }
-                    Button("Copy Image", systemImage: "doc.on.doc") {
-                        copyImage(at: variant.imagePath)
-                    }
-                    Divider()
-                    Button("Adjust Crop", systemImage: "crop") {
-                        onAdjustCrop()
-                    }
-                    Button("Quick Look", systemImage: "eye") {
-                        openQuickLook(for: [variant.imagePath], startingAt: 0)
-                    }
+        if let variant {
+            AsyncStoreThumbnailImage.rounded(
+                store: store,
+                path: variant.imagePath,
+                maxSize: 360,
+                width: nil,
+                height: 150,
+                cornerRadius: 14
+            )
+            // Single-tap surfaces this chosen pose image in Inspector Details.
+            // Double-tap opens Quick Look. SwiftUI disambiguates by count.
+            .onTapGesture(count: 2) {
+                openQuickLook(for: [variant.imagePath], startingAt: 0)
+            }
+            .onTapGesture(count: 1) {
+                store.imaginePreviewImagePath = variant.imagePath
+            }
+            .contextMenu {
+                Button("View Prompt", systemImage: "eye.circle") {
+                    onShowPrompt()
                 }
-                .overlay {
-                    if isGenerating {
-                        generationOverlay(statusText: statusText)
-                    }
+                Button("Edit", systemImage: "slider.horizontal.3") {
+                    onEdit()
                 }
+                Button("Show in Finder", systemImage: "folder") {
+                    showInFinder(at: variant.imagePath)
+                }
+                Button("Copy Image", systemImage: "doc.on.doc") {
+                    copyImage(at: variant.imagePath)
+                }
+                Divider()
+                Button("Adjust Crop", systemImage: "crop") {
+                    onAdjustCrop()
+                }
+                Button("Quick Look", systemImage: "eye") {
+                    openQuickLook(for: [variant.imagePath], startingAt: 0)
+                }
+            }
+            .overlay {
+                if isGenerating {
+                    generationOverlay(statusText: statusText)
+                }
+            }
         } else {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.quaternary.opacity(0.22))
@@ -1663,30 +1677,32 @@ struct CharacterReferenceWorkflowSheet: View {
         let isIncluded = character.masterReferenceSourceImagePaths.contains(path) || character.curatedInspirationImagePaths.contains(path)
 
         VStack(alignment: .leading, spacing: 8) {
-            if let image = store.thumbnailImage(for: path, maxSize: 132) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 132, height: 132)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .onTapGesture(count: 2) {
-                        openQuickLook(for: [path], startingAt: 0)
-                    }
-                    .contextMenu {
-                        Button("Show in Finder", systemImage: "folder") {
-                            showInFinder(at: path)
-                        }
-                        Button("Copy Image", systemImage: "doc.on.doc") {
-                            copyImage(at: path)
-                        }
-                        Button("Quick Look", systemImage: "eye") {
-                            openQuickLook(for: [path], startingAt: 0)
-                        }
-                    }
-            } else {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.quaternary.opacity(0.2))
-                    .frame(width: 132, height: 132)
+            AsyncStoreThumbnailImage.rounded(
+                store: store,
+                path: path,
+                maxSize: 132,
+                width: 132,
+                height: 132,
+                cornerRadius: 12,
+                placeholderOpacity: 0.2
+            )
+            .onTapGesture(count: 2) {
+                openQuickLook(for: [path], startingAt: 0)
+            }
+            .onTapGesture(count: 1) {
+                // Surface this source image in the Inspector Details pane.
+                store.imaginePreviewImagePath = path
+            }
+            .contextMenu {
+                Button("Show in Finder", systemImage: "folder") {
+                    showInFinder(at: path)
+                }
+                Button("Copy Image", systemImage: "doc.on.doc") {
+                    copyImage(at: path)
+                }
+                Button("Quick Look", systemImage: "eye") {
+                    openQuickLook(for: [path], startingAt: 0)
+                }
             }
 
             Toggle(isOn: Binding(
@@ -1763,6 +1779,11 @@ struct ReferenceVariantCard: View {
         VStack(alignment: .leading, spacing: 8) {
             thumbnail
                 .onTapGesture(count: 2, perform: onQuickLook)
+                .onTapGesture(count: 1) {
+                    // Surface this variant in the Inspector Details pane so
+                    // single-click selection mirrors the rest of the app.
+                    store.imaginePreviewImagePath = variant.imagePath
+                }
                 .contextMenu {
                     Button("View Prompt", systemImage: "eye.circle") {
                         onShowPrompt()
@@ -1836,17 +1857,14 @@ struct ReferenceVariantCard: View {
 
     @ViewBuilder
     private var thumbnail: some View {
-        if let image = store.thumbnailImage(for: variant.imagePath, maxSize: 196) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 196, height: 196)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        } else {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.quaternary.opacity(0.22))
-                .frame(width: 196, height: 196)
-        }
+        AsyncStoreThumbnailImage.rounded(
+            store: store,
+            path: variant.imagePath,
+            maxSize: 196,
+            width: 196,
+            height: 196,
+            cornerRadius: 14
+        )
     }
 }
 
@@ -1866,49 +1884,51 @@ struct MiniVariantChip: View {
     var body: some View {
         VStack(spacing: 4) {
             ZStack(alignment: .bottomTrailing) {
-                if let image = store.thumbnailImage(for: variant.imagePath, maxSize: 72) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 72, height: 72)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .onTapGesture(count: 2, perform: onQuickLook)
-                        .contextMenu {
-                            Button("View Prompt", systemImage: "eye.circle") {
-                                onShowPrompt()
-                            }
-                            Button("Edit", systemImage: "slider.horizontal.3") {
-                                onEdit()
-                            }
-                            Button("Show in Finder", systemImage: "folder") {
-                                if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
-                                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                                }
-                            }
-                            Button("Copy Image", systemImage: "doc.on.doc") {
-                                onCopy()
-                            }
-                            Divider()
-                            Button("Adjust Crop", systemImage: "crop") {
-                                onAdjustCrop()
-                            }
-                            Button("Quick Look", systemImage: "eye") {
-                                onQuickLook()
-                            }
-                            Divider()
-                            if !isApproved {
-                                Button("Use This Variant", systemImage: "checkmark.circle") {
-                                    onApprove()
-                                }
-                            }
-                            Button("Delete", systemImage: "trash", role: .destructive) {
-                                onDelete()
-                            }
+                AsyncStoreThumbnailImage.rounded(
+                    store: store,
+                    path: variant.imagePath,
+                    maxSize: 72,
+                    width: 72,
+                    height: 72,
+                    cornerRadius: 10,
+                    placeholderOpacity: 0.2
+                )
+                .onTapGesture(count: 2, perform: onQuickLook)
+                .onTapGesture(count: 1) {
+                    // Surface this variant in the Inspector Details pane.
+                    store.imaginePreviewImagePath = variant.imagePath
+                }
+                .contextMenu {
+                    Button("View Prompt", systemImage: "eye.circle") {
+                        onShowPrompt()
+                    }
+                    Button("Edit", systemImage: "slider.horizontal.3") {
+                        onEdit()
+                    }
+                    Button("Show in Finder", systemImage: "folder") {
+                        if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
                         }
-                } else {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(.quaternary.opacity(0.2))
-                        .frame(width: 72, height: 72)
+                    }
+                    Button("Copy Image", systemImage: "doc.on.doc") {
+                        onCopy()
+                    }
+                    Divider()
+                    Button("Adjust Crop", systemImage: "crop") {
+                        onAdjustCrop()
+                    }
+                    Button("Quick Look", systemImage: "eye") {
+                        onQuickLook()
+                    }
+                    Divider()
+                    if !isApproved {
+                        Button("Use This Variant", systemImage: "checkmark.circle") {
+                            onApprove()
+                        }
+                    }
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        onDelete()
+                    }
                 }
                 if isApproved {
                     Image(systemName: "checkmark.circle.fill")

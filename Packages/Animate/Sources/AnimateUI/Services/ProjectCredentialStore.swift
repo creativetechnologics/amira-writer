@@ -1,5 +1,4 @@
 import Foundation
-import Security
 
 /// Project-local credential store. Keeps API keys inside the OWP project
 /// folder (at `<project>/config/api-credentials.json`) so they automatically
@@ -7,13 +6,12 @@ import Security
 ///
 /// File permissions are forced to owner-only (0600) on every write. The JSON
 /// itself is plaintext — Gary's threat model treats his own machines as
-/// trusted, and Keychain also yields plaintext to any process running as him.
+/// trusted, and Keychain also yielded plaintext to any process running as him.
 ///
-/// **Migration strategy**: the existing macOS Keychain stores are still
-/// consulted as a fallback. The first time an OWP is opened on a machine
-/// whose JSON is empty, we read each key from Keychain and WRITE it to JSON,
-/// then continue to use JSON as the source of truth. Keychain writes are
-/// kept synchronised on every save for belt-and-braces redundancy.
+/// The Keychain path was removed because ad-hoc rebuilds generate a fresh
+/// code signature on every build, and macOS re-prompts for access to the
+/// Keychain ACL on each launch. The project-folder JSON is now the single
+/// source of truth; Vertex project/region still migrate from UserDefaults.
 @available(macOS 26.0, *)
 final class ProjectCredentialStore: @unchecked Sendable {
     static let shared = ProjectCredentialStore()
@@ -35,7 +33,7 @@ final class ProjectCredentialStore: @unchecked Sendable {
     private init() {}
 
     /// Call once the user opens an OWP project. Loads the credential file
-    /// into memory (or migrates from Keychain if the file doesn't yet exist).
+    /// into memory, or creates an empty one if it doesn't yet exist.
     func setActiveProject(_ owpURL: URL?) {
         ioQueue.sync {
             guard let owpURL else {
@@ -56,19 +54,15 @@ final class ProjectCredentialStore: @unchecked Sendable {
                     return
                 }
             }
-            // File missing or corrupt — migrate from Keychain.
-            var migrated = Payload()
-            migrated.geminiAPIKey = Self.readKeychain(service: "com.amira.writer.animate", account: "gemini-api-key") ?? ""
-            migrated.miniMaxAPIKey = Self.readKeychain(service: "com.amira.writer.animate", account: "minimax-api-key") ?? ""
-            migrated.viduAPIKey = Self.readKeychain(service: "com.amira.writer.animate", account: "vidu-api-key") ?? ""
-            migrated.runPodAPIKey = Self.readKeychain(service: "com.amira.writer.animate", account: "runpod-api-key") ?? ""
-            // Vertex settings live in UserDefaults, not Keychain.
-            migrated.vertexProjectID = UserDefaults.standard.string(forKey: "animate.gemini.vertex.projectID") ?? ""
-            migrated.vertexRegion = UserDefaults.standard.string(forKey: "animate.gemini.vertex.region") ?? ""
+            // File missing or corrupt — start fresh. Vertex settings
+            // migrate from UserDefaults since they never lived in Keychain.
+            var fresh = Payload()
+            fresh.vertexProjectID = UserDefaults.standard.string(forKey: "animate.gemini.vertex.projectID") ?? ""
+            fresh.vertexRegion = UserDefaults.standard.string(forKey: "animate.gemini.vertex.region") ?? ""
 
-            cachedPayload = migrated
+            cachedPayload = fresh
             isPayloadLoaded = true
-            writeFileLocked(payload: migrated, to: file)
+            writeFileLocked(payload: fresh, to: file)
         }
     }
 
@@ -118,17 +112,4 @@ final class ProjectCredentialStore: @unchecked Sendable {
         }
     }
 
-    private static func readKeychain(service: String, account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
 }

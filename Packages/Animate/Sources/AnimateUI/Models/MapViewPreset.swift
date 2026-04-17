@@ -100,7 +100,8 @@ struct MapViewPreset: Codable, Hashable, Sendable {
     /// Preamble that prepends the draft prompt at submit time.
     func formattedPromptPreamble() -> String {
         if !geminiPromptBrief.isEmpty { return "[Camera brief from 3D map]\n\(geminiPromptBrief)" }
-        let buildings = visibleBuildingLabels.prefix(6).joined(separator: ", ")
+        let buildingCount = visibleBuildingLabels.count
+        let nearestBuilding = visibleBuildingDistancesMeters.first ?? 0
         var lines: [String] = [
             "[Camera brief from 3D map]",
             "Render the image from a virtual camera at world coordinates " +
@@ -110,7 +111,12 @@ struct MapViewPreset: Codable, Hashable, Sendable {
             "looking compass heading \(Int(compassHeadingDeg))° (\(headingName)), " +
             "field of view \(Int(fovDeg))°.",
         ]
-        if !buildings.isEmpty { lines.append("Buildings visible in frame (closest first): \(buildings).") }
+        if buildingCount > 0 {
+            lines.append("Visible structures in frame: \(buildingCount) building masses, nearest roughly \(nearestBuilding) m from camera.")
+        }
+        if !visibleWaterLabels.isEmpty {
+            lines.append("Water is visible in frame; keep the river placement consistent with the uploaded map and references.")
+        }
         lines.append("The image must match this camera position and viewing direction exactly; do not invent a different vantage.")
         return lines.joined(separator: " ")
     }

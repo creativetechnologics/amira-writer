@@ -7,33 +7,38 @@
   <script type="importmap">
   {
     "imports": {
-      "three": "https://unpkg.com/three@0.168.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.168.0/examples/jsm/"
+      "three": "./vendor/three/three.module.js",
+      "three/addons/": "./vendor/three/addons/"
     }
   }
   </script>
 </head>
 <body>
-  <div id="hud">
-    <h1>Amira Valley <span class="sub">· 3D Map</span></h1>
-    <div class="toggles">
-      <label><input type="checkbox" data-layer="terrain" checked>Terrain</label>
-      <label><input type="checkbox" data-layer="texture" checked>Map drape</label>
-      <label><input type="checkbox" data-layer="buildings" checked>Buildings</label>
-      <label><input type="checkbox" data-layer="roads" checked>Roads</label>
-      <label><input type="checkbox" data-layer="water" checked>Water</label>
-      <label><input type="checkbox" data-layer="wireframe">Wireframe</label>
+  <div id="hud" class="collapsed">
+    <div class="hud-header">
+      <h1>Amira Valley <span class="sub">· 3D Map</span></h1>
+      <button id="toggleHud" class="hud-toggle" type="button" aria-expanded="false">Show map controls</button>
     </div>
-    <div class="info" id="info">Loading…</div>
-    <div class="controls">
-      <button id="resetView">Reset view</button>
-      <button id="topView">Top-down</button>
-    </div>
-    <div class="controls" style="margin-top: 8px;">
-      <button id="captureCard" title="Capture a grounding card for Gemini from the current camera">📷 Grounding card</button>
-    </div>
-    <div class="controls" style="margin-top: 8px;">
-      <button id="saveCameraForDraft" title="Save this camera angle to the Gemini draft that opened this sheet">💾 Save camera for draft</button>
+    <div id="hudBody">
+      <div class="toggles">
+        <label><input type="checkbox" data-layer="terrain" checked>Terrain</label>
+        <label><input type="checkbox" data-layer="texture" checked>Map drape</label>
+        <label><input type="checkbox" data-layer="buildings" checked>Buildings</label>
+        <label><input type="checkbox" data-layer="roads" checked>Roads</label>
+        <label><input type="checkbox" data-layer="water" checked>Water</label>
+        <label><input type="checkbox" data-layer="wireframe">Wireframe</label>
+      </div>
+      <div class="info" id="info">Loading…</div>
+      <div class="controls">
+        <button id="resetView">Reset view</button>
+        <button id="topView">Top-down</button>
+      </div>
+      <div class="controls" style="margin-top: 8px;">
+        <button id="captureCard" title="Capture a grounding card for Gemini from the current camera">📷 Grounding card</button>
+      </div>
+      <div class="controls" style="margin-top: 8px;">
+        <button id="saveCameraForDraft" title="Save this camera angle to the Gemini draft that opened this sheet">💾 Save camera for draft</button>
+      </div>
     </div>
   </div>
   <div id="app"></div>

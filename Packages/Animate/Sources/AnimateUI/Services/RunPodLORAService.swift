@@ -388,7 +388,7 @@ final class RunPodLORAService: ObservableObject {
         }
     }
 
-    // MARK: - API Key (Keychain-based, works on any machine)
+    // MARK: - API Key (project-folder JSON, synced via Syncthing)
 
     func loadAPIKey() {
         apiKey = RunPodCredentialStore().loadAPIKey()

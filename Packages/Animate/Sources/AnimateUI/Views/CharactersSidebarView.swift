@@ -70,18 +70,25 @@ struct CharactersSidebarView: View {
     private func characterRow(_ character: AnimationCharacter) -> some View {
         let owpChar = store.owpCharacter(for: character)
         HStack(spacing: OperaChromeSidebarMetrics.rowIconSpacing) {
-            // Thumbnail
-            if let image = store.thumbnailImage(for: character.profileImagePath, maxSize: 48) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 24, height: 24)
-                    .clipShape(Circle())
-            } else {
-                Image(systemName: "person.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(OperaChromeTheme.textSecondary)
+            // Thumbnail — async load so selecting a character never blocks
+            // the sidebar on a fresh image decode.
+            AsyncStoreThumbnailImage(
+                store: store,
+                path: character.profileImagePath,
+                maxSize: 48,
+                width: 24,
+                height: 24,
+                contentMode: .fill,
+                cornerRadius: 12
+            ) {
+                ZStack {
+                    Circle().fill(.quaternary.opacity(0.22))
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                }
             }
+            .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 4) {

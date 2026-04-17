@@ -28,7 +28,8 @@ let package = Package(
             path: "Sources/AnimateUI",
             exclude: ["_archived_3d"],
             resources: [
-                .copy("Resources/Models3D")
+                .copy("Resources/Models3D"),
+                .copy("Resources/gemini_inspiration_batch.py")
             ]
         ),
         .executableTarget(

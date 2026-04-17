@@ -13,8 +13,48 @@ enum CharacterPromptWorldContext {
     static let cityClinicEnvironment =
         "a dusty urban street near a district clinic at pre-dawn first light, with plaster, concrete, mud-brick walls, corrugated awnings, doorway light, restrained humanitarian and military presence, and grounded Afghan village-and-city realism"
 
+    /// Varied environments for the 27-image inspiration set. Each describes a
+    /// distinct location within the story world so generated images don't all
+    /// share the same background.
+    static let variedEnvironments: [String] = [
+        "a sunlit open-air bazaar with fabric awnings, stacked crates, and warm morning light filtering through the market stalls",
+        "a dusty rural road on the outskirts of a mud-brick village, bright midday sun overhead, distant mountains on the horizon",
+        "the rooftop of a two-story concrete building overlooking the city at golden hour, warm amber light, satellite dishes and water tanks nearby",
+        "inside a spartan district clinic hallway with fluorescent overhead light, peeling paint walls, and a narrow window casting a stripe of daylight",
+        "a vehicle checkpoint with concrete barriers and a metal gate, clear blue sky, open desert stretching behind",
+        "a shaded courtyard behind a compound wall with a single tree, dappled sunlight on packed earth, a wooden bench against the wall",
+        "a wide gravel staging area beside parked military trucks, bright overcast sky, flat terrain with scrub brush",
+        "a narrow alley between mud-brick buildings with laundry lines overhead, soft indirect daylight bouncing between the walls",
+        "a hillside trail above the city with dry grass and scattered rocks, open sky, the city visible below in warm haze",
+        "the interior of a dimly lit teahouse with low wooden tables, warm lamp light, textured plaster walls, and an open doorway letting in daylight",
+        "a bridge approach road with concrete railings, river visible below, clear sky, dry riverbank vegetation",
+        "a field hospital tent with canvas walls, bright portable lamps, metal folding tables, and crates of supplies",
+        "a dusty schoolyard with a low concrete wall, a flagpole, and bright late-morning sunlight, children's murals on the building",
+        "the back of an open cargo truck at rest, canvas flap pulled aside, open road and flat landscape under a wide bright sky",
+        "a quiet residential street at sunrise with pastel-washed walls, iron gates, and long warm shadows on the pavement",
+        "a humanitarian supply depot with stacked pallets, a corrugated metal roof open on two sides, and strong midday light",
+        "an open desert plain with tire tracks in the sand, sparse vegetation, and a vast pale-blue sky",
+        "the doorway of a mosque with carved wooden doors, arched stonework, and soft warm light on the entry steps",
+        "a radio tower compound with chain-link fencing, a gravel yard, antenna masts, and bright overcast light",
+        "a riverbank at late afternoon with smooth stones, shallow water, and warm golden side-light from the low sun",
+        "a construction site with rebar, cinder blocks, and a half-finished concrete wall, clear sky, scattered tools",
+        "a main boulevard with shop fronts, hand-painted signs, parked bicycles, and bright diffused daylight",
+        "a perimeter guard post with sandbags, a plywood shelter, open ground, and clean morning light",
+        "a mechanic's yard with vehicle parts, oil drums, and a corrugated roof casting sharp shadow lines in afternoon sun",
+        "an irrigation canal path with low mud walls, green patches of cultivated land, bright sky, and distant farmhouses",
+        "a helipad clearing on packed dirt, open sky, wind sock on a pole, midday sun, flat horizon",
+        "a covered walkway with concrete pillars outside a government building, bright reflected light from a paved courtyard",
+    ]
+
     static let avoidHistoricalWarStyling =
         "Avoid fantasy, science fiction, World War I styling, World War II styling, wool tunics, leather cross straps, puttees, Sam Browne belts, vintage tailoring, and old-fashioned military costumes."
+
+    /// One-sentence anchor used at the top of Gemini prompts to place an image
+    /// in the specific world of Amira (not a generic desert warzone). Covers
+    /// geography, architecture, human presence, and tonal cues so the model
+    /// renders something story-specific rather than Hollywood war-movie stock.
+    static let amiraWorldAnchor =
+        "the world of Amira: an early-2000s Afghan valley town cradled by arid foothills and a slow river, with a mix of mud-brick homes, plastered concrete shopfronts, a modest district clinic, irrigation canals and walled courtyards, dusty unpaved lanes, humanitarian and American military presence threaded through everyday local life, mothers and elders and children in modest local dress moving through markets and doorways, and a grounded humane dramatic tone — not a generic desert warzone, not a Hollywood military backlot, not a generic Middle-Eastern city"
 }
 
 enum CharacterReferencePose: String, Codable, Sendable, CaseIterable, Hashable {

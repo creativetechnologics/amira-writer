@@ -12,18 +12,29 @@ struct ImagineCharactersPageView: View {
     @State private var galleryState: ImagineGallerySelectionState = .init()
     @State private var focusedIndex: Int = 0
     @State private var preloadedPaths: [String] = []
-    @AppStorage("animate.features.loraEnabled") private var loraEnabled: Bool = true
+    // LoRA generation path is archived (2026-04-16). All LoRA UI is gated on
+    // this flag, which now defaults to `false` — Gemini is the sole generation
+    // path. To bring LoRA back, flip the Global Settings toggle (or this
+    // default) and the gated sections render again. No Swift source was
+    // deleted; see `loraSelectionSection`, `preparePhotorealLORACandidatePlan`,
+    // and the `.lora` gallery filter case which all stay callable.
+    @AppStorage("animate.features.loraEnabled") private var loraEnabled: Bool = false
     @AppStorage("imagineChars.galleryThumbnailSize") private var thumbnailBaseSize: Double = 120
     @AppStorage("imagineChars.galleryFilter") private var galleryFilterRawValue: String = GalleryFilter.all.rawValue
-    /// Default preview pane height.
-    @AppStorage("imagineChars.previewHeight") private var previewHeight: Double = 320
-    @AppStorage("imagineChars.previewCollapsed") private var previewCollapsed: Bool = false
+    /// Minimum rating filter (0 = show all regardless of rating, 1-5 = show only
+    /// images rated N or higher). Mirrors the Places "All Images" gallery.
+    @AppStorage("imagineChars.galleryMinimumRating") private var galleryMinimumRating: Int = 0
     @AppStorage("imagineChars.galleryCollapsed") private var galleryCollapsed: Bool = false
     @AppStorage("imagineChars.generationStatusCollapsed") private var generationStatusCollapsed: Bool = false
-    @State private var dragStartHeight: Double?
     @State private var inspirationPendingPlan: PendingInspirationGenerationPlan?
     @State private var inspirationDrafts: [GeminiGenerationDraft] = []
     @State private var inspirationActiveWardrobe: CharacterInspirationWardrobe?
+    /// Tracks the character whose catalog-driven drafts are in the preflight
+    /// sheet so the pose-title refresh button can cycle to the next spec from
+    /// CharacterInspirationPromptCatalog.allSpecs. `nil` for freeform drafts
+    /// (Edit-with-Gemini, photoreal with-ref generation) where the refresh
+    /// button is intentionally hidden.
+    @State private var inspirationPendingCharacterID: UUID?
     @State private var inspirationPendingBatchTitleOverride: String?
     @State private var inspirationPendingBatchFolderSlugOverride: String?
     @State private var inspirationPendingBatchKind: CharacterInspirationBatchJob.Kind = .inspiration
@@ -34,6 +45,16 @@ struct ImagineCharactersPageView: View {
     @State private var inspirationGenerationProgress: Double = 0
     @State private var isGeneratingInspiration: Bool = false
     @State private var generatingInspirationCharacterID: UUID?
+    /// Task handle for the in-flight "Generate Now" (standard pricing) worker
+    /// that drains `inspirationGenerationQueue`. `nil` when no worker is
+    /// running. One long-lived worker processes all enqueued runs serially so
+    /// starting a second batch while one is running queues behind it instead
+    /// of cancelling. Per-activity cancel buttons in the Gemini activity
+    /// popover can abort individual items via `attachGeminiActivityCancel`.
+    @State private var inspirationGenerationTask: Task<Void, Never>?
+    /// FIFO queue of pending runs. The worker pops the head entry, processes
+    /// its drafts, then keeps going while the queue is non-empty.
+    @State private var inspirationGenerationQueue: [QueuedInspirationRun] = []
     @State private var isSubmittingInspirationBatch: Bool = false
     @State private var submittingInspirationBatchCharacterID: UUID?
     @ObservedObject private var runpodService = RunPodLORAService.shared
@@ -42,19 +63,59 @@ struct ImagineCharactersPageView: View {
     @State private var pendingGallerySaveTask: Task<Void, Never>?
     private let gallerySaveDebounceNanoseconds: UInt64 = 300_000_000
 
+    /// Transient in-session multi-selection — the yellow ring around
+    /// gallery thumbnails. Holds raw `path` values from `preloadedPaths`
+    /// (no normalization, since this set never persists to disk). Plain
+    /// click replaces, cmd-click toggles, shift-click fills a range from
+    /// `rangeAnchorPath`. Reset on character change, project load, and
+    /// page switch. Replaced the old persistent `galleryState.selectedPaths`
+    /// gray-checkmark system on 2026-04-16 — those checkmarks were
+    /// surviving restarts and couldn't be cleared from the UI. Gemini
+    /// right-click and "Use Selected as References" now read from here
+    /// instead.
+    @State private var yellowSelection: Set<String> = []
+    /// Anchor for shift-click range selection. Tracks the last path the
+    /// user plain- or cmd-clicked so shift+click can fill in everything
+    /// between that anchor and the new click target.
+    @State private var rangeAnchorPath: String?
 
+
+    /// Visibility filter for the gallery. Places-style pill group drives
+    /// `.all / .unreviewed / .rejected`; `.gemini`, `.lora`, and the legacy
+    /// `.hidden` value are retained for persisted backward-compat (old
+    /// `@AppStorage` values) and are honored by `isPathVisibleInGallery`
+    /// but are not surfaced in the filter pill UI anymore. The per-device
+    /// "Hidden" concept was unified into `inspirationRejectedPaths` on
+    /// 2026-04-16 — rejected is now the single dim+eye.slash visual.
     private enum GalleryFilter: String, CaseIterable {
         case all
+        case unreviewed
+        case rejected
+        /// Deprecated — retained only so persisted `@AppStorage` values from
+        /// older builds still decode. Treated as `.rejected` at read time.
+        case hidden
         case gemini
         case lora
-        case hidden
 
         var title: String {
             switch self {
             case .all: return "All"
+            case .unreviewed: return "Unreviewed"
+            case .rejected: return "Rejected"
+            case .hidden: return "Rejected"
             case .gemini: return "Gemini"
             case .lora: return "LoRA"
-            case .hidden: return "Hidden"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .all: return "square.grid.2x2"
+            case .unreviewed: return "circle.dotted"
+            case .rejected: return "eye.slash.fill"
+            case .hidden: return "eye.slash.fill"
+            case .gemini: return "sparkles"
+            case .lora: return "cpu"
             }
         }
     }
@@ -68,8 +129,33 @@ struct ImagineCharactersPageView: View {
         CGFloat(thumbnailBaseSize)
     }
 
-    private var displayedPaths: [String] {
-        preloadedPaths.filter(isPathVisibleInGallery)
+    /// Cached filter result. Recomputed via `recomputeDisplayedPaths()`
+    /// whenever `preloadedPaths`, the filter, or any per-path visibility
+    /// dependency (ratings, rejected, reviewed, gallery selection sets)
+    /// changes. Avoids re-running the filter on every body evaluation.
+    @State private var displayedPaths: [String] = []
+
+    private func recomputeDisplayedPaths() {
+        displayedPaths = preloadedPaths.filter(isPathVisibleInGallery)
+    }
+
+    /// Combined visibility signature. Used as the sole `.onChange` trigger
+    /// for the cached `displayedPaths`, so the outer `inspirationSection`
+    /// modifier chain stays short (SwiftUI's type-checker falls over when
+    /// too many modifiers stack on the same `some View`).
+    private func visibilitySignature(for character: AnimationCharacter) -> ImagineGalleryVisibilitySignature {
+        ImagineGalleryVisibilitySignature(
+            filterRaw: galleryFilterRawValue,
+            minRating: galleryMinimumRating,
+            rejected: character.inspirationRejectedPaths,
+            reviewed: character.reviewedInspirationImagePaths,
+            ratings: character.inspirationRatings,
+            // `yellowSelection` drives both the ring visual and (for legacy
+            // decode-compat) the `.gemini` filter. Feeding it into the
+            // signature keeps the cached `displayedPaths` in sync.
+            selected: yellowSelection,
+            lora: galleryState.loraSelectedPaths
+        )
     }
 
     var body: some View {
@@ -110,6 +196,7 @@ struct ImagineCharactersPageView: View {
                         inspirationPendingBatchFolderSlugOverride = nil
                         inspirationPendingBatchKind = .inspiration
                         inspirationAutoSelectForLoRA = false
+                        inspirationPendingCharacterID = nil
                     },
                     onCancel: {
                         inspirationPendingPlan = nil
@@ -117,7 +204,15 @@ struct ImagineCharactersPageView: View {
                         inspirationPendingBatchFolderSlugOverride = nil
                         inspirationPendingBatchKind = .inspiration
                         inspirationAutoSelectForLoRA = false
-                    }
+                        inspirationPendingCharacterID = nil
+                    },
+                    // Refresh button is only meaningful when the draft came
+                    // from the pose catalog (inspirationPendingCharacterID is
+                    // set). Freeform drafts (Edit-with-Gemini, with-ref
+                    // photoreal) leave the character ID nil → button hides.
+                    onRefreshSpec: inspirationPendingCharacterID == nil
+                        ? nil
+                        : { draftID in cycleInspirationDraftSpec(draftID: draftID) }
                 )
             }
             .sheet(isPresented: $store.showImageCropper) {
@@ -214,13 +309,13 @@ struct ImagineCharactersPageView: View {
 
                 Menu {
                     inspirationGenerationMenuItems(for: character, wardrobe: character.defaultWardrobeType)
-                    if !galleryState.selectedPaths.isEmpty {
+                    if !yellowSelection.isEmpty {
                         Divider()
                         Section("Use Selected as References") {
-                            Button("Generate 27-Image Set Now (with Selected Refs)") {
+                            Button("Generate 27-Image Set Now (with \(yellowSelection.count) Selected)") {
                                 prepareInspirationWithSelectedReferences(character: character, mode: .immediate)
                             }
-                            Button("Submit 27-Image Batch + Watchdog (with Selected Refs)") {
+                            Button("Submit 27-Image Batch + Watchdog (with \(yellowSelection.count) Selected)") {
                                 prepareInspirationWithSelectedReferences(character: character, mode: .batch)
                             }
                         }
@@ -276,77 +371,30 @@ struct ImagineCharactersPageView: View {
                 generationStatusSection(character: character)
             }
 
-            loraSelectionSection(character)
-
-            // Preview pane header with collapse toggle
-            if !displayedPaths.isEmpty, focusedIndex < displayedPaths.count {
-                HStack(spacing: 6) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            previewCollapsed.toggle()
-                        }
-                    } label: {
-                        Image(systemName: previewCollapsed ? "chevron.right" : "chevron.down")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 14, height: 14)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Text("Preview")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
-                    if previewCollapsed {
-                        Text("(hidden)")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    Spacer()
-                }
-                .padding(.vertical, 2)
-
-                // Large preview pane
-                if !previewCollapsed {
-                    let focusedPath = displayedPaths[focusedIndex]
-                    if let url = store.resolvedCharacterAssetURL(for: focusedPath) {
-                        CachedPreviewImage(path: url.path)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: previewHeight)
-                            .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
-                            )
-
-                        // Draggable resize handle
-                        previewResizeHandle
-                    }
-                }
+            if loraEnabled {
+                loraSelectionSection(character)
             }
 
             // Selection status bar
-            if !galleryState.selectedPaths.isEmpty || !galleryState.loraSelectedPaths.isEmpty || !galleryState.hiddenPaths.isEmpty {
+            if !yellowSelection.isEmpty || !galleryState.loraSelectedPaths.isEmpty || !character.inspirationRejectedPaths.isEmpty {
                 HStack(spacing: 8) {
-                    if !galleryState.selectedPaths.isEmpty {
-                        Text("\(galleryState.selectedPaths.count) Gemini")
+                    if !yellowSelection.isEmpty {
+                        Text("\(yellowSelection.count) selected")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(.yellow)
                     }
-                    if !galleryState.loraSelectedPaths.isEmpty {
+                    if loraEnabled && !galleryState.loraSelectedPaths.isEmpty {
                         Text("\(galleryState.loraSelectedPaths.count) LORA")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.purple)
                     }
-                    if !galleryState.hiddenPaths.isEmpty {
-                        Text("\(galleryState.hiddenPaths.count) hidden")
+                    if !character.inspirationRejectedPaths.isEmpty {
+                        Text("\(character.inspirationRejectedPaths.count) rejected")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text("← →: navigate | G: Gemini pick | F: unpick | L: LORA pick | K: unpick | X: hide | Space: Quick Look")
+                    Text(keyboardShortcutHint)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
@@ -407,8 +455,8 @@ struct ImagineCharactersPageView: View {
                 }
             }
 
-            if previewCollapsed && galleryCollapsed && character.inspirationBatchJobs.isEmpty && runpodService.currentJob == nil && runpodService.queuedJobs.isEmpty && runpodService.recentJobs.isEmpty {
-                Text("Preview and Gallery are both collapsed. Expand one section to continue.")
+            if galleryCollapsed && character.inspirationBatchJobs.isEmpty && runpodService.currentJob == nil && runpodService.queuedJobs.isEmpty && runpodService.recentJobs.isEmpty {
+                Text("Gallery is collapsed. Expand it to continue.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .padding(.top, 4)
@@ -460,7 +508,8 @@ struct ImagineCharactersPageView: View {
                 maxPixelSize: Int(galleryThumbnailBaseSize * 2)
             )
         }
-        .onChange(of: galleryFilterRawValue) { _, _ in
+        .onChange(of: visibilitySignature(for: character)) { _, _ in
+            recomputeDisplayedPaths()
             syncFocusedIndex()
         }
         .focusable()
@@ -485,23 +534,22 @@ struct ImagineCharactersPageView: View {
             }
             return .ignored
         }
-        // Gemini reference shortcuts
+        // Yellow multi-select keyboard shortcuts — add/remove focused path
+        // from the transient in-session `yellowSelection`. Previously these
+        // wrote to the persistent `galleryState.selectedPaths` which caused
+        // gray checkmarks to survive restarts; the new set is session-only
+        // so the selection naturally clears on navigation away.
         .onKeyPress(.init("g")) {
             if let path = focusedPath {
-                let selectionKey = gallerySelectionKey(for: path)
-                galleryState.selectedPaths.insert(selectionKey)
-                syncFocusedIndex(preferredPath: path)
-                scheduleGalleryStateSave(for: character)
+                yellowSelection.insert(path)
+                rangeAnchorPath = path
                 hasShownFocusHighlight = true
             }
             return .handled
         }
         .onKeyPress(.init("f")) {
             if let path = focusedPath {
-                let selectionKey = gallerySelectionKey(for: path)
-                galleryState.selectedPaths.remove(selectionKey)
-                syncFocusedIndex(preferredPath: path)
-                scheduleGalleryStateSave(for: character)
+                yellowSelection.remove(path)
                 hasShownFocusHighlight = true
             }
             return .handled
@@ -527,19 +575,50 @@ struct ImagineCharactersPageView: View {
             }
             return .handled
         }
+        // Rejection toggle — matches PlaceAllImagesGallerySection (Places parity).
+        // Was "toggle hidden" before 2026-04-16; hidden is now context-menu only
+        // via Hide/Show (see contextMenu below).
         .onKeyPress(.init("x")) {
             if let path = focusedPath {
-                let selectionKey = gallerySelectionKey(for: path)
-                if galleryState.hiddenPaths.contains(selectionKey) {
-                    galleryState.hiddenPaths.remove(selectionKey)
-                } else {
-                    galleryState.hiddenPaths.insert(selectionKey)
-                }
-                syncFocusedIndex(preferredPath: path)
-                scheduleGalleryStateSave(for: character)
+                store.toggleInspirationRejected(path: path, for: character.id)
                 hasShownFocusHighlight = true
             }
             return .handled
+        }
+        // Rating shortcuts 1-5 / 0. Apply to the focused path (single-image),
+        // unlike Places which applies to the full selectedPaths set — here the
+        // selected set means "Gemini multi-select", so we keep rating on the
+        // focus cursor to avoid surprise batch rates.
+        .onKeyPress(phases: .down) { press in
+            guard let path = focusedPath else { return .ignored }
+            switch press.key {
+            case "1":
+                store.setInspirationRating(1, path: path, for: character.id)
+                hasShownFocusHighlight = true
+                return .handled
+            case "2":
+                store.setInspirationRating(2, path: path, for: character.id)
+                hasShownFocusHighlight = true
+                return .handled
+            case "3":
+                store.setInspirationRating(3, path: path, for: character.id)
+                hasShownFocusHighlight = true
+                return .handled
+            case "4":
+                store.setInspirationRating(4, path: path, for: character.id)
+                hasShownFocusHighlight = true
+                return .handled
+            case "5":
+                store.setInspirationRating(5, path: path, for: character.id)
+                hasShownFocusHighlight = true
+                return .handled
+            case "0":
+                store.setInspirationRating(nil, path: path, for: character.id)
+                hasShownFocusHighlight = true
+                return .handled
+            default:
+                return .ignored
+            }
         }
         .onDisappear {
             pendingGallerySaveTask?.cancel()
@@ -553,19 +632,88 @@ struct ImagineCharactersPageView: View {
         return "(\(displayedPaths.count)/\(preloadedPaths.count))"
     }
 
+    /// Places-style filter pills. Flag filter (All / Unreviewed / Rejected)
+    /// in one capsule, then a rating pill group (1★…5★, tap to set min, tap
+    /// again to clear). Matches `PlaceAllImagesGallerySection`'s header at
+    /// PlacesPageView.swift:1496. The legacy "Hidden" pill was retired on
+    /// 2026-04-16 — its concept folded into Rejected (single persistent
+    /// dim+eye.slash visual).
     private var galleryFilterControls: some View {
-        Picker("Filter", selection: Binding(
-            get: { galleryFilter },
-            set: { galleryFilter = $0 }
-        )) {
-            ForEach(GalleryFilter.allCases, id: \.self) { filter in
-                Text(filter.title).tag(filter)
+        HStack(spacing: 8) {
+            // Flag filter capsule
+            HStack(spacing: 8) {
+                galleryFilterButton(
+                    systemImage: GalleryFilter.all.systemImage,
+                    isSelected: galleryFilter == .all
+                ) { galleryFilter = .all }
+                .help("Show all images")
+
+                galleryFilterButton(
+                    systemImage: GalleryFilter.unreviewed.systemImage,
+                    isSelected: galleryFilter == .unreviewed
+                ) { galleryFilter = .unreviewed }
+                .help("Show only unreviewed images")
+
+                galleryFilterButton(
+                    systemImage: GalleryFilter.rejected.systemImage,
+                    isSelected: galleryFilter == .rejected || galleryFilter == .hidden
+                ) { galleryFilter = .rejected }
+                .help("Show only rejected images")
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.quaternary.opacity(0.12), in: Capsule())
+            .fixedSize(horizontal: true, vertical: false)
+
+            // Rating pill capsule
+            HStack(spacing: 4) {
+                ForEach(1...5, id: \.self) { rating in
+                    galleryFilterButton(
+                        systemImage: galleryMinimumRating > 0 && rating <= galleryMinimumRating ? "star.fill" : "star",
+                        tint: .yellow,
+                        isSelected: galleryMinimumRating == rating
+                    ) {
+                        galleryMinimumRating = galleryMinimumRating == rating ? 0 : rating
+                    }
+                    .help("Show \(rating)-star and higher")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.quaternary.opacity(0.12), in: Capsule())
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .pickerStyle(.menu)
-        .labelsHidden()
-        .frame(width: 92)
-        .help("Filter gallery to all images, Gemini picks, LoRA picks, or hidden images")
+    }
+
+    private func galleryFilterButton(
+        systemImage: String,
+        tint: Color = .accentColor,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 24, height: 24)
+                .foregroundStyle(isSelected ? .white : tint)
+                .background(
+                    Circle()
+                        .fill(isSelected ? tint : Color.clear)
+                )
+                .overlay(
+                    Circle()
+                        .stroke(isSelected ? tint.opacity(0.9) : Color.secondary.opacity(0.3), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Single-line keyboard hint shown in the selection status bar. Rewritten
+    /// 2026-04-16 to match the Places-style rating/rejection gallery — 1-5 /
+    /// 0 / X replace the old G/F (Gemini pick) hint.
+    private var keyboardShortcutHint: String {
+        "← →: navigate  ·  Space: Quick Look  ·  1-5: rate  ·  0: clear  ·  X: reject"
     }
 
     private var galleryZoomControls: some View {
@@ -596,67 +744,103 @@ struct ImagineCharactersPageView: View {
 
     private func isPathVisibleInGallery(_ path: String) -> Bool {
         let selectionKey = gallerySelectionKey(for: path)
+        guard let character = store.selectedCharacter else { return true }
+
+        // Rating filter: images below the minimum are hidden regardless of
+        // flag filter. 0 = don't apply this filter.
+        if galleryMinimumRating > 0 {
+            let rating = character.inspirationRatings?[path] ?? 0
+            if rating < galleryMinimumRating { return false }
+        }
+
         switch galleryFilter {
         case .all:
             return true
+        case .unreviewed:
+            return !character.reviewedInspirationImagePaths.contains(path)
+        case .rejected, .hidden:
+            // Legacy `.hidden` persisted values redirect to rejected — the
+            // two concepts were unified on 2026-04-16.
+            return character.inspirationRejectedPaths.contains(path)
         case .gemini:
-            return galleryState.selectedPaths.contains(selectionKey)
+            // `.gemini` filter pill was retired when the persistent
+            // Gemini-reference set was replaced by the transient
+            // `yellowSelection` on 2026-04-16. This case is retained only
+            // so old persisted `@AppStorage` values decode; it now tracks
+            // the transient selection so the filter still makes visual
+            // sense if a user somehow lands on it.
+            return yellowSelection.contains(path)
         case .lora:
             return galleryState.loraSelectedPaths.contains(selectionKey)
-        case .hidden:
-            return galleryState.hiddenPaths.contains(selectionKey)
         }
+    }
+
+    /// Apply modifier-aware tap selection to `yellowSelection`. Called from
+    /// the thumbnail's `.onTapGesture`. Reads the live `NSEvent.modifierFlags`
+    /// so shift/cmd-clicks Just Work without a custom gesture recognizer.
+    ///
+    /// Semantics (mirrors Finder / macOS conventions):
+    ///   • plain click         → single-select this path
+    ///   • ⌘-click             → toggle this path, move range anchor here
+    ///   • ⇧-click (w/ anchor) → union everything between anchor and path
+    ///   • ⇧-click (no anchor) → same as plain click
+    private func applyGalleryTapSelection(path: String) {
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.shift),
+           let anchor = rangeAnchorPath,
+           let a = displayedPaths.firstIndex(of: anchor),
+           let b = displayedPaths.firstIndex(of: path) {
+            let lower = min(a, b)
+            let upper = max(a, b)
+            yellowSelection.formUnion(displayedPaths[lower...upper])
+            return
+        }
+        if flags.contains(.command) {
+            if yellowSelection.contains(path) {
+                yellowSelection.remove(path)
+            } else {
+                yellowSelection.insert(path)
+            }
+            rangeAnchorPath = path
+            return
+        }
+        yellowSelection = [path]
+        rangeAnchorPath = path
     }
 
     private func syncFocusedIndex(preferredPath: String? = nil) {
         let paths = displayedPaths
         guard !paths.isEmpty else {
             focusedIndex = 0
+            updatePreviewPath()
             return
         }
 
         if let preferredPath, let preferredIndex = paths.firstIndex(of: preferredPath) {
             focusedIndex = preferredIndex
+            updatePreviewPath()
             return
         }
 
         if let current = focusedPath, let currentIndex = paths.firstIndex(of: current) {
             focusedIndex = currentIndex
+            updatePreviewPath()
             return
         }
 
         focusedIndex = min(max(focusedIndex, 0), paths.count - 1)
+        updatePreviewPath()
     }
 
-    private var previewResizeHandle: some View {
-        Rectangle()
-            .fill(Color.clear)
-            .frame(height: 10)
-            .overlay(
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.secondary.opacity(0.4))
-                    .frame(width: 60, height: 4)
-            )
-            .contentShape(Rectangle())
-            .onHover { hovering in
-                if hovering {
-                    NSCursor.resizeUpDown.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        let start = dragStartHeight ?? previewHeight
-                        if dragStartHeight == nil { dragStartHeight = start }
-                        let newHeight = start + value.translation.height
-                        previewHeight = min(max(newHeight, 120), 1200)
-                    }
-                    .onEnded { _ in
-                        dragStartHeight = nil
-                    }
-            )
+    /// Sync `store.imaginePreviewImagePath` to whatever is currently focused so
+    /// the Details inspector picks it up. Called after every focusedIndex change.
+    private func updatePreviewPath() {
+        let paths = displayedPaths
+        if paths.isEmpty {
+            store.imaginePreviewImagePath = nil
+        } else if focusedIndex >= 0, focusedIndex < paths.count {
+            store.imaginePreviewImagePath = paths[focusedIndex]
+        }
     }
 
     @ViewBuilder
@@ -782,6 +966,18 @@ struct ImagineCharactersPageView: View {
             }
 
             Spacer()
+
+            // Cancel — drops any in-flight HTTP request on Google's side via
+            // URLSession Task cancellation propagation.
+            Button {
+                cancelInspirationGeneration()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("Cancel this generation run")
         }
     }
 
@@ -1071,6 +1267,19 @@ struct ImagineCharactersPageView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Remove from list")
+            } else {
+                // Cancel the remote batch on Google's side. The Python helper
+                // calls client.batches.cancel(...) and rewrites local
+                // metadata to JOB_STATE_CANCELLED — the next refresh will
+                // reconcile the UI.
+                Button(role: .destructive) {
+                    store.cancelInspirationBatchJob(job, for: character.id)
+                } label: {
+                    Image(systemName: "stop.circle.fill")
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
+                .help("Cancel this batch on Google's side")
             }
         }
         .padding(.vertical, 4)
@@ -1134,6 +1343,7 @@ struct ImagineCharactersPageView: View {
         let newIndex = focusedIndex + delta
         if newIndex >= 0 && newIndex < displayedPaths.count {
             focusedIndex = newIndex
+            updatePreviewPath()
         }
     }
 
@@ -1143,8 +1353,21 @@ struct ImagineCharactersPageView: View {
             animateURL: animateURL,
             characterSlug: character.assetFolderSlug
         )
+        // Wipe legacy persisted "Gemini-reference" selection — the concept
+        // was replaced by the transient in-session `yellowSelection` on
+        // 2026-04-16. Any pre-existing gray checkmarks in the on-disk JSON
+        // get cleared on first load and a debounced save strips them from
+        // disk. `loraSelectedPaths` and `dismissedBatchJobKeys` are
+        // preserved since those remain legitimately persistent.
+        if !galleryState.selectedPaths.isEmpty {
+            galleryState.selectedPaths.removeAll()
+            scheduleGalleryStateSave(for: character)
+        }
+        yellowSelection.removeAll()
+        rangeAnchorPath = nil
         focusedIndex = 0
         hasShownFocusHighlight = false
+        updatePreviewPath()
     }
 
     private func saveGalleryState(_ state: ImagineGallerySelectionState, for character: AnimationCharacter) {
@@ -1202,26 +1425,58 @@ struct ImagineCharactersPageView: View {
         let preferredPaths = store.preferredInspirationReferencePaths(for: character)
         let owned = Set(character.inspirationImagePaths)
         let filtered = preferredPaths.filter { owned.contains($0) }
-        preloadedPaths = sortPathsByModificationTimeDescending(filtered)
-        ImagineThumbnailCache.shared.prefetch(
-            paths: preloadedPaths.compactMap(resolvedGalleryAssetPath(for:)),
-            maxPixelSize: Int(galleryThumbnailBaseSize * 2)
-        )
+
+        // Snapshot resolved-path lookup on the main actor so the background
+        // sort doesn't have to touch @MainActor state. Per-path filesystem
+        // stat() is the real main-thread blocker with 100+ images.
+        let resolvedPairs: [(path: String, resolved: String?)] = filtered.map { p in
+            (p, resolvedGalleryAssetPath(for: p))
+        }
+
+        // Show the pre-sort order immediately so the UI feels instant, then
+        // replace with the mtime-sorted order once stat() completes.
+        preloadedPaths = filtered
+        recomputeDisplayedPaths()
         if focusedIndex >= preloadedPaths.count {
             focusedIndex = max(0, preloadedPaths.count - 1)
         }
+        updatePreviewPath()
+
+        let characterID = character.id
+        let prefetchSize = Int(galleryThumbnailBaseSize * 2)
+        let resolvedForPrefetch = resolvedPairs.compactMap { $0.resolved }
+
+        Task { @MainActor in
+            let sorted = await Task.detached(priority: .utility) {
+                Self.sortedByModificationTimeDescending(resolvedPairs)
+            }.value
+            guard store.selectedCharacterID == characterID else { return }
+            preloadedPaths = sorted
+            recomputeDisplayedPaths()
+            if focusedIndex >= preloadedPaths.count {
+                focusedIndex = max(0, preloadedPaths.count - 1)
+            }
+            updatePreviewPath()
+        }
+
+        ImagineThumbnailCache.shared.prefetch(
+            paths: resolvedForPrefetch,
+            maxPixelSize: prefetchSize
+        )
     }
 
-    /// Sort paths by file mtime (newest first). Paths without a resolvable
-    /// file fall to the end in their original relative order.
-    private func sortPathsByModificationTimeDescending(_ paths: [String]) -> [String] {
+    /// Sort paths by file mtime (newest first). Pure function — no @MainActor
+    /// state access so it can run on a background task. Callers pre-resolve
+    /// relative → absolute paths on the main actor and pass pairs in.
+    nonisolated private static func sortedByModificationTimeDescending(
+        _ pairs: [(path: String, resolved: String?)]
+    ) -> [String] {
         let fm = FileManager.default
-        let decorated: [(index: Int, path: String, mtime: Date?)] = paths.enumerated().map { (idx, path) in
-            let resolved = resolvedGalleryAssetPath(for: path)
-            let date: Date? = resolved.flatMap { p in
+        let decorated: [(index: Int, path: String, mtime: Date?)] = pairs.enumerated().map { (idx, pair) in
+            let date: Date? = pair.resolved.flatMap { p in
                 (try? fm.attributesOfItem(atPath: p)[.modificationDate]) as? Date
             }
-            return (idx, path, date)
+            return (idx, pair.path, date)
         }
         return decorated.sorted { lhs, rhs in
             switch (lhs.mtime, rhs.mtime) {
@@ -1249,48 +1504,34 @@ struct ImagineCharactersPageView: View {
     private func cachedThumbnail(path: String, index: Int, character: AnimationCharacter) -> some View {
         let selectionKey = gallerySelectionKey(for: path)
         let resolvedPath = resolvedGalleryAssetPath(for: path)
-        let isGeminiPicked = galleryState.selectedPaths.contains(selectionKey)
+        // Yellow-ring multi-selection is transient and keyed on raw `path`
+        // values (not normalized selectionKeys) — the set never persists to
+        // disk, so we don't need path normalization for equality checks.
+        let isSelected = yellowSelection.contains(path)
         let isLoraPicked = galleryState.loraSelectedPaths.contains(selectionKey)
-        let isHidden = galleryState.hiddenPaths.contains(selectionKey)
         let isFocused = index == focusedIndex
         let shouldShowFocusBorder = isFocused && hasShownFocusHighlight
+        let showYellowRing = isSelected || shouldShowFocusBorder
+        let rating = character.inspirationRatings?[path]
+        let isRejected = character.inspirationRejectedPaths.contains(path)
 
         CachedThumbnailView(path: resolvedPath ?? path, size: galleryThumbnailBaseSize)
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .opacity(isHidden ? 0.3 : 1.0)
+            .opacity(isRejected ? 0.45 : 1.0)
+            // Unified yellow ring — both the keyboard focus cursor and the
+            // cmd/shift-click multi-selection use the same color, so the
+            // user never has to decode which kind of "highlighted" they're
+            // looking at. The old two-tone (yellow-focus / accent-selection)
+            // + gray checkmark overlay were retired on 2026-04-16 because
+            // the persistent "Gemini selection" concept was replaced by
+            // the transient `yellowSelection` set.
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(
-                        shouldShowFocusBorder ? Color.yellow : Color.clear,
-                        lineWidth: shouldShowFocusBorder ? 3 : 0
+                        showYellowRing ? Color.yellow : Color.clear,
+                        lineWidth: showYellowRing ? 3 : 0
                     )
             )
-            // Gemini checkbox — TOP LEFT (blue)
-            .overlay(alignment: .topLeading) {
-                ZStack {
-                    Image(systemName: isGeminiPicked ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 18))
-                        .foregroundStyle(isGeminiPicked ? Color.blue : Color.white.opacity(0.85))
-                        .shadow(color: .black.opacity(0.6), radius: 2, x: 0, y: 1)
-                    Text("G")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(isGeminiPicked ? .white : Color.blue)
-                }
-                .padding(5)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    galleryKeyboardFocused = true
-                    hasShownFocusHighlight = true
-                    if isGeminiPicked {
-                        galleryState.selectedPaths.remove(selectionKey)
-                    } else {
-                        galleryState.selectedPaths.insert(selectionKey)
-                    }
-                    syncFocusedIndex(preferredPath: path)
-                    scheduleGalleryStateSave(for: character)
-                }
-                .help("Gemini reference (G=pick, F=unpick)")
-            }
             // LORA checkbox — TOP RIGHT (purple). Hidden when LoRA features
             // are disabled in Global Settings.
             .overlay(alignment: .topTrailing) {
@@ -1320,14 +1561,19 @@ struct ImagineCharactersPageView: View {
                     .help("LORA training (L=pick, K=unpick)")
                 }
             }
-            // Hidden indicator (bottom-center)
+            // Rejected indicator (bottom-center) — unified dim+eye.slash visual
+            // that replaced the legacy per-device Hidden overlay on 2026-04-16.
+            // Uses the same eye.slash iconography the old Hide button had, but
+            // keyed off the persistent per-character `inspirationRejectedPaths`
+            // set so rejections survive app restarts and project-folder syncs.
             .overlay(alignment: .bottom) {
-                if isHidden {
+                if isRejected {
                     Image(systemName: "eye.slash.fill")
-                        .font(.system(size: 12))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
-                        .padding(4)
+                        .shadow(color: .black.opacity(0.55), radius: 3, x: 0, y: 1)
+                        .padding(6)
+                        .help("Rejected — toggle with X or the context menu")
                 }
             }
             // "New / unreviewed" dot — BOTTOM LEFT (green)
@@ -1342,17 +1588,42 @@ struct ImagineCharactersPageView: View {
                         .help("New — not yet reviewed")
                 }
             }
+            // Star rating — BOTTOM RIGHT (yellow). The "Rejected" xmark label
+            // that used to live in this branch was retired on 2026-04-16; the
+            // unified dim+eye.slash overlay above now carries that signal.
+            .overlay(alignment: .bottomTrailing) {
+                if let rating, rating > 0 {
+                    Label("\(rating)", systemImage: "star.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.yellow)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .shadow(color: .black.opacity(0.4), radius: 2, x: 0, y: 1)
+                        .padding(5)
+                        .help("Rating: \(rating)/5")
+                }
+            }
         .contentShape(Rectangle())
         // Single-tap = instant selection. We intentionally do NOT use a
         // double-tap + .exclusively(before:) combo here because SwiftUI has to
         // wait the full macOS double-click interval (~250-500ms) before firing
         // the single-tap, which the user experienced as a "click lag".
         // Quick Look is still available via Space (keyboard) and context menu.
+        //
+        // Modifier-aware multi-select:
+        //   plain click  → replace yellowSelection with just this path
+        //   ⌘-click      → toggle this path in yellowSelection (anchor moves)
+        //   ⇧-click      → extend range from rangeAnchorPath to this path
+        // NSEvent.modifierFlags reads the live keyboard state at the moment
+        // the tap fires, so we don't need a custom Gesture builder.
         .onTapGesture {
             galleryKeyboardFocused = true
             hasShownFocusHighlight = true
             focusedIndex = index
+            store.imaginePreviewImagePath = path
             store.markInspirationImageReviewed(path: path, for: character.id)
+            applyGalleryTapSelection(path: path)
         }
         .contextMenu {
             Button("Quick Look") {
@@ -1376,7 +1647,57 @@ struct ImagineCharactersPageView: View {
                 Button("Set as Profile Pic") {
                     store.prepareProfilePicCrop(from: path, for: charID)
                 }
+                Button(character.inspirationRejectedPaths.contains(path) ? "Unreject" : "Reject") {
+                    store.toggleInspirationRejected(path: path, for: charID)
+                }
+                // The former Hide/Show toggle was retired on 2026-04-16 — it
+                // was a per-device duplicate of Reject. `x` is the keyboard
+                // shortcut for Reject, matching Places parity.
+                Menu("Rate") {
+                    ForEach(1...5, id: \.self) { r in
+                        Button("\(r) ★") {
+                            store.setInspirationRating(r, path: path, for: charID)
+                        }
+                    }
+                    Divider()
+                    Button("Clear") {
+                        store.setInspirationRating(nil, path: path, for: charID)
+                    }
+                }
                 Divider()
+                Menu("Generate with Gemini…", systemImage: "sparkles") {
+                    // Existing "photoreal/freeform" path — no wardrobe prompt,
+                    // user fills the prompt in the preflight sheet.
+                    Section("Photoreal") {
+                        Button("Generate 1 with this as reference") {
+                            beginGenerateWithGemini(characterID: charID, imagePath: path, count: 1)
+                        }
+                        Button("Generate 27 batch variations") {
+                            beginGenerateWithGemini(characterID: charID, imagePath: path, count: 27)
+                        }
+                    }
+                    // Soldier wardrobe — catalog prompts pre-filled with military
+                    // clothing guidance. Right-clicked image prepended to refs.
+                    Section("Soldier") {
+                        Button("Generate 1 with this as reference") {
+                            beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 1, wardrobe: .soldier)
+                        }
+                        Button("Generate 27 batch variations") {
+                            beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 27, wardrobe: .soldier)
+                        }
+                    }
+                    // Civilian wardrobe — catalog prompts pre-filled with civilian
+                    // clothing guidance.
+                    Section("Civilian") {
+                        Button("Generate 1 with this as reference") {
+                            beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 1, wardrobe: .civilian)
+                        }
+                        Button("Generate 27 batch variations") {
+                            beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 27, wardrobe: .civilian)
+                        }
+                    }
+                }
+                .disabled(store.geminiAPIKey.isEmpty || !store.geminiMasterSwitch)
                 Button("Edit with Gemini…", systemImage: "wand.and.sparkles") {
                     beginEditWithGemini(characterID: charID, imagePath: path)
                 }
@@ -1422,11 +1743,127 @@ struct ImagineCharactersPageView: View {
         draft.editInstructions = ""
         inspirationDrafts = [draft]
         inspirationActiveWardrobe = character.defaultWardrobeType
+        inspirationPendingCharacterID = nil  // freeform — no pose cycle
         inspirationPendingPlan = PendingInspirationGenerationPlan(
             title: "Edit \(filename)",
             confirmTitle: "Regenerate",
             mode: .immediate,
             wardrobe: character.defaultWardrobeType
+        )
+    }
+
+    /// Right-click "Generate with Gemini…" on an Imagine inspiration thumbnail →
+    /// opens the preflight sheet with a fresh generation draft using this image
+    /// as the reference. Does NOT auto-call Gemini — the user clicks Generate.
+    private func beginGenerateWithGemini(characterID: UUID, imagePath: String, count: Int) {
+        guard let character = store.characters.first(where: { $0.id == characterID }) else { return }
+        let filename = URL(fileURLWithPath: imagePath).lastPathComponent
+        let ref = GeminiGenerationReferenceDraft(label: "Reference: \(filename)", path: imagePath, isIncluded: true)
+
+        let aspectRatio = CharacterInspirationPromptCatalog.defaultAspectRatio
+        let imageSize = CharacterInspirationPromptCatalog.defaultImageSize
+
+        let drafts = (0..<count).map { i in
+            GeminiGenerationDraft(
+                title: count == 1 ? "Generate from \(filename)" : "Batch \(i + 1) from \(filename)",
+                destinationDescription: "\(character.name) • inspiration",
+                prompt: "",
+                model: store.selectedGeminiModel,
+                aspectRatio: aspectRatio,
+                imageSize: imageSize,
+                referenceItems: [ref],
+                pricingMode: .standard
+            )
+        }
+        inspirationDrafts = drafts
+        inspirationActiveWardrobe = character.defaultWardrobeType
+        inspirationPendingCharacterID = nil  // freeform — no pose cycle
+        inspirationPendingPlan = PendingInspirationGenerationPlan(
+            title: count == 1 ? "Generate from \(filename)" : "Generate \(count) variations",
+            confirmTitle: "Generate",
+            mode: count > 1 ? .batch : .immediate,
+            wardrobe: character.defaultWardrobeType
+        )
+    }
+
+    /// Right-click "Generate with Gemini…" → Soldier/Civilian section. Uses the
+    /// catalog's wardrobe-aware prompts pre-filled (the same ones the top
+    /// "Generate" button uses) and prepends the right-clicked thumbnail as
+    /// the primary reference image, keeping the character's other inspiration
+    /// refs as supporting context. Opens the preflight sheet — does NOT
+    /// auto-call Gemini.
+    private func beginGenerateWithGeminiWardrobe(
+        characterID: UUID,
+        imagePath: String,
+        count: Int,
+        wardrobe: CharacterInspirationWardrobe
+    ) {
+        guard let character = store.characters.first(where: { $0.id == characterID }) else { return }
+        let filename = URL(fileURLWithPath: imagePath).lastPathComponent
+
+        // Right-clicked image is the anchor — put it first so the identity
+        // signal is dominant. If the user has multi-selected additional images
+        // in the gallery, include them as supporting refs in selection order.
+        // Previously this also bundled every character reference ref, which
+        // flooded the preflight sheet with images the user didn't ask for.
+        let anchorRef = GeminiGenerationReferenceDraft(
+            label: "Reference: \(filename)",
+            path: imagePath,
+            isIncluded: true
+        )
+        // Pull any additional yellow-selected thumbnails in as supporting
+        // refs, de-duped against the right-clicked anchor. `yellowSelection`
+        // is transient (cmd/shift-click in the grid) and holds the same raw
+        // `path` values as `character.inspirationImagePaths`, so no
+        // normalization dance is required.
+        let extraRefs: [GeminiGenerationReferenceDraft] = character.inspirationImagePaths.compactMap { p in
+            guard p != imagePath, yellowSelection.contains(p) else { return nil }
+            let pFilename = URL(fileURLWithPath: p).lastPathComponent
+            return GeminiGenerationReferenceDraft(
+                label: "Reference: \(pFilename)",
+                path: p,
+                isIncluded: true
+            )
+        }
+        let combinedRefs = [anchorRef] + extraRefs
+
+        inspirationPendingBatchTitleOverride = nil
+        inspirationPendingBatchFolderSlugOverride = nil
+        inspirationPendingBatchKind = .inspiration
+        inspirationAutoSelectForLoRA = false
+        inspirationPendingCharacterID = character.id
+
+        let specs = Array(CharacterInspirationPromptCatalog.allSpecs.prefix(count))
+        let mode: CharacterInspirationGenerationMode = count > 1 ? .batch : .immediate
+
+        inspirationDrafts = specs.enumerated().map { index, spec in
+            GeminiGenerationDraft(
+                title: spec.title,
+                destinationDescription: "\(wardrobe.displayName) inspiration image",
+                prompt: CharacterInspirationPromptCatalog.prompt(
+                    for: spec,
+                    character: character,
+                    wardrobe: wardrobe,
+                    specIndex: index
+                ),
+                model: store.selectedGeminiModel,
+                aspectRatio: CharacterInspirationPromptCatalog.defaultAspectRatio,
+                imageSize: CharacterInspirationPromptCatalog.defaultImageSize,
+                referenceItems: combinedRefs,
+                pricingMode: mode == .batch ? .batch : .standard
+            )
+        }
+
+        inspirationActiveWardrobe = wardrobe
+        inspirationPendingPlan = PendingInspirationGenerationPlan(
+            title: count == 1
+                ? "\(character.name) • \(wardrobe.displayName) from \(filename)"
+                : "\(character.name) • \(wardrobe.displayName) Inspiration (\(count))",
+            confirmTitle: mode == .batch
+                ? "Submit \(count)-Image Batch"
+                : "Generate 1 Image",
+            mode: mode,
+            wardrobe: wardrobe
         )
     }
 
@@ -1533,23 +1970,25 @@ struct ImagineCharactersPageView: View {
         for character: AnimationCharacter,
         wardrobe: CharacterInspirationWardrobe
     ) -> some View {
-        Section("Photoreal LoRA Candidates") {
-            Button("Generate 1 Test Candidate") {
-                preparePhotorealLORACandidatePlan(for: character, count: 1, mode: .immediate)
-            }
-            Button("Generate 50 Candidates Now") {
-                preparePhotorealLORACandidatePlan(
-                    for: character,
-                    count: PhotorealLORACandidateCatalog.allSpecs.count,
-                    mode: .immediate
-                )
-            }
-            Button("Submit 50-Candidate Batch + Watchdog") {
-                preparePhotorealLORACandidatePlan(
-                    for: character,
-                    count: PhotorealLORACandidateCatalog.allSpecs.count,
-                    mode: .batch
-                )
+        if loraEnabled {
+            Section("Photoreal LoRA Candidates") {
+                Button("Generate 1 Test Candidate") {
+                    preparePhotorealLORACandidatePlan(for: character, count: 1, mode: .immediate)
+                }
+                Button("Generate 50 Candidates Now") {
+                    preparePhotorealLORACandidatePlan(
+                        for: character,
+                        count: PhotorealLORACandidateCatalog.allSpecs.count,
+                        mode: .immediate
+                    )
+                }
+                Button("Submit 50-Candidate Batch + Watchdog") {
+                    preparePhotorealLORACandidatePlan(
+                        for: character,
+                        count: PhotorealLORACandidateCatalog.allSpecs.count,
+                        mode: .batch
+                    )
+                }
             }
         }
 
@@ -1557,7 +1996,7 @@ struct ImagineCharactersPageView: View {
             Button("Generate 1 Test Image") {
                 prepareInspirationGenerationPlan(for: character, count: 1, wardrobe: wardrobe, mode: .immediate)
             }
-            Button("Generate 27-Image Set Now") {
+            Button("Generate \(CharacterInspirationPromptCatalog.allSpecs.count)-Image Set Now") {
                 prepareInspirationGenerationPlan(
                     for: character,
                     count: CharacterInspirationPromptCatalog.allSpecs.count,
@@ -1565,10 +2004,29 @@ struct ImagineCharactersPageView: View {
                     mode: .immediate
                 )
             }
-            Button("Submit 27-Image Batch + Watchdog") {
+            Button("Submit \(CharacterInspirationPromptCatalog.allSpecs.count)-Image Batch + Watchdog") {
                 prepareInspirationGenerationPlan(
                     for: character,
                     count: CharacterInspirationPromptCatalog.allSpecs.count,
+                    wardrobe: wardrobe,
+                    mode: .batch
+                )
+            }
+        }
+
+        Section("Action Images (Amira-specific)") {
+            Button("Generate \(CharacterActionPromptCatalog.allSpecs.count) Action Images Now") {
+                prepareActionImageGenerationPlan(
+                    for: character,
+                    count: CharacterActionPromptCatalog.allSpecs.count,
+                    wardrobe: wardrobe,
+                    mode: .immediate
+                )
+            }
+            Button("Submit \(CharacterActionPromptCatalog.allSpecs.count)-Image Action Batch + Watchdog") {
+                prepareActionImageGenerationPlan(
+                    for: character,
+                    count: CharacterActionPromptCatalog.allSpecs.count,
                     wardrobe: wardrobe,
                     mode: .batch
                 )
@@ -1584,9 +2042,13 @@ struct ImagineCharactersPageView: View {
         inspirationPendingBatchFolderSlugOverride = nil
         inspirationPendingBatchKind = .inspiration
         inspirationAutoSelectForLoRA = false
-        // Use the selected images as reference images for a 27-image set.
+        inspirationPendingCharacterID = character.id
+        // Use the yellow-selected images as reference images for a 27-image
+        // set. `yellowSelection` is the transient cmd/shift-click selection
+        // from the gallery grid (replaced the persistent gray-checkmark
+        // `galleryState.selectedPaths` on 2026-04-16).
         let specs = CharacterInspirationPromptCatalog.allSpecs
-        let selectedRefs = galleryState.selectedPaths.compactMap { path -> GeminiGenerationReferenceDraft? in
+        let selectedRefs = yellowSelection.compactMap { path -> GeminiGenerationReferenceDraft? in
             let url = store.resolvedCharacterAssetURL(for: path) ?? URL(fileURLWithPath: path)
             return GeminiGenerationReferenceDraft(
                 label: url.deletingPathExtension().lastPathComponent,
@@ -1595,14 +2057,15 @@ struct ImagineCharactersPageView: View {
             )
         }
 
-        inspirationDrafts = specs.map { spec in
+        inspirationDrafts = specs.enumerated().map { index, spec in
             GeminiGenerationDraft(
                 title: spec.title,
                 destinationDescription: "\(character.defaultWardrobeType.displayName) inspiration image",
                 prompt: CharacterInspirationPromptCatalog.prompt(
                     for: spec,
                     character: character,
-                    wardrobe: character.defaultWardrobeType
+                    wardrobe: character.defaultWardrobeType,
+                    specIndex: index
                 ),
                 model: store.selectedGeminiModel,
                 aspectRatio: CharacterInspirationPromptCatalog.defaultAspectRatio,
@@ -1626,6 +2089,34 @@ struct ImagineCharactersPageView: View {
         )
     }
 
+    /// Called by the preflight sheet's pose-title refresh button. Advances
+    /// the draft's title + prompt to the next spec in
+    /// `CharacterInspirationPromptCatalog.allSpecs`, wrapping around. Looks
+    /// up the current spec by matching title; falls back to spec[0] if the
+    /// title has been user-edited away from a known spec. No-op when the
+    /// pending character or active wardrobe have been cleared.
+    private func cycleInspirationDraftSpec(draftID: UUID) {
+        guard let characterID = inspirationPendingCharacterID,
+              let character = store.characters.first(where: { $0.id == characterID }),
+              let wardrobe = inspirationActiveWardrobe,
+              let draftIndex = inspirationDrafts.firstIndex(where: { $0.id == draftID }) else {
+            return
+        }
+        let specs = CharacterInspirationPromptCatalog.allSpecs
+        guard !specs.isEmpty else { return }
+        let currentTitle = inspirationDrafts[draftIndex].title
+        let currentIdx = specs.firstIndex(where: { $0.title == currentTitle }) ?? -1
+        let nextIdx = (currentIdx + 1) % specs.count
+        let nextSpec = specs[nextIdx]
+        inspirationDrafts[draftIndex].title = nextSpec.title
+        inspirationDrafts[draftIndex].prompt = CharacterInspirationPromptCatalog.prompt(
+            for: nextSpec,
+            character: character,
+            wardrobe: wardrobe,
+            specIndex: nextIdx
+        )
+    }
+
     private func prepareInspirationGenerationPlan(
         for character: AnimationCharacter,
         count: Int,
@@ -1636,15 +2127,19 @@ struct ImagineCharactersPageView: View {
         inspirationPendingBatchFolderSlugOverride = nil
         inspirationPendingBatchKind = .inspiration
         inspirationAutoSelectForLoRA = false
+        // Track character so the preflight sheet's pose-refresh button can
+        // cycle to the next catalog spec. Clears on sheet dismiss.
+        inspirationPendingCharacterID = character.id
         let specs = Array(CharacterInspirationPromptCatalog.allSpecs.prefix(count))
-        inspirationDrafts = specs.map { spec in
+        inspirationDrafts = specs.enumerated().map { index, spec in
             GeminiGenerationDraft(
                 title: spec.title,
                 destinationDescription: "\(wardrobe.displayName) inspiration image",
                 prompt: CharacterInspirationPromptCatalog.prompt(
                     for: spec,
                     character: character,
-                    wardrobe: wardrobe
+                    wardrobe: wardrobe,
+                    specIndex: index
                 ),
                 model: store.selectedGeminiModel,
                 aspectRatio: CharacterInspirationPromptCatalog.defaultAspectRatio,
@@ -1660,6 +2155,49 @@ struct ImagineCharactersPageView: View {
             confirmTitle: mode == .batch
                 ? "Submit \(count)-Image Batch"
                 : (count == 1 ? "Generate 1 Image" : "Generate \(count) Images"),
+            mode: mode,
+            wardrobe: wardrobe
+        )
+    }
+
+    private func prepareActionImageGenerationPlan(
+        for character: AnimationCharacter,
+        count: Int,
+        wardrobe: CharacterInspirationWardrobe,
+        mode: CharacterInspirationGenerationMode
+    ) {
+        inspirationPendingBatchTitleOverride = CharacterActionPromptCatalog.batchTitle
+        inspirationPendingBatchFolderSlugOverride = CharacterActionPromptCatalog.batchFolderSlug
+        inspirationPendingBatchKind = .inspiration
+        inspirationAutoSelectForLoRA = false
+        inspirationPendingCharacterID = character.id
+
+        let specs = Array(CharacterActionPromptCatalog.allSpecs.prefix(count))
+        inspirationDrafts = specs.enumerated().map { index, spec in
+            GeminiGenerationDraft(
+                title: spec.title,
+                destinationDescription: "\(wardrobe.displayName) action image",
+                prompt: CharacterActionPromptCatalog.prompt(
+                    for: spec,
+                    character: character,
+                    wardrobe: wardrobe,
+                    specIndex: index
+                ),
+                contextNote: "Amira-specific action image",
+                model: store.selectedGeminiModel,
+                aspectRatio: CharacterActionPromptCatalog.defaultAspectRatio,
+                imageSize: CharacterActionPromptCatalog.defaultImageSize,
+                referenceItems: inspirationReferenceDrafts(for: character),
+                pricingMode: mode == .batch ? .batch : .standard
+            )
+        }
+
+        inspirationActiveWardrobe = wardrobe
+        inspirationPendingPlan = PendingInspirationGenerationPlan(
+            title: "\(character.name) • \(wardrobe.displayName) Action Images",
+            confirmTitle: mode == .batch
+                ? "Submit \(count)-Image Action Batch"
+                : (count == 1 ? "Generate 1 Action Image" : "Generate \(count) Action Images"),
             mode: mode,
             wardrobe: wardrobe
         )
@@ -1698,7 +2236,7 @@ struct ImagineCharactersPageView: View {
         inspirationPendingBatchKind = .loraCandidate
         inspirationAutoSelectForLoRA = true
 
-        let usingSelectedRefs = !galleryState.selectedPaths.isEmpty
+        let usingSelectedRefs = !yellowSelection.isEmpty
         inspirationPendingPlan = PendingInspirationGenerationPlan(
             title: "\(character.name) • Photoreal LoRA Candidates\(usingSelectedRefs ? " (selected refs)" : "")",
             confirmTitle: mode == .batch
@@ -1711,6 +2249,13 @@ struct ImagineCharactersPageView: View {
 
     // MARK: - Generation Execution
 
+    struct QueuedInspirationRun {
+        let drafts: [GeminiGenerationDraft]
+        let autoSelectForLoRA: Bool
+        let characterID: UUID
+        let characterName: String
+    }
+
     private func runInspirationGeneration(
         _ drafts: [GeminiGenerationDraft],
         autoSelectForLoRA: Bool = false
@@ -1720,74 +2265,149 @@ struct ImagineCharactersPageView: View {
             inspirationGenerationErrorMessage = "Gemini API calls are blocked. Enable Gemini API Calls in Inspector > Tools."
             return
         }
+        guard !drafts.isEmpty else { return }
+
+        // Queue the new run. If a worker is already processing an earlier
+        // batch, this one waits its turn — no cancellation of in-flight work.
+        inspirationGenerationQueue.append(
+            QueuedInspirationRun(
+                drafts: drafts,
+                autoSelectForLoRA: autoSelectForLoRA,
+                characterID: character.id,
+                characterName: character.name
+            )
+        )
+        inspirationStatusCharacterID = character.id
+        inspirationGenerationErrorMessage = nil
+
+        // Worker already running — just let it pick up the new run when it
+        // finishes its current draft.
+        if inspirationGenerationTask != nil {
+            let pending = inspirationGenerationQueue.reduce(0) { $0 + $1.drafts.count }
+            inspirationGenerationStatus = "Queued \(drafts.count) more • \(pending) pending."
+            return
+        }
 
         isGeneratingInspiration = true
         generatingInspirationCharacterID = character.id
-        inspirationStatusCharacterID = character.id
         inspirationGenerationStatus = nil
         inspirationGenerationProgress = 0
-        inspirationGenerationErrorMessage = nil
 
-        Task { @MainActor in
+        inspirationGenerationTask = Task { @MainActor in
             let service = GeminiImageService()
+            var totalCompleted = 0
+            var totalSeen = 0
 
-            do {
-                let total = Double(max(drafts.count, 1))
+            outerLoop: while !inspirationGenerationQueue.isEmpty {
+                if Task.isCancelled { break outerLoop }
+                let run = inspirationGenerationQueue.removeFirst()
+                totalSeen += run.drafts.count
 
-                for (index, draft) in drafts.enumerated() {
-                    inspirationGenerationStatus = "Generating \(index + 1) of \(drafts.count)…"
-                    inspirationGenerationProgress = Double(index) / total
+                for draft in run.drafts {
+                    if Task.isCancelled { break outerLoop }
+
+                    let pending = inspirationGenerationQueue.reduce(0) { $0 + $1.drafts.count }
+                    inspirationGenerationStatus = pending > 0
+                        ? "Generating \(totalCompleted + 1) of \(totalSeen)… (\(pending) more queued)"
+                        : "Generating \(totalCompleted + 1) of \(totalSeen)…"
+                    inspirationGenerationProgress = totalSeen == 0 ? 0 : Double(totalCompleted) / Double(totalSeen)
 
                     let activityID = store.registerGeminiActivity(
                         kind: .immediate,
                         title: draft.title,
-                        source: "Imagine • \(character.name)"
+                        source: "Imagine • \(run.characterName)"
                     )
 
+                    let referenceImages = buildReferenceImages(from: draft.referenceItems)
                     let request = GeminiImageService.GenerationRequest(
                         prompt: draft.effectivePrompt,
-                        referenceImages: buildReferenceImages(from: draft.referenceItems),
+                        referenceImages: referenceImages,
                         model: draft.model,
                         aspectRatio: draft.aspectRatio,
                         imageSize: draft.imageSize
                     )
+                    let apiKey = store.geminiAPIKey
+                    store.logGeminiAPICall(
+                        endpoint: "image-generation",
+                        source: "ImagineCharactersPageView.runInspirationGeneration()"
+                    )
 
-                    store.logGeminiAPICall(endpoint: "image-generation", source: "ImagineCharactersPageView.runInspirationGeneration()")
-                    let result: GeminiImageService.GenerationResult
+                    // Wrap the single-image call in its own child Task so the
+                    // per-activity cancel button in the Gemini popover can
+                    // abort just this one item without killing the queue.
+                    let itemTask = Task<GeminiImageService.GenerationResult, Error> {
+                        try await service.generate(request: request, apiKey: apiKey)
+                    }
+                    store.attachGeminiActivityCancel(activityID) { itemTask.cancel() }
+
                     do {
-                        result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
+                        let result = try await withTaskCancellationHandler {
+                            try await itemTask.value
+                        } onCancel: {
+                            itemTask.cancel()
+                        }
+
+                        let storedPath = try store.storeGeneratedInspirationImage(
+                            result.imageData,
+                            prompt: draft.prompt,
+                            model: draft.model,
+                            filenameStem: sanitizedFilenameStem(for: draft.title),
+                            for: run.characterID,
+                            aspectRatio: draft.aspectRatio,
+                            imageSize: draft.imageSize,
+                            recommendedLORACaption: draft.recommendedLORACaption,
+                            autoSelectForLoRA: run.autoSelectForLoRA
+                        )
+                        if run.autoSelectForLoRA, !storedPath.isEmpty {
+                            galleryState.loraSelectedPaths.insert(storedPath)
+                        }
+                        store.updateGeminiActivity(
+                            activityID,
+                            status: .completed,
+                            outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent
+                        )
+                        store.recordVertexCreditUsage(draft.estimatedCost)
+                        if let activeCharacter = store.selectedCharacter,
+                           activeCharacter.id == run.characterID {
+                            refreshPreloadedPaths(character: activeCharacter)
+                        }
+                        totalCompleted += 1
+                    } catch is CancellationError {
+                        store.updateGeminiActivity(activityID, status: .failed, errorMessage: "Canceled")
+                        // If the outer worker was cancelled (user clicked the
+                        // main Cancel), bail out of the queue entirely.
+                        // Otherwise, the cancel came from the per-activity
+                        // button — skip this item and keep draining the queue.
+                        if Task.isCancelled { break outerLoop }
+                        continue
                     } catch {
                         store.updateGeminiActivity(activityID, status: .failed, errorMessage: error.localizedDescription)
-                        throw error
+                        continue
                     }
-
-                    let storedPath = try store.storeGeneratedInspirationImage(
-                        result.imageData,
-                        prompt: draft.prompt,
-                        model: draft.model,
-                        filenameStem: sanitizedFilenameStem(for: draft.title),
-                        for: character.id,
-                        aspectRatio: draft.aspectRatio,
-                        imageSize: draft.imageSize,
-                        recommendedLORACaption: draft.recommendedLORACaption,
-                        autoSelectForLoRA: autoSelectForLoRA
-                    )
-                    if autoSelectForLoRA, !storedPath.isEmpty {
-                        galleryState.loraSelectedPaths.insert(storedPath)
-                    }
-                    store.updateGeminiActivity(activityID, status: .completed,
-                                               outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent)
-                    refreshPreloadedPaths(character: character)
                 }
-
-                inspirationGenerationProgress = 1
-                inspirationGenerationStatus = "Finished \(drafts.count) inspiration image\(drafts.count == 1 ? "" : "s")."
-            } catch {
-                inspirationGenerationErrorMessage = error.localizedDescription
             }
 
+            inspirationGenerationProgress = 1
+            if Task.isCancelled {
+                inspirationGenerationStatus = "Canceled after \(totalCompleted) of \(totalSeen)."
+            } else {
+                inspirationGenerationStatus = "Finished \(totalCompleted) inspiration image\(totalCompleted == 1 ? "" : "s")."
+            }
             isGeneratingInspiration = false
             generatingInspirationCharacterID = nil
+            inspirationGenerationQueue.removeAll()
+            inspirationGenerationTask = nil
+        }
+    }
+
+    /// User pressed the cancel button on the instant-generation row.
+    /// Cancels the outer Task + clears the queue, which propagates to
+    /// URLSession and drops any in-flight HTTP request on Google's side.
+    private func cancelInspirationGeneration() {
+        inspirationGenerationQueue.removeAll()
+        inspirationGenerationTask?.cancel()
+        if isGeneratingInspiration {
+            inspirationGenerationStatus = "Canceling…"
         }
     }
 
@@ -1897,7 +2517,13 @@ struct ImagineCharactersPageView: View {
     }
 
     private func photorealLORACandidateReferenceDrafts(for character: AnimationCharacter) -> [GeminiGenerationReferenceDraft] {
-        let selectedLifestylePaths = galleryState.selectedPaths
+        // Photoreal LoRA candidate refs follow the same yellow-selection
+        // rule as the rest of the Imagine gallery: if the user has actively
+        // multi-selected images in the grid, use those; otherwise fall back
+        // to the store-preferred ordering. Previously keyed off the
+        // persistent `galleryState.selectedPaths` which was retired on
+        // 2026-04-16.
+        let selectedLifestylePaths = yellowSelection
         if !selectedLifestylePaths.isEmpty {
             return selectedLifestylePaths.sorted().map { path in
                 GeminiGenerationReferenceDraft(
@@ -2101,5 +2727,31 @@ struct ImagineCharactersPageView: View {
         URL(fileURLWithPath: filename)
             .deletingPathExtension()
             .lastPathComponent
+    }
+}
+
+// MARK: - displayedPaths invalidator
+
+/// Combined visibility signature. Hashes all of the per-path state that
+/// `isPathVisibleInGallery` reads so the surrounding view can observe a
+/// single value instead of chaining 6 separate `.onChange` modifiers
+/// (which tips SwiftUI's type-checker over the expression-complexity
+/// cliff on the already-large `inspirationSection` body).
+struct ImagineGalleryVisibilitySignature: Hashable {
+    let filterRaw: String
+    let minRating: Int
+    let rejected: Set<String>
+    let reviewed: Set<String>
+    let ratings: [String: Int]?
+    let selected: Set<String>
+    let lora: Set<String>
+}
+
+private struct DisplayedPathsInvalidator: ViewModifier {
+    let signature: ImagineGalleryVisibilitySignature
+    let recompute: () -> Void
+
+    func body(content: Content) -> some View {
+        content.onChange(of: signature) { _, _ in recompute() }
     }
 }

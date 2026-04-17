@@ -16,11 +16,29 @@ final class MiniMaxPromptService: Sendable {
     ) async throws -> String {
         guard !apiKey.isEmpty else { throw MiniMaxError.noAPIKey }
 
-        let systemPrompt = "You are an expert at writing Stable Diffusion prompts. Generate a detailed, comma-separated prompt for generating a background plate image. Focus on: composition, lighting, atmosphere, materials, color palette. Do NOT include character descriptions. Output ONLY the prompt text, nothing else."
+        let systemPrompt = """
+        You are an expert at writing image-generation prompts for background plates.
 
-        var userContent = "Location: \(placeName)\nCategory: \(category)\nNotes: \(notes)"
-        if let ctx = sceneContext { userContent += "\nScene context: \(ctx)" }
-        userContent += "\n\nGenerate a detailed Stable Diffusion prompt for this location as a background plate."
+        RULES:
+        1. Write only in plain-language visual description.
+        2. NEVER include place names, scene titles, character names, script references, or internal project labels.
+        3. If the input uses shorthand or names, translate them into concrete visible details: architecture, terrain, materials, atmosphere, camera framing, lighting, and time of day.
+        4. Describe only what the image model can actually see in the final frame.
+        5. Do NOT include character descriptions unless the user explicitly asks for visible people.
+        6. Output ONLY the prompt text, nothing else.
+        """
+
+        var userContent = """
+        The following fields may contain internal names or shorthand. Use them only as hidden clues and rewrite them into one fully explicit visual prompt for a single background plate.
+
+        Location label: \(placeName)
+        Category: \(category)
+        Notes: \(notes)
+        """
+        if let ctx = sceneContext {
+            userContent += "\nScene/context label (do not mention directly): \(ctx)"
+        }
+        userContent += "\n\nGenerate the final prompt now."
 
         let body: [String: Any] = [
             "model": model,
@@ -62,11 +80,33 @@ final class MiniMaxPromptService: Sendable {
     ) async throws -> String {
         guard !apiKey.isEmpty else { throw MiniMaxError.noAPIKey }
 
-        let systemPrompt = "You are an expert at writing image generation prompts for animation keyframes. Generate a detailed prompt describing a single frame. Include: character positions, expressions, camera angle, background, lighting, and animation style. Output ONLY the prompt, nothing else."
+        let systemPrompt = """
+        You are an expert at writing image-generation prompts for animation keyframes.
 
-        var charDesc = characters.map { "\($0.name) at \($0.position), expression: \($0.expression)" }.joined(separator: "; ")
+        RULES:
+        1. Write the frame entirely as plain-language visual description.
+        2. NEVER include character names, scene names, script references, or internal labels.
+        3. Convert all shorthand into concrete visible staging: body placement, expression, camera, lighting, environment, and motion state.
+        4. Describe only what the image model can actually see in the frame.
+        5. Output ONLY the prompt text, nothing else.
+        """
+
+        let charDesc = characters.enumerated().map { index, character in
+            "character \(index + 1) at \(character.position), expression: \(character.expression)"
+        }.joined(separator: "; ")
         let frameType = isFirstFrame ? "FIRST frame (starting state)" : "LAST frame (ending state after motion)"
-        let userContent = "Background: \(background)\nCharacters: \(charDesc)\nCamera: \(cameraShot)\nFrame type: \(frameType)\nMotion: \(motionDirection)\nAnimation style: \(animationStyle)\n\nGenerate a detailed image generation prompt for this keyframe."
+        let userContent = """
+        The following fields may contain shorthand. Rewrite them into one explicit image prompt for a single frame.
+
+        Background/context label: \(background)
+        Characters (use generic labels only): \(charDesc)
+        Camera: \(cameraShot)
+        Frame type: \(frameType)
+        Motion state: \(motionDirection)
+        Animation style: \(animationStyle)
+
+        Generate the final prompt now.
+        """
 
         let body: [String: Any] = [
             "model": model,

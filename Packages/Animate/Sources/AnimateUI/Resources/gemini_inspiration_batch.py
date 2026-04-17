@@ -245,18 +245,6 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--timeout-hours", type=float, default=2.0,
                        help="Auto-cancel the batch if still running after this many hours (default: 2)")
 
-    cancel = subparsers.add_parser(
-        "cancel",
-        help="Cancel a running batch on Google's side and mark the local metadata as cancelled.",
-    )
-    cancel.add_argument("--metadata", type=Path, required=True)
-    cancel.add_argument("--api-key", default=None)
-    cancel.add_argument(
-        "--reason",
-        default="User cancelled from app",
-        help="Free-form note recorded in the local metadata's cancel_reason field.",
-    )
-
     return parser
 
 
@@ -812,56 +800,6 @@ def watch_batch(args: argparse.Namespace) -> int:
         time.sleep(max(30, args.poll_seconds))
 
 
-def cancel_batch(args: argparse.Namespace) -> int:
-    """Cancel a running batch on Google's side.
-
-    Called from the Swift app when the user presses the Cancel button on an
-    in-flight batch job row. The watchdog already owns the same cancel call
-    for the timeout path (see `watch_batch`), but exposing it as an explicit
-    subcommand means the app can cancel without racing the watchdog's poll
-    cycle.
-    """
-    api_key = load_api_key(args.api_key)
-    metadata_path = args.metadata.expanduser().resolve()
-    metadata = _load_metadata(metadata_path)
-    batch_name = metadata["batch_name"]
-
-    client = genai.Client(api_key=api_key)
-
-    # If the batch already reached a terminal state, report that and exit
-    # cleanly so the Swift side can treat it as success + trigger a refresh.
-    try:
-        _, payload = _fetch_batch_payload(client, batch_name)
-    except Exception as error:  # pragma: no cover — network/API failures
-        payload = {"batch_name": batch_name, "state": "UNKNOWN", "fetch_error": str(error)}
-
-    already_terminal = payload.get("state") in {
-        "JOB_STATE_SUCCEEDED",
-        "JOB_STATE_FAILED",
-        "JOB_STATE_CANCELLED",
-        "JOB_STATE_EXPIRED",
-    }
-
-    if not already_terminal:
-        try:
-            client.batches.cancel(name=batch_name)
-        except Exception as error:
-            # Surface the failure to the caller but still update local state
-            # so the UI can show "cancel failed" instead of silently wedged.
-            payload["cancel_error"] = str(error)
-            payload["state"] = payload.get("state", "UNKNOWN")
-            _save_status(metadata_path, payload)
-            print(json.dumps(payload))
-            return 1
-
-        payload["state"] = "JOB_STATE_CANCELLED"
-
-    payload["cancel_reason"] = args.reason
-    _save_status(metadata_path, payload)
-    print(json.dumps(payload))
-    return 0
-
-
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -871,8 +809,6 @@ def main() -> int:
         return check_status(args)
     if args.command == "watch":
         return watch_batch(args)
-    if args.command == "cancel":
-        return cancel_batch(args)
     raise RuntimeError(f"Unknown command: {args.command}")
 
 

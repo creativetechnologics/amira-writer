@@ -18,20 +18,36 @@ final class GeminiImageService {
         case imageDecodingFailed
         case cancelled
         case rateLimitExceeded
+        case resourceExhausted(String)
         case masterSwitchOff
         case vertexNotConfigured(String)
 
         var errorDescription: String? {
             switch self {
-            case .noAPIKey: "Gemini API key is not set."
-            case .invalidResponse: "Invalid response from Gemini API."
-            case .httpError(let code, let msg): "HTTP \(code): \(msg)"
-            case .noImageInResponse: "No image was returned in the response."
-            case .imageDecodingFailed: "Failed to decode the generated image."
-            case .cancelled: "Generation was cancelled."
-            case .rateLimitExceeded: "Too many API calls in a short period. Wait a moment and try again."
-            case .masterSwitchOff: "Gemini API calls are disabled. Enable them in the Imagine > Inspector > Tools tab."
-            case .vertexNotConfigured(let msg): "Vertex AI backend is selected but not configured: \(msg)"
+            case .noAPIKey:
+                return "Gemini API key is not set."
+            case .invalidResponse:
+                return "Invalid response from Gemini API."
+            case .httpError(let code, let msg):
+                return "HTTP \(code): \(msg)"
+            case .noImageInResponse:
+                return "No image was returned in the response."
+            case .imageDecodingFailed:
+                return "Failed to decode the generated image."
+            case .cancelled:
+                return "Generation was cancelled."
+            case .rateLimitExceeded:
+                return "Too many API calls in a short period. Wait a moment and try again."
+            case .resourceExhausted(let message):
+                let detail = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                if detail.isEmpty {
+                    return "Vertex AI temporarily ran out of shared capacity (HTTP 429 RESOURCE_EXHAUSTED). The app already retried with backoff. Try again in a moment or switch the run to batch mode."
+                }
+                return "Vertex AI temporarily ran out of shared capacity (HTTP 429 RESOURCE_EXHAUSTED). The app already retried with backoff. \(detail)"
+            case .masterSwitchOff:
+                return "Gemini API calls are disabled. Enable them in Settings (gear icon in the title bar)."
+            case .vertexNotConfigured(let msg):
+                return "Vertex AI backend is selected but not configured: \(msg)"
             }
         }
     }
@@ -70,7 +86,7 @@ final class GeminiImageService {
     // MARK: - Rate Limiting & Circuit Breaker
 
     /// Maximum number of `generate()` calls allowed per 60-second window.
-    static var rateLimitPerMinute: Int = 5
+    static var rateLimitPerMinute: Int = 12
 
     /// Circuit breaker: after this many consecutive failures, all calls are blocked
     /// until the app is restarted. Prevents runaway retry loops from burning API quota.
@@ -206,73 +222,54 @@ final class GeminiImageService {
         urlRequest.setValue(authHeaderValue, forHTTPHeaderField: authHeaderName)
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-        let data: Data
-        let response: URLResponse
         do {
-            (data, response) = try await session.data(for: urlRequest)
-        } catch {
-            Self.consecutiveFailures += 1
-            print("[GeminiImageService] Network error (\(Self.consecutiveFailures) consecutive failures): \(error.localizedDescription)")
-            if Self.consecutiveFailures >= Self.circuitBreakerThreshold {
-                Self.circuitBreakerTripped = true
-                print("[GeminiImageService] 🛑 CIRCUIT BREAKER TRIPPED after \(Self.consecutiveFailures) consecutive failures. All API calls blocked until app restart.")
+            let (data, httpResponse) = try await performRequestWithRetry(urlRequest, backend: backend)
+
+            // Success — reset the failure counter
+            Self.consecutiveFailures = 0
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let candidates = json["candidates"] as? [[String: Any]],
+                  let firstCandidate = candidates.first,
+                  let content = firstCandidate["content"] as? [String: Any],
+                  let responseParts = content["parts"] as? [[String: Any]]
+            else {
+                throw ServiceError.invalidResponse
             }
+
+            var resultImage: NSImage?
+            var resultData: Data?
+            var textResponse: String?
+
+            for part in responseParts {
+                if let text = part["text"] as? String {
+                    textResponse = text
+                } else if let inlineData = part["inlineData"] as? [String: Any],
+                          let base64String = inlineData["data"] as? String {
+                    guard let imageData = Data(base64Encoded: base64String) else {
+                        throw ServiceError.imageDecodingFailed
+                    }
+                    guard let image = NSImage(data: imageData) else {
+                        throw ServiceError.imageDecodingFailed
+                    }
+                    resultImage = image
+                    resultData = imageData
+                }
+            }
+
+            guard let image = resultImage, let imageData = resultData else {
+                throw ServiceError.noImageInResponse
+            }
+
+            _ = httpResponse
+            return GenerationResult(image: image, imageData: imageData, textResponse: textResponse)
+        } catch {
+            if case ServiceError.cancelled = error {
+                throw error
+            }
+            recordFailure(error)
             throw error
         }
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            Self.consecutiveFailures += 1
-            throw ServiceError.invalidResponse
-        }
-
-        if httpResponse.statusCode != 200 {
-            Self.consecutiveFailures += 1
-            let body = String(data: data, encoding: .utf8) ?? "No body"
-            print("[GeminiImageService] HTTP \(httpResponse.statusCode) (\(Self.consecutiveFailures) consecutive failures)")
-            if Self.consecutiveFailures >= Self.circuitBreakerThreshold {
-                Self.circuitBreakerTripped = true
-                print("[GeminiImageService] 🛑 CIRCUIT BREAKER TRIPPED after \(Self.consecutiveFailures) consecutive failures. All API calls blocked until app restart.")
-            }
-            throw ServiceError.httpError(httpResponse.statusCode, body)
-        }
-
-        // Success — reset the failure counter
-        Self.consecutiveFailures = 0
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let candidates = json["candidates"] as? [[String: Any]],
-              let firstCandidate = candidates.first,
-              let content = firstCandidate["content"] as? [String: Any],
-              let responseParts = content["parts"] as? [[String: Any]]
-        else {
-            throw ServiceError.invalidResponse
-        }
-
-        var resultImage: NSImage?
-        var resultData: Data?
-        var textResponse: String?
-
-        for part in responseParts {
-            if let text = part["text"] as? String {
-                textResponse = text
-            } else if let inlineData = part["inlineData"] as? [String: Any],
-                      let base64String = inlineData["data"] as? String {
-                guard let imageData = Data(base64Encoded: base64String) else {
-                    throw ServiceError.imageDecodingFailed
-                }
-                guard let image = NSImage(data: imageData) else {
-                    throw ServiceError.imageDecodingFailed
-                }
-                resultImage = image
-                resultData = imageData
-            }
-        }
-
-        guard let image = resultImage, let imageData = resultData else {
-            throw ServiceError.noImageInResponse
-        }
-
-        return GenerationResult(image: image, imageData: imageData, textResponse: textResponse)
     }
 
     // MARK: - Reference Image Helpers
@@ -316,6 +313,128 @@ final class GeminiImageService {
         try data.write(to: fileURL)
         return fileURL
     }
+
+    // MARK: - Retry helpers
+
+    private func performRequestWithRetry(
+        _ urlRequest: URLRequest,
+        backend: ImageGenBackend
+    ) async throws -> (Data, HTTPURLResponse) {
+        let maxAttempts = backend == .vertex ? 5 : 3
+        var lastTransportError: Error?
+
+        for attempt in 1...maxAttempts {
+            do {
+                let (data, response) = try await session.data(for: urlRequest)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw ServiceError.invalidResponse
+                }
+
+                if httpResponse.statusCode == 200 {
+                    return (data, httpResponse)
+                }
+
+                let serverMessage = Self.serverMessage(from: data)
+                if Self.shouldRetryHTTPStatus(httpResponse.statusCode), attempt < maxAttempts {
+                    let delay = Self.retryDelaySeconds(
+                        attempt: attempt,
+                        retryAfterHeader: httpResponse.value(forHTTPHeaderField: "Retry-After")
+                    )
+                    let formattedDelay = String(format: "%.1f", delay)
+                    print(
+                        "[GeminiImageService] HTTP \(httpResponse.statusCode) on attempt \(attempt)/\(maxAttempts); " +
+                        "retrying in \(formattedDelay)s (\(serverMessage))"
+                    )
+                    try? await Task.sleep(nanoseconds: Self.nanoseconds(for: delay))
+                    continue
+                }
+
+                if httpResponse.statusCode == 429 {
+                    throw ServiceError.resourceExhausted(serverMessage)
+                }
+
+                let fallback = String(data: data, encoding: .utf8) ?? "No body"
+                throw ServiceError.httpError(
+                    httpResponse.statusCode,
+                    serverMessage.isEmpty ? fallback : serverMessage
+                )
+            } catch let error as ServiceError {
+                throw error
+            } catch {
+                if Task.isCancelled {
+                    throw ServiceError.cancelled
+                }
+                lastTransportError = error
+                guard Self.shouldRetryTransportError(error), attempt < maxAttempts else {
+                    throw error
+                }
+                let delay = Self.retryDelaySeconds(attempt: attempt, retryAfterHeader: nil)
+                let formattedDelay = String(format: "%.1f", delay)
+                print(
+                    "[GeminiImageService] transient transport error on attempt \(attempt)/\(maxAttempts): " +
+                    "\(error.localizedDescription). Retrying in \(formattedDelay)s"
+                )
+                try? await Task.sleep(nanoseconds: Self.nanoseconds(for: delay))
+            }
+        }
+
+        throw lastTransportError ?? ServiceError.invalidResponse
+    }
+
+    private func recordFailure(_ error: Error) {
+        Self.consecutiveFailures += 1
+        print("[GeminiImageService] failure (\(Self.consecutiveFailures) consecutive): \(error.localizedDescription)")
+        if Self.consecutiveFailures >= Self.circuitBreakerThreshold {
+            Self.circuitBreakerTripped = true
+            print("[GeminiImageService] 🛑 CIRCUIT BREAKER TRIPPED after \(Self.consecutiveFailures) consecutive failures. All API calls blocked until app restart.")
+        }
+    }
+
+    private static func shouldRetryHTTPStatus(_ statusCode: Int) -> Bool {
+        statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
+    }
+
+    private static func shouldRetryTransportError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut,
+             .networkConnectionLost,
+             .cannotFindHost,
+             .cannotConnectToHost,
+             .dnsLookupFailed,
+             .notConnectedToInternet,
+             .resourceUnavailable:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func retryDelaySeconds(attempt: Int, retryAfterHeader: String?) -> Double {
+        if let retryAfterHeader,
+           let parsed = Double(retryAfterHeader.trimmingCharacters(in: .whitespacesAndNewlines)),
+           parsed > 0 {
+            return parsed
+        }
+        let cappedExponent = min(attempt - 1, 4)
+        let base = pow(2.0, Double(cappedExponent))
+        let jitter = Double.random(in: 0.15...0.85)
+        return min(base + jitter, 12.0)
+    }
+
+    private static func nanoseconds(for seconds: Double) -> UInt64 {
+        UInt64(max(0, seconds) * 1_000_000_000)
+    }
+
+    private static func serverMessage(from data: Data) -> String {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = json["error"] as? [String: Any],
+           let message = error["message"] as? String {
+            return message.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return (String(data: data, encoding: .utf8) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 // MARK: - Turnaround Generation
@@ -325,7 +444,7 @@ extension GeminiImageService {
 
     /// Prompt templates for generating character turnaround views.
     struct TurnaroundPrompts {
-        static func prompt(for angle: AngleView, characterName: String, style: String = "") -> String {
+        static func prompt(for angle: AngleView, characterName _: String, style: String = "") -> String {
             let styleNote = style.isEmpty ? "" : " Style: \(style)."
             let angleDesc: String
             switch angle {
@@ -342,9 +461,10 @@ extension GeminiImageService {
             }
 
             return """
-            Generate a full-body character turnaround illustration of "\(characterName)" in \(angleDesc). \
+            Generate a full-body turnaround illustration of the exact same character shown in the reference image, in \(angleDesc). \
             The character should be standing in a neutral A-pose with arms slightly away from the body. \
             Use a clean white or transparent background. \
+            Do not mention any character names or internal labels. \
             Match the exact same art style, proportions, colors, and costume details as the reference image. \
             Keep the character centered and at the same scale as the reference.\(styleNote)
             """
@@ -358,14 +478,15 @@ extension GeminiImageService {
 
     /// Prompt templates for generating body part breakdowns.
     struct PartBreakdownPrompts {
-        static func prompt(for partType: PartType, characterName: String, angle: AngleView) -> String {
+        static func prompt(for partType: PartType, characterName _: String, angle _: AngleView) -> String {
             let partName = partType.rawValue
                 .replacingOccurrences(of: "Left", with: " (left)")
                 .replacingOccurrences(of: "Right", with: " (right)")
 
             return """
-            Extract and isolate the \(partName) from this character illustration of "\(characterName)". \
+            Extract and isolate the \(partName) from this character illustration. \
             Output ONLY the isolated body part on a completely transparent background. \
+            Do not mention any character names or internal labels. \
             Maintain the exact art style, colors, and details. \
             The part should be cleanly separated with smooth edges, suitable for puppet-style animation. \
             Do not include any other body parts or background elements.
@@ -380,10 +501,11 @@ extension GeminiImageService {
             "worried", "disgusted", "fearful", "smirking", "laughing",
         ]
 
-        static func prompt(for expression: String, characterName: String) -> String {
+        static func prompt(for expression: String, characterName _: String) -> String {
             """
-            Generate the face of character "\(characterName)" showing a \(expression) expression. \
+            Generate the face of the exact same character from the reference image showing a \(expression) expression. \
             Match the exact same art style, proportions, and details as the reference image. \
+            Do not mention any character names or internal labels. \
             Show only the head and face area on a transparent background. \
             The expression should be clear and exaggerated enough for animation readability.
             """
@@ -392,7 +514,7 @@ extension GeminiImageService {
 
     /// Prompt templates for generating viseme (mouth shape) variants.
     struct VisemePrompts {
-        static func prompt(for viseme: PrestonBlairViseme, characterName: String) -> String {
+        static func prompt(for viseme: PrestonBlairViseme, characterName _: String) -> String {
             let shapeDesc: String
             switch viseme {
             case .rest: shapeDesc = "mouth closed in a neutral resting position"
@@ -408,8 +530,9 @@ extension GeminiImageService {
             }
 
             return """
-            Generate just the mouth area of character "\(characterName)" showing the \(viseme.label) viseme shape: \(shapeDesc). \
+            Generate just the mouth area of the exact same character from the reference image showing the \(viseme.label) viseme shape: \(shapeDesc). \
             Match the exact same art style as the reference image. \
+            Do not mention any character names or internal labels. \
             Show only the mouth and immediately surrounding area on a transparent background. \
             The mouth shape should be clear and distinct for lip-sync animation.
             """
@@ -447,6 +570,23 @@ struct GeminiBatchSubmissionResult: Sendable {
     var state: String
     var promptCount: Int
     var submittedAt: Date
+}
+
+/// Result of a `GeminiBatchService.cancel(...)` invocation.
+///
+/// `state` reflects the local metadata state after the cancel attempt.
+/// `cancelError` is non-nil when the Google side of the cancel failed —
+/// metadata was still saved so the UI can decide whether to retry, but
+/// the batch may still be running remotely. Callers should surface this
+/// to the user instead of silently treating it as a clean cancel.
+@available(macOS 26.0, *)
+struct GeminiBatchCancelResult {
+    var state: String
+    var cancelError: String?
+
+    var didCancelRemotely: Bool {
+        cancelError == nil && state == "JOB_STATE_CANCELLED"
+    }
 }
 
 @available(macOS 26.0, *)
@@ -563,7 +703,64 @@ final class GeminiBatchService {
         try process.run()
     }
 
+    /// Cancel a batch on Google's side. Wraps the Python helper's `cancel`
+    /// subcommand, which calls `client.batches.cancel(name:)` and rewrites
+    /// local metadata to `JOB_STATE_CANCELLED`.
+    ///
+    /// The call is safe to invoke on an already-terminal batch — the helper
+    /// detects the terminal state and returns success without re-calling
+    /// Google, so the UI can always surface "Cancel" without pre-checking.
+    func cancel(
+        metadataPath: URL,
+        apiKey: String,
+        reason: String = "User cancelled from app"
+    ) async throws -> GeminiBatchCancelResult {
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw BatchError.missingAPIKey
+        }
+
+        let scriptURL = try batchScriptURL()
+        let pythonURL = try pythonExecutableURL()
+
+        let output = try await runProcess(
+            executableURL: pythonURL,
+            arguments: [
+                scriptURL.path,
+                "cancel",
+                "--metadata", metadataPath.path,
+                "--reason", reason,
+            ],
+            apiKey: apiKey
+        )
+
+        guard let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw BatchError.invalidResponse(output)
+        }
+
+        let state = json["state"] as? String ?? "JOB_STATE_CANCELLED"
+        let cancelError = json["cancel_error"] as? String
+        return GeminiBatchCancelResult(
+            state: state,
+            cancelError: cancelError
+        )
+    }
+
     private func batchScriptURL() throws -> URL {
+        // Prefer the copy bundled in the AnimateUI resource bundle (added via
+        // Package.swift .copy).
+        //
+        // IMPORTANT: use `SafeBundle.module` — the SPM-auto-generated
+        // `Bundle.module` raises `fatalError` when the resource bundle
+        // cannot be located, which crashed the app on batch submit
+        // (2026-04-16 crash in `_assertionFailure` via
+        // `GeminiBatchService.batchScriptURL()` → `Bundle.module.unsafeMutableAddressor`).
+        if let moduleBundled = SafeBundle.module?
+            .url(forResource: "gemini_inspiration_batch", withExtension: "py"),
+           fileManager.fileExists(atPath: moduleBundled.path) {
+            return moduleBundled
+        }
+
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent("gemini_inspiration_batch.py"),
            fileManager.fileExists(atPath: bundled.path) {
             return bundled

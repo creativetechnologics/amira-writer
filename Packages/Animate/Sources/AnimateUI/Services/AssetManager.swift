@@ -100,6 +100,34 @@ final class AssetManager {
         return thumb
     }
 
+    /// Return a thumbnail ONLY if it's already in the cache. Never generates.
+    /// Used by SwiftUI bodies on the hot path (character selection, grid
+    /// rendering) so a cache miss never blocks the main thread for a full
+    /// image decode. Pair with `thumbnailAsync` in a `.task` to fill the
+    /// cache off-main after the first render.
+    func cachedThumbnail(for url: URL, maxSize: CGFloat = 120) -> NSImage? {
+        let cacheKey = "\(url.path)#\(Int(maxSize.rounded()))" as NSString
+        return thumbnailCache.object(forKey: cacheKey)
+    }
+
+    /// Cache hit by an arbitrary identifier string. Thumbnail grids use the
+    /// unresolved input path here so they can avoid the up-to-4 fileExists
+    /// checks of URL resolution on every render cycle. The async loader
+    /// writes the image under *both* the identifier key and the resolved
+    /// URL key so later URL-keyed lookups still find it.
+    func cachedThumbnail(forIdentifier identifier: String, maxSize: CGFloat = 120) -> NSImage? {
+        let cacheKey = "id:\(identifier)#\(Int(maxSize.rounded()))" as NSString
+        return thumbnailCache.object(forKey: cacheKey)
+    }
+
+    /// Store a thumbnail under a caller-supplied identifier as well as its
+    /// resolved URL. Lets hot-path views key by the original input path to
+    /// skip URL resolution on cache hits.
+    func storeThumbnail(_ image: NSImage, forIdentifier identifier: String, maxSize: CGFloat) {
+        let cacheKey = "id:\(identifier)#\(Int(maxSize.rounded()))" as NSString
+        thumbnailCache.setObject(image, forKey: cacheKey)
+    }
+
     /// Load a thumbnail asynchronously — returns cached image immediately or generates off-main-thread.
     func thumbnailAsync(for url: URL, maxSize: CGFloat = 120) async -> NSImage? {
         let cacheKey = "\(url.path)#\(Int(maxSize.rounded()))" as NSString

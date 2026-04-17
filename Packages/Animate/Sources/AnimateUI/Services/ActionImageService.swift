@@ -89,16 +89,18 @@ struct ActionImageService {
         1. NEVER include character names or proper nouns.
         2. Describe the pose physically: body position, limb placement, weight distribution, direction of movement.
         3. Include: camera angle, lighting, background context, art style.
-        4. Output ONLY the prompt text, nothing else.
+        4. Translate any scene labels, script shorthand, or internal references into concrete visible details instead of quoting them.
+        5. Describe only what the image model can actually see in the frame.
+        6. Output ONLY the prompt text, nothing else.
         """
 
         let userPrompt = """
         Generate an image prompt for \(subject) performing this action:
 
-        Scene: \(pose.sceneName)
-        Action: \(pose.description)
+        Hidden context label (do not mention directly): \(pose.sceneName)
+        Action brief: \(pose.description)
 
-        Make it a full-body dynamic action pose with cinematic lighting.
+        Make it a full-body dynamic action pose with clear body mechanics, cinematic lighting, and a believable grounded environment.
         """
 
         let body: [String: Any] = [
