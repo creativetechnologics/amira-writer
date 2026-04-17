@@ -93,6 +93,8 @@ struct AllProjectImagesPageView: View {
     @State private var editPendingDrafts: [GeminiGenerationDraft] = []
     @State private var editPendingPreflight: GeminiGenerationDraft? = nil
     @State private var editErrorMessage: String? = nil
+    @State private var cachedAllRecords: [ProjectImageRecord] = []
+    @State private var lastBuildSignature: Int = -1
 
     init(store: AnimateStore, onDismiss: @escaping () -> Void) {
         self.store = store
@@ -116,6 +118,17 @@ struct AllProjectImagesPageView: View {
             }
         }
         .frame(minWidth: 1100, minHeight: 700)
+        .task(id: recordsSignature) {
+            let sig = recordsSignature
+            if sig == lastBuildSignature { return }
+            cachedAllRecords = buildAllRecords()
+            lastBuildSignature = sig
+        }
+        .task(id: prefetchKey) {
+            let paths = filteredRecords.prefix(120).map(\.resolvedPath)
+            let pixel = Int(thumbnailSize * 2)
+            ImagineThumbnailCache.shared.prefetch(paths: paths, maxPixelSize: pixel)
+        }
     }
 
     // MARK: - Header
@@ -133,7 +146,7 @@ struct AllProjectImagesPageView: View {
             Text("All Project Images")
                 .font(.system(size: 16, weight: .semibold))
 
-            Text("\(filteredRecords.count) of \(allRecords.count)")
+            Text("\(filteredRecords.count) of \(cachedAllRecords.count)")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
 
@@ -173,7 +186,7 @@ struct AllProjectImagesPageView: View {
                         .frame(width: 18)
                     Text("All")
                     Spacer()
-                    Text("\(allRecords.count)")
+                    Text("\(cachedAllRecords.count)")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
@@ -188,7 +201,7 @@ struct AllProjectImagesPageView: View {
 
             Section("Sources") {
                 ForEach(AllProjectImagesSource.allCases) { source in
-                    let count = allRecords.filter { $0.source == source }.count
+                    let count = cachedAllRecords.filter { $0.source == source }.count
                     HStack {
                         Image(systemName: source.systemImage)
                             .frame(width: 18)
@@ -464,7 +477,39 @@ struct AllProjectImagesPageView: View {
 
     // MARK: - Aggregation
 
-    private var allRecords: [ProjectImageRecord] {
+    /// Lightweight hash of every path collection's `.count`. Used as `.task(id:)`
+    /// so we only rebuild `cachedAllRecords` — which does per-record FileManager
+    /// syscalls — when the set of paths actually changed. Typing in the search
+    /// field does NOT change this, so no rebuild, no beachball.
+    private var recordsSignature: Int {
+        var h = 1469598103934665603 & Int.max
+        func mix(_ v: Int) { h = (h ^ v) &* 1099511628211 }
+        for p in store.backgrounds {
+            mix(p.imagePaths.count)
+            mix(p.animatedImagePaths.count &<< 3)
+        }
+        mix(store.canvasGenerations.count &<< 7)
+        mix(store.placesWorkflowLibrary.generatedImageRecords.count &<< 11)
+        for c in store.characters {
+            mix(c.inspirationImagePaths.count)
+            mix(c.referenceImagePaths.count &<< 2)
+            mix(c.animatedImagePaths.count &<< 4)
+        }
+        for (_, galleries) in store.imagineSceneGalleries {
+            for g in galleries {
+                mix(g.beginningImagePaths.count)
+                mix(g.middleImagePaths.count &<< 2)
+                mix(g.endImagePaths.count &<< 4)
+            }
+        }
+        return h
+    }
+
+    private var prefetchKey: String {
+        "\(recordsSignature)|\(selectedSource?.rawValue ?? "all")|\(Int(thumbnailSize))"
+    }
+
+    private func buildAllRecords() -> [ProjectImageRecord] {
         var records: [ProjectImageRecord] = []
 
         for place in store.backgrounds {
@@ -567,7 +612,7 @@ struct AllProjectImagesPageView: View {
     }
 
     private var filteredRecords: [ProjectImageRecord] {
-        var records = allRecords
+        var records = cachedAllRecords
         if let source = selectedSource {
             records = records.filter { $0.source == source }
         }
@@ -599,7 +644,7 @@ struct AllProjectImagesPageView: View {
     private var selectedRecord: ProjectImageRecord? {
         guard let id = selectedRecordID else { return nil }
         return filteredRecords.first(where: { $0.id == id })
-            ?? allRecords.first(where: { $0.id == id })
+            ?? cachedAllRecords.first(where: { $0.id == id })
     }
 
     private func makeRecord(

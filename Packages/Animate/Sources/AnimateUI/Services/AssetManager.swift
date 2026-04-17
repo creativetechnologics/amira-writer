@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import ImageIO
 
@@ -8,9 +9,40 @@ import ImageIO
 @MainActor
 final class AssetManager {
     private let thumbnailCache = NSCache<NSString, NSImage>()
+    nonisolated private let diskCacheDir: URL
 
     init() {
         thumbnailCache.countLimit = 500
+
+        let base: URL
+        if let cachesDir = FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+        ).first {
+            base = cachesDir.appendingPathComponent("com.amira.writer/asset-thumbs")
+        } else {
+            base = FileManager.default.temporaryDirectory
+                .appendingPathComponent("amira-asset-thumbs")
+        }
+        try? FileManager.default.createDirectory(
+            at: base,
+            withIntermediateDirectories: true
+        )
+        self.diskCacheDir = base
+    }
+
+    nonisolated private static func diskCacheFileURL(
+        base: URL,
+        path: String,
+        mtime: TimeInterval,
+        maxSize: Int
+    ) -> URL {
+        let raw = "\(path)|\(Int(mtime))|\(maxSize)"
+        let hash = SHA256.hash(data: Data(raw.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+            .prefix(32)
+        return base.appendingPathComponent("\(hash).png")
     }
 
     // MARK: - Import
@@ -129,6 +161,8 @@ final class AssetManager {
     }
 
     /// Load a thumbnail asynchronously — returns cached image immediately or generates off-main-thread.
+    /// Checks memory → disk (`~/Library/Caches/com.amira.writer/asset-thumbs/`) → CGImageSource in that order.
+    /// Disk entries are SHA256-keyed by path+mtime+size so edits naturally miss and regenerate.
     func thumbnailAsync(for url: URL, maxSize: CGFloat = 120) async -> NSImage? {
         let cacheKey = "\(url.path)#\(Int(maxSize.rounded()))" as NSString
 
@@ -138,7 +172,22 @@ final class AssetManager {
 
         let targetSize = max(64, Int(maxSize.rounded() * 2))
         let path = url.path
-        let thumb = await Task.detached(priority: .medium) {
+        let diskBase = diskCacheDir
+        let thumb = await Task.detached(priority: .medium) { () -> NSImage? in
+            let mtime = (try? FileManager.default
+                .attributesOfItem(atPath: path)[.modificationDate] as? Date)?
+                .timeIntervalSince1970 ?? 0
+            let diskURL = Self.diskCacheFileURL(
+                base: diskBase,
+                path: path,
+                mtime: mtime,
+                maxSize: targetSize
+            )
+
+            if let diskImage = NSImage(contentsOf: diskURL) {
+                return diskImage
+            }
+
             guard let imageSource = CGImageSourceCreateWithURL(
                 URL(fileURLWithPath: path) as CFURL, nil
             ) else { return nil as NSImage? }
@@ -154,7 +203,15 @@ final class AssetManager {
             ) else { return nil as NSImage? }
 
             let size = NSSize(width: CGFloat(cgImage.width), height: CGFloat(cgImage.height))
-            return NSImage(cgImage: cgImage, size: size)
+            let image = NSImage(cgImage: cgImage, size: size)
+
+            if let tiff = image.tiffRepresentation,
+               let rep = NSBitmapImageRep(data: tiff),
+               let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: diskURL, options: .atomic)
+            }
+
+            return image
         }.value
 
         if let thumb {
