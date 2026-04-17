@@ -8,6 +8,11 @@ public final class AnimateWorkspaceController: ObservableObject {
     let store = AnimateStore()
     private var loadedProjectPath: String?
     private var loadRequestID: UInt64 = 0
+    /// Most recent project URL the host has selected. Written from Opera's
+    /// shell on every project switch so the loopback API can activate the
+    /// correct project when an external request arrives before any UI mode
+    /// has triggered lazy loading.
+    private var apiHostProjectURL: URL?
     @Published public private(set) var isLoadingProject = false
     @Published public private(set) var loadStatusMessage = "Ready"
     @Published public private(set) var saveIndicator: SaveIndicatorState = .idle
@@ -26,6 +31,23 @@ public final class AnimateWorkspaceController: ObservableObject {
         saveIndicator = store.saveIndicator
         observeSaveIndicator()
         observeSelectionPath()
+        // Loopback HTTP API for external agents (curated Places generation, etc.).
+        // Idempotent; safe if the shell re-inits or AnimateApp runs standalone.
+        AnimateAPIServer.startIfNeeded(store: store)
+        // Let the API hydrate the active project on demand, bypassing Opera's
+        // lazy mode-switch gate. `apiHostProjectURL` is refreshed from the shell.
+        AnimateAPIServer.projectActivator = { [weak self] in
+            guard let self else { return }
+            guard let url = self.apiHostProjectURL else { return }
+            _ = await self.ensureProjectLoaded(url)
+        }
+    }
+
+    /// Called by the Opera shell whenever the active project URL changes so
+    /// the loopback API can hydrate the correct project without waiting for a
+    /// UI mode switch into Places/Animate.
+    public func setAPIHostProjectURL(_ url: URL?) {
+        apiHostProjectURL = url
     }
 
     public var isDirty: Bool { store.saveIndicator == .unsavedChanges }
@@ -56,6 +78,25 @@ public final class AnimateWorkspaceController: ObservableObject {
 
     public func save() {
         store.save()
+    }
+
+    /// Returns the title-bar Gemini activity badge bound to this workspace's store.
+    /// Exposed here so the top-level Opera shell can host it without needing
+    /// direct access to the internal AnimateStore type.
+    public func geminiStatusBadgeView() -> some View {
+        GeminiStatusBadge(store: store)
+    }
+
+    /// Returns the global-settings gear button bound to this workspace's store.
+    public func globalSettingsGearView() -> some View {
+        GlobalSettingsGear(store: store)
+    }
+
+    /// Returns the project-wide All Images page bound to this workspace's store.
+    /// Hosted by the Opera shell so users can browse every image in the project
+    /// (Places, Canvas, Characters, Scene Shots, Map 3D Captures) from one surface.
+    public func allProjectImagesPageView(onDismiss: @escaping () -> Void) -> some View {
+        AllProjectImagesPageView(store: store, onDismiss: onDismiss)
     }
 
     public func setSelectionRestorePending(_ isPending: Bool) {
@@ -307,9 +348,6 @@ private struct AnimateWorkspaceContent: View {
                     }
 
                     Spacer(minLength: 10)
-
-                    GeminiStatusBadge(store: store)
-                    GlobalSettingsGear(store: store)
 
                     if !inspectorVisible {
                         OperaChromeActionButton(systemImage: "sidebar.right") {

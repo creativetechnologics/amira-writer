@@ -295,6 +295,19 @@ private struct PlaceAllImagesThumbnail: View {
                 }
                 .padding(6)
             }
+            // Unified rejection visual (2026-04-16) — dim+eye.slash. Matches
+            // the Imagine Characters gallery. Footer-row "Rejected" xmark
+            // label was removed below in favor of this single overlay.
+            .overlay(alignment: .bottom) {
+                if record.isRejected {
+                    Image(systemName: "eye.slash.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.55), radius: 3, x: 0, y: 1)
+                        .padding(6)
+                        .help("Rejected — toggle with X")
+                }
+            }
 
             Text(displayName)
                 .font(.caption2.weight(.medium))
@@ -313,11 +326,9 @@ private struct PlaceAllImagesThumbnail: View {
                     Label("\(rating)", systemImage: "star.fill")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.yellow)
-                } else if record.isRejected {
-                    Label("Rejected", systemImage: "xmark.circle.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.red)
                 }
+                // Rejected indicator lives on the thumbnail overlay now — see
+                // unified eye.slash.fill above (2026-04-16).
             }
         }
         .padding(6)
@@ -792,11 +803,19 @@ struct PlacesPageView: View {
     @State private var libraryFlagFilter: GeneratedBackgroundFlagFilterMode = .all
     @State private var libraryMinimumRating: Int? = nil
     @State private var libraryWorkflowFilter: GeneratedBackgroundWorkflowFilterMode = .all
+    @AppStorage("animate.places.librarySortMode.v1") private var librarySortModeRaw: String = GeneratedBackgroundSortMode.newestFirst.rawValue
+    private var librarySortMode: GeneratedBackgroundSortMode {
+        GeneratedBackgroundSortMode(rawValue: librarySortModeRaw) ?? .newestFirst
+    }
     @State private var librarySearchText = ""
     @State private var showEditBatchManager = false
     @State private var placePendingPlan: PendingPlaceGenerationPlan?
     @State private var placeGenerationDrafts: [GeminiGenerationDraft] = []
     @State private var placeGenerationErrorMessage: String?
+    @State private var map3dCapturePendingDraft: GeminiGenerationDraft? = nil
+    @State private var map3dCaptureDrafts: [GeminiGenerationDraft] = []
+    @State private var map3dCaptureTempPath: String? = nil
+    @State private var map3dCaptureErrorMessage: String? = nil
     @State private var selectedWorldRouteID: String?
     @State private var selectedWorldNodeID: String?
     @State private var selectedWorldReviewID: String?
@@ -939,6 +958,30 @@ struct PlacesPageView: View {
                 }
             )
         }
+        .sheet(item: $map3dCapturePendingDraft) { _ in
+            GeminiGenerationPreflightSheet(
+                store: store,
+                drafts: $map3dCaptureDrafts,
+                title: "3D Map Capture",
+                confirmTitle: "Generate",
+                onConfirm: { drafts, _ in
+                    map3dCapturePendingDraft = nil
+                    runMap3DCaptureGeneration(drafts)
+                },
+                onCancel: {
+                    deleteMap3DCaptureTempFile()
+                    map3dCapturePendingDraft = nil
+                }
+            )
+        }
+        .alert("3D Map Capture", isPresented: Binding(
+            get: { map3dCaptureErrorMessage != nil },
+            set: { if !$0 { map3dCaptureErrorMessage = nil } }
+        )) {
+            Button("OK") { map3dCaptureErrorMessage = nil }
+        } message: {
+            Text(map3dCaptureErrorMessage ?? "")
+        }
         .sheet(isPresented: $showEditBatchManager) {
             NavigationStack {
                 ScrollView {
@@ -984,28 +1027,42 @@ struct PlacesPageView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                switch viewMode {
-                case .grid:
-                    overviewSection
-                    workflowModePicker
-                    locationGridSection
-                case .detail:
-                    placeDetailSection
-                case .world:
-                    worldMapSection
-                case .map3d:
-                    map3DSection
-                case .landmarks:
-                    landmarksSection
-                case .review:
-                    reviewQueueSection
-                case .library:
-                    allImagesLibrarySection
+        // `.map3d` must render OUTSIDE the ScrollView so the map can claim the
+        // full available height. ScrollView proposes unbounded height to its
+        // content, which collapses `.frame(maxHeight: .infinity)` to the
+        // image's intrinsic size (~10px tall when the texture hasn't loaded).
+        // Other modes keep their scroll behavior since their content is
+        // vertically long.
+        switch viewMode {
+        case .map3d:
+            map3DSection
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+        default:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    switch viewMode {
+                    case .grid:
+                        overviewSection
+                        workflowModePicker
+                        locationGridSection
+                    case .detail:
+                        placeDetailSection
+                    case .world:
+                        worldMapSection
+                    case .map3d:
+                        // Handled above — unreachable here.
+                        EmptyView()
+                    case .landmarks:
+                        landmarksSection
+                    case .review:
+                        reviewQueueSection
+                    case .library:
+                        allImagesLibrarySection
+                    }
                 }
+                .padding()
             }
-            .padding()
         }
     }
 
@@ -1266,7 +1323,8 @@ struct PlacesPageView: View {
             flagFilter: libraryFlagFilter,
             minimumRating: libraryMinimumRating,
             workflowFilter: libraryWorkflowFilter,
-            searchText: librarySearchText
+            searchText: librarySearchText,
+            sortMode: librarySortMode
         )
     }
 
@@ -1551,6 +1609,20 @@ struct PlacesPageView: View {
                 .background(.quaternary.opacity(0.12), in: Capsule())
                 .fixedSize(horizontal: true, vertical: false)
 
+                Picker("", selection: Binding(
+                    get: { librarySortMode },
+                    set: { librarySortModeRaw = $0.rawValue }
+                )) {
+                    ForEach(GeneratedBackgroundSortMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(width: 160)
+                .help("Sort library images")
+                .fixedSize(horizontal: true, vertical: false)
+
                 TextField("Filter by filename, summary, keyword, or prompt", text: $librarySearchText)
                     .textFieldStyle(.roundedBorder)
 
@@ -1610,8 +1682,11 @@ struct PlacesPageView: View {
     }
 
     private var map3DSection: some View {
-        PlacesMap3DView()
-            .frame(maxWidth: .infinity)
+        PlacesMap3DView(
+            onCaptureDraft: handleMap3DCaptureResult,
+            onCaptureError: { map3dCaptureErrorMessage = $0 }
+        )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var worldMapSection: some View {
@@ -2136,19 +2211,7 @@ struct PlacesPageView: View {
                 .buttonStyle(.bordered)
             }
 
-            if let approvedPath,
-               let url = resolvedAssetURL(for: approvedPath),
-               let image = NSImage(contentsOf: url) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 280)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .onTapGesture(count: 2) {
-                        openQuickLook(for: galleryPaths, startingAt: galleryPaths.firstIndex(of: approvedPath) ?? 0)
-                    }
-            } else {
+            if approvedPath == nil {
                 emptyCard(
                     "No approved \(workflowMode.displayName.lowercased()) image",
                     systemImage: workflowMode == .photorealistic ? "camera" : "paintpalette",
@@ -2156,7 +2219,7 @@ struct PlacesPageView: View {
                         ? "Import or generate a place image, then approve the strongest one for continuity."
                         : "Import or generate an animated variant of this place once the photoreal geography is in good shape."
                 )
-                .frame(height: 220)
+                .frame(height: 120)
             }
 
             ImageGallerySection(
@@ -2183,7 +2246,13 @@ struct PlacesPageView: View {
                 showsInlineRemoveButton: true,
                 showsHeader: true,
                 selectedPaths: $workflowSelectedPaths,
-                lastClickedPath: $workflowLastClickedPath
+                lastClickedPath: $workflowLastClickedPath,
+                onFocusPathChange: { path in
+                    // Wire gallery selection into the right-side Details
+                    // inspector so the approved-image preview panel is no
+                    // longer needed — the inspector preview replaces it.
+                    store.selectGeneratedBackgroundRecord(for: path)
+                }
             )
 
             if let firstSelected = workflowSelectedPaths.first,
@@ -2564,45 +2633,58 @@ struct PlacesPageView: View {
         workflow: PlaceWorkflowMode,
         config: PlaceWorkflowRenderConfig
     ) -> String {
-        let sceneNames = store.sceneReferences(for: place.id).map(\.sceneName)
-        let sourceLines = store.sourceLines(for: place.id)
-        let locationNotes = place.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        let workflowNotes = place.workflowPromptNotes.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sceneNote = sceneNames.isEmpty ? "" : "This place appears in scenes: \(sceneNames.joined(separator: ", "))."
-        let sourceLineNote = sourceLines.isEmpty ? "" : "Script/place clues: \(sourceLines.prefix(3).joined(separator: " • "))."
         let lens = config.lensDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefix = config.promptPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
         let suffix = config.promptSuffix.trimmingCharacters(in: .whitespacesAndNewlines)
         let bridgeConstraint = bridgeConstraintNote(for: place)
+        let placeDescription = descriptivePlaceEnvironment(for: place)
+        let lightingDescription = descriptiveLightingGuidance(for: place)
+        let visualBrief = place.visualBrief.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let workflowLead: String
         switch workflow {
         case .photorealistic:
-            workflowLead = "Create a photoreal cinematic still image of \(place.name). The image should look like a real production still or location photograph, not a matte painting or fantasy concept painting."
+            workflowLead = "A wide-angle photograph of the scene described below, shot on location with natural light and documentary framing."
         case .animated:
-            workflowLead = "Create a cinematic animated background frame of \(place.name). Preserve the geography and staging from the references, but reinterpret the result into the animated Amira look instead of copying the source frame 1:1."
+            workflowLead = "A wide-angle animated background frame of the scene described below, rendered as a grounded hand-authored animated still."
         }
 
-        let exteriorCanon = place.isExteriorLike
-            ? "Respect the master map and reference geography. If the river is visible, settlement should only appear on the correct side indicated by the references, not on both sides. The town should read as inhabited and maintained, with a mix of worn stone, repaired structures, textiles, awnings, and daily-life detail."
-            : "Respect the established architecture and continuity of the place. The room should feel in use and alive, not abandoned or in total ruin."
+        // Interior / exterior framing. Overrides ambiguous brief vocabulary
+        // (e.g. "courtyard" inside an Interior-tagged place).
+        let exteriorCanon: String
+        if place.isExteriorLike {
+            exteriorCanon = "The scene is outdoors, under open sky. If the river is visible, settlement appears only on the north bank per the master valley map, never on both sides. The town reads as inhabited and maintained: worn stone, repaired mud-brick, textiles, awnings, and daily-life detail."
+        } else {
+            exteriorCanon = "The scene is indoors, fully enclosed inside a room with walls and a roof. Any windows reveal only a narrow framed slice of what the brief describes — never a panoramic view. The room reads as in active use, not abandoned or in total ruin."
+        }
+
+        let unpopulated = "No people, no figures, no silhouettes in the frame."
+        let militaryClause = AnimateStore.apiMilitaryClauseIfRelevant(for: visualBrief)
 
         return [
             prefix,
             workflowLead,
-            "Focus: \(spec.focus).",
-            lens.isEmpty ? "" : lens,
             exteriorCanon,
-            sceneNote,
-            sourceLineNote,
+            unpopulated,
+            militaryClause,
+            "Focus: \(spec.focus).",
+            placeDescription,
+            lightingDescription,
+            lens.isEmpty ? "" : lens,
+            visualBrief,
             bridgeConstraint,
-            locationNotes.isEmpty ? "" : "Location notes: \(locationNotes)",
-            workflowNotes.isEmpty ? "" : "Workflow notes: \(workflowNotes)",
             suffix,
         ]
         .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         .joined(separator: " ")
     }
+
+    // NOTE: The old `emptyPlateAnchor` was removed. Scene-conditional clauses
+    // (unpopulated + AnimateStore.apiMilitaryClauseIfRelevant) now live inline
+    // in each prompt builder above, so civilian scenes never see military
+    // language and no image carries the paradoxical "this is an environment
+    // plate" / "not concept art, not a matte painting" negatives that were
+    // making outputs look more AI-generated, not less.
 
     private func generationReferenceDrafts(for place: BackgroundPlate, workflow: PlaceWorkflowMode) -> [GeminiGenerationReferenceDraft] {
         var drafts: [GeminiGenerationReferenceDraft] = []
@@ -2686,58 +2768,236 @@ struct PlacesPageView: View {
         workflow: PlaceWorkflowMode,
         config: PlaceWorkflowRenderConfig
     ) -> String {
-        let scenes = store.sceneReferences(for: place.id).map(\.sceneName)
-        let sourceLines = store.sourceLines(for: place.id)
         let workflowLead: String
         switch workflow {
         case .photorealistic:
-            workflowLead = "Create a photoreal cinematic background plate for \(place.name)."
+            workflowLead = "A wide-angle location photograph of the scene described below."
         case .animated:
-            workflowLead = "Create a cinematic animated background frame for \(place.name) that preserves the approved world geography."
+            workflowLead = "A wide-angle animated background frame of the scene described below, rendered in a grounded hand-authored style."
         }
 
         let landmarkLine = node.expectedLandmarks.isEmpty
             ? ""
-            : "Expected landmarks in or near frame: \(node.expectedLandmarks.joined(separator: ", "))."
-        let routeLine = "This frame is route \(route.title), node \(node.sequenceIndex + 1). Treat it as one stop in a Street-View-like traversal through the world."
-        let cameraLine = String(
-            format: "Camera pose: heading %.0f°, pitch %.0f°, roll %.0f°, focal length %.0fmm.",
-            node.heading,
-            node.pitch,
-            node.roll,
-            node.focalLength
-        )
-        let mapLine = String(
-            format: "Map anchor: normalized x %.3f, y %.3f on the master map.",
-            Double(node.position.x),
-            Double(node.position.y)
-        )
+            : "Keep the following landmark categories visible or strongly implied in frame: \(sanitizedLandmarkList(node.expectedLandmarks))."
+        let routeLine = "This image is one stop in a continuous traversal through the world, so the viewpoint must feel adjacent to neighboring frames rather than like a disconnected hero shot."
+        let cameraLine = cameraGuidance(for: node)
+        let mapLine = mapAnchorGuidance(for: node)
         let continuityLine = "Honor continuity with the neighboring route frames and the master map. Do not invent or remove buildings, trees, terraces, roads, or skyline elements that would break adjacency."
-        let sceneNote = scenes.isEmpty ? "" : "Relevant scenes: \(scenes.joined(separator: ", "))."
-        let sourceLineNote = sourceLines.isEmpty ? "" : "Script/place clues: \(sourceLines.prefix(3).joined(separator: " • "))."
-        let locationNotes = place.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let lens = config.lensDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         let bridgeConstraint = node.expectedLandmarks.joined(separator: " ").lowercased().contains("bridge")
             ? "Bridge continuity requirement: whenever the bridge is visible, the entire top of the bridge must stay completely flat and open. No raised side stones, parapets, railings, curbs, guard edges, or protective walls should appear on either side of the bridge deck."
             : bridgeConstraintNote(for: place)
+        let placeDescription = descriptivePlaceEnvironment(for: place)
+        let lightingDescription = descriptiveLightingGuidance(for: place)
+        let visualBrief = place.visualBrief.trimmingCharacters(in: .whitespacesAndNewlines)
+        let unpopulated = "No people, no figures, no silhouettes in the frame."
+        let militaryClause = AnimateStore.apiMilitaryClauseIfRelevant(for: visualBrief)
 
         return [
             config.promptPrefix.trimmingCharacters(in: .whitespacesAndNewlines),
             workflowLead,
+            unpopulated,
+            militaryClause,
+            placeDescription,
+            lightingDescription,
             routeLine,
             cameraLine,
             mapLine,
             landmarkLine,
             continuityLine,
             lens,
-            sceneNote,
-            sourceLineNote,
+            visualBrief,
             bridgeConstraint,
-            locationNotes.isEmpty ? "" : "Location notes: \(locationNotes)",
             config.promptSuffix.trimmingCharacters(in: .whitespacesAndNewlines)
         ]
         .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         .joined(separator: " ")
+    }
+
+    /// Filter expected landmarks down to the ones whose names are already plainly
+    /// visual categories (river, bridge, ridge, etc.) so we don't leak internal
+    /// landmark identifiers into the prompt.
+    private func sanitizedLandmarkList(_ raw: [String]) -> String {
+        let allowedVisualTerms: Set<String> = [
+            "river", "bridge", "ridge", "overlook", "riverbank", "riverside",
+            "marketplace", "market", "street", "lane", "alley", "courtyard",
+            "rooftop", "roof", "clinic", "home", "gathering", "hillside",
+            "grave", "memorial", "stones", "fields", "terraces", "valley",
+            "perimeter", "gate", "checkpoint", "tent", "tents", "mast",
+            "shepherd", "huts", "walls", "wall", "stone", "dirt", "road"
+        ]
+        let tokens = raw
+            .flatMap { $0.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init) }
+            .filter { allowedVisualTerms.contains($0) }
+        let unique = Array(NSOrderedSet(array: tokens)) as? [String] ?? []
+        return unique.joined(separator: ", ")
+    }
+
+    private func descriptivePlaceEnvironment(for place: BackgroundPlate) -> String {
+        let emphasis = ([place.name, place.notes, place.workflowPromptNotes] + store.sourceLines(for: place.id))
+            .joined(separator: " ")
+            .lowercased()
+
+        if emphasis.contains("briefing room") {
+            return "Setting: a practical military briefing room with work tables, paper maps, radios, chairs, worn surfaces, and signs of active planning."
+        }
+        if emphasis.contains("clinic back room") || (emphasis.contains("clinic") && emphasis.contains("back room")) {
+            return "Setting: a cramped clinic back room with worn plaster, practical medical supplies, cots or worktables, and signs of urgent daily use."
+        }
+        if emphasis.contains("clinic") {
+            return "Setting: a modest rural clinic or treatment room with practical medical supplies, worn surfaces, simple fixtures, and signs of constant use."
+        }
+        if emphasis.contains("gathering") {
+            return "Setting: a communal gathering space with layered textiles, cushions or benches, lanterns, worn plaster, and signs of frequent shared use."
+        }
+        if emphasis.contains("home") {
+            return "Setting: a modest family home with worn plaster, layered textiles, simple furnishings, practical storage, and lived-in domestic detail."
+        }
+        if emphasis.contains("bridge") {
+            return "Setting: a flat open bridge crossing a mountain river, surrounded by weathered masonry, ochre dirt, and a rugged valley settlement."
+        }
+        if emphasis.contains("market") {
+            return "Setting: a dusty market street with stalls, awnings, textiles, practical goods, weathered stone and mud-brick buildings, and signs of active daily trade."
+        }
+        if emphasis.contains("riverbank") || emphasis.contains("riverside") || emphasis.contains("river edge") {
+            return "Setting: a rocky riverside edge with glacial-blue water, silt, scrubby vegetation, and nearby village structures grounded in the valley geography."
+        }
+        if emphasis.contains("ridge") || emphasis.contains("overlook") {
+            return "Setting: a high ridge or overlook above the settlement, with steep mountain slopes, dusty terrain, and a broad view down into the inhabited valley."
+        }
+        if emphasis.contains("checkpoint") {
+            return "Setting: a dusty checkpoint with barriers, weathered concrete or timber elements, practical security detail, and surrounding road grit."
+        }
+        if emphasis.contains("alley") || emphasis.contains("lane") {
+            return "Setting: a narrow lane between mud-brick and stone buildings, with hanging textiles, hard-packed dirt, and dense lived-in village detail."
+        }
+        if emphasis.contains("courtyard") {
+            return "Setting: a worn courtyard enclosed by practical village architecture, layered textiles, weathered surfaces, and evidence of daily use."
+        }
+        if emphasis.contains("street") || emphasis.contains("road") {
+            return "Setting: a dusty village street lined with mud-brick and stone buildings, weathered wood, textiles, awnings, and everyday life detail."
+        }
+        if emphasis.contains("interior") || !place.isExteriorLike {
+            return "Setting: a practical interior that feels actively used, modest, worn, and believable rather than decorative, pristine, or abandoned."
+        }
+        return "Setting: an inhabited mountain-valley location with weathered stone and mud-brick architecture, ochre dirt, scrubby vegetation, textiles, and grounded daily-life detail."
+    }
+
+    private func descriptiveLightingGuidance(for place: BackgroundPlate) -> String {
+        let cueText = ([place.name] + store.sceneReferences(for: place.id).map(\.sceneName) + store.sourceLines(for: place.id))
+            .joined(separator: " ")
+            .lowercased()
+
+        if cueText.contains("pre-dawn") {
+            return "Lighting: pre-dawn dimness with cool blue ambient light, minimal direct sun, and practical lamps or sky glow carrying the scene."
+        }
+        if cueText.contains("dawn") {
+            return "Lighting: dawn light with a cool ambient base, a first warm edge of sun, long shadows, and crisp atmospheric clarity."
+        }
+        if cueText.contains("late morning") {
+            return "Lighting: bright late-morning daylight with clean natural color, strong clarity, and moderately short shadows."
+        }
+        if cueText.contains("morning") {
+            return "Lighting: fresh morning daylight with soft-to-clean natural contrast and a cool-warm balance."
+        }
+        if cueText.contains("midday") || cueText.contains("noon") {
+            return "Lighting: hard midday sun with short shadows, bright exposure, and strong top light controlled to remain photographic and believable."
+        }
+        if cueText.contains("late afternoon") {
+            return "Lighting: warm late-afternoon side light with longer shadows, gentle contrast, and visible atmospheric depth."
+        }
+        if cueText.contains("golden hour") || cueText.contains("sunset") {
+            return "Lighting: low golden-hour sun with warm side light, long shadows, and strong depth separation."
+        }
+        if cueText.contains("blue hour") || cueText.contains("dusk") {
+            return "Lighting: blue-hour twilight with cool ambient fill, practical lights beginning to glow, and soft low-contrast separation."
+        }
+        if cueText.contains("evening") {
+            return "Lighting: evening light with warm practical illumination, low ambient fill, and a believable transition toward night."
+        }
+        if cueText.contains("night") || cueText.contains("lamplight") {
+            return "Lighting: night or lamplit conditions with practical sources motivating the image, controlled exposure, and readable shadow detail."
+        }
+        return place.isExteriorLike
+            ? "Lighting: natural daylight that matches the supplied references and reads as grounded live-action photography."
+            : "Lighting: believable motivated interior light with enough exposure to read the space clearly while still feeling cinematic."
+    }
+
+    private func sanitizedStoryFragments(for place: BackgroundPlate) -> String {
+        let fragments = ([place.name] + store.sceneReferences(for: place.id).map(\.sceneName) + store.sourceLines(for: place.id))
+            .compactMap { normalizedPromptSentence(from: $0) }
+            .filter { !$0.isEmpty }
+        guard !fragments.isEmpty else { return "" }
+        return "Additional story-driven visual facts: \(Array(fragments.prefix(3)).joined(separator: " "))"
+    }
+
+    private func normalizedPromptSentence(from raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "" }
+
+        let replacements: [(String, String)] = [
+            ("INT.", "interior "),
+            ("EXT.", "exterior "),
+            ("INT/", "interior "),
+            ("EXT/", "exterior "),
+            ("INT ", "interior "),
+            ("EXT ", "exterior "),
+            ("DAY 1", "first day"),
+            ("DAY 2", "second day"),
+            ("DAY 3", "third day"),
+            ("AMIRA", "the young woman"),
+            ("GEMINI", "the image model")
+        ]
+        for (source, target) in replacements {
+            text = text.replacingOccurrences(of: source, with: target, options: [.caseInsensitive])
+        }
+
+        text = text.replacingOccurrences(of: #"\b\d+(?:\.\d+)+\b"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"[_/]"#, with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"[\(\)\[\]\{\}]"#, with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"[:;]"#, with: ". ", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"[-–—]+"#, with: ", ", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"\bscene\b"#, with: "", options: [.caseInsensitive, .regularExpression])
+        text = text.replacingOccurrences(of: #"\bscript\b"#, with: "", options: [.caseInsensitive, .regularExpression])
+        text = text.replacingOccurrences(of: #"\bclues?\b"#, with: "", options: [.caseInsensitive, .regularExpression])
+        text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        text = text.trimmingCharacters(in: CharacterSet(charactersIn: " ,.-"))
+
+        guard !text.isEmpty else { return "" }
+        if !text.hasSuffix(".") { text.append(".") }
+        return text.prefix(1).uppercased() + text.dropFirst()
+    }
+
+    private func cameraGuidance(for node: PlacesWorldbuildingSnapshot.Node) -> String {
+        let heading = cardinalDirection(for: node.heading)
+        return String(
+            format: "Camera guidance: look %@ with a %.0fmm lens, pitch %.0f°, and roll %.0f°. Keep the framing grounded to that exact angle rather than inventing a new hero viewpoint.",
+            heading,
+            node.focalLength,
+            node.pitch,
+            node.roll
+        )
+    }
+
+    private func mapAnchorGuidance(for node: PlacesWorldbuildingSnapshot.Node) -> String {
+        String(
+            format: "Map anchor guidance: keep the shot rooted near normalized map position x %.3f, y %.3f so nearby roads, buildings, terrain slopes, and river relationships stay spatially correct.",
+            Double(node.position.x),
+            Double(node.position.y)
+        )
+    }
+
+    private func cardinalDirection(for headingDegrees: Double) -> String {
+        let directions = [
+            "north", "north-northeast", "northeast", "east-northeast",
+            "east", "east-southeast", "southeast", "south-southeast",
+            "south", "south-southwest", "southwest", "west-southwest",
+            "west", "west-northwest", "northwest", "north-northwest"
+        ]
+        let normalized = headingDegrees.truncatingRemainder(dividingBy: 360)
+        let wrapped = normalized < 0 ? normalized + 360 : normalized
+        let index = Int((wrapped / 22.5).rounded()) % directions.count
+        return directions[index]
     }
 
     private func routeGenerationContextNote(
@@ -2843,7 +3103,7 @@ struct PlacesPageView: View {
                         let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
                         let storedPath = try store.storeGeneratedPlaceImage(
                             result.imageData,
-                            prompt: draft.prompt,
+                            prompt: draft.effectivePrompt,
                             model: draft.model,
                             filenameStem: sanitizedFilenameStem(for: draft.title),
                             for: draft.linkedPlaceID ?? place.id,
@@ -2863,6 +3123,10 @@ struct PlacesPageView: View {
                                                    errorMessage: error.localizedDescription)
                         throw error
                     }
+
+                    if index < drafts.count - 1 {
+                        await vertexImmediateCooldown(afterCompletedDraft: index + 1, totalDrafts: drafts.count, placeID: place.id)
+                    }
                 }
                 store.placeGenerationStatusByID[place.id] = "Finished \(drafts.count) \(workflow.displayName.lowercased()) draft\(drafts.count == 1 ? "" : "s")."
                 store.statusMessage = "Generated \(drafts.count) \(workflow.displayName.lowercased()) place image\(drafts.count == 1 ? "" : "s") for \(place.name)"
@@ -2870,6 +3134,89 @@ struct PlacesPageView: View {
                 store.placeGenerationStatusByID[place.id] = error.localizedDescription
                 placeGenerationErrorMessage = error.localizedDescription
             }
+        }
+    }
+
+    private func handleMap3DCaptureResult(_ result: PlacesMap3DView.MapCaptureResult) {
+        guard let masterMapPath = store.placesWorkflowLibrary.masterMapImagePath,
+              let masterMapURL = store.resolvedCharacterAssetURL(for: masterMapPath) else {
+            map3dCaptureErrorMessage = "No master map is configured. Set one in Places → World before using 3D Map capture."
+            deleteMap3DCaptureTempFile(path: result.captureImagePath)
+            return
+        }
+        var draft = store.buildMap3DCapturePreflightDraft(
+            captureImagePath: result.captureImagePath,
+            masterMapAbsolutePath: masterMapURL.path,
+            contextBlocks: store.placesWorldContextBlocks
+        )
+        draft.aspectRatio = result.aspectRatioHint
+        map3dCaptureTempPath = result.captureImagePath
+        map3dCaptureDrafts = [draft]
+        map3dCapturePendingDraft = draft
+    }
+
+    private func deleteMap3DCaptureTempFile(path: String? = nil) {
+        let target = path ?? map3dCaptureTempPath
+        if let target {
+            try? FileManager.default.removeItem(atPath: target)
+        }
+        if path == nil { map3dCaptureTempPath = nil }
+    }
+
+    private func runMap3DCaptureGeneration(_ drafts: [GeminiGenerationDraft]) {
+        guard store.isGeminiAllowed() else {
+            map3dCaptureErrorMessage = "Gemini API calls are blocked. Enable Gemini API Calls in Inspector > Tools."
+            deleteMap3DCaptureTempFile()
+            return
+        }
+        let captureTempPath = map3dCaptureTempPath
+
+        Task { @MainActor in
+            let service = GeminiImageService()
+            var finishedCount = 0
+            for (index, draft) in drafts.enumerated() {
+                let activityID = store.registerGeminiActivity(
+                    kind: .immediate,
+                    title: draft.title,
+                    source: "Places • 3D Map Capture"
+                )
+                let request = GeminiImageService.GenerationRequest(
+                    prompt: draft.effectivePrompt,
+                    referenceImages: buildReferenceImages(from: draft.referenceItems),
+                    model: draft.model,
+                    aspectRatio: draft.aspectRatio,
+                    imageSize: draft.imageSize
+                )
+                store.logGeminiAPICall(endpoint: "image-generation", source: "PlacesPageView.runMap3DCaptureGeneration()")
+                do {
+                    let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
+                    let storedPath = try store.storeUnattachedGeneratedImage(
+                        imageData: result.imageData,
+                        prompt: draft.effectivePrompt,
+                        model: draft.model,
+                        aspectRatio: draft.aspectRatio,
+                        imageSize: draft.imageSize
+                    )
+                    store.updateGeminiActivity(activityID, status: .completed,
+                                               outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent)
+                    finishedCount += 1
+                } catch {
+                    store.updateGeminiActivity(activityID, status: .failed,
+                                               errorMessage: error.localizedDescription)
+                    map3dCaptureErrorMessage = error.localizedDescription
+                    break
+                }
+                if index < drafts.count - 1 {
+                    await vertexImmediateCooldown(afterCompletedDraft: index + 1, totalDrafts: drafts.count, placeID: nil)
+                }
+            }
+            if finishedCount > 0 {
+                store.statusMessage = "Generated \(finishedCount) map capture image\(finishedCount == 1 ? "" : "s")"
+            }
+            if let captureTempPath {
+                try? FileManager.default.removeItem(atPath: captureTempPath)
+            }
+            map3dCaptureTempPath = nil
         }
     }
 
@@ -2903,7 +3250,7 @@ struct PlacesPageView: View {
                     GeminiBatchSubmissionPlan.PromptRequest(
                         id: sanitizedFilenameStem(for: draft.title),
                         title: draft.title,
-                        prompt: draft.prompt,
+                        prompt: draft.effectivePrompt,
                         referencePaths: try resolvedBatchReferencePaths(from: draft.includedReferenceItems)
                     )
                 }
@@ -2948,6 +3295,19 @@ struct PlacesPageView: View {
     }
 
     private static let maxPlaceGenerationReferenceImages = 4
+
+    private func vertexImmediateCooldown(
+        afterCompletedDraft completedDraftCount: Int,
+        totalDrafts: Int,
+        placeID: UUID?
+    ) async {
+        guard ImageGenBackendStore.currentBackend() == .vertex, totalDrafts > 1 else { return }
+        let seconds = completedDraftCount.isMultiple(of: 4) ? 8.0 : 2.5
+        if let placeID {
+            store.placeGenerationStatusByID[placeID] = "Cooling down \(String(format: "%.1f", seconds))s before the next Vertex request…"
+        }
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    }
 
     private func buildReferenceImages(from references: [GeminiGenerationReferenceDraft]) -> [GeminiImageService.ReferenceImage] {
         references
@@ -4003,6 +4363,11 @@ private struct PlaceLandmarkProfileCard: View {
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .stroke(accent.opacity(0.35), lineWidth: 1)
                         )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            // Populate the Details inspector with this record.
+                            store.selectGeneratedBackgroundRecord(for: currentPath)
+                        }
                 } else {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .fill(Color.secondary.opacity(0.08))

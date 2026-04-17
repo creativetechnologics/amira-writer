@@ -18,11 +18,15 @@ struct GlobalSettingsSheet: View {
     @AppStorage("animate.features.map3dEnabled") private var map3dEnabled: Bool = true
 
     @State private var selectedTab: Tab = .general
+    @State private var showAPISettings = false
+    @State private var drawThingsStatus: String?
+    @State private var drawThingsStatusIcon: String = "network"
 
     enum Tab: String, CaseIterable {
         case general = "General"
         case gemini = "Gemini"
         case features = "Features"
+        case places = "Places"
     }
 
     var body: some View {
@@ -45,6 +49,8 @@ struct GlobalSettingsSheet: View {
                         geminiTab
                     case .features:
                         featuresTab
+                    case .places:
+                        placesTab
                     }
                 }
                 .padding(.vertical, 4)
@@ -60,7 +66,7 @@ struct GlobalSettingsSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 620, height: 520)
+        .frame(width: 680, height: 640)
     }
 
     private var header: some View {
@@ -115,13 +121,20 @@ struct GlobalSettingsSheet: View {
     private var geminiTab: some View {
         VStack(alignment: .leading, spacing: 14) {
             sectionCard(
-                title: "Access",
-                subtitle: "Gemini API key management lives in the API Settings sheet (Gemini tab). This section links to it."
+                title: "API Keys",
+                subtitle: "Stored in the project folder (synced by Syncthing). Covers Gemini, MiniMax, Vidu, RunPod, and the Vertex AI backend."
             ) {
-                Text("API keys are stored in the macOS Keychain. Use the gear icon in the Animate workspace sidebar (or the Imagine inspector's Tools tab) to open the full API Settings sheet, which covers Gemini, MiniMax, Vidu, RunPod, and the Vertex AI backend picker.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    apiKeyStatusRow("Gemini", configured: !store.geminiAPIKey.isEmpty)
+                    apiKeyStatusRow("MiniMax", configured: !store.miniMaxAPIKey.isEmpty)
+                    apiKeyStatusRow("RunPod", configured: !store.runPodAPIKey.isEmpty)
+
+                    Button("Open API Settings…") {
+                        showAPISettings = true
+                    }
+                    .controlSize(.small)
+                    .padding(.top, 4)
+                }
             }
 
             sectionCard(
@@ -135,6 +148,137 @@ struct GlobalSettingsSheet: View {
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
+            }
+
+            vertexCreditCard
+
+            sectionCard(
+                title: "Draw Things",
+                subtitle: "Local Stable Diffusion server for bulk generation."
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent("Host") {
+                        TextField("http://127.0.0.1", text: Binding(
+                            get: { store.drawThingsPlaceConfig.apiHost },
+                            set: { newValue in
+                                var updated = store.drawThingsPlaceConfig
+                                updated.apiHost = newValue
+                                store.updateDrawThingsPlacesConfig(updated)
+                            }
+                        ))
+                        .font(.caption.monospaced())
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 180)
+                    }
+                    LabeledContent("Port") {
+                        TextField("7860", value: Binding(
+                            get: { store.drawThingsPlaceConfig.apiPort },
+                            set: { newValue in
+                                var updated = store.drawThingsPlaceConfig
+                                updated.apiPort = newValue
+                                store.updateDrawThingsPlacesConfig(updated)
+                            }
+                        ), format: IntegerFormatStyle<Int>().grouping(.never))
+                        .font(.caption.monospaced())
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 80)
+                    }
+
+                    Button {
+                        checkDrawThingsConnection()
+                    } label: {
+                        Label(drawThingsStatus ?? "Check Connection", systemImage: drawThingsStatusIcon)
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+        .sheet(isPresented: $showAPISettings) {
+            GeminiSettingsSheet(
+                store: store,
+                onDismiss: { showAPISettings = false }
+            )
+        }
+    }
+
+    private var vertexCreditCard: some View {
+        let used = store.vertexCreditUsedUSD
+        let budget = store.vertexCreditBudgetUSD
+        let remaining = store.vertexCreditRemainingUSD
+        let pct = budget > 0 ? min(max(used / budget, 0), 1) : 0
+        return sectionCard(
+            title: "Vertex AI free-trial credit",
+            subtitle: "Google doesn't expose a live credit endpoint, so this is a local running estimate: $\(String(format: "%.2f", budget)) minus the model-estimated cost of each Gemini image the app has generated. Reset if you top up or switch accounts."
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("$\(String(format: "%.2f", used)) used")
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                    Spacer()
+                    Text("$\(String(format: "%.2f", remaining)) remaining")
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(remaining > 10 ? .green : (remaining > 1 ? .orange : .red))
+                }
+                ProgressView(value: pct)
+                    .progressViewStyle(.linear)
+                    .tint(remaining > 10 ? .green : (remaining > 1 ? .orange : .red))
+                Text("Budget: $\(String(format: "%.2f", budget))")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                HStack {
+                    Button("Reset tracking") {
+                        store.resetVertexCreditTracking()
+                    }
+                    .controlSize(.small)
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    private func apiKeyStatusRow(_ name: String, configured: Bool) -> some View {
+        HStack {
+            Text(name)
+                .font(.caption)
+            Spacer()
+            Text(configured ? "Configured" : "Not set")
+                .font(.caption)
+                .foregroundStyle(configured ? .green : .red)
+        }
+    }
+
+    private func checkDrawThingsConnection() {
+        drawThingsStatus = "Checking…"
+        drawThingsStatusIcon = "arrow.triangle.2.circlepath"
+        let config = store.drawThingsPlaceConfig
+        guard var components = URLComponents(string: config.apiHost) else {
+            drawThingsStatus = "Invalid host"
+            drawThingsStatusIcon = "xmark.circle.fill"
+            return
+        }
+        if components.scheme == nil { components.scheme = "http" }
+        components.port = config.apiPort
+        components.path = "/sdapi/v1/options"
+        guard let url = components.url else {
+            drawThingsStatus = "Invalid URL"
+            drawThingsStatusIcon = "xmark.circle.fill"
+            return
+        }
+        Task {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 5
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                    drawThingsStatus = "Connected"
+                    drawThingsStatusIcon = "checkmark.circle.fill"
+                } else {
+                    drawThingsStatus = "Error (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))"
+                    drawThingsStatusIcon = "xmark.circle.fill"
+                }
+            } catch {
+                drawThingsStatus = "Offline — \(error.localizedDescription)"
+                drawThingsStatusIcon = "xmark.circle.fill"
             }
         }
     }
@@ -166,6 +310,76 @@ struct GlobalSettingsSheet: View {
                     Label("Show 3D map features", systemImage: "mountain.2")
                 }
             }
+        }
+    }
+
+    // MARK: - Places
+
+    private var placesTab: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionCard(
+                title: "Places World Context",
+                subtitle: "These context lines are pre-filled into every 3D Map camera capture draft. Delete anything you don't want before submitting the Gemini sheet. One line per idea — blank lines separate the three blocks in the final prompt."
+            ) {
+                VStack(alignment: .leading, spacing: 14) {
+                    worldContextEditor(
+                        label: "Environmental",
+                        text: Binding(
+                            get: { store.placesWorldContextBlocks.environmental },
+                            set: { store.placesWorldContextBlocks.environmental = $0 }
+                        ),
+                        defaultValue: PlacesWorldContextBlocks.defaultEnvironmental
+                    )
+                    worldContextEditor(
+                        label: "Time Period",
+                        text: Binding(
+                            get: { store.placesWorldContextBlocks.timePeriod },
+                            set: { store.placesWorldContextBlocks.timePeriod = $0 }
+                        ),
+                        defaultValue: PlacesWorldContextBlocks.defaultTimePeriod
+                    )
+                    worldContextEditor(
+                        label: "Aesthetic",
+                        text: Binding(
+                            get: { store.placesWorldContextBlocks.aesthetic },
+                            set: { store.placesWorldContextBlocks.aesthetic = $0 }
+                        ),
+                        defaultValue: PlacesWorldContextBlocks.defaultAesthetic
+                    )
+                    HStack {
+                        Spacer()
+                        Button("Save") {
+                            store.save(writePlaces: true)
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func worldContextEditor(
+        label: String,
+        text: Binding<String>,
+        defaultValue: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button("Reset to default") {
+                    text.wrappedValue = defaultValue
+                }
+                .controlSize(.mini)
+            }
+            TextEditor(text: text)
+                .font(.system(.caption, design: .monospaced))
+                .frame(minHeight: 110)
+                .padding(4)
+                .background(Color.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(.white.opacity(0.08)))
         }
     }
 

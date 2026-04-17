@@ -87,6 +87,23 @@ enum GeneratedBackgroundWorkflowFilterMode: String, CaseIterable, Sendable {
     var displayName: String { rawValue }
 }
 
+/// Sort order for the Show All Images grid. Default is newest-first because
+/// Gary's primary flow is reviewing what just generated, not browsing by
+/// place-groupings (which was the legacy "canonical" order).
+enum GeneratedBackgroundSortMode: String, CaseIterable, Sendable {
+    case newestFirst
+    case oldestFirst
+    case canonical
+
+    var displayName: String {
+        switch self {
+        case .newestFirst: return "Newest first"
+        case .oldestFirst: return "Oldest first"
+        case .canonical:   return "By place / rating"
+        }
+    }
+}
+
 @available(macOS 26.0, *)
 @Observable @MainActor
 final class AnimateStore {
@@ -160,7 +177,12 @@ final class AnimateStore {
     var imagineSceneGalleries: [UUID: [ImagineSceneShotGallery]] = [:]
     var imagineBulkRunConfig: ImagineBulkRunConfig = .init()
     var imagineBulkRunProgress: ImagineBulkRunProgress = .init()
-    var geminiMasterSwitch: Bool = false
+    static let geminiMasterSwitchDefaultsKey = "animate.geminiMasterSwitch"
+    var geminiMasterSwitch: Bool = (UserDefaults.standard.object(forKey: "animate.geminiMasterSwitch") as? Bool) ?? true {
+        didSet {
+            UserDefaults.standard.set(geminiMasterSwitch, forKey: Self.geminiMasterSwitchDefaultsKey)
+        }
+    }
     var imagineSelectedShotIndex: Int? = nil
     var imagineSelectedMoment: ImagineShotMoment = .beginning
     var imaginePreviewImagePath: String? = nil
@@ -303,6 +325,7 @@ final class AnimateStore {
     var placeGenerationStatusByID: [UUID: String] = [:]
     var generatingPlaceIDs: Set<UUID> = []
     var placesWorkflowLibrary: PlacesWorkflowLibrary = .init()
+    var placesWorldContextBlocks: PlacesWorldContextBlocks = .init()
     var placesWorldMapCanonLibrary: PlacesWorldMapCanonLibrary = .init()
     private var placesWorldMapCanonRawPayload: [String: Any] = [:]
     private var placesGeneratedReviewStateLibrary: GeneratedBackgroundReviewStateLibrary = .init()
@@ -402,6 +425,19 @@ final class AnimateStore {
     var nlaBlendedPose: BlendedPose?
     /// Cache of loaded motion clip data, keyed by MotionClip UUID.
     @ObservationIgnored private var motionClipDataCache: [UUID: NLAEvaluator.MotionClipData] = [:]
+
+    /// In-memory resolution cache for `resolvedCharacterAssetURL(for:)`.
+    ///
+    /// The resolver does up to four `FileManager.fileExists` calls per path
+    /// to find the file under project / animate / root locations. Thumbnail
+    /// grids call this for every visible cell on every render, which was a
+    /// material contributor to Characters-page slowness. Caching by the
+    /// trimmed input path string short-circuits the repeat syscalls.
+    ///
+    /// Invalidated whenever the active project URL changes (see
+    /// `invalidateAssetURLCache()`).
+    @ObservationIgnored private var resolvedAssetURLCache: [String: URL] = [:]
+    @ObservationIgnored private var resolvedAssetURLMisses: Set<String> = []
 
     // MARK: - Gemini
 
@@ -745,12 +781,14 @@ final class AnimateStore {
     }
 
     func workflowConfig(for mode: PlaceWorkflowMode) -> PlaceWorkflowRenderConfig {
-        switch mode {
+        var config: PlaceWorkflowRenderConfig = switch mode {
         case .photorealistic:
             placesWorkflowLibrary.photorealConfig
         case .animated:
             placesWorkflowLibrary.animatedConfig
         }
+        config.model = selectedGeminiModel
+        return config
     }
 
     func selectPlacesScene(_ sceneID: UUID) {
@@ -2435,11 +2473,23 @@ final class AnimateStore {
             return nil
         }
 
+        // Fast path: the asset URL cache remembers both hits and misses so
+        // thumbnail grids don't pay the up-to-4 fileExists syscalls per
+        // render cycle. The cache is cleared whenever the active project
+        // URL changes (see `invalidateAssetURLCache()`).
+        if let cached = resolvedAssetURLCache[trimmed] {
+            return cached
+        }
+        if resolvedAssetURLMisses.contains(trimmed) {
+            return nil
+        }
+
         let fileManager = FileManager.default
         if !trimmed.hasPrefix("/"),
            let projectURL = fileOWPURL {
             let projectRelativeURL = projectURL.appendingPathComponent(trimmed)
             if fileManager.fileExists(atPath: projectRelativeURL.path) {
+                resolvedAssetURLCache[trimmed] = projectRelativeURL
                 return projectRelativeURL
             }
         }
@@ -2451,6 +2501,7 @@ final class AnimateStore {
                 .deletingLastPathComponent()
                 .appendingPathComponent(trimmed)
             if fileManager.fileExists(atPath: animateRelativeURL.path) {
+                resolvedAssetURLCache[trimmed] = animateRelativeURL
                 return animateRelativeURL
             }
         }
@@ -2460,6 +2511,7 @@ final class AnimateStore {
            (trimmed.hasPrefix("characters/") || trimmed.hasPrefix("backgrounds/")) {
             let animateRelativeURL = animateURL.appendingPathComponent(trimmed)
             if fileManager.fileExists(atPath: animateRelativeURL.path) {
+                resolvedAssetURLCache[trimmed] = animateRelativeURL
                 return animateRelativeURL
             }
         }
@@ -2468,16 +2520,27 @@ final class AnimateStore {
            let projectRelativePath = projectRelativeCharacterAssetPath(from: trimmed) {
             let remappedURL = projectURL.appendingPathComponent(projectRelativePath)
             if fileManager.fileExists(atPath: remappedURL.path) {
+                resolvedAssetURLCache[trimmed] = remappedURL
                 return remappedURL
             }
         }
 
         let candidateURL = URL(fileURLWithPath: trimmed)
         if trimmed.hasPrefix("/"), fileManager.fileExists(atPath: candidateURL.path) {
+            resolvedAssetURLCache[trimmed] = candidateURL
             return candidateURL
         }
 
+        resolvedAssetURLMisses.insert(trimmed)
         return nil
+    }
+
+    /// Clear the cached path→URL resolutions. Call when the active project
+    /// URL changes, on project reload, or when assets are known to have
+    /// moved (e.g. after an import that re-homes files).
+    func invalidateAssetURLCache() {
+        resolvedAssetURLCache.removeAll(keepingCapacity: true)
+        resolvedAssetURLMisses.removeAll(keepingCapacity: true)
     }
 
     func thumbnailImage(
@@ -2489,6 +2552,19 @@ final class AnimateStore {
         }
 
         return assetManager.thumbnail(for: url, maxSize: maxSize)
+    }
+
+    /// Cache-only thumbnail lookup — returns nil on cache miss instead of
+    /// decoding on the main thread. Views should render a placeholder and
+    /// use `thumbnailImageAsync` in a `.task` to populate the cache.
+    func cachedThumbnailImage(
+        for path: String?,
+        maxSize: CGFloat = 120
+    ) -> NSImage? {
+        guard let url = resolvedCharacterAssetURL(for: path) else {
+            return nil
+        }
+        return assetManager.cachedThumbnail(for: url, maxSize: maxSize)
     }
 
     func thumbnailImageAsync(
@@ -2947,7 +3023,11 @@ final class AnimateStore {
             age: character.age,
             inspirationImagePaths: normalizedCharacterAssetPaths(character.inspirationImagePaths),
             curatedInspirationImagePaths: normalizedCharacterAssetPaths(character.curatedInspirationImagePaths),
+            reviewedInspirationImagePaths: character.reviewedInspirationImagePaths,
             inspirationReferenceImagePath: normalizedCharacterAssetPath(character.inspirationReferenceImagePath),
+            inspirationRatings: character.inspirationRatings,
+            inspirationNotes: character.inspirationNotes,
+            inspirationRejectedPaths: character.inspirationRejectedPaths,
             inspirationBatchJobs: normalizedInspirationBatchJobs(character.inspirationBatchJobs),
             referenceImagePaths: normalizedCharacterAssetPaths(character.referenceImagePaths),
             animatedImagePaths: normalizedCharacterAssetPaths(character.animatedImagePaths),
@@ -3844,6 +3924,7 @@ final class AnimateStore {
                         self.placesWorkflowLibrary = self.hydratedPlacesWorkflowLibrary(
                             self.loadPlacesWorkflowLibrary(from: animateDir)
                         )
+                        self.placesWorldContextBlocks = self.loadPlacesWorldContextBlocks(from: animateDir)
                     }
                     self.syncSelectedSceneTimeline()
                     self.markAgentUpdated()
@@ -3862,6 +3943,7 @@ final class AnimateStore {
                     self.placesWorkflowLibrary = self.hydratedPlacesWorkflowLibrary(
                         self.loadPlacesWorkflowLibrary(from: animateDir)
                     )
+                    self.placesWorldContextBlocks = self.loadPlacesWorldContextBlocks(from: animateDir)
                     self.refreshPlaceWorldGenerationBatches()
                     _ = self.applyScriptPlaceRequirements(self.scriptPlaceRequirements, persistChanges: false)
                     self.markAgentUpdated()
@@ -4564,6 +4646,7 @@ final class AnimateStore {
         loadErrorMessage = nil
         owpURL = url
         workingOWPURL = url
+        invalidateAssetURLCache()
         statusMessage = "Opening project..."
         saveIndicator = .idle
         backgroundIndexRefreshTask?.cancel()
@@ -4592,14 +4675,14 @@ final class AnimateStore {
             let effectiveProjectURL = result.workingProjectURL
             let hasLocalMirror = fm.fileExists(atPath: effectiveProjectURL.path)
             workingOWPURL = effectiveProjectURL
+            invalidateAssetURLCache()
             owpCharacters = result.characters
             owpIndexFile = result.indexFile
             owpInstrumentMappings = result.instrumentMappings
 
             // 1b. Activate the project-local credential store so API keys
-            //     are read from / written to <project>/config/api-credentials.json
-            //     instead of the macOS Keychain. First open migrates existing
-            //     Keychain values into the JSON file.
+            //     are read from / written to <project>/config/api-credentials.json.
+            //     Syncthing replicates the file between machines.
             ProjectCredentialStore.shared.setActiveProject(effectiveProjectURL)
             AppLog.log("STARTUP", "Credentials: project store active at \(effectiveProjectURL.appendingPathComponent("config/api-credentials.json").path)")
             hydrateGeminiSettings()
@@ -4741,6 +4824,7 @@ final class AnimateStore {
                 backgrounds = []
             }
             placesWorkflowLibrary = hydratedPlacesWorkflowLibrary(loadPlacesWorkflowLibrary(from: animateDir))
+            placesWorldContextBlocks = loadPlacesWorldContextBlocks(from: animateDir)
             syncGeneratedBackgroundLibrary()
             refreshPlaceWorldGenerationBatches()
             refreshPlaceEditBatchJobs()
@@ -4756,7 +4840,9 @@ final class AnimateStore {
             }
             statusMessage = "Opened: \(projectName) (\(scenes.count) songs, \(characters.count) characters)"
             loadErrorMessage = nil
-            geminiMasterSwitch = ProjectDatabaseBridge.loadGeminiMasterSwitch(projectURL: effectiveProjectURL) ?? false
+            // geminiMasterSwitch is now persisted at user-level via UserDefaults
+            // (see declaration), so it survives across project opens. No
+            // project-scoped load here.
             loadImagineGalleries()
             loadCanvasGenerations()
             UserDefaults.standard.set(url.path, forKey: "lastProjectPath")
@@ -4876,6 +4962,8 @@ final class AnimateStore {
                 try writeProtectedData(placesData, to: animateDir.appendingPathComponent("places.json"))
                 let placesWorkflowData = try encoder.encode(persistedPlacesWorkflowLibrary(placesWorkflowLibrary))
                 try writeProtectedData(placesWorkflowData, to: animateDir.appendingPathComponent("places-workflow.json"))
+                let worldContextData = try encoder.encode(placesWorldContextBlocks)
+                try writeProtectedData(worldContextData, to: animateDir.appendingPathComponent("places-world-context.json"))
                 let reviewStateLibrary = rebuiltGeneratedBackgroundReviewStateLibrary(
                     from: placesWorkflowLibrary.generatedImageRecords,
                     existing: self.placesGeneratedReviewStateLibrary
@@ -4958,7 +5046,8 @@ final class AnimateStore {
                     projectURL: effectiveProjectURL
                 )
             }
-            try? ProjectDatabaseBridge.saveGeminiMasterSwitch(geminiMasterSwitch, projectURL: effectiveProjectURL)
+            // geminiMasterSwitch is persisted at user-level via UserDefaults (see
+            // declaration). No per-project save needed.
             saveImagineGalleries()
 
             // Write motion clips
@@ -5972,6 +6061,48 @@ final class AnimateStore {
         save()
     }
 
+    func setInspirationRating(_ rating: Int?, path: String, for characterID: UUID) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        var ratings = characters[charIndex].inspirationRatings ?? [:]
+        if let rating {
+            ratings[path] = min(max(rating, 1), 5)
+        } else {
+            ratings.removeValue(forKey: path)
+        }
+        characters[charIndex].inspirationRatings = ratings.isEmpty ? nil : ratings
+        save()
+    }
+
+    func updateInspirationNotes(_ notes: String, path: String, for characterID: UUID) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        var allNotes = characters[charIndex].inspirationNotes ?? [:]
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            allNotes.removeValue(forKey: path)
+        } else {
+            allNotes[path] = notes
+        }
+        characters[charIndex].inspirationNotes = allNotes.isEmpty ? nil : allNotes
+        scheduleDebouncedSave()
+    }
+
+    /// Toggle the rejected flag for an inspiration image. Rejected images stay
+    /// in `inspirationImagePaths` but are visually de-emphasized in galleries.
+    func toggleInspirationRejected(path: String, for characterID: UUID) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        if characters[charIndex].inspirationRejectedPaths.contains(path) {
+            characters[charIndex].inspirationRejectedPaths.remove(path)
+        } else {
+            characters[charIndex].inspirationRejectedPaths.insert(path)
+        }
+        save()
+    }
+
+    func isInspirationRejected(path: String, for characterID: UUID) -> Bool {
+        guard let char = characters.first(where: { $0.id == characterID }) else { return false }
+        return char.inspirationRejectedPaths.contains(path)
+    }
+
     /// Mark an inspiration image as reviewed so the "new" green dot in the
     /// gallery goes away. Idempotent.
     func markInspirationImageReviewed(path: String, for characterID: UUID) {
@@ -6209,6 +6340,95 @@ final class AnimateStore {
         return storedPath
     }
 
+    /// Store a generated image that is NOT linked to any place — lands in
+    /// `Animate/backgrounds/_map3d-captures/` and appears in the Places
+    /// "Show All Images" gallery via `linkedPlaceID = nil`.
+    func storeUnattachedGeneratedImage(
+        imageData: Data,
+        prompt: String,
+        model: GeminiModel,
+        aspectRatio: String,
+        imageSize: String
+    ) throws -> String {
+        let animateURL = try requireAnimateURL()
+        let directory = animateURL
+            .appendingPathComponent("backgrounds")
+            .appendingPathComponent("_map3d-captures")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "")
+        let filename = "\(timestamp)-\(UUID().uuidString).png"
+        let storedURL = directory.appendingPathComponent(filename)
+        try imageData.write(to: storedURL)
+
+        try writeGenerationMetadata(
+            prompt: prompt,
+            model: model,
+            aspectRatio: aspectRatio,
+            imageSize: imageSize,
+            to: storedURL
+        )
+
+        let storedPath = projectRelativeCharacterAssetPath(from: storedURL.path)
+            ?? normalizedCharacterAssetPath(storedURL.path)
+            ?? storedURL.path
+
+        var record = GeneratedBackgroundLibraryRecord(
+            activePath: storedPath,
+            workflow: .photorealistic,
+            sourcePrompt: prompt,
+            linkedPlaceID: nil,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        record.keywords = ["map3d-capture"]
+        placesWorkflowLibrary.generatedImageRecords.append(record)
+
+        save(writePlaces: true)
+        return storedPath
+    }
+
+    /// Build a pre-filled `GeminiGenerationDraft` for the 3D Map camera
+    /// capture flow. The viewport snapshot + master map are attached as
+    /// reference images; the prompt body is seeded with line-separated
+    /// environmental / time-period / aesthetic blocks. The user fills in the
+    /// trailing "Your instructions:" section inside the sheet.
+    func buildMap3DCapturePreflightDraft(
+        captureImagePath: String,
+        masterMapAbsolutePath: String,
+        contextBlocks: PlacesWorldContextBlocks
+    ) -> GeminiGenerationDraft {
+        let prompt = Self.buildCameraCapturePromptBody(contextBlocks)
+        return GeminiGenerationDraft(
+            title: "3D Map Capture",
+            destinationDescription: "Unattached · Places gallery",
+            prompt: prompt,
+            model: selectedGeminiModel,
+            aspectRatio: "16:9",
+            imageSize: "2K",
+            referenceItems: [
+                GeminiGenerationReferenceDraft(label: "Viewport capture", path: captureImagePath),
+                GeminiGenerationReferenceDraft(label: "Master map", path: masterMapAbsolutePath),
+            ],
+            linkedPlaceID: nil,
+            routeID: nil,
+            worldNodeID: nil
+        )
+    }
+
+    private static func buildCameraCapturePromptBody(_ blocks: PlacesWorldContextBlocks) -> String {
+        let env = blocks.environmental.trimmingCharacters(in: .whitespacesAndNewlines)
+        let time = blocks.timePeriod.trimmingCharacters(in: .whitespacesAndNewlines)
+        let aes = blocks.aesthetic.trimmingCharacters(in: .whitespacesAndNewlines)
+        var parts: [String] = []
+        if !env.isEmpty { parts.append(env) }
+        if !time.isEmpty { parts.append(time) }
+        if !aes.isEmpty { parts.append(aes) }
+        let body = parts.joined(separator: "\n\n")
+        return body + "\n\nYour instructions:\n\n"
+    }
+
     func registerInspirationBatchJob(_ job: CharacterInspirationBatchJob, for characterID: UUID) {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
         let normalizedMetadataPath = normalizedCharacterAssetPath(job.metadataPath) ?? job.metadataPath
@@ -6250,6 +6470,68 @@ final class AnimateStore {
         dismissedKeys.insert(key)
         persistDismissedInspirationBatchJobKeys(dismissedKeys, for: characters[charIndex])
         characters[charIndex].inspirationBatchJobs.removeAll { inspirationBatchJobKey($0) == key }
+        save()
+    }
+
+    /// Cancel a Gemini batch on Google's side. Shells out to the Python
+    /// helper's `cancel` subcommand which calls `client.batches.cancel(...)`
+    /// and rewrites the local metadata to `JOB_STATE_CANCELLED`. The watchdog
+    /// (if still running) will see the new state on its next poll cycle and
+    /// exit.
+    ///
+    /// Flips the job's local state to `JOB_STATE_CANCELLED` eagerly so the UI
+    /// shows the terminal badge immediately; a follow-up
+    /// `refreshInspirationBatchJobs()` call reconciles against the remote
+    /// status.
+    func cancelInspirationBatchJob(
+        _ job: CharacterInspirationBatchJob,
+        for characterID: UUID
+    ) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard !job.isTerminal else { return }
+
+        guard let metadataURL = resolvedCharacterAssetURL(for: job.metadataPath)
+            ?? (job.metadataPath.hasPrefix("/") ? URL(fileURLWithPath: job.metadataPath) : nil) else {
+            return
+        }
+
+        let apiKey = geminiAPIKey
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        // Mark pending-cancel locally so the UI stops the pulsing indicator.
+        if let jobIndex = characters[charIndex].inspirationBatchJobs.firstIndex(where: { $0.id == job.id }) {
+            characters[charIndex].inspirationBatchJobs[jobIndex].state = "JOB_STATE_CANCELLED"
+            characters[charIndex].inspirationBatchJobs[jobIndex].lastCheckedAt = Date()
+            save()
+        }
+
+        let characterID = characterID
+        let jobID = job.id
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let service = GeminiBatchService()
+            do {
+                let result = try await service.cancel(metadataPath: metadataURL, apiKey: apiKey)
+                if let cancelError = result.cancelError {
+                    // Remote cancel failed — surface the error on the job so
+                    // the user knows the batch may still be running.
+                    self.applyBatchCancelError(cancelError, jobID: jobID, characterID: characterID)
+                }
+            } catch {
+                self.applyBatchCancelError(
+                    error.localizedDescription,
+                    jobID: jobID,
+                    characterID: characterID
+                )
+            }
+            self.refreshInspirationBatchJobs()
+        }
+    }
+
+    private func applyBatchCancelError(_ message: String, jobID: UUID, characterID: UUID) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }),
+              let jobIndex = characters[charIndex].inspirationBatchJobs.firstIndex(where: { $0.id == jobID }) else { return }
+        characters[charIndex].inspirationBatchJobs[jobIndex].lastErrorMessage = "Cancel failed: \(message)"
         save()
     }
 
@@ -8434,10 +8716,11 @@ final class AnimateStore {
         flagFilter: GeneratedBackgroundFlagFilterMode = .all,
         minimumRating: Int? = nil,
         workflowFilter: GeneratedBackgroundWorkflowFilterMode = .all,
-        searchText: String = ""
+        searchText: String = "",
+        sortMode: GeneratedBackgroundSortMode = .newestFirst
     ) -> [GeneratedBackgroundLibraryRecord] {
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return visibleGeneratedBackgroundLibraryRecords().filter { record in
+        let filtered = visibleGeneratedBackgroundLibraryRecords().filter { record in
             switch workflowFilter {
             case .all:
                 break
@@ -8472,6 +8755,15 @@ final class AnimateStore {
             .joined(separator: " ")
             .lowercased()
             return haystack.contains(trimmedSearch)
+        }
+
+        switch sortMode {
+        case .canonical:
+            return filtered
+        case .newestFirst:
+            return filtered.sorted { $0.createdAt > $1.createdAt }
+        case .oldestFirst:
+            return filtered.sorted { $0.createdAt < $1.createdAt }
         }
     }
 
@@ -9954,8 +10246,11 @@ final class AnimateStore {
 
         let summary: String
         if let prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let trimmed = prompt.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-            summary = String(trimmed.prefix(220))
+            // Show the full prompt. Previous 220-char cap clipped the preview
+            // mid-sentence (Gary saw "…terrain, props, li" on every image).
+            summary = prompt
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
             summary = filename.replacingOccurrences(of: "-", with: " ")
         }
@@ -10271,7 +10566,8 @@ final class AnimateStore {
             normalized.contains("/backgrounds/place-batches/") ||
             normalized.contains("/backgrounds/chosen-references/") ||
             normalized.contains("/backgrounds/pipeline/tests/") ||
-            normalized.contains("/backgrounds/pipeline/batches/") {
+            normalized.contains("/backgrounds/pipeline/batches/") ||
+            normalized.contains("/backgrounds/_map3d-captures/") {
             return !isCharacterCentricGeneratedBackgroundPath(normalized)
         }
 
@@ -10856,6 +11152,7 @@ final class AnimateStore {
         if let errorMessage { geminiActivityLog[idx].errorMessage = errorMessage }
         if status == .completed || status == .failed {
             geminiActivityLog[idx].completedAt = Date()
+            geminiActivityCancelHandles.removeValue(forKey: id)
         }
         let title = geminiActivityLog[idx].title
         AppLog.log("GEMINI", "update \(status.rawValue) — \(title)\(errorMessage.map { " (err: \($0))" } ?? "")")
@@ -10863,6 +11160,78 @@ final class AnimateStore {
 
     func clearCompletedGeminiActivity() {
         geminiActivityLog.removeAll { $0.status == .completed || $0.status == .failed }
+    }
+
+    // MARK: - Per-activity cancellation
+
+    /// Cancel handles keyed by activity ID. Attached by the caller after
+    /// registerGeminiActivity when it knows how to stop its own work (drop the
+    /// Task, skip a queued draft, etc.). Cleared on terminal status or on
+    /// explicit cancel.
+    @ObservationIgnored
+    private var geminiActivityCancelHandles: [UUID: @Sendable () -> Void] = [:]
+
+    /// Associate a cancel closure with a registered Gemini activity. The
+    /// closure should make the underlying work abandon cleanly (Task.cancel(),
+    /// remove from queue, etc.). Multiple calls replace the previous handle.
+    func attachGeminiActivityCancel(_ id: UUID, handle: @escaping @Sendable () -> Void) {
+        geminiActivityCancelHandles[id] = handle
+    }
+
+    /// Called from the popover's per-row cancel button. Invokes the attached
+    /// handle, marks the log entry failed with a "Canceled by user" message,
+    /// and drops the handle so it can't fire twice.
+    func cancelGeminiActivity(_ id: UUID) {
+        if let handle = geminiActivityCancelHandles.removeValue(forKey: id) {
+            handle()
+        }
+        guard let idx = geminiActivityLog.firstIndex(where: { $0.id == id }) else { return }
+        let status = geminiActivityLog[idx].status
+        if status == .queued || status == .running {
+            geminiActivityLog[idx].status = .failed
+            geminiActivityLog[idx].errorMessage = "Canceled by user"
+            geminiActivityLog[idx].completedAt = Date()
+            AppLog.log("GEMINI", "canceled \(geminiActivityLog[idx].title)")
+        }
+    }
+
+    // MARK: - Vertex AI free-trial credit tracking
+
+    private static let vertexCreditUsedKey = "animate.vertex.creditUsedUSD"
+    private static let vertexCreditBudgetUSD: Double = 300.0
+
+    /// Running tally of estimated Vertex AI / Gemini image-generation spend
+    /// since the user last reset the counter. Persisted in UserDefaults so it
+    /// survives relaunches and is shared across projects (the $300 trial is
+    /// per-Google-account, not per-project).
+    var vertexCreditUsedUSD: Double = UserDefaults.standard.double(forKey: AnimateStore.vertexCreditUsedKey) {
+        didSet {
+            UserDefaults.standard.set(vertexCreditUsedUSD, forKey: AnimateStore.vertexCreditUsedKey)
+        }
+    }
+
+    /// Total trial budget minus what we've tallied. Clamped to zero.
+    var vertexCreditRemainingUSD: Double {
+        max(0, AnimateStore.vertexCreditBudgetUSD - vertexCreditUsedUSD)
+    }
+
+    /// Full trial budget constant ($300 as of the current Google promotion).
+    var vertexCreditBudgetUSD: Double { AnimateStore.vertexCreditBudgetUSD }
+
+    /// Add the estimated cost of a successful generation to the rolling tally.
+    /// Called from inspiration / action / photoreal LoRA generation pipelines
+    /// after the API returns success. Vertex doesn't expose a client-reachable
+    /// "trial remaining" endpoint, so this is the pragmatic estimator Gary
+    /// signed off on.
+    func recordVertexCreditUsage(_ usd: Double) {
+        guard usd > 0 else { return }
+        vertexCreditUsedUSD = vertexCreditUsedUSD + usd
+    }
+
+    /// Resets the running tally to zero. Surfaced in Global Settings so the
+    /// user can re-sync against the real Google Cloud Console figure.
+    func resetVertexCreditTracking() {
+        vertexCreditUsedUSD = 0
     }
 
     /// Get the star rating (0-5) for a specific place image. 0 = unrated.
@@ -11746,13 +12115,306 @@ final class AnimateStore {
     }
 
     func updatePlaceWorkflowConfig(_ config: PlaceWorkflowRenderConfig, for workflow: PlaceWorkflowMode) {
+        var normalized = config
+        normalized.model = selectedGeminiModel
         switch workflow {
         case .photorealistic:
-            placesWorkflowLibrary.photorealConfig = config
+            placesWorkflowLibrary.photorealConfig = normalized
         case .animated:
-            placesWorkflowLibrary.animatedConfig = config
+            placesWorkflowLibrary.animatedConfig = normalized
         }
         save(writePlaces: true)
+    }
+
+    // MARK: - Loopback API: Place Image Generation
+    //
+    // Called by AnimateAPIServer when an external tool (Claude / Codex CLI)
+    // POSTs a place generation. Mirrors PlacesPageView.runPlaceGeneration so
+    // the result lands in the Gemini activity queue and attaches to the
+    // correct BackgroundPlate record — identical to a UI button click.
+
+    struct APIGenerationError: Error {
+        let status: Int
+        let message: String
+    }
+
+    enum APIReferenceMode: String {
+        /// Existing behavior — master map (if exterior) + continuity + up to 4 place.referenceImages.
+        case `default`
+        /// Gary's strict rule: master map (always) + only this place's 5★-rated images.
+        /// Nothing else. No unrated images, no external reference entries, no continuity.
+        case curated
+    }
+
+    struct APIGenerationResult {
+        let placeID: UUID
+        let placeName: String
+        let model: GeminiModel
+        let aspectRatio: String
+        let imageSize: String
+        let referenceCount: Int
+        let referencePaths: [String]
+        let activityIDs: [UUID]
+        let storedPaths: [String]
+    }
+
+    /// Minimal scene-agnostic anchor for API-triggered generations. All
+    /// geography, culture, period, palette, and per-room specifics come from
+    /// each place's own `visualBrief` in places.json (700–1,100 chars each).
+    /// This anchor carries only the two invariants that are NOT guaranteed to
+    /// be in every brief: (1) an empty-plate backstop so the model never
+    /// sneaks figures into a window or doorway, and (2) the desert-coated
+    /// military rule — triggered whenever a brief mentions tents, bases,
+    /// gear, or vehicles. Anything location-specific (Persian-Afghan culture,
+    /// mountain-valley geography, Hindu Kush peaks) is intentionally omitted
+    /// so interior briefs do not leak mountain views into windows and so the
+    /// brief's own grounded language leads the render.
+    // Scene-conditional military clause. Only added when the visual brief
+    // actually describes military infrastructure, gear, or vehicles. Civilian
+    // scenes (villages, bridges, domestic spaces, markets) never see this
+    // clause, so their prompts don't get muddied with "if any military gear…"
+    // language that has nothing to do with the scene.
+    static let apiMilitaryTokens: [String] = [
+        "military", " base ", "base camp", "base gate", "base tent", "base access",
+        "camp", "tent", "patrol", "soldier", "soldiers", "military gear",
+        "armor", "helmet", "barrack", "outpost", "checkpoint",
+        "briefing room", "ops tent", "operations tent", "combat",
+        "uniform", "fatigues", "sentry", "hesco", "sandbag", "concertina",
+        "plate carrier", "rifle", "sidearm", "military vehicle", "humvee", "mrap"
+    ]
+
+    static func apiMilitaryClauseIfRelevant(for brief: String) -> String {
+        let haystack = " " + brief.lowercased() + " "
+        let hit = apiMilitaryTokens.contains { haystack.contains($0) }
+        guard hit else { return "" }
+        return "Any military gear, tents, packs, armor, or vehicles in frame read as fully desert-coated in tan and khaki — never forest green, never olive drab."
+    }
+
+    func generatePlaceImageForAPI(
+        placeIdentifier: String,
+        workflow: PlaceWorkflowMode,
+        model: GeminiModel?,
+        count: Int,
+        aspectRatio: String? = nil,
+        imageSize: String? = nil,
+        referenceMode: APIReferenceMode = .default
+    ) async throws -> APIGenerationResult {
+        guard isGeminiAllowed() else {
+            throw APIGenerationError(status: 403,
+                message: "Gemini API calls are blocked. Enable in Inspector > Tools.")
+        }
+
+        // Resolve place — UUID first, then case-insensitive name match.
+        let place: BackgroundPlate
+        if let uuid = UUID(uuidString: placeIdentifier),
+           let match = backgrounds.first(where: { $0.id == uuid }) {
+            place = match
+        } else {
+            let needle = placeIdentifier.lowercased()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let match = backgrounds.first(where: { $0.name.lowercased() == needle }) {
+                place = match
+            } else if let match = backgrounds.first(where: {
+                $0.name.lowercased().contains(needle)
+            }) {
+                place = match
+            } else {
+                throw APIGenerationError(status: 404,
+                    message: "No place found matching '\(placeIdentifier)'")
+            }
+        }
+
+        guard !generatingPlaceIDs.contains(place.id) else {
+            throw APIGenerationError(status: 409,
+                message: "Place '\(place.name)' is already generating")
+        }
+
+        // Resolve config + model override.
+        var config = workflowConfig(for: workflow)
+        if let model { config.model = model }
+        if let aspectRatio, !aspectRatio.isEmpty { config.aspectRatio = aspectRatio }
+        if let imageSize, !imageSize.isEmpty { config.imageSize = imageSize }
+        let effectiveModel = config.model
+
+        guard effectiveModel == .flash || effectiveModel == .pro else {
+            throw APIGenerationError(status: 400,
+                message: "Unsupported model for API use: \(effectiveModel.rawValue)")
+        }
+
+        // Assemble prompt — scene-conditional, no universal preamble. Every
+        // non-essential clause (military desert-coat, interior/exterior framing,
+        // people suppression) is either short and positive, or gated on what
+        // the brief actually describes. No "environment plate", no "not
+        // concept art / not a matte painting" negatives — those were causing
+        // paradoxical AI-looking outputs. The visual brief leads.
+        let visualBrief = place.visualBrief.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workflowLead: String = switch workflow {
+        case .photorealistic:
+            "A wide-angle photograph of the scene described below, shot on location with natural light and documentary framing."
+        case .animated:
+            "A wide-angle animated background frame of the scene described below, rendered as a grounded hand-authored animated still."
+        }
+        // Interior / exterior framing. Overrides ambiguous brief vocabulary
+        // (e.g. "courtyard" for an indoor hall).
+        let exteriorCanon: String
+        if place.isExteriorLike {
+            exteriorCanon = "The scene is outdoors, under open sky. If the river is visible, settlement appears only on the north bank per the master valley map, never on both sides."
+        } else {
+            exteriorCanon = "The scene is indoors, fully enclosed inside a room with walls and a roof. Any windows reveal only a narrow framed slice of what the brief describes — never a panoramic view. The room reads as in active use, not abandoned or in total ruin."
+        }
+        // People suppression — short, applied everywhere because every Places
+        // image in Amira is meant to be an uninhabited location shot.
+        let unpopulated = "No people, no figures, no silhouettes in the frame."
+        // Scene-conditional: only triggered if the brief mentions military
+        // infrastructure or gear. Civilian briefs skip this entirely.
+        let militaryClause = Self.apiMilitaryClauseIfRelevant(for: visualBrief)
+        let lensLine = config.lensDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = [
+            config.promptPrefix.trimmingCharacters(in: .whitespacesAndNewlines),
+            workflowLead,
+            exteriorCanon,
+            unpopulated,
+            militaryClause,
+            lensLine,
+            visualBrief,
+            config.promptSuffix.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
+
+        // Build reference image bundle. Two modes:
+        //
+        //  .default  — master map (if exterior) + photoreal continuity + up to 4 place.referenceImages.
+        //  .curated  — master map (always) + ONLY this place's 5★-rated images from its own galleries.
+        //              No continuity, no unrated images, no external reference entries.
+        var referenceURLs: [URL] = []
+        var referencePaths: [String] = []
+        var seenPaths: Set<String> = []
+        func appendRef(_ path: String?) {
+            guard let path,
+                  !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !seenPaths.contains(path),
+                  let url = resolvedCharacterAssetURL(for: path) else { return }
+            seenPaths.insert(path)
+            referenceURLs.append(url)
+            referencePaths.append(path)
+        }
+
+        switch referenceMode {
+        case .default:
+            if place.isExteriorLike {
+                appendRef(effectivePlacesMasterMapPath())
+            }
+            appendRef(preferredPlaceContinuityImagePath(for: place, workflow: .photorealistic))
+            for ref in place.referenceImages {
+                appendRef(ref.imagePath)
+                if referenceURLs.count >= 4 { break }
+            }
+
+        case .curated:
+            // Always include the master map — it's Gary's canonical world anchor
+            // and the "ONLY the map, or …" rule always permits it.
+            appendRef(effectivePlacesMasterMapPath())
+
+            // Pull every 5★-rated image from this place's photoreal + animated galleries.
+            // `place.imageRatings` is keyed by path → star count (0–5).
+            let rated: [(path: String, rating: Int)] = (place.imagePaths + place.animatedImagePaths)
+                .map { path in (path, place.imageRatings[path] ?? 0) }
+                .filter { $0.rating >= 5 }
+                // Sort higher-rated first then stable by path for determinism.
+                .sorted { lhs, rhs in
+                    if lhs.rating != rhs.rating { return lhs.rating > rhs.rating }
+                    return lhs.path < rhs.path
+                }
+            for entry in rated {
+                appendRef(entry.path)
+                if referenceURLs.count >= 4 { break }
+            }
+        }
+
+        let referenceImages = referenceURLs
+            .prefix(4)
+            .compactMap { GeminiImageService.referenceImage(from: $0) }
+
+        // Generate in sequence, registering activity per image.
+        generatingPlaceIDs.insert(place.id)
+        defer { generatingPlaceIDs.remove(place.id) }
+
+        let service = GeminiImageService()
+        var activityIDs: [UUID] = []
+        var storedPaths: [String] = []
+
+        for index in 0..<count {
+            let title = count > 1
+                ? "\(place.name) (\(index + 1)/\(count))"
+                : place.name
+            placeGenerationStatusByID[place.id] = count > 1
+                ? "API generating \(index + 1) of \(count)…"
+                : "API generating…"
+
+            let activityID = registerGeminiActivity(
+                kind: .immediate,
+                title: title,
+                source: "Loopback API • \(place.name) • \(workflow.displayName)"
+            )
+            activityIDs.append(activityID)
+
+            let request = GeminiImageService.GenerationRequest(
+                prompt: prompt,
+                referenceImages: referenceImages,
+                model: effectiveModel,
+                aspectRatio: config.aspectRatio,
+                imageSize: config.imageSize
+            )
+            logGeminiAPICall(endpoint: "image-generation",
+                             source: "AnimateStore.generatePlaceImageForAPI()")
+            do {
+                let result = try await service.generate(request: request,
+                                                        apiKey: geminiAPIKey)
+                let filenameStem = "api-\(PlacesScriptIndexService.fileStem(for: place.name))"
+                let storedPath = try storeGeneratedPlaceImage(
+                    result.imageData,
+                    prompt: prompt,
+                    model: effectiveModel,
+                    filenameStem: filenameStem,
+                    for: place.id,
+                    workflow: workflow,
+                    aspectRatio: config.aspectRatio,
+                    imageSize: config.imageSize
+                )
+                storedPaths.append(storedPath)
+                updateGeminiActivity(activityID, status: .completed,
+                    outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent)
+            } catch {
+                updateGeminiActivity(activityID, status: .failed,
+                    errorMessage: error.localizedDescription)
+                placeGenerationStatusByID[place.id] = "API generation failed: \(error.localizedDescription)"
+                throw APIGenerationError(status: 500,
+                    message: "Generation failed on image \(index + 1): \(error.localizedDescription)")
+            }
+
+            // Vertex cooldown between drafts, matching PlacesPageView pacing.
+            if index < count - 1,
+               ImageGenBackendStore.currentBackend() == .vertex {
+                let seconds: Double = (index + 1).isMultiple(of: 4) ? 8.0 : 2.5
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            }
+        }
+
+        placeGenerationStatusByID[place.id] = "API generated \(count) image\(count == 1 ? "" : "s")."
+        statusMessage = "Loopback API generated \(count) \(workflow.displayName.lowercased()) image\(count == 1 ? "" : "s") for \(place.name)"
+
+        return APIGenerationResult(
+            placeID: place.id,
+            placeName: place.name,
+            model: effectiveModel,
+            aspectRatio: config.aspectRatio,
+            imageSize: config.imageSize,
+            referenceCount: referenceImages.count,
+            referencePaths: Array(referencePaths.prefix(referenceImages.count)),
+            activityIDs: activityIDs,
+            storedPaths: storedPaths
+        )
     }
 
     func generateDrawThingsPlaceImage(for placeID: UUID) {
@@ -11762,18 +12424,7 @@ final class AnimateStore {
         }
 
         let sceneNames = sceneReferences(for: placeID).map(\.sceneName)
-        let notes = place.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        let promptSegments = [
-            drawThingsPlaceConfig.promptPrefix.trimmingCharacters(in: .whitespacesAndNewlines),
-            "Cinematic environment concept art for the Amira opera location \(place.name).",
-            place.locationCategory.isEmpty ? "" : "\(place.locationCategory) location.",
-            sceneNames.isEmpty ? "" : "Used in scenes: \(sceneNames.joined(separator: ", ")).",
-            notes.isEmpty ? "" : "Production notes: \(notes).",
-            "No characters, no text, no lettering, focus on the location only.",
-            drawThingsPlaceConfig.promptSuffix.trimmingCharacters(in: .whitespacesAndNewlines)
-        ]
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
+        let promptSegments = drawThingsPlacePrompt(for: place, sceneNames: sceneNames)
 
         let service = DrawThingsPlaceGenerationService()
         let tempURL = FileManager.default.temporaryDirectory
@@ -11801,6 +12452,114 @@ final class AnimateStore {
                 self.statusMessage = "Place generation failed for \(place.name): \(error.localizedDescription)"
             }
         }
+    }
+
+    private func drawThingsPlacePrompt(for place: BackgroundPlate, sceneNames: [String]) -> String {
+        let cueText = ([place.name, place.locationCategory, place.notes] + sceneNames)
+            .joined(separator: " ")
+            .lowercased()
+        let visualNotes = sanitizedPlaceVisualNotes(place.notes)
+
+        return [
+            drawThingsPlaceConfig.promptPrefix.trimmingCharacters(in: .whitespacesAndNewlines),
+            "Create a cinematic background plate written entirely as plain-language visual description.",
+            drawThingsPlaceEnvironmentDescription(for: cueText, category: place.locationCategory),
+            drawThingsPlaceLightingDescription(for: cueText),
+            visualNotes.isEmpty ? "" : "Additional visible design cues: \(visualNotes).",
+            "Describe architecture, terrain, materials, atmosphere, camera distance, and time of day in concrete visual terms.",
+            "Do not mention place names, scene titles, script references, character names, or any internal project labels.",
+            "No characters, no text, no lettering, no logos; focus on the environment only.",
+            drawThingsPlaceConfig.promptSuffix.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
+    }
+
+    private func drawThingsPlaceEnvironmentDescription(for cueText: String, category: String) -> String {
+        let lowerCategory = category.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if cueText.contains("briefing") {
+            return "A modest functional interior meeting room with worn plaster walls, practical furniture, grounded documentary realism, and no decorative fantasy styling."
+        }
+        if cueText.contains("clinic") {
+            return "A modest district clinic with restrained medical furnishings, worn plaster, practical surfaces, believable real-world wear, and grounded documentary realism."
+        }
+        if cueText.contains("gathering") || cueText.contains("communal") {
+            return "A communal meeting space with simple seating, practical floor coverings, worn plaster or mud-brick surfaces, and everyday lived-in materials."
+        }
+        if cueText.contains("home") || cueText.contains("house") {
+            return "A modest lived-in home setting with practical household objects, worn plaster, layered textiles, and intimate human-scale detail."
+        }
+        if cueText.contains("bridge") {
+            return "A grounded river crossing with a readable bridge structure, dusty approaches, weathered construction materials, and the river clearly placed in frame."
+        }
+        if cueText.contains("market") {
+            return "A dusty village market with practical stalls, muted fabric shade, rough plaster storefronts, everyday goods, and layered real materials."
+        }
+        if cueText.contains("grave") || cueText.contains("memorial") {
+            return "A quiet memorial setting with muted earth tones, weathered markers, restrained solemn atmosphere, and grounded real-world detail."
+        }
+        if cueText.contains("river") || cueText.contains("riverside") || cueText.contains("riverbank") {
+            return "A river-edge environment with visible water, rocky or sandy banks, sparse vegetation, dusty footpaths, and grounded terrain detail."
+        }
+        if cueText.contains("ridge") || cueText.contains("overlook") || cueText.contains("valley") {
+            return "A dry valley overlook with dusty slopes, layered terrain depth, distant settlement detail, and grounded mountainous geography."
+        }
+        if cueText.contains("street") || cueText.contains("road") || cueText.contains("lane") || cueText.contains("courtyard") || cueText.contains("doorway") {
+            return "A dusty village exterior with packed earth, rough plaster walls, practical doors, muted tones, and believable lived-in wear."
+        }
+        if cueText.contains("interior") || cueText.contains("room") || cueText.contains("inside") || lowerCategory.contains("interior") {
+            return "A grounded interior environment with practical architecture, believable wear, restrained decoration, and documentary realism."
+        }
+        if lowerCategory.contains("exterior") {
+            return "A grounded exterior environment with believable architecture, terrain, weathering, and restrained documentary realism."
+        }
+        return "A grounded real-world environment with believable architecture, restrained materials, readable spatial depth, and documentary-style realism."
+    }
+
+    private func drawThingsPlaceLightingDescription(for cueText: String) -> String {
+        if cueText.contains("pre-dawn") {
+            return "Lighting: cool pre-dawn blue light, dim ambient contrast, quiet atmosphere, and soft low-angle illumination."
+        }
+        if cueText.contains("dawn") || cueText.contains("sunrise") || cueText.contains("early morning") {
+            return "Lighting: early morning light with soft warm highlights, long shadows, clean air, and gentle low-angle sun."
+        }
+        if cueText.contains("late morning") || cueText.contains("morning") {
+            return "Lighting: clear late-morning daylight with realistic sun direction, natural contrast, and grounded neutral color."
+        }
+        if cueText.contains("midday") || cueText.contains("noon") {
+            return "Lighting: bright overhead daylight with crisp shadows, strong realism, and restrained color saturation."
+        }
+        if cueText.contains("late afternoon") || cueText.contains("golden hour") || cueText.contains("sunset") {
+            return "Lighting: warm late-afternoon sunlight with longer shadows, dusty atmosphere, and cinematic golden highlights."
+        }
+        if cueText.contains("dusk") || cueText.contains("blue hour") || cueText.contains("evening") {
+            return "Lighting: dim dusk or blue-hour light with cool ambient tones, practical glow where appropriate, and restrained contrast."
+        }
+        if cueText.contains("night") || cueText.contains("lamplight") {
+            return "Lighting: low night illumination with localized practical light, deep shadows, and believable dark-value control."
+        }
+        return "Lighting: grounded naturalistic light with believable shadow direction, realistic atmosphere, and a restrained cinematic finish."
+    }
+
+    private func sanitizedPlaceVisualNotes(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "\n", with: " ")
+            .components(separatedBy: CharacterSet(charactersIn: ".;"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { fragment in
+                let lower = fragment.lowercased()
+                return !lower.contains("scene")
+                    && !lower.contains("script")
+                    && !lower.contains("song")
+                    && !lower.contains("assignment")
+                    && !lower.contains("appears")
+                    && !lower.contains("int.")
+                    && !lower.contains("ext.")
+            }
+            .prefix(2)
+            .joined(separator: ". ")
     }
 
     /// Returns camera shot types required for a given place based on scenes that use it.
@@ -11920,6 +12679,16 @@ final class AnimateStore {
         _ = applyPlacesWorldMapCanonOverrides(placesWorldMapCanonLibrary, to: &decoded.generatedImageRecords)
         decoded.pendingEditQueue = decoded.pendingEditQueue.map { normalizePlaceEditQueueItem($0) }
         decoded.editBatchJobs = decoded.editBatchJobs.map { normalizePlaceEditBatchJob($0) }
+        return decoded
+    }
+
+    func loadPlacesWorldContextBlocks(from animateDir: URL) -> PlacesWorldContextBlocks {
+        let url = animateDir.appendingPathComponent("places-world-context.json")
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(PlacesWorldContextBlocks.self, from: data) else {
+            return .init()
+        }
         return decoded
     }
 

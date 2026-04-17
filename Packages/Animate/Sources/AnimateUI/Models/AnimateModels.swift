@@ -629,6 +629,12 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
     /// dot in the gallery until the user interacts with the thumbnail.
     var reviewedInspirationImagePaths: Set<String> = []
     var inspirationReferenceImagePath: String?
+    var inspirationRatings: [String: Int]?
+    var inspirationNotes: [String: String]?
+    /// Paths the user has explicitly rejected. Rejected images stay in the
+    /// library but are visually de-emphasized in galleries and excluded from
+    /// default curation logic.
+    var inspirationRejectedPaths: Set<String> = []
     var inspirationBatchJobs: [CharacterInspirationBatchJob]
     var referenceImagePaths: [String]
     var animatedImagePaths: [String]
@@ -667,7 +673,11 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         age: Int? = nil,
         inspirationImagePaths: [String] = [],
         curatedInspirationImagePaths: [String] = [],
+        reviewedInspirationImagePaths: Set<String> = [],
         inspirationReferenceImagePath: String? = nil,
+        inspirationRatings: [String: Int]? = nil,
+        inspirationNotes: [String: String]? = nil,
+        inspirationRejectedPaths: Set<String> = [],
         inspirationBatchJobs: [CharacterInspirationBatchJob] = [],
         referenceImagePaths: [String] = [],
         animatedImagePaths: [String] = [],
@@ -705,7 +715,11 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         self.age = age
         self.inspirationImagePaths = inspirationImagePaths
         self.curatedInspirationImagePaths = curatedInspirationImagePaths
+        self.reviewedInspirationImagePaths = reviewedInspirationImagePaths
         self.inspirationReferenceImagePath = inspirationReferenceImagePath
+        self.inspirationRatings = inspirationRatings
+        self.inspirationNotes = inspirationNotes
+        self.inspirationRejectedPaths = inspirationRejectedPaths
         self.inspirationBatchJobs = inspirationBatchJobs
         self.referenceImagePaths = referenceImagePaths
         self.animatedImagePaths = animatedImagePaths
@@ -748,6 +762,9 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         curatedInspirationImagePaths = try c.decodeIfPresent([String].self, forKey: .curatedInspirationImagePaths) ?? []
         reviewedInspirationImagePaths = Set(try c.decodeIfPresent([String].self, forKey: .reviewedInspirationImagePaths) ?? [])
         inspirationReferenceImagePath = try c.decodeIfPresent(String.self, forKey: .inspirationReferenceImagePath)
+        inspirationRatings = try c.decodeIfPresent([String: Int].self, forKey: .inspirationRatings)
+        inspirationNotes = try c.decodeIfPresent([String: String].self, forKey: .inspirationNotes)
+        inspirationRejectedPaths = Set(try c.decodeIfPresent([String].self, forKey: .inspirationRejectedPaths) ?? [])
         inspirationBatchJobs = try c.decodeIfPresent([CharacterInspirationBatchJob].self, forKey: .inspirationBatchJobs) ?? []
         referenceImagePaths = try c.decodeIfPresent([String].self, forKey: .referenceImagePaths) ?? []
         animatedImagePaths = try c.decodeIfPresent([String].self, forKey: .animatedImagePaths) ?? []
@@ -2152,6 +2169,46 @@ struct PlacesWorkflowLibrary: Codable, Sendable, Hashable {
     }
 }
 
+public struct PlacesWorldContextBlocks: Codable, Sendable, Equatable, Hashable {
+    public var environmental: String
+    public var timePeriod: String
+    public var aesthetic: String
+
+    public init(
+        environmental: String = Self.defaultEnvironmental,
+        timePeriod: String = Self.defaultTimePeriod,
+        aesthetic: String = Self.defaultAesthetic
+    ) {
+        self.environmental = environmental
+        self.timePeriod = timePeriod
+        self.aesthetic = aesthetic
+    }
+
+    public static let defaultEnvironmental = """
+    Exterior environment with open sky
+    Persian-Afghan highland valley landscape
+    Settlement on the north bank of the main river only
+    Textured stone and mud-brick facades, weathered surfaces
+    Overhead power lines and irregular signage
+    Dry dust haze characteristic of arid subtropical climate
+    """
+
+    public static let defaultTimePeriod = """
+    Contemporary present day, mid-2020s
+    No future technology in frame
+    Period-appropriate vehicles, clothing, and infrastructure
+    Analog signage alongside modern mobile-era details
+    """
+
+    public static let defaultAesthetic = """
+    Cinematic photorealism, documentary framing
+    Natural light, golden-hour or overcast diffuse preferred
+    Medium telephoto compression (85–135mm equivalent)
+    Subtle film grain, no CGI smoothness
+    Muted satellite-style palette — no HDR punch
+    """
+}
+
 struct BackgroundPlate: Identifiable, Codable, Sendable {
     var id: UUID
     var name: String
@@ -2165,6 +2222,11 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
     var sceneUsage: [String]
     var referenceImages: [PlaceReferenceImage]
     var workflowPromptNotes: String
+    /// Canonical visual-only description of this place used for prompt assembly.
+    /// Pure plain-language description of what the camera sees. No character names,
+    /// no place slugs, no scene titles, no meta-instructions. Empty string = no brief.
+    /// When empty the assembler omits the segment rather than falling back to legacy fields.
+    var visualBrief: String = ""
     var animatedImagePaths: [String]
     var animatedApprovedImagePath: String?
     var buildingAnchorNodeID: UUID?
@@ -2175,7 +2237,7 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, name, filename, notes, imagePaths, approvedImagePath
         case angleImages, locationCategory, sceneUsage
-        case referenceImages, workflowPromptNotes, animatedImagePaths, animatedApprovedImagePath
+        case referenceImages, workflowPromptNotes, visualBrief, animatedImagePaths, animatedApprovedImagePath
         case buildingAnchorNodeID, linkedExteriorPlaceID
         case imageRatings
     }
@@ -2193,6 +2255,7 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         sceneUsage: [String] = [],
         referenceImages: [PlaceReferenceImage] = [],
         workflowPromptNotes: String = "",
+        visualBrief: String = "",
         animatedImagePaths: [String] = [],
         animatedApprovedImagePath: String? = nil,
         buildingAnchorNodeID: UUID? = nil,
@@ -2210,6 +2273,7 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         self.sceneUsage = sceneUsage
         self.referenceImages = referenceImages
         self.workflowPromptNotes = workflowPromptNotes
+        self.visualBrief = visualBrief
         self.animatedImagePaths = animatedImagePaths
         self.animatedApprovedImagePath = animatedApprovedImagePath
         self.buildingAnchorNodeID = buildingAnchorNodeID
@@ -2230,6 +2294,7 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         sceneUsage = try c.decodeIfPresent([String].self, forKey: .sceneUsage) ?? []
         referenceImages = try c.decodeIfPresent([PlaceReferenceImage].self, forKey: .referenceImages) ?? []
         workflowPromptNotes = try c.decodeIfPresent(String.self, forKey: .workflowPromptNotes) ?? ""
+        visualBrief = try c.decodeIfPresent(String.self, forKey: .visualBrief) ?? ""
         animatedImagePaths = try c.decodeIfPresent([String].self, forKey: .animatedImagePaths) ?? []
         animatedApprovedImagePath = try c.decodeIfPresent(String.self, forKey: .animatedApprovedImagePath)
         buildingAnchorNodeID = try c.decodeIfPresent(UUID.self, forKey: .buildingAnchorNodeID)

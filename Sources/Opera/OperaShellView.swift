@@ -213,6 +213,7 @@ struct OperaShellView: View {
     @State private var activeProjectTitle: String?
     @State private var renderedMode: OperaMode = .write
     @State private var activeModal: OperaModal?
+    @State private var showAllProjectImages: Bool = false
     @State private var loadState: OperaLoadState = .idle
     @State private var recentProjects: [URL] = []
     @State private var activeProjectLoadError: String?
@@ -268,6 +269,10 @@ struct OperaShellView: View {
         .background(OperaWindowAccessor())
         .task {
             await initializeShellIfNeeded()
+            // Seed the loopback API with whatever project is now active so
+            // requests that arrive before a Places/Animate mode switch can
+            // still hydrate the store.
+            animateController.setAPIHostProjectURL(activeProjectURL)
             // Register dirty-state check for the AppDelegate's quit confirmation
             // Note: Characters and Places modes share animateController, so no separate dirty/save check needed.
             OperaShellSignals.hasUnsavedChanges = { [writeController, scoreController, mixController, animateController] in
@@ -360,6 +365,12 @@ struct OperaShellView: View {
                 projectPath: animateController.activeProjectPath
             )
         }
+        .onChange(of: activeProjectURL) { _, newURL in
+            // Keep the Animate-backed loopback API in sync with whichever project
+            // the shell has active, so external agents can trigger generations
+            // without the user first switching into Places/Animate.
+            animateController.setAPIHostProjectURL(newURL)
+        }
         .onReceive(NotificationCenter.default.publisher(for: OperaShellSignals.openProjectFromDisk)) { _ in
             Task {
                 await openProjectFromDisk()
@@ -398,6 +409,11 @@ struct OperaShellView: View {
             switch modal {
             case .recentProjects:
                 recentProjectsSheet
+            }
+        }
+        .sheet(isPresented: $showAllProjectImages) {
+            animateController.allProjectImagesPageView {
+                showAllProjectImages = false
             }
         }
     }
@@ -559,6 +575,15 @@ struct OperaShellView: View {
             Spacer(minLength: 4)
 
             HStack(spacing: 6) {
+                OperaChromeActionButton(
+                    systemImage: "photo.on.rectangle.angled",
+                    isSelected: showAllProjectImages
+                ) {
+                    showAllProjectImages = true
+                }
+                animateController.geminiStatusBadgeView()
+                animateController.globalSettingsGearView()
+
                 OperaChromeActionButton(
                     systemImage: currentSidebarVisible ? "sidebar.left" : "sidebar.right",
                     isSelected: currentSidebarVisible
