@@ -56,15 +56,22 @@ private enum HostedAudioUnitExportMode: String {
     }
 }
 
-private struct HostedAudioUnitOfflineQualification: Sendable {
-    enum Verdict: String, Sendable {
+private enum HostedAudioUnitOfflineRenderProfile: String, Codable, CaseIterable, Sendable {
+    case standard
+    case conservative
+}
+
+private struct HostedAudioUnitOfflineQualification: Codable, Sendable {
+    enum Verdict: String, Codable, Sendable {
         case qualified
         case rejected
     }
 
     let verdict: Verdict
     let similarity: Double
+    let envelopeSimilarity: Double
     let durationDeltaSeconds: Double
+    let renderProfile: HostedAudioUnitOfflineRenderProfile
     let checkedAt: Date
     let detail: String
 }
@@ -1648,6 +1655,7 @@ final class ScoreStore {
     // MARK: - Init
 
     init() {
+        hostedAudioUnitOfflineQualificationCache = Self.loadHostedAudioUnitOfflineQualificationCache()
         setupPlaybackCallbacks()
         sunoServerManager.onStateChange = { [weak self] state, step, error in
             self?.sunoServerState = state
@@ -4711,7 +4719,7 @@ final class ScoreStore {
             Self.ticksToSecondsStatic(tick, ticksPerQuarter: tpq, tempoEvents: tempoEvents)
         }
 
-        let performOfflineRender: @Sendable (URL) async throws -> Void = { outputURLToUse in
+        let performOfflineRender: @Sendable (URL, HostedAudioUnitOfflineRenderProfile) async throws -> Void = { outputURLToUse, renderProfile in
             // Run ALL heavy work off the main thread
             try await Task.detached(priority: .userInitiated) {
                 try await Self.renderChunkToWavBackground(
@@ -4725,6 +4733,7 @@ final class ScoreStore {
                     resolvedMappings: resolvedMappings,
                     masterVolume: volume,
                     panMap: panMap,
+                    hostedAudioUnitRenderProfile: renderProfile,
                     ticksToSec: ticksToSec,
                     reportStatus: reportStatus,
                     reportWarning: reportWarning
@@ -4753,7 +4762,9 @@ final class ScoreStore {
         }
 
         if containsAudioUnitMappings {
+            let qualificationProjectIdentifier = fileProjectURL?.resolvingSymlinksInPath().path
             let qualificationKey = Self.hostedAudioUnitQualificationKey(
+                projectIdentifier: qualificationProjectIdentifier,
                 songPath: selectedMidiAsset?.relativePath,
                 startTick: startTick,
                 endTick: endTick,
@@ -4763,16 +4774,32 @@ final class ScoreStore {
                 ticksPerQuarter: tpq,
                 tempoEvents: tempoEvents
             )
+            let cacheQualification: (HostedAudioUnitOfflineQualification) -> Void = { [self] qualification in
+                self.hostedAudioUnitOfflineQualificationCache[qualificationKey] = qualification
+                self.persistHostedAudioUnitOfflineQualificationCache()
+            }
 
-            let attemptOfflineFullRender: @Sendable () async throws -> Void = {
-                NSLog("[OfflineExport] Attempting offline hosted-instrument export for %@", outputURL.lastPathComponent)
-                reportStatus("Rendering hosted instruments offline...")
-                try await performOfflineRender(outputURL)
+            let attemptOfflineFullRender: @Sendable (HostedAudioUnitOfflineRenderProfile) async throws -> Void = { renderProfile in
+                NSLog(
+                    "[OfflineExport] Attempting %@ offline hosted-instrument export for %@",
+                    renderProfile.rawValue,
+                    outputURL.lastPathComponent
+                )
+                reportStatus(
+                    renderProfile == .conservative
+                        ? "Rendering hosted instruments offline (conservative)..."
+                        : "Rendering hosted instruments offline..."
+                )
+                try await performOfflineRender(outputURL, renderProfile)
                 let fileSize = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
                 if Self.isLikelyIncompleteWavExport(at: outputURL, fileSize: fileSize) {
                     throw ChunkExportError.bufferCreationFailed
                 }
-                NSLog("[OfflineExport] Offline hosted-instrument export succeeded for %@", outputURL.lastPathComponent)
+                NSLog(
+                    "[OfflineExport] %@ offline hosted-instrument export succeeded for %@",
+                    renderProfile.rawValue,
+                    outputURL.lastPathComponent
+                )
             }
 
             let qualifyOfflineRender: @Sendable () async -> HostedAudioUnitOfflineQualification = {
@@ -4785,7 +4812,9 @@ final class ScoreStore {
                     return HostedAudioUnitOfflineQualification(
                         verdict: .rejected,
                         similarity: 0,
+                        envelopeSimilarity: 0,
                         durationDeltaSeconds: .infinity,
+                        renderProfile: .standard,
                         checkedAt: Date(),
                         detail: "No representative note excerpt was available for qualification."
                     )
@@ -4793,7 +4822,6 @@ final class ScoreStore {
 
                 let tempRoot = FileManager.default.temporaryDirectory
                     .appendingPathComponent("amira-au-export-qualification-\(UUID().uuidString)", isDirectory: true)
-                let offlineURL = tempRoot.appendingPathComponent("offline.wav")
                 let realtimeURL = tempRoot.appendingPathComponent("realtime.wav")
 
                 do {
@@ -4802,7 +4830,9 @@ final class ScoreStore {
                     return HostedAudioUnitOfflineQualification(
                         verdict: .rejected,
                         similarity: 0,
+                        envelopeSimilarity: 0,
                         durationDeltaSeconds: .infinity,
+                        renderProfile: .standard,
                         checkedAt: Date(),
                         detail: "Could not create qualification directory: \(error.localizedDescription)"
                     )
@@ -4810,36 +4840,6 @@ final class ScoreStore {
 
                 defer {
                     try? FileManager.default.removeItem(at: tempRoot)
-                }
-
-                do {
-                    reportStatus("Qualifying fast hosted-instrument export...")
-                    try await Task.detached(priority: .userInitiated) {
-                        try await Self.renderChunkToWavBackground(
-                            chunkNotes: dynamicsApplied,
-                            startTick: excerpt.startTick,
-                            endTick: excerpt.endTick,
-                            outputURL: offlineURL,
-                            overrideSF2Path: overrideSF2Path,
-                            gainOverrides: gainOverrides,
-                            channelKeyMap: channelKeyMap,
-                            resolvedMappings: resolvedMappings,
-                            masterVolume: volume,
-                            panMap: panMap,
-                            ticksToSec: ticksToSec,
-                            reportStatus: reportStatus,
-                            reportWarning: reportWarning
-                        )
-                    }.value
-                } catch {
-                    Self.removeIncompleteExportFile(at: offlineURL)
-                    return HostedAudioUnitOfflineQualification(
-                        verdict: .rejected,
-                        similarity: 0,
-                        durationDeltaSeconds: .infinity,
-                        checkedAt: Date(),
-                        detail: "Offline qualification render failed: \(error.localizedDescription)"
-                    )
                 }
 
                 do {
@@ -4865,40 +4865,123 @@ final class ScoreStore {
                     return HostedAudioUnitOfflineQualification(
                         verdict: .rejected,
                         similarity: 0,
+                        envelopeSimilarity: 0,
                         durationDeltaSeconds: .infinity,
+                        renderProfile: .standard,
                         checkedAt: Date(),
                         detail: "Realtime qualification render failed: \(error.localizedDescription)"
                     )
                 }
 
-                let offlineDuration = Self.audioDurationSeconds(at: offlineURL) ?? 0
                 let realtimeDuration = Self.audioDurationSeconds(at: realtimeURL) ?? 0
-                let durationDelta = abs(offlineDuration - realtimeDuration)
-                let similarity = (try? MFCCSimilarity.compareFiles(
-                    fileA: offlineURL.path,
-                    fileB: realtimeURL.path
-                )) ?? 0
-                let qualified = similarity >= 0.985 && durationDelta <= 0.08
-                let detail = String(
-                    format: "similarity=%.4f durationDelta=%.3fs excerpt=%d→%d",
-                    similarity,
-                    durationDelta,
-                    excerpt.startTick,
-                    excerpt.endTick
-                )
-                NSLog("[OfflineExport] Qualification %@", detail)
-                return HostedAudioUnitOfflineQualification(
-                    verdict: qualified ? .qualified : .rejected,
-                    similarity: similarity,
-                    durationDeltaSeconds: durationDelta,
+                var bestQualification = HostedAudioUnitOfflineQualification(
+                    verdict: .rejected,
+                    similarity: 0,
+                    envelopeSimilarity: 0,
+                    durationDeltaSeconds: .infinity,
+                    renderProfile: .standard,
                     checkedAt: Date(),
-                    detail: detail
+                    detail: "No hosted-AU offline render profile completed."
                 )
+
+                for renderProfile in HostedAudioUnitOfflineRenderProfile.allCases {
+                    let offlineURL = tempRoot.appendingPathComponent("\(renderProfile.rawValue).wav")
+                    do {
+                        reportStatus(
+                            renderProfile == .conservative
+                                ? "Qualifying fast hosted-instrument export (conservative)..."
+                                : "Qualifying fast hosted-instrument export..."
+                        )
+                        try await Task.detached(priority: .userInitiated) {
+                            try await Self.renderChunkToWavBackground(
+                                chunkNotes: dynamicsApplied,
+                                startTick: excerpt.startTick,
+                                endTick: excerpt.endTick,
+                                outputURL: offlineURL,
+                                overrideSF2Path: overrideSF2Path,
+                                gainOverrides: gainOverrides,
+                                channelKeyMap: channelKeyMap,
+                                resolvedMappings: resolvedMappings,
+                                masterVolume: volume,
+                                panMap: panMap,
+                                hostedAudioUnitRenderProfile: renderProfile,
+                                ticksToSec: ticksToSec,
+                                reportStatus: reportStatus,
+                                reportWarning: reportWarning
+                            )
+                        }.value
+                    } catch {
+                        Self.removeIncompleteExportFile(at: offlineURL)
+                        let failure = HostedAudioUnitOfflineQualification(
+                            verdict: .rejected,
+                            similarity: 0,
+                            envelopeSimilarity: 0,
+                            durationDeltaSeconds: .infinity,
+                            renderProfile: renderProfile,
+                            checkedAt: Date(),
+                            detail: "\(renderProfile.rawValue) offline qualification render failed: \(error.localizedDescription)"
+                        )
+                        if bestQualification.checkedAt <= failure.checkedAt {
+                            bestQualification = failure
+                        }
+                        continue
+                    }
+
+                    let offlineDuration = Self.audioDurationSeconds(at: offlineURL) ?? 0
+                    let durationDelta = abs(offlineDuration - realtimeDuration)
+                    let similarity = (try? MFCCSimilarity.compareFiles(
+                        fileA: offlineURL.path,
+                        fileB: realtimeURL.path
+                    )) ?? 0
+                    let envelopeSimilarity = Self.audioEnvelopeSimilarity(
+                        fileA: offlineURL,
+                        fileB: realtimeURL
+                    ) ?? 0
+                    let qualified = durationDelta <= 0.08 && (
+                        (similarity >= 0.985 && envelopeSimilarity >= 0.995) ||
+                        (similarity >= 0.978 && envelopeSimilarity >= 0.999 && durationDelta <= 0.03)
+                    )
+                    let detail = String(
+                        format: "%@ similarity=%.4f envelope=%.4f durationDelta=%.3fs excerpt=%d→%d",
+                        renderProfile.rawValue,
+                        similarity,
+                        envelopeSimilarity,
+                        durationDelta,
+                        excerpt.startTick,
+                        excerpt.endTick
+                    )
+                    NSLog("[OfflineExport] Qualification %@", detail)
+
+                    let candidate = HostedAudioUnitOfflineQualification(
+                        verdict: qualified ? .qualified : .rejected,
+                        similarity: similarity,
+                        envelopeSimilarity: envelopeSimilarity,
+                        durationDeltaSeconds: durationDelta,
+                        renderProfile: renderProfile,
+                        checkedAt: Date(),
+                        detail: detail
+                    )
+
+                    if qualified {
+                        return candidate
+                    }
+
+                    if candidate.similarity > bestQualification.similarity ||
+                        (candidate.similarity == bestQualification.similarity &&
+                         candidate.envelopeSimilarity > bestQualification.envelopeSimilarity) ||
+                        (candidate.similarity == bestQualification.similarity &&
+                         candidate.envelopeSimilarity == bestQualification.envelopeSimilarity &&
+                         candidate.durationDeltaSeconds < bestQualification.durationDeltaSeconds) {
+                        bestQualification = candidate
+                    }
+                }
+
+                return bestQualification
             }
 
             switch hostedAudioUnitExportMode {
             case .offline:
-                try await attemptOfflineFullRender()
+                try await attemptOfflineFullRender(.standard)
                 return
             case .realtime:
                 try await performRealtimeHostedRender(outputURL)
@@ -4910,22 +4993,24 @@ final class ScoreStore {
                     NSLog("[OfflineExport] Reusing cached qualification for %@: %@", outputURL.lastPathComponent, cached.detail)
                 } else {
                     let fresh = await qualifyOfflineRender()
-                    hostedAudioUnitOfflineQualificationCache[qualificationKey] = fresh
+                    cacheQualification(fresh)
                     qualification = fresh
                 }
 
                 if qualification.verdict == .qualified {
                     do {
-                        try await attemptOfflineFullRender()
+                        try await attemptOfflineFullRender(qualification.renderProfile)
                         return
                     } catch {
-                        hostedAudioUnitOfflineQualificationCache[qualificationKey] = HostedAudioUnitOfflineQualification(
+                        cacheQualification(HostedAudioUnitOfflineQualification(
                             verdict: .rejected,
                             similarity: qualification.similarity,
+                            envelopeSimilarity: qualification.envelopeSimilarity,
                             durationDeltaSeconds: qualification.durationDeltaSeconds,
+                            renderProfile: qualification.renderProfile,
                             checkedAt: Date(),
                             detail: "\(qualification.detail); full render fallback after failure: \(error.localizedDescription)"
-                        )
+                        ))
                         Self.removeIncompleteExportFile(at: outputURL)
                         NSLog("[OfflineExport] Qualified offline export failed for %@: %@", outputURL.lastPathComponent, error.localizedDescription)
                         reportWarning("Fast hosted-instrument render failed (\(error.localizedDescription)); falling back to live capture.")
@@ -4941,7 +5026,7 @@ final class ScoreStore {
             }
         }
 
-        try await performOfflineRender(outputURL)
+        try await performOfflineRender(outputURL, .standard)
     }
 
     private func renderChunkToWavViaPlaybackEngine(
@@ -5107,6 +5192,17 @@ final class ScoreStore {
     /// Pure static helper — runs entirely off the main thread.
     /// All ScoreStore data is passed in as parameters (no self access).
     @Sendable
+    private nonisolated static func hostedAudioUnitOfflineRenderTuning(
+        for profile: HostedAudioUnitOfflineRenderProfile
+    ) -> (renderBlockSize: AVAudioFrameCount, warmupSeconds: Double) {
+        switch profile {
+        case .standard:
+            return (renderBlockSize: 256, warmupSeconds: 0.35)
+        case .conservative:
+            return (renderBlockSize: 128, warmupSeconds: 0.60)
+        }
+    }
+
     private nonisolated static func renderChunkToWavBackground(
         chunkNotes: [PianoRollNote],
         startTick: Int,
@@ -5118,6 +5214,7 @@ final class ScoreStore {
         resolvedMappings: [String: InstrumentMapping],
         masterVolume: Double,
         panMap: [String: Double],
+        hostedAudioUnitRenderProfile: HostedAudioUnitOfflineRenderProfile = .standard,
         ticksToSec: @Sendable (Int) -> Double,
         reportStatus: @Sendable (String) -> Void,
         reportWarning: @Sendable (String) -> Void
@@ -5151,7 +5248,10 @@ final class ScoreStore {
         // Hosted Audio Units render more faithfully with smaller manual-rendering
         // blocks and a short warm-up pass. This narrows the gap versus the live
         // capture path while still remaining faster than realtime when qualified.
-        let renderBlockSize: AVAudioFrameCount = containsHostedAudioUnits ? 512 : 2048
+        let hostedAudioUnitTuning = Self.hostedAudioUnitOfflineRenderTuning(for: hostedAudioUnitRenderProfile)
+        let renderBlockSize: AVAudioFrameCount = containsHostedAudioUnits
+            ? hostedAudioUnitTuning.renderBlockSize
+            : 2048
 
         // Phase 1: Create engine, attach samplers and AU instruments
         let offlineEngine = AVAudioEngine()
@@ -5396,7 +5496,7 @@ final class ScoreStore {
 
         if containsHostedAudioUnits {
             reportStatus("Priming hosted instruments...")
-            let warmupFramesTarget = AVAudioFramePosition(sampleRate * 0.20)
+            let warmupFramesTarget = AVAudioFramePosition(sampleRate * hostedAudioUnitTuning.warmupSeconds)
             var warmedFrames: AVAudioFramePosition = 0
             guard let warmupBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: renderBlockSize) else {
                 throw ChunkExportError.bufferCreationFailed
@@ -5565,7 +5665,7 @@ final class ScoreStore {
         guard let firstAudibleNote = sortedNotes.first else { return nil }
 
         let excerptStartTick = min(max(startTick, firstAudibleNote.startTick), max(startTick, endTick - 1))
-        let targetDurationSeconds = 10.0
+        let targetDurationSeconds = 12.0
         let excerptStartSeconds = ticksToSec(excerptStartTick)
 
         var excerptEndTick = min(endTick, max(excerptStartTick + 1, firstAudibleNote.startTick + firstAudibleNote.duration))
@@ -5582,6 +5682,7 @@ final class ScoreStore {
     }
 
     private nonisolated static func hostedAudioUnitQualificationKey(
+        projectIdentifier: String?,
         songPath: String?,
         startTick: Int,
         endTick: Int,
@@ -5614,6 +5715,8 @@ final class ScoreStore {
             .joined(separator: ",")
 
         return [
+            "hosted-au-qualification:v4",
+            projectIdentifier ?? "__unknown_project__",
             songPath ?? "__unsaved__",
             "ticks:\(startTick)-\(endTick)",
             "tpq:\(ticksPerQuarter)",
@@ -5622,11 +5725,161 @@ final class ScoreStore {
         ].joined(separator: "||")
     }
 
+    private nonisolated static func hostedAudioUnitOfflineQualificationCacheURL() -> URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return appSupport
+            .appendingPathComponent("Opera", isDirectory: true)
+            .appendingPathComponent("HostedAudioUnitQualificationCache.json", isDirectory: false)
+    }
+
+    private nonisolated static func prunedHostedAudioUnitOfflineQualificationCache(
+        _ cache: [String: HostedAudioUnitOfflineQualification]
+    ) -> [String: HostedAudioUnitOfflineQualification] {
+        let freshnessCutoff = Date().addingTimeInterval(-(60 * 60 * 24 * 30))
+        let freshEntries = cache.filter { _, value in
+            value.checkedAt >= freshnessCutoff
+        }
+
+        guard freshEntries.count > 256 else { return freshEntries }
+
+        let orderedKeys = freshEntries
+            .sorted { lhs, rhs in lhs.value.checkedAt > rhs.value.checkedAt }
+            .prefix(256)
+            .map(\.key)
+        let keep = Set(orderedKeys)
+        return freshEntries.filter { keep.contains($0.key) }
+    }
+
+    private nonisolated static func loadHostedAudioUnitOfflineQualificationCache() -> [String: HostedAudioUnitOfflineQualification] {
+        guard let cacheURL = hostedAudioUnitOfflineQualificationCacheURL(),
+              let data = try? Data(contentsOf: cacheURL) else {
+            return [:]
+        }
+
+        do {
+            let decoded = try JSONDecoder().decode([String: HostedAudioUnitOfflineQualification].self, from: data)
+            return prunedHostedAudioUnitOfflineQualificationCache(decoded)
+        } catch {
+            NSLog("[OfflineExport] Failed to decode hosted-AU qualification cache: %@", error.localizedDescription)
+            return [:]
+        }
+    }
+
+    private func persistHostedAudioUnitOfflineQualificationCache() {
+        let snapshot = Self.prunedHostedAudioUnitOfflineQualificationCache(hostedAudioUnitOfflineQualificationCache)
+        hostedAudioUnitOfflineQualificationCache = snapshot
+
+        guard let cacheURL = Self.hostedAudioUnitOfflineQualificationCacheURL() else { return }
+        let snapshotToWrite = snapshot
+
+        Task.detached(priority: .utility) {
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(snapshotToWrite)
+                let directory = cacheURL.deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try data.write(to: cacheURL, options: .atomic)
+            } catch {
+                NSLog("[OfflineExport] Failed to persist hosted-AU qualification cache: %@", error.localizedDescription)
+            }
+        }
+    }
+
     private nonisolated static func audioDurationSeconds(at url: URL) -> Double? {
         guard let file = try? AVAudioFile(forReading: url) else { return nil }
         let sampleRate = file.processingFormat.sampleRate
         guard sampleRate > 0 else { return nil }
         return Double(file.length) / sampleRate
+    }
+
+    private nonisolated static func audioEnvelopeSimilarity(
+        fileA: URL,
+        fileB: URL,
+        windowFrames: AVAudioFrameCount = 2048
+    ) -> Double? {
+        guard let envelopeA = rmsEnvelope(at: fileA, windowFrames: windowFrames),
+              let envelopeB = rmsEnvelope(at: fileB, windowFrames: windowFrames) else {
+            return nil
+        }
+
+        let count = min(envelopeA.count, envelopeB.count)
+        guard count > 0 else { return nil }
+
+        var dot = 0.0
+        var normA = 0.0
+        var normB = 0.0
+
+        for index in 0..<count {
+            let lhs = envelopeA[index]
+            let rhs = envelopeB[index]
+            dot += lhs * rhs
+            normA += lhs * lhs
+            normB += rhs * rhs
+        }
+
+        guard normA > 0, normB > 0 else { return nil }
+        return max(0, min(1, dot / (sqrt(normA) * sqrt(normB))))
+    }
+
+    private nonisolated static func rmsEnvelope(
+        at url: URL,
+        windowFrames: AVAudioFrameCount
+    ) -> [Double]? {
+        guard let audioFile = try? AVAudioFile(
+            forReading: url,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        ) else {
+            return nil
+        }
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: audioFile.processingFormat,
+            frameCapacity: AVAudioFrameCount(max(1, min(audioFile.length, 65_536)))
+        ) else {
+            return nil
+        }
+
+        var envelope: [Double] = []
+        var sumSquares = 0.0
+        var sampleCount = 0
+        let channels = Int(audioFile.processingFormat.channelCount)
+
+        while true {
+            do {
+                try audioFile.read(into: buffer)
+            } catch {
+                return nil
+            }
+
+            let frameLength = Int(buffer.frameLength)
+            guard frameLength > 0 else { break }
+            guard let channelData = buffer.floatChannelData else { return nil }
+
+            for frame in 0..<frameLength {
+                var monoSample = 0.0
+                for channel in 0..<channels {
+                    monoSample += Double(channelData[channel][frame])
+                }
+                monoSample /= Double(max(channels, 1))
+                sumSquares += monoSample * monoSample
+                sampleCount += 1
+
+                if sampleCount >= Int(windowFrames) {
+                    envelope.append(sqrt(sumSquares / Double(sampleCount)))
+                    sumSquares = 0
+                    sampleCount = 0
+                }
+            }
+        }
+
+        if sampleCount > 0 {
+            envelope.append(sqrt(sumSquares / Double(sampleCount)))
+        }
+
+        return envelope
     }
 
     private nonisolated static func shiftedTempoEventsForRealtimeRender(

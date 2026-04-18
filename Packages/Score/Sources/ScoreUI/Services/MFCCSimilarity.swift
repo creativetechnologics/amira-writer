@@ -15,7 +15,11 @@ enum MFCCSimilarity {
     /// Extract MFCC feature vector from an audio file.
     static func extractMFCC(filePath: String, numCoefficients: Int = 13) throws -> [Float] {
         let url = URL(fileURLWithPath: filePath)
-        let audioFile = try AVAudioFile(forReading: url)
+        let audioFile = try AVAudioFile(
+            forReading: url,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
         let format = audioFile.processingFormat
         let frameCount = UInt32(audioFile.length)
 
