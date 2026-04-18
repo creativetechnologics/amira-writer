@@ -22,7 +22,14 @@ private struct PlaceAllImagesGallerySection: View {
     @Binding var thumbnailBaseSize: CGFloat
     @Binding var selectedPaths: Set<String>
     @Binding var lastClickedPath: String?
+    /// When non-nil, PlaceAllImagesThumbnail exposes an "Edit with Gemini"
+    /// entry in its right-click menu for any record whose `linkedPlaceID`
+    /// resolves to a known place. Caller routes through the parent view's
+    /// preflight sheet plumbing.
+    var onEditWithGemini: ((GeneratedBackgroundLibraryRecord) -> Void)? = nil
+    var onGenerateWithGemini: ((GeneratedBackgroundLibraryRecord, Int) -> Void)? = nil
     @FocusState private var galleryKeyboardFocused: Bool
+    @State private var columnCount: Int = 1
 
     private let minThumbnailSize: CGFloat = 100
     private let maxThumbnailSize: CGFloat = 260
@@ -51,12 +58,23 @@ private struct PlaceAllImagesGallerySection: View {
                             record: record,
                             tileWidth: thumbnailBaseSize,
                             isSelected: selectedPaths.contains(record.activePath),
+                            selectedCount: selectedPaths.count,
                             onClick: { event in handleClick(path: record.activePath, event: event) },
                             onQuickLook: { openQuickLook(path: record.activePath) },
-                            onShowInFinder: { showInFinder(path: record.activePath) }
+                            onShowInFinder: { showInFinder(path: record.activePath) },
+                            onCopy: { copyPath(record.activePath) },
+                            onEditWithGemini: onEditWithGemini.map { handler in { handler(record) } },
+                            onGenerateWithGemini: onGenerateWithGemini.map { handler in { count in handler(record, count) } },
+                            onSetRating: { rating in
+                                store.setGeneratedBackgroundRating(rating, for: record.id)
+                            },
+                            onToggleRejected: {
+                                store.toggleGeneratedBackgroundRejected(record.id)
+                            }
                         )
                     }
                 }
+                .trackGridColumnCount($columnCount, tileMinWidth: thumbnailBaseSize, spacing: 12)
                 .focusable()
                 .focused($galleryKeyboardFocused)
                 .focusEffectDisabled()
@@ -74,38 +92,10 @@ private struct PlaceAllImagesGallerySection: View {
                     QuickLookPreviewController.shared.toggle(urls: urls, startAt: qlIndex)
                     return .handled
                 }
-                .onKeyPress(.leftArrow) {
-                    guard let focusPath = lastClickedPath,
-                          let currentIndex = records.firstIndex(where: { $0.activePath == focusPath }),
-                          currentIndex > 0 else {
-                        return .ignored
-                    }
-                    let newIndex = currentIndex - 1
-                    let newPath = records[newIndex].activePath
-                    selectedPaths = [newPath]
-                    lastClickedPath = newPath
-                    store.selectGeneratedBackgroundRecord(for: newPath)
-                    if QuickLookPreviewController.shared.isVisible {
-                        QuickLookPreviewController.shared.navigateTo(index: newIndex)
-                    }
-                    return .handled
-                }
-                .onKeyPress(.rightArrow) {
-                    guard let focusPath = lastClickedPath,
-                          let currentIndex = records.firstIndex(where: { $0.activePath == focusPath }),
-                          currentIndex < records.count - 1 else {
-                        return .ignored
-                    }
-                    let newIndex = currentIndex + 1
-                    let newPath = records[newIndex].activePath
-                    selectedPaths = [newPath]
-                    lastClickedPath = newPath
-                    store.selectGeneratedBackgroundRecord(for: newPath)
-                    if QuickLookPreviewController.shared.isVisible {
-                        QuickLookPreviewController.shared.navigateTo(index: newIndex)
-                    }
-                    return .handled
-                }
+                .onKeyPress(.leftArrow) { navigate(.left) }
+                .onKeyPress(.rightArrow) { navigate(.right) }
+                .onKeyPress(.upArrow) { navigate(.up) }
+                .onKeyPress(.downArrow) { navigate(.down) }
                 .onKeyPress(phases: .down) { press in
                     handleRatingKeyPress(press)
                 }
@@ -207,6 +197,32 @@ private struct PlaceAllImagesGallerySection: View {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    private func copyPath(_ path: String) {
+        guard let url = store.resolvedCharacterAssetURL(for: path) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([url as NSURL])
+    }
+
+    private func navigate(_ direction: UnifiedGridNavigation.Direction) -> KeyPress.Result {
+        guard let focusPath = lastClickedPath,
+              let currentIndex = records.firstIndex(where: { $0.activePath == focusPath })
+        else { return .ignored }
+        guard let newIndex = UnifiedGridNavigation.nextIndex(
+            currentIndex: currentIndex,
+            totalCount: records.count,
+            columnCount: columnCount,
+            direction: direction
+        ) else { return .ignored }
+        let newPath = records[newIndex].activePath
+        selectedPaths = [newPath]
+        lastClickedPath = newPath
+        store.selectGeneratedBackgroundRecord(for: newPath)
+        if QuickLookPreviewController.shared.isVisible {
+            QuickLookPreviewController.shared.navigateTo(index: newIndex)
+        }
+        return .handled
+    }
+
     private func applyRating(_ rating: Int?) -> KeyPress.Result {
         guard !selectedPaths.isEmpty else { return .ignored }
         let selectedIDs = selectedPaths.compactMap { store.generatedBackgroundRecord(for: $0)?.id }
@@ -255,9 +271,15 @@ private struct PlaceAllImagesThumbnail: View {
     let record: GeneratedBackgroundLibraryRecord
     let tileWidth: CGFloat
     let isSelected: Bool
+    let selectedCount: Int
     let onClick: (GalleryClickEvent) -> Void
     let onQuickLook: () -> Void
     let onShowInFinder: () -> Void
+    let onCopy: () -> Void
+    let onEditWithGemini: (() -> Void)?
+    let onGenerateWithGemini: ((Int) -> Void)?
+    let onSetRating: (Int?) -> Void
+    let onToggleRejected: () -> Void
 
     private var imageBoxHeight: CGFloat { max(90, tileWidth * 0.72) }
 
@@ -353,8 +375,21 @@ private struct PlaceAllImagesThumbnail: View {
             }
         }
         .contextMenu {
-            Button("Quick Look", systemImage: "eye") { onQuickLook() }
-            Button("Show in Finder", systemImage: "folder") { onShowInFinder() }
+            UnifiedImageContextMenuContent(
+                selectedCount: selectedCount,
+                isSelected: isSelected,
+                actions: UnifiedImageActions(
+                    onShowInFinder: { onShowInFinder() },
+                    onCopy: { onCopy() },
+                    onQuickLook: { onQuickLook() },
+                    onEditWithGemini: onEditWithGemini,
+                    onGenerateWithGemini: onGenerateWithGemini,
+                    onSetRating: { rating in onSetRating(rating) },
+                    currentRating: record.rating,
+                    onToggleRejected: { onToggleRejected() },
+                    isRejected: record.isRejected
+                )
+            )
         }
         .help("Click to select. Press Space to Quick Look.")
         .draggable(resolvedURL ?? URL(fileURLWithPath: record.activePath))
@@ -1644,7 +1679,28 @@ struct PlacesPageView: View {
                 records: filteredGeneratedBackgroundRecords,
                 thumbnailBaseSize: $thumbnailBaseSize,
                 selectedPaths: $allLibrarySelectedPaths,
-                lastClickedPath: $allLibraryLastClickedPath
+                lastClickedPath: $allLibraryLastClickedPath,
+                onEditWithGemini: { record in
+                    guard let placeID = record.linkedPlaceID,
+                          let place = store.backgrounds.first(where: { $0.id == placeID })
+                    else { return }
+                    beginEditWithGemini(
+                        for: place,
+                        imagePath: record.activePath,
+                        workflow: record.workflow
+                    )
+                },
+                onGenerateWithGemini: { record, count in
+                    guard let placeID = record.linkedPlaceID,
+                          let place = store.backgrounds.first(where: { $0.id == placeID })
+                    else { return }
+                    beginGenerateWithGemini(
+                        for: place,
+                        imagePath: record.activePath,
+                        count: count,
+                        workflow: record.workflow
+                    )
+                }
             )
         }
     }
@@ -2531,6 +2587,58 @@ struct PlacesPageView: View {
     /// preflight sheet with a single draft that uses this image as the first
     /// (included) reference. Metadata sidecar drives the default prompt/model/
     /// aspect/size when present.
+    /// Right-click "Generate with Gemini…" on any place-library image →
+    /// opens the preflight with a fresh draft using the clicked image as the
+    /// primary reference. Count == 1 is immediate, count > 1 is batch.
+    private func beginGenerateWithGemini(
+        for place: BackgroundPlate,
+        imagePath: String,
+        count: Int,
+        workflow: PlaceWorkflowMode
+    ) {
+        let config = store.workflowConfig(for: workflow)
+        let filename = URL(fileURLWithPath: imagePath).lastPathComponent
+
+        var refs = generationReferenceDrafts(for: place, workflow: workflow)
+        let anchorLabel = "Reference: \(filename)"
+        if !refs.contains(where: { $0.path == imagePath }) {
+            refs.insert(
+                GeminiGenerationReferenceDraft(label: anchorLabel, path: imagePath, isIncluded: true),
+                at: 0
+            )
+        } else if let idx = refs.firstIndex(where: { $0.path == imagePath }) {
+            refs[idx].isIncluded = true
+            refs.swapAt(0, idx)
+        }
+
+        let specs = Array(generationSpecs(for: place).prefix(max(1, count)))
+
+        placeGenerationDrafts = specs.map { spec in
+            GeminiGenerationDraft(
+                title: count == 1 ? "Generate from \(filename)" : spec.title,
+                destinationDescription: "\(place.name) • \(workflow.displayName)",
+                prompt: prompt(for: spec, place: place, workflow: workflow, config: config),
+                contextNote: generationContextNote(for: place, workflow: workflow),
+                model: config.model,
+                aspectRatio: config.aspectRatio,
+                imageSize: config.imageSize,
+                referenceItems: refs,
+                pricingMode: count > 1 ? .batch : .standard
+            )
+        }
+        placePendingPlan = PendingPlaceGenerationPlan(
+            placeID: place.id,
+            workflow: workflow,
+            routeID: nil,
+            nodeIDs: [],
+            count: specs.count,
+            title: count == 1
+                ? "Generate from \(filename)"
+                : "\(place.name) • \(workflow.displayName) • \(specs.count) draft\(specs.count == 1 ? "" : "s")",
+            confirmTitle: count == 1 ? "Generate Draft" : "Generate Drafts"
+        )
+    }
+
     private func beginEditWithGemini(for place: BackgroundPlate, imagePath: String, workflow: PlaceWorkflowMode) {
         let config = store.workflowConfig(for: workflow)
         let metadata = store.generationMetadata(for: imagePath)

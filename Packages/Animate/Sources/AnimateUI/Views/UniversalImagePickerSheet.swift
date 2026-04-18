@@ -106,17 +106,15 @@ struct UniversalImagePickerSheet: View {
         let isSelected = selectedPaths.contains(entry.path)
 
         ZStack(alignment: .topTrailing) {
-            AsyncImage(url: URL(fileURLWithPath: entry.path)) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fill)
-                        .frame(width: 80, height: 80).clipped()
-                default:
-                    RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.1))
-                        .frame(width: 80, height: 80)
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            AsyncStoreThumbnailImage<AnyView>.rounded(
+                store: store,
+                path: entry.path,
+                maxSize: 160,
+                width: 80,
+                height: 80,
+                contentMode: .fill,
+                cornerRadius: 4
+            )
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2))
 
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -133,17 +131,15 @@ struct UniversalImagePickerSheet: View {
             HStack(spacing: 8) {
                 ForEach(selectedPaths, id: \.self) { path in
                     ZStack(alignment: .topTrailing) {
-                        AsyncImage(url: URL(fileURLWithPath: path)) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image.resizable().aspectRatio(contentMode: .fill)
-                                    .frame(width: 50, height: 50).clipped()
-                            default:
-                                RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.1))
-                                    .frame(width: 50, height: 50)
-                            }
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        AsyncStoreThumbnailImage<AnyView>.rounded(
+                            store: store,
+                            path: path,
+                            maxSize: 100,
+                            width: 50,
+                            height: 50,
+                            contentMode: .fill,
+                            cornerRadius: 4
+                        )
 
                         Button {
                             selectedPaths.removeAll { $0 == path }

@@ -103,7 +103,11 @@ final class ImagineThumbnailCache: @unchecked Sendable {
                     maxPixelSize: maxPixelSize
                 )
 
-                if let diskImage = NSImage(contentsOf: diskURL) {
+                if FileManager.default.fileExists(atPath: diskURL.path),
+                   let diskImage = Self.decodeDownsampled(
+                    url: diskURL,
+                    maxPixelSize: maxPixelSize
+                   ) {
                     let cost = Int(diskImage.size.width * diskImage.size.height * 4)
                     self.memCache.setObject(diskImage, forKey: nsKey, cost: cost)
                     self.registerKey(key, forPath: path)
@@ -164,7 +168,10 @@ final class ImagineThumbnailCache: @unchecked Sendable {
     // MARK: - Decoder
 
     private static func loadThumbnail(path: String, maxPixelSize: Int) -> NSImage? {
-        let url = URL(fileURLWithPath: path)
+        decodeDownsampled(url: URL(fileURLWithPath: path), maxPixelSize: maxPixelSize)
+    }
+
+    private static func decodeDownsampled(url: URL, maxPixelSize: Int) -> NSImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             return nil
         }

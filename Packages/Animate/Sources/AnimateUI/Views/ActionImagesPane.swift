@@ -108,21 +108,15 @@ struct ActionImagesPane: View {
 
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: thumbnailSize))], spacing: 6) {
                         ForEach(existingImages, id: \.self) { path in
-                            AsyncImage(url: URL(fileURLWithPath: path)) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .frame(width: thumbnailSize, height: thumbnailSize)
-                                        .clipped()
-                                default:
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(Color.secondary.opacity(0.1))
-                                        .frame(width: thumbnailSize, height: thumbnailSize)
-                                }
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            AsyncStoreThumbnailImage<AnyView>.rounded(
+                                store: store,
+                                path: path,
+                                maxSize: thumbnailSize * 2,
+                                width: thumbnailSize,
+                                height: thumbnailSize,
+                                contentMode: .fill,
+                                cornerRadius: 4
+                            )
                             .contextMenu {
                                 Button("Show in Finder") {
                                     ImagineProjectStorage.revealInFinder(path)

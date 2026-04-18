@@ -239,16 +239,15 @@ struct ImagineScenesPageView: View {
     private var previewSection: some View {
         Group {
             if let path = previewImagePath ?? currentGallery?.selectedPath(for: selectedMoment) {
-                AsyncImage(url: URL(fileURLWithPath: path)) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: .infinity).frame(maxHeight: 400)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    default:
-                        previewPlaceholder
-                    }
-                }
+                AsyncStoreThumbnailImage<AnyView>.rounded(
+                    store: store,
+                    path: path,
+                    maxSize: 1600,
+                    width: nil,
+                    height: 400,
+                    contentMode: .fit,
+                    cornerRadius: 8
+                )
             } else {
                 previewPlaceholder
             }
@@ -314,17 +313,15 @@ struct ImagineScenesPageView: View {
     @ViewBuilder
     private func galleryThumbnail(path: String) -> some View {
         let isSelected = previewImagePath == path
-        AsyncImage(url: URL(fileURLWithPath: path)) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().aspectRatio(contentMode: .fill)
-                    .frame(width: 100, height: 100).clipped()
-            default:
-                RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.1))
-                    .frame(width: 100, height: 100)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        AsyncStoreThumbnailImage<AnyView>.rounded(
+            store: store,
+            path: path,
+            maxSize: 200,
+            width: 100,
+            height: 100,
+            contentMode: .fill,
+            cornerRadius: 6
+        )
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2))
         .onTapGesture {
             previewImagePath = path

@@ -60,6 +60,7 @@ struct ImagineCharactersPageView: View {
     @ObservedObject private var runpodService = RunPodLORAService.shared
     @FocusState private var galleryKeyboardFocused: Bool
     @State private var hasShownFocusHighlight = false
+    @State private var galleryColumnCount: Int = 1
     @State private var pendingGallerySaveTask: Task<Void, Never>?
     private let gallerySaveDebounceNanoseconds: UInt64 = 300_000_000
 
@@ -452,6 +453,7 @@ struct ImagineCharactersPageView: View {
                             cachedThumbnail(path: path, index: index, character: character)
                         }
                     }
+                    .trackGridColumnCount($galleryColumnCount, tileMinWidth: galleryThumbnailBaseSize, spacing: 6)
                 }
             }
 
@@ -523,6 +525,16 @@ struct ImagineCharactersPageView: View {
         .onKeyPress(.rightArrow) {
             hasShownFocusHighlight = true
             moveFocus(1)
+            return .handled
+        }
+        .onKeyPress(.upArrow) {
+            hasShownFocusHighlight = true
+            moveFocus(-max(1, galleryColumnCount))
+            return .handled
+        }
+        .onKeyPress(.downArrow) {
+            hasShownFocusHighlight = true
+            moveFocus(max(1, galleryColumnCount))
             return .handled
         }
         .onKeyPress(.space) {
