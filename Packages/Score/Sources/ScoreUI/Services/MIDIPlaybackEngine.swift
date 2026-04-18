@@ -790,18 +790,11 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             }
 
             // 7. Load AU instruments (need running engine)
-            var preparedAULoads: [PreparedAudioUnitLoad] = []
-            for (key, mapping) in mappings {
-                if mapping.effectiveSourceType == .audioUnit,
-                   let desc = mapping.audioComponentDescription {
-                    if let placeholder = self.samplerByMappingKey[key] {
-                        placeholder.volume = 0
-                    }
-                    if let prepared = self.prepareAudioUnitLoad(mappingKey: key, mapping: mapping, description: desc) {
-                        preparedAULoads.append(prepared)
-                    }
-                }
-            }
+            let preparedAULoads = self.prepareAudioUnitLoads(
+                for: mappings.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending },
+                mappings: mappings,
+                muteExistingSamplerPlaceholders: true
+            )
             self.installPreparedAudioUnits(preparedAULoads)
 
             _ = self.configureAudioGraphIfNeeded()
@@ -867,15 +860,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
             _ = self.configureAudioGraphIfNeeded()
 
-            var preparedLoads: [PreparedAudioUnitLoad] = []
-            preparedLoads.reserveCapacity(orderedAUKeys.count)
-            for mappingKey in orderedAUKeys {
-                guard let mapping = snapshot[mappingKey],
-                      let description = mapping.audioComponentDescription else { continue }
-                if let prepared = self.prepareAudioUnitLoad(mappingKey: mappingKey, mapping: mapping, description: description) {
-                    preparedLoads.append(prepared)
-                }
-            }
+            let preparedLoads = self.prepareAudioUnitLoads(for: orderedAUKeys, mappings: snapshot)
             self.installPreparedAudioUnits(preparedLoads)
 
             DispatchQueue.main.async { completion?() }
@@ -1870,6 +1855,29 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         installPreparedAudioUnits([prepared])
     }
 
+    private func prepareAudioUnitLoads(
+        for mappingKeys: [String],
+        mappings: [String: InstrumentMapping],
+        muteExistingSamplerPlaceholders: Bool = false
+    ) -> [PreparedAudioUnitLoad] {
+        guard !mappingKeys.isEmpty else { return [] }
+
+        var preparedLoads: [PreparedAudioUnitLoad] = []
+        preparedLoads.reserveCapacity(mappingKeys.count)
+        for mappingKey in mappingKeys {
+            guard let mapping = mappings[mappingKey],
+                  mapping.effectiveSourceType == .audioUnit,
+                  let description = mapping.audioComponentDescription else { continue }
+            if muteExistingSamplerPlaceholders, let placeholder = samplerByMappingKey[mappingKey] {
+                placeholder.volume = 0
+            }
+            if let prepared = prepareAudioUnitLoad(mappingKey: mappingKey, mapping: mapping, description: description) {
+                preparedLoads.append(prepared)
+            }
+        }
+        return preparedLoads
+    }
+
     private func prepareAudioUnitLoad(mappingKey: String, mapping: InstrumentMapping, description: AudioComponentDescription) -> PreparedAudioUnitLoad? {
         let sig = SamplerPatchSignature(
             soundBankPath: nil, bankMSB: 0, bankLSB: 0, program: 0,
@@ -2586,6 +2594,21 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             ticksPerQuarter: ticksPerQuarter
         ) : []
 
+        let missingAUMappingKeys = noteGroups.keys
+            .filter { mappingKey in
+                guard auInstrumentByMappingKey[mappingKey] == nil,
+                      samplerByMappingKey[mappingKey] == nil,
+                      let mapping = instrumentMappings[mappingKey] else { return false }
+                return mapping.effectiveSourceType == .audioUnit && mapping.audioComponentDescription != nil
+            }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        let preparedAULoads = prepareAudioUnitLoads(
+            for: missingAUMappingKeys,
+            mappings: instrumentMappings,
+            muteExistingSamplerPlaceholders: true
+        )
+        installPreparedAudioUnits(preparedAULoads)
+
         var hasDestination = false
         for mappingKey in noteGroups.keys {
             if auInstrumentByMappingKey[mappingKey] != nil {
@@ -2597,7 +2620,8 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 continue
             }
             let samplerMapping = instrumentMappings[mappingKey]
-            _ = sampler(for: mappingKey, mapping: samplerMapping)
+            let fallbackMapping = samplerMapping?.effectiveSourceType == .audioUnit ? nil : samplerMapping
+            _ = sampler(for: mappingKey, mapping: fallbackMapping)
             if samplerByMappingKey[mappingKey] != nil {
                 hasDestination = true
             }
@@ -2888,18 +2912,15 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             // Solution: collect all new samplers, attach them ALL in ONE withEnginePaused block.
             // Existing cached samplers don't need attachment — just loadInstrument if sig changed.
             var newSamplerPairs: [(key: String, node: AVAudioUnitSampler, mapping: InstrumentMapping?)] = []
-            var preparedAULoads: [PreparedAudioUnitLoad] = []
+            let preparedAULoads = prepareAudioUnitLoads(for: orderedMappingKeys, mappings: instrumentMappings)
             for mappingKey in orderedMappingKeys {
                 let mapping = instrumentMappings[mappingKey]
                 let srcType = mapping?.effectiveSourceType
                 let hasAUDesc = mapping?.audioComponentDescription != nil
                 fileLog("  setup \(mappingKey): sourceType=\(String(describing: srcType)) hasAUDesc=\(hasAUDesc) hasSampler=\(samplerByMappingKey[mappingKey] != nil) hasAU=\(auInstrumentByMappingKey[mappingKey] != nil)")
-                if let mapping, mapping.effectiveSourceType == .audioUnit, let desc = mapping.audioComponentDescription {
+                if let mapping, mapping.effectiveSourceType == .audioUnit, mapping.audioComponentDescription != nil {
                     // AU instruments are hosted directly; do not create placeholder sampler nodes
                     // during playback setup unless we actually need a silent fallback.
-                    if let prepared = prepareAudioUnitLoad(mappingKey: mappingKey, mapping: mapping, description: desc) {
-                        preparedAULoads.append(prepared)
-                    }
                 } else if samplerByMappingKey[mappingKey] == nil {
                     // New SF2 sampler needed — create node now, attach below in one batch
                     newSamplerPairs.append((key: mappingKey, node: AVAudioUnitSampler(), mapping: mapping))
