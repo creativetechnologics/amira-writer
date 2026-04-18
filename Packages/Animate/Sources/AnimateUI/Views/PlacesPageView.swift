@@ -801,6 +801,7 @@ struct PlacesPageView: View {
     @State private var renderOverviewDetails = false
     @State private var renderPlaceDetailPrimaryAssets = false
     @State private var renderPlaceDetailSecondaryAssets = false
+    @State private var renderPlaceDetailNotes = false
     @State private var renderPlaceDetailGenerationStudio = false
     @State private var worldbuildingRefreshTask: Task<Void, Never>?
     @State private var landmarkSuggestionRefreshTask: Task<Void, Never>?
@@ -1813,7 +1814,14 @@ struct PlacesPageView: View {
                         message: "Preparing reference and angle image sections…"
                     )
                 }
-                placeNotesSection(place)
+                if renderPlaceDetailNotes {
+                    placeNotesSection(place)
+                } else {
+                    placeDetailSectionPlaceholder(
+                        title: "Story Notes + Prompt Notes",
+                        message: "Preparing editable notes and prompt fields…"
+                    )
+                }
                 if renderPlaceDetailGenerationStudio {
                     generationStudioSection(place)
                 } else {
@@ -1847,6 +1855,7 @@ struct PlacesPageView: View {
         if reset {
             renderPlaceDetailPrimaryAssets = false
             renderPlaceDetailSecondaryAssets = false
+            renderPlaceDetailNotes = false
             renderPlaceDetailGenerationStudio = false
         }
 
@@ -1860,6 +1869,10 @@ struct PlacesPageView: View {
             try? await Task.sleep(for: .milliseconds(220))
             guard !Task.isCancelled else { return }
             renderPlaceDetailSecondaryAssets = true
+
+            try? await Task.sleep(for: .milliseconds(140))
+            guard !Task.isCancelled else { return }
+            renderPlaceDetailNotes = true
 
             try? await Task.sleep(for: .milliseconds(220))
             guard !Task.isCancelled else { return }

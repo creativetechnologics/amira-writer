@@ -628,10 +628,9 @@ struct CharacterRigEditor: View {
 
     @ViewBuilder
     private func variantPreview(_ variant: DrawingVariant) -> some View {
-        if let image = previewImage(for: variant) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
+        if let character,
+           let drawingURL = drawingURL(for: variant, character: character) {
+            AsyncResolvedImageView(path: drawingURL.path, maxPixelSize: 720, contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         } else {
@@ -642,16 +641,6 @@ struct CharacterRigEditor: View {
                         .foregroundStyle(.tertiary)
                 }
         }
-    }
-
-    private func previewImage(for variant: DrawingVariant) -> NSImage? {
-        guard let character,
-              let drawingURL = drawingURL(for: variant, character: character)
-        else {
-            return nil
-        }
-
-        return NSImage(contentsOf: drawingURL)
     }
 
     private func drawingURL(

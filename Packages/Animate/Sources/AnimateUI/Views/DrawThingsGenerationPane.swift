@@ -404,20 +404,9 @@ struct DrawThingsGenerationPane: View {
     @ViewBuilder
     private func stagedThumbnail(url: URL) -> some View {
         let isSelected = selectedStagedURL == url
-        Group {
-            if let image = NSImage(contentsOf: url) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 100, height: 64)
-                    .clipped()
-            } else {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.secondary.opacity(0.1))
-                    .frame(width: 100, height: 64)
-                    .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
-            }
-        }
+        AsyncResolvedImageView(path: url.path, maxPixelSize: 220, contentMode: .fill)
+            .frame(width: 100, height: 64)
+            .clipped()
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
