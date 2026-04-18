@@ -246,7 +246,7 @@ struct ContentView: View {
                     PlacesSidebarView(
                         store: store,
                         viewMode: $placesViewMode,
-                        allImageCount: store.allBackgroundHierarchyImagePaths().count
+                        allImageCount: store.allBackgroundHierarchyImageCount()
                     )
                 }
         default:

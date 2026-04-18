@@ -79,7 +79,7 @@ private struct PlacesWorkspaceContent: View {
                     PlacesSidebarView(
                         store: store,
                         viewMode: $placesViewMode,
-                        allImageCount: store.allBackgroundHierarchyImagePaths().count
+                        allImageCount: store.allBackgroundHierarchyImageCount()
                     )
                 }
                 .frame(width: sidebarWidth)

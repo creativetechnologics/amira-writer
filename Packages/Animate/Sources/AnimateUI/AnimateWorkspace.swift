@@ -127,8 +127,6 @@ public final class AnimateWorkspaceController: ObservableObject {
             RunPodLORAService.shared.setActiveAnimateURL(store.animateURL)
             RunPodMouthSyncService.shared.setActiveAnimateURL(store.animateURL)
             store.resumeBackgroundWork()
-            // Refresh scene data from disk so authored shots survive re-entry
-            store.reloadScenesFromDisk()
             return nil
         }
 

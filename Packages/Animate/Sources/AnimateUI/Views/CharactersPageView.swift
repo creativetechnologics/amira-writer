@@ -974,17 +974,8 @@ private struct AsyncSidebarThumbnail: View {
                       let imageDir = store.owpCharacterImageDirectory(for: owpChar),
                       let firstImage = owpChar.images.first {
                 let imageURL = imageDir.appendingPathComponent(firstImage.filename)
-                AsyncImage(url: imageURL) { img in
-                    img
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 28, height: 28)
-                        .clipShape(Circle())
-                } placeholder: {
-                    Image(systemName: "person.fill")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                }
+                CachedThumbnailView(path: imageURL.path, size: 28)
+                    .clipShape(Circle())
             } else {
                 Image(systemName: "person.fill")
                     .frame(width: 28, height: 28)
@@ -1016,9 +1007,8 @@ private struct AsyncSidebarThumbnail: View {
                 image = nil
                 return
             }
-            image = await Task.detached(priority: .userInitiated) {
-                NSImage(contentsOf: url)
-            }.value
+            let resolvedPath = url.path
+            image = await loadSharedPreviewImage(at: resolvedPath, maxPixelSize: 256)
         }
     }
 
@@ -1151,9 +1141,7 @@ private struct AsyncReferenceThumbView: View {
                   let url = store.resolvedCharacterAssetURL(for: path) else {
                 image = nil; return
             }
-            let loaded = await Task.detached(priority: .userInitiated) {
-                NSImage(contentsOf: url)
-            }.value
+            let loaded = await loadSharedPreviewImage(at: url.path, maxPixelSize: 256)
             if !Task.isCancelled { image = loaded }
         }
     }
@@ -1220,9 +1208,10 @@ private struct AsyncApprovedVariantView: View {
             }
             .task(id: variant.imagePath) {
                 guard let url = store.resolvedCharacterAssetURL(for: variant.imagePath) else { return }
-                let loaded = await Task.detached(priority: .userInitiated) {
-                    NSImage(contentsOf: url)
-                }.value
+                let loaded = await loadSharedPreviewImage(
+                    at: url.path,
+                    maxPixelSize: Int(max(width, height) * 2)
+                )
                 if !Task.isCancelled { image = loaded }
             }
         }
@@ -1255,6 +1244,8 @@ struct ImageGallerySection: View {
     let onEditWithGemini: ((String) -> Void)?
     let onGenerateWithGemini: ((String, Int) -> Void)?
     let ratingFor: ((String) -> Int)?        // nil = rating UI disabled
+    let isRejectedFor: ((String) -> Bool)?
+    let hasNotesFor: ((String) -> Bool)?
     let onSetRating: ((String, Int) -> Void)?
     let showsInlineRemoveButton: Bool
     var curatedPaths: Set<String>
@@ -1287,6 +1278,8 @@ struct ImageGallerySection: View {
         onEditWithGemini: ((String) -> Void)? = nil,
         onGenerateWithGemini: ((String, Int) -> Void)? = nil,
         ratingFor: ((String) -> Int)? = nil,
+        isRejectedFor: ((String) -> Bool)? = nil,
+        hasNotesFor: ((String) -> Bool)? = nil,
         onSetRating: ((String, Int) -> Void)? = nil,
         showsInlineRemoveButton: Bool = false,
         curatedPaths: Set<String> = [],
@@ -1314,6 +1307,8 @@ struct ImageGallerySection: View {
         self.onEditWithGemini = onEditWithGemini
         self.onGenerateWithGemini = onGenerateWithGemini
         self.ratingFor = ratingFor
+        self.isRejectedFor = isRejectedFor
+        self.hasNotesFor = hasNotesFor
         self.onSetRating = onSetRating
         self.showsInlineRemoveButton = showsInlineRemoveButton
         self.curatedPaths = curatedPaths
@@ -1558,6 +1553,8 @@ struct ImageGallerySection: View {
                     onEditWithGemini: onEditWithGemini == nil ? nil : { onEditWithGemini?(path) },
                     onGenerateWithGemini: onGenerateWithGemini == nil ? nil : { count in onGenerateWithGemini?(path, count) },
                     currentRating: ratingFor.map { $0(path) },
+                    isRejected: isRejectedFor?(path) ?? false,
+                    hasNotes: hasNotesFor?(path) ?? false,
                     onSetRating: onSetRating == nil ? nil : { rating in onSetRating?(path, rating) },
                     showsInlineRemoveButton: showsInlineRemoveButton
                 )
@@ -1605,6 +1602,8 @@ struct ImageGalleryThumbnail: View {
     let onEditWithGemini: (() -> Void)?
     let onGenerateWithGemini: ((Int) -> Void)?
     let currentRating: Int?           // nil = rating UI disabled
+    let isRejected: Bool
+    let hasNotes: Bool
     let onSetRating: ((Int) -> Void)?
     let showsInlineRemoveButton: Bool
 
@@ -1632,6 +1631,8 @@ struct ImageGalleryThumbnail: View {
             caption: displayName,
             isSelected: isSelected,
             isCurated: isCurated,
+            isRejected: isRejected,
+            hasNotes: hasNotes,
             rating: displayRating,
             selectedCount: selectedCount,
             actions: UnifiedImageActions(
@@ -1838,11 +1839,21 @@ struct ImagePreviewOverlay: View {
         guard let path = paths[safe: currentIndex] else { return }
         isLoading = true
 
-        DispatchQueue.global(qos: .userInitiated).async {
-            let image = store.resolvedCharacterAssetURL(for: path).flatMap(NSImage.init(contentsOf:))
-            DispatchQueue.main.async {
-                self.previewImage = image
-                self.isLoading = false
+        let requestedIndex = currentIndex
+        Task {
+            let resolvedPath = await MainActor.run {
+                store.resolvedCharacterAssetURL(for: path)?.path
+            }
+            let image: NSImage?
+            if let resolvedPath {
+                image = await loadSharedPreviewImage(at: resolvedPath, maxPixelSize: 2200)
+            } else {
+                image = nil
+            }
+            await MainActor.run {
+                guard currentIndex == requestedIndex else { return }
+                previewImage = image
+                isLoading = false
             }
         }
     }
@@ -2379,9 +2390,7 @@ struct ReferenceImagesSheet: View {
                   let url = store.resolvedCharacterAssetURL(for: path) else {
                 mainRefImage = nil; return
             }
-            let loaded = await Task.detached(priority: .userInitiated) {
-                NSImage(contentsOf: url)
-            }.value
+            let loaded = await loadSharedPreviewImage(at: url.path, maxPixelSize: 1200)
             if !Task.isCancelled { mainRefImage = loaded }
         }
     }

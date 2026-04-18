@@ -7,20 +7,19 @@ struct ImagineInspectorView: View {
     @State private var showLORATraining = false
     @ObservedObject private var runpodService = RunPodLORAService.shared
 
-    private enum InspectorTab: String { case details, bulk, lora, properties }
+    private enum InspectorTab: String, Identifiable {
+        case details, bulk, lora, properties
+
+        var id: String { rawValue }
+    }
     @AppStorage("imagine.inspector.selectedTab.v3") private var selectedTab = InspectorTab.details.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                tabButton("Details", tab: .details, icon: "info.circle")
-                tabButton("Bulk", tab: .bulk, icon: "tray.full")
-                // LORA and Props tabs removed 2026-04-15 — LORA training lives
-                // on the Imagine page itself, and Props metadata is already
-                // surfaced in the Details pane.
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            SharedInspectorTabBar(selection: selectedTabBinding, items: [
+                SharedInspectorTabItem(value: .details, title: "Details", systemImage: "info.circle"),
+                SharedInspectorTabItem(value: .bulk, title: "Bulk", systemImage: "tray.full")
+            ])
 
             Divider()
 
@@ -50,6 +49,13 @@ struct ImagineInspectorView: View {
     }
 
     // MARK: - Bulk Tab
+
+    private var selectedTabBinding: Binding<InspectorTab> {
+        Binding(
+            get: { InspectorTab(rawValue: selectedTab) ?? .details },
+            set: { selectedTab = $0.rawValue }
+        )
+    }
 
     private var bulkContent: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -327,29 +333,6 @@ struct ImagineInspectorView: View {
             }
         }
         .padding()
-    }
-
-    // MARK: - Tab Button
-
-    private func tabButton(_ title: String, tab: InspectorTab, icon: String) -> some View {
-        Button {
-            selectedTab = tab.rawValue
-        } label: {
-            Label(title, systemImage: icon)
-                .font(.caption)
-                .fontWeight(selectedTab == tab.rawValue ? .semibold : .regular)
-                .foregroundStyle(selectedTab == tab.rawValue ? .primary : .secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-                .background(
-                    selectedTab == tab.rawValue
-                        ? AnyShapeStyle(Color.accentColor.opacity(0.12))
-                        : AnyShapeStyle(Color.clear),
-                    in: RoundedRectangle(cornerRadius: 8)
-                )
-        }
-        .buttonStyle(.plain)
     }
 
 }

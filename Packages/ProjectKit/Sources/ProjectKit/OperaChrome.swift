@@ -168,6 +168,7 @@ public struct OperaChromePaneHeader<Actions: View>: View {
             Spacer(minLength: 10)
 
             actions
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 }
@@ -204,6 +205,7 @@ public struct OperaChromeStatusBar: View {
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(OperaChromeTheme.textSecondary)
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 .transition(.opacity)
             } else if isSaved {
                 HStack(spacing: 4) {
@@ -214,6 +216,7 @@ public struct OperaChromeStatusBar: View {
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(OperaChromeTheme.textSecondary)
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 .transition(.opacity)
             } else if !statusMessage.isEmpty {
                 Text(statusMessage)
@@ -236,6 +239,7 @@ public struct OperaChromeStatusBar: View {
                 Text(itemCountText)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(OperaChromeTheme.textTertiary)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: isSaving)
@@ -378,6 +382,7 @@ public struct OperaChromeStatusBadge: View {
                         Capsule(style: .continuous)
                             .fill(tint.opacity(0.16))
                     )
+                    .fixedSize(horizontal: true, vertical: false)
             } else {
                 HStack(spacing: 6) {
                     if showsProgress {
@@ -393,6 +398,7 @@ public struct OperaChromeStatusBadge: View {
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 .foregroundStyle(OperaChromeTheme.textSecondary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -439,8 +445,10 @@ public struct OperaChromeActionButton: View {
                 if let title {
                     Text(title)
                         .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
                 }
             }
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(foregroundColor)
             .padding(.horizontal, title == nil ? 8 : 11)
             .padding(.vertical, 7)
@@ -728,6 +736,7 @@ public struct OperaChromeCompactSaveIndicator: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(OperaChromeTheme.textSecondary)
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 .transition(.opacity)
             case .saving:
                 HStack(spacing: 4) {
@@ -737,6 +746,7 @@ public struct OperaChromeCompactSaveIndicator: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(OperaChromeTheme.textSecondary)
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 .transition(.opacity)
             case .saved:
                 HStack(spacing: 3) {
@@ -747,6 +757,7 @@ public struct OperaChromeCompactSaveIndicator: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(OperaChromeTheme.textSecondary)
                 }
+                .fixedSize(horizontal: true, vertical: false)
                 .transition(.opacity)
             case .idle:
                 EmptyView()

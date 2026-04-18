@@ -31,30 +31,16 @@ struct InspectorView: View {
         var id: UUID { variant.id }
     }
 
-    private enum InspectorTab: String { case details, assets, properties, gemini, llm, batch }
+    private enum InspectorTab: String, Identifiable {
+        case details, assets, properties, gemini, llm, batch
+
+        var id: String { rawValue }
+    }
     @AppStorage("animate.inspector.selectedTab.v3") private var selectedTab = InspectorTab.details.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                // Properties tab removed 2026-04-15 — the per-page grids /
-                // Details pane already surface the same information without
-                // a separate tab.
-                if currentPage == .places {
-                    tabButton("Details", tab: .details, icon: "info.circle")
-                    tabButton("Assets", tab: .assets, icon: "photo.stack")
-                    tabButton("Gemini", tab: .gemini, icon: "sparkles")
-                } else {
-                    tabButton("Details", tab: .details, icon: "info.circle")
-                    tabButton("Assets", tab: .assets, icon: "shippingbox.fill")
-                    tabButton("LLM", tab: .llm, icon: "bubble.left.and.text.bubble.right")
-                }
-                if currentPage == .characters {
-                    tabButton("Batch", tab: .batch, icon: "tray.full")
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            SharedInspectorTabBar(selection: selectedTabBinding, items: tabItems)
 
             Divider()
 
@@ -114,26 +100,28 @@ struct InspectorView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func tabButton(_ title: String, tab: InspectorTab, icon: String) -> some View {
-        Button {
-            selectedTab = tab.rawValue
-        } label: {
-            Label(title, systemImage: icon)
-                .font(.caption)
-                .fontWeight(selectedTab == tab.rawValue ? .semibold : .regular)
-                .foregroundStyle(selectedTab == tab.rawValue ? .primary : .secondary)
-                .frame(maxWidth: .infinity, minHeight: 32)
-                .padding(.horizontal, 10)
-                .background(
-                    selectedTab == tab.rawValue
-                        ? AnyShapeStyle(Color.accentColor.opacity(0.12))
-                        : AnyShapeStyle(Color.clear),
-                    in: RoundedRectangle(cornerRadius: 8)
-                )
-                .contentShape(Rectangle())
+    private var selectedTabBinding: Binding<InspectorTab> {
+        Binding(
+            get: { InspectorTab(rawValue: selectedTab) ?? .details },
+            set: { selectedTab = $0.rawValue }
+        )
+    }
+
+    private var tabItems: [SharedInspectorTabItem<InspectorTab>] {
+        var items: [SharedInspectorTabItem<InspectorTab>] = [
+            SharedInspectorTabItem(value: .details, title: "Details", systemImage: "info.circle")
+        ]
+        if currentPage == .places {
+            items.append(SharedInspectorTabItem(value: .assets, title: "Assets", systemImage: "photo.stack"))
+            items.append(SharedInspectorTabItem(value: .gemini, title: "Gemini", systemImage: "sparkles"))
+        } else {
+            items.append(SharedInspectorTabItem(value: .assets, title: "Assets", systemImage: "shippingbox.fill"))
+            items.append(SharedInspectorTabItem(value: .llm, title: "LLM", systemImage: "bubble.left.and.text.bubble.right"))
         }
-        .frame(maxWidth: .infinity)
-        .buttonStyle(.plain)
+        if currentPage == .characters {
+            items.append(SharedInspectorTabItem(value: .batch, title: "Batch", systemImage: "tray.full"))
+        }
+        return items
     }
 
     private var assetsContent: some View {
@@ -2093,11 +2081,8 @@ private struct PlaceAssetsInspectorSection: View {
                 .foregroundStyle(.secondary)
 
             if let path,
-               let url = store.resolvedCharacterAssetURL(for: path),
-               let image = NSImage(contentsOf: url) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
+               let url = store.resolvedCharacterAssetURL(for: path) {
+                AsyncResolvedImageView(path: url.path, maxPixelSize: 960, contentMode: .fill)
                     .frame(maxWidth: .infinity)
                     .frame(height: 150)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -2326,11 +2311,8 @@ struct PlaceGeneratedImageDetailsInspectorSection: View {
                 }
             }
 
-            if let url = store.resolvedCharacterAssetURL(for: record.activePath),
-               let image = NSImage(contentsOf: url) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
+            if let url = store.resolvedCharacterAssetURL(for: record.activePath) {
+                AsyncResolvedImageView(path: url.path, maxPixelSize: 1280, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: 180, maxHeight: 260)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))

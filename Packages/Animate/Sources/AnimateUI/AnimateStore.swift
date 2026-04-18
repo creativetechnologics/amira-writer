@@ -26,6 +26,27 @@ private struct AnimateExternalFileSnapshot: Equatable, Sendable {
     let fileSize: Int64
 }
 
+private struct GeneratedBackgroundScannedFile: Sendable {
+    let normalizedPath: String
+    let absolutePath: String
+    let snapshot: AnimateExternalFileSnapshot
+    let fingerprint: String?
+}
+
+private struct GeneratedBackgroundLibraryScan: Sendable {
+    let files: [GeneratedBackgroundScannedFile]
+
+    var discoveredPaths: [String] {
+        files.map(\.normalizedPath)
+    }
+
+    var fingerprintsByPath: [String: String] {
+        Dictionary(uniqueKeysWithValues: files.compactMap { file in
+            file.fingerprint.map { (file.normalizedPath, $0) }
+        })
+    }
+}
+
 private struct PlaceWorldGenerationBatchResultsSummary: Sendable {
     var rowCount: Int
     var successCount: Int
@@ -332,6 +353,8 @@ final class AnimateStore {
     var drawThingsPlaceConfig: DrawThingsPlaceConfig = .init()
     var selectedGeneratedBackgroundRecordID: UUID?
     private var generatedBackgroundFingerprintCache: [String: (snapshot: AnimateExternalFileSnapshot, digest: String)] = [:]
+    private var generatedBackgroundLibraryNeedsRefresh = false
+    private var generatedBackgroundLibraryRefreshRequestID: Int = 0
 
     var selectedPlace: BackgroundPlate? {
         backgrounds.first { $0.id == selectedBackgroundID }
@@ -4033,6 +4056,230 @@ final class AnimateStore {
         if !disableExternalFileWatch {
             startExternalFileWatch()
         }
+        if generatedBackgroundLibraryNeedsRefresh {
+            scheduleGeneratedBackgroundLibraryRefresh()
+        }
+    }
+
+    func refreshGeneratedBackgroundLibraryIfNeededInBackground() {
+        guard generatedBackgroundLibraryNeedsRefresh else { return }
+        scheduleGeneratedBackgroundLibraryRefresh()
+    }
+
+    private func scheduleGeneratedBackgroundLibraryRefresh() {
+        guard generatedBackgroundLibraryNeedsRefresh,
+              let animateURL else { return }
+
+        backgroundIndexRefreshTask?.cancel()
+        generatedBackgroundLibraryRefreshRequestID &+= 1
+        let requestID = generatedBackgroundLibraryRefreshRequestID
+        let backgroundsRootPath = animateURL.appendingPathComponent("backgrounds").path
+        let projectRootPath = animateURL.deletingLastPathComponent().path
+        let characterTerms = knownGeneratedBackgroundCharacterTerms()
+        let cachedFingerprints = generatedBackgroundFingerprintCache
+
+        backgroundIndexRefreshTask = Task(priority: .utility) { [weak self] in
+            let scan = await Task.detached(priority: .utility) {
+                Self.scanGeneratedBackgroundLibrary(
+                    backgroundsRootPath: backgroundsRootPath,
+                    projectRootPath: projectRootPath,
+                    characterTerms: characterTerms,
+                    cachedFingerprints: cachedFingerprints
+                )
+            }.value
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self,
+                      requestID == self.generatedBackgroundLibraryRefreshRequestID else { return }
+                self.applyGeneratedBackgroundLibraryScan(scan)
+                self.generatedBackgroundLibraryNeedsRefresh = false
+                self.backgroundIndexRefreshTask = nil
+            }
+        }
+    }
+
+    nonisolated private static func scanGeneratedBackgroundLibrary(
+        backgroundsRootPath: String,
+        projectRootPath: String,
+        characterTerms: [String],
+        cachedFingerprints: [String: (snapshot: AnimateExternalFileSnapshot, digest: String)]
+    ) -> GeneratedBackgroundLibraryScan {
+        let backgroundsRootURL = URL(fileURLWithPath: backgroundsRootPath)
+        let projectRootURL = URL(fileURLWithPath: projectRootPath)
+        let fileManager = FileManager.default
+        let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "tiff", "webp"]
+
+        guard fileManager.fileExists(atPath: backgroundsRootURL.path),
+              let enumerator = fileManager.enumerator(
+                at: backgroundsRootURL,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+              ) else {
+            return GeneratedBackgroundLibraryScan(files: [])
+        }
+
+        var seenNormalizedPaths: Set<String> = []
+        var files: [GeneratedBackgroundScannedFile] = []
+
+        while let url = enumerator.nextObject() as? URL {
+            guard imageExtensions.contains(url.pathExtension.lowercased()) else { continue }
+            let absolutePath = url.standardizedFileURL.path
+            let normalizedPath = normalizedGeneratedBackgroundPath(
+                absolutePath,
+                projectRootPath: projectRootURL.path
+            )
+            guard shouldIncludeInGeneratedBackgroundLibrary(
+                normalizedPath,
+                characterTerms: characterTerms
+            ) else { continue }
+            guard seenNormalizedPaths.insert(normalizedPath).inserted else { continue }
+            guard let snapshot = fileSnapshot(atPath: absolutePath) else { continue }
+
+            let fingerprint: String?
+            if let cached = cachedFingerprints[absolutePath],
+               cached.snapshot == snapshot {
+                fingerprint = cached.digest
+            } else {
+                fingerprint = generatedBackgroundFingerprint(atPath: absolutePath)
+            }
+
+            files.append(
+                GeneratedBackgroundScannedFile(
+                    normalizedPath: normalizedPath,
+                    absolutePath: absolutePath,
+                    snapshot: snapshot,
+                    fingerprint: fingerprint
+                )
+            )
+        }
+
+        files.sort { lhs, rhs in
+            let lhsRank = generatedBackgroundLibrarySortRank(for: lhs.normalizedPath)
+            let rhsRank = generatedBackgroundLibrarySortRank(for: rhs.normalizedPath)
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            return lhs.normalizedPath.localizedCaseInsensitiveCompare(rhs.normalizedPath) == .orderedAscending
+        }
+
+        return GeneratedBackgroundLibraryScan(files: files)
+    }
+
+    nonisolated private static func fileSnapshot(atPath path: String) -> AnimateExternalFileSnapshot? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else { return nil }
+        let modificationDate = (attrs[.modificationDate] as? Date) ?? .distantPast
+        let fileSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+        return AnimateExternalFileSnapshot(modificationDate: modificationDate, fileSize: fileSize)
+    }
+
+    nonisolated private static func generatedBackgroundFingerprint(atPath path: String) -> String? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    nonisolated private static func normalizedGeneratedBackgroundPath(
+        _ absolutePath: String,
+        projectRootPath: String
+    ) -> String {
+        let standardizedPath = URL(fileURLWithPath: absolutePath).standardizedFileURL.path
+        let projectPrefix = projectRootPath.hasSuffix("/") ? projectRootPath : projectRootPath + "/"
+        if standardizedPath.hasPrefix(projectPrefix) {
+            return String(standardizedPath.dropFirst(projectPrefix.count))
+        }
+        if let animateRange = standardizedPath.range(of: "/Animate/") {
+            return "Animate/" + standardizedPath[animateRange.upperBound...]
+        }
+        return standardizedPath
+    }
+
+    nonisolated private static func shouldIncludeInGeneratedBackgroundLibrary(
+        _ path: String,
+        characterTerms: [String]
+    ) -> Bool {
+        let normalized = path.replacingOccurrences(of: "\\", with: "/").lowercased()
+        guard normalized.contains("/backgrounds/") else { return false }
+
+        if normalized.contains("/backgrounds/inspiration/") {
+            return false
+        }
+        if normalized.contains("/backgrounds/continuity-pack/") {
+            return false
+        }
+        if normalized.contains("/backgrounds/pipeline/catalog/") ||
+            normalized.contains("/backgrounds/pipeline/catalog-snapshots/") ||
+            normalized.contains("/backgrounds/pipeline/matrix/") ||
+            normalized.contains("/backgrounds/pipeline/refs/") {
+            return false
+        }
+
+        if normalized.contains("/backgrounds/places/") ||
+            normalized.contains("/backgrounds/place-batches/") ||
+            normalized.contains("/backgrounds/chosen-references/") ||
+            normalized.contains("/backgrounds/pipeline/tests/") ||
+            normalized.contains("/backgrounds/pipeline/batches/") ||
+            normalized.contains("/backgrounds/_map3d-captures/") {
+            return !isCharacterCentricGeneratedBackgroundPath(
+                normalized,
+                characterTerms: characterTerms
+            )
+        }
+
+        return false
+    }
+
+    nonisolated private static func isCharacterCentricGeneratedBackgroundPath(
+        _ normalizedPath: String,
+        characterTerms: [String]
+    ) -> Bool {
+        let searchable = normalizedPath
+            .replacingOccurrences(of: "_", with: "-")
+            .replacingOccurrences(of: " ", with: "-")
+
+        let explicitCharacterMarkers = [
+            "character-test",
+            "character-study",
+            "character-studies",
+            "costume-test",
+            "costume-study",
+            "portrait",
+            "headshot",
+            "close-up",
+            "closeup",
+            "waist-up",
+            "waistup",
+            "full-body",
+            "fullbody"
+        ]
+        if explicitCharacterMarkers.contains(where: searchable.contains) {
+            return true
+        }
+
+        let actionMarkers = [
+            "enters",
+            "walks",
+            "walking",
+            "runs",
+            "running",
+            "stands",
+            "standing",
+            "falls",
+            "falling",
+            "scene",
+            "continuity-test",
+            "character"
+        ]
+        guard !characterTerms.isEmpty else { return false }
+        guard characterTerms.contains(where: searchable.contains) else { return false }
+        return actionMarkers.contains(where: searchable.contains)
+    }
+
+    nonisolated private static func generatedBackgroundLibrarySortRank(for path: String) -> Int {
+        let normalized = path.replacingOccurrences(of: "\\", with: "/").lowercased()
+        if normalized.contains("/backgrounds/chosen-references/") { return 0 }
+        if normalized.contains("/backgrounds/places/") { return 1 }
+        if normalized.contains("/backgrounds/place-batches/") { return 2 }
+        if normalized.contains("/backgrounds/pipeline/batches/") { return 3 }
+        if normalized.contains("/backgrounds/pipeline/tests/") { return 4 }
+        return 5
     }
 
     private func observePersistedSaveState() {
@@ -4825,17 +5072,22 @@ final class AnimateStore {
             }
             placesWorkflowLibrary = hydratedPlacesWorkflowLibrary(loadPlacesWorkflowLibrary(from: animateDir))
             placesWorldContextBlocks = loadPlacesWorldContextBlocks(from: animateDir)
-            syncGeneratedBackgroundLibrary()
+            generatedBackgroundLibraryNeedsRefresh = !skipBackgroundRefresh
+            if !skipBackgroundRefresh {
+                scheduleGeneratedBackgroundLibraryRefresh()
+            }
             refreshPlaceWorldGenerationBatches()
             refreshPlaceEditBatchJobs()
-
-            let didRefreshPlaces = await refreshPlacesFromScript(persistChanges: false)
+            Task { [weak self] in
+                guard let self else { return }
+                _ = await self.refreshPlacesFromScript(persistChanges: true)
+            }
 
             // 8. Load motion clips
             motionClips = (try? MotionClipPersistence.loadAll(animateURL: animateDir)) ?? []
 
             let projectName = url.deletingPathExtension().lastPathComponent
-            if didMigrateCharacterStorage || didRefreshPlaces {
+            if didMigrateCharacterStorage {
                 save()
             }
             statusMessage = "Opened: \(projectName) (\(scenes.count) songs, \(characters.count) characters)"
@@ -6061,6 +6313,37 @@ final class AnimateStore {
         save()
     }
 
+    private func mutateImageLibrarySidecar(
+        for imagePath: String,
+        _ mutate: (inout ImageLibraryReviewMetadata) -> Void
+    ) {
+        let resolvedPath = resolvedCharacterAssetURL(for: imagePath)?.path ?? (imagePath.hasPrefix("/") ? imagePath : nil)
+        guard let resolvedPath else { return }
+        var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: resolvedPath)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+        mutate(&metadata)
+        metadata.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: resolvedPath)
+    }
+
+    func imageLibraryReviewMetadata(for imagePath: String) -> ImageLibraryReviewMetadata? {
+        let resolvedPath = resolvedCharacterAssetURL(for: imagePath)?.path ?? (imagePath.hasPrefix("/") ? imagePath : nil)
+        guard let resolvedPath else { return nil }
+        return ImageLibraryMetadataSidecarService.load(forImagePath: resolvedPath)
+    }
+
+    func imageLibraryRating(for imagePath: String) -> Int? {
+        imageLibraryReviewMetadata(for: imagePath)?.rating
+    }
+
+    func imageLibraryIsRejected(for imagePath: String) -> Bool {
+        imageLibraryReviewMetadata(for: imagePath)?.isRejected ?? false
+    }
+
+    func imageLibraryNotes(for imagePath: String) -> String {
+        imageLibraryReviewMetadata(for: imagePath)?.notes ?? ""
+    }
+
     func setInspirationRating(_ rating: Int?, path: String, for characterID: UUID) {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
         var ratings = characters[charIndex].inspirationRatings ?? [:]
@@ -6070,6 +6353,9 @@ final class AnimateStore {
             ratings.removeValue(forKey: path)
         }
         characters[charIndex].inspirationRatings = ratings.isEmpty ? nil : ratings
+        mutateImageLibrarySidecar(for: path) { metadata in
+            metadata.rating = rating
+        }
         save()
     }
 
@@ -6083,6 +6369,9 @@ final class AnimateStore {
             allNotes[path] = notes
         }
         characters[charIndex].inspirationNotes = allNotes.isEmpty ? nil : allNotes
+        mutateImageLibrarySidecar(for: path) { metadata in
+            metadata.notes = notes
+        }
         scheduleDebouncedSave()
     }
 
@@ -6094,6 +6383,10 @@ final class AnimateStore {
             characters[charIndex].inspirationRejectedPaths.remove(path)
         } else {
             characters[charIndex].inspirationRejectedPaths.insert(path)
+        }
+        let isRejected = characters[charIndex].inspirationRejectedPaths.contains(path)
+        mutateImageLibrarySidecar(for: path) { metadata in
+            metadata.isRejected = isRejected
         }
         save()
     }
@@ -8693,14 +8986,21 @@ final class AnimateStore {
     }
 
     func allBackgroundHierarchyImagePaths() -> [String] {
-        if placesWorkflowLibrary.generatedImageRecords.isEmpty {
-            syncGeneratedBackgroundLibrary()
+        if generatedBackgroundLibraryNeedsRefresh {
+            scheduleGeneratedBackgroundLibraryRefresh()
         }
         let visible = visibleGeneratedBackgroundLibraryRecords()
         if !visible.isEmpty {
             return visible.map(\.activePath)
         }
-        return scannedGeneratedBackgroundPaths()
+        return []
+    }
+
+    func allBackgroundHierarchyImageCount() -> Int {
+        if generatedBackgroundLibraryNeedsRefresh {
+            scheduleGeneratedBackgroundLibraryRefresh()
+        }
+        return placesWorkflowLibrary.generatedImageRecords.count
     }
 
     func visibleGeneratedBackgroundLibraryRecords() -> [GeneratedBackgroundLibraryRecord] {
@@ -9626,7 +9926,38 @@ final class AnimateStore {
     }
 
     func syncGeneratedBackgroundLibrary() {
-        let discoveredPaths = scannedGeneratedBackgroundPaths()
+        guard let animateURL else {
+            generatedBackgroundLibraryNeedsRefresh = false
+            return
+        }
+        backgroundIndexRefreshTask?.cancel()
+        backgroundIndexRefreshTask = nil
+        generatedBackgroundLibraryRefreshRequestID &+= 1
+        let scan = Self.scanGeneratedBackgroundLibrary(
+            backgroundsRootPath: animateURL.appendingPathComponent("backgrounds").path,
+            projectRootPath: animateURL.deletingLastPathComponent().path,
+            characterTerms: knownGeneratedBackgroundCharacterTerms(),
+            cachedFingerprints: generatedBackgroundFingerprintCache
+        )
+        applyGeneratedBackgroundLibraryScan(scan)
+        generatedBackgroundLibraryNeedsRefresh = false
+    }
+
+    private func applyGeneratedBackgroundLibraryScan(_ scan: GeneratedBackgroundLibraryScan) {
+        for file in scan.files {
+            guard let fingerprint = file.fingerprint else { continue }
+            generatedBackgroundFingerprintCache[file.absolutePath] = (file.snapshot, fingerprint)
+        }
+        reconcileGeneratedBackgroundLibrary(
+            discoveredPaths: scan.discoveredPaths,
+            fingerprintsByPath: scan.fingerprintsByPath
+        )
+    }
+
+    private func reconcileGeneratedBackgroundLibrary(
+        discoveredPaths: [String],
+        fingerprintsByPath: [String: String]
+    ) {
         guard !discoveredPaths.isEmpty else {
             if !placesWorkflowLibrary.generatedImageRecords.isEmpty {
                 statusMessage = "Generated background scan found no files, so existing review state was preserved instead of being cleared."
@@ -9636,7 +9967,7 @@ final class AnimateStore {
 
         var records = placesWorkflowLibrary.generatedImageRecords
         let discoveredSet = Set(discoveredPaths)
-        let discoveredFingerprints = Set(discoveredPaths.compactMap { generatedBackgroundFingerprint(for: $0) })
+        let discoveredFingerprints = Set(fingerprintsByPath.values)
         var changed = false
 
         for index in records.indices {
@@ -9660,7 +9991,7 @@ final class AnimateStore {
                 records[index].priorVersions = normalizedHistory
                 changed = true
             }
-            let fingerprint = generatedBackgroundFingerprint(for: records[index].activePath)
+            let fingerprint = fingerprintsByPath[records[index].activePath]
             if records[index].contentFingerprint != fingerprint {
                 records[index].contentFingerprint = fingerprint
                 changed = true
@@ -9692,7 +10023,7 @@ final class AnimateStore {
                 continue
             }
 
-            let fingerprint = generatedBackgroundFingerprint(for: path)
+            let fingerprint = fingerprintsByPath[path]
             if let matchIndex = records.firstIndex(where: { $0.contentFingerprint != nil && $0.contentFingerprint == fingerprint }) {
                 let preferred = preferredGeneratedBackgroundPath(records[matchIndex].activePath, path)
                 if preferred == path && records[matchIndex].activePath != path {
@@ -9774,6 +10105,10 @@ final class AnimateStore {
         let clamped = rating.map { min(max($0, 1), 5) }
         placesWorkflowLibrary.generatedImageRecords[index].rating = clamped
         placesWorkflowLibrary.generatedImageRecords[index].updatedAt = Date()
+        let activePath = placesWorkflowLibrary.generatedImageRecords[index].activePath
+        mutateImageLibrarySidecar(for: activePath) { metadata in
+            metadata.rating = clamped
+        }
         persistGeneratedBackgroundReviewStateNow()
         appendGeneratedBackgroundReviewEvent(action: "set_rating", record: placesWorkflowLibrary.generatedImageRecords[index])
         save(writePlaces: true)
@@ -9784,6 +10119,11 @@ final class AnimateStore {
         placesWorkflowLibrary.generatedImageRecords[index].isRejected.toggle()
         placesWorkflowLibrary.generatedImageRecords[index].canonStatus = placesWorkflowLibrary.generatedImageRecords[index].isRejected ? .rejected : .candidate
         placesWorkflowLibrary.generatedImageRecords[index].updatedAt = Date()
+        let activePath = placesWorkflowLibrary.generatedImageRecords[index].activePath
+        let isRejected = placesWorkflowLibrary.generatedImageRecords[index].isRejected
+        mutateImageLibrarySidecar(for: activePath) { metadata in
+            metadata.isRejected = isRejected
+        }
         persistGeneratedBackgroundReviewStateNow()
         appendGeneratedBackgroundReviewEvent(action: "toggle_rejected", record: placesWorkflowLibrary.generatedImageRecords[index])
         save(writePlaces: true)
@@ -9794,6 +10134,10 @@ final class AnimateStore {
         guard placesWorkflowLibrary.generatedImageRecords[index].rejectionNotes != notes else { return }
         placesWorkflowLibrary.generatedImageRecords[index].rejectionNotes = notes
         placesWorkflowLibrary.generatedImageRecords[index].updatedAt = Date()
+        let activePath = placesWorkflowLibrary.generatedImageRecords[index].activePath
+        mutateImageLibrarySidecar(for: activePath) { metadata in
+            metadata.notes = notes
+        }
         persistGeneratedBackgroundReviewStateNow()
         appendGeneratedBackgroundReviewEvent(action: "set_rejection_notes", record: placesWorkflowLibrary.generatedImageRecords[index])
         scheduleDebouncedSave(writePlaces: true)
@@ -9804,6 +10148,10 @@ final class AnimateStore {
         guard placesWorkflowLibrary.generatedImageRecords[index].draftEditNotes != notes else { return }
         placesWorkflowLibrary.generatedImageRecords[index].draftEditNotes = notes
         placesWorkflowLibrary.generatedImageRecords[index].updatedAt = Date()
+        let activePath = placesWorkflowLibrary.generatedImageRecords[index].activePath
+        mutateImageLibrarySidecar(for: activePath) { metadata in
+            metadata.notes = notes
+        }
         persistGeneratedBackgroundReviewStateNow()
         appendGeneratedBackgroundReviewEvent(action: "set_edit_notes", record: placesWorkflowLibrary.generatedImageRecords[index])
         scheduleDebouncedSave(writePlaces: true)
@@ -10546,76 +10894,17 @@ final class AnimateStore {
     }
 
     private func shouldIncludeInGeneratedBackgroundLibrary(_ path: String) -> Bool {
-        let normalized = path.replacingOccurrences(of: "\\", with: "/").lowercased()
-        guard normalized.contains("/backgrounds/") else { return false }
-
-        if normalized.contains("/backgrounds/inspiration/") {
-            return false
-        }
-        if normalized.contains("/backgrounds/continuity-pack/") {
-            return false
-        }
-        if normalized.contains("/backgrounds/pipeline/catalog/") ||
-            normalized.contains("/backgrounds/pipeline/catalog-snapshots/") ||
-            normalized.contains("/backgrounds/pipeline/matrix/") ||
-            normalized.contains("/backgrounds/pipeline/refs/") {
-            return false
-        }
-
-        if normalized.contains("/backgrounds/places/") ||
-            normalized.contains("/backgrounds/place-batches/") ||
-            normalized.contains("/backgrounds/chosen-references/") ||
-            normalized.contains("/backgrounds/pipeline/tests/") ||
-            normalized.contains("/backgrounds/pipeline/batches/") ||
-            normalized.contains("/backgrounds/_map3d-captures/") {
-            return !isCharacterCentricGeneratedBackgroundPath(normalized)
-        }
-
-        return false
+        Self.shouldIncludeInGeneratedBackgroundLibrary(
+            path,
+            characterTerms: knownGeneratedBackgroundCharacterTerms()
+        )
     }
 
     private func isCharacterCentricGeneratedBackgroundPath(_ normalizedPath: String) -> Bool {
-        let searchable = normalizedPath
-            .replacingOccurrences(of: "_", with: "-")
-            .replacingOccurrences(of: " ", with: "-")
-
-        let explicitCharacterMarkers = [
-            "character-test",
-            "character-study",
-            "character-studies",
-            "costume-test",
-            "costume-study",
-            "portrait",
-            "headshot",
-            "close-up",
-            "closeup",
-            "waist-up",
-            "waistup",
-            "full-body",
-            "fullbody"
-        ]
-        if explicitCharacterMarkers.contains(where: searchable.contains) {
-            return true
-        }
-
-        let actionMarkers = [
-            "enters",
-            "walks",
-            "walking",
-            "runs",
-            "running",
-            "stands",
-            "standing",
-            "falls",
-            "falling",
-            "scene",
-            "continuity-test",
-            "character"
-        ]
-        let characterTerms = knownGeneratedBackgroundCharacterTerms()
-        guard !characterTerms.isEmpty else { return false }
-        guard characterTerms.contains(where: { searchable.contains($0) }) else { return false }
-        return actionMarkers.contains(where: searchable.contains)
+        Self.isCharacterCentricGeneratedBackgroundPath(
+            normalizedPath,
+            characterTerms: knownGeneratedBackgroundCharacterTerms()
+        )
     }
 
     private func knownGeneratedBackgroundCharacterTerms() -> [String] {
@@ -10991,13 +11280,7 @@ final class AnimateStore {
     }
 
     private func generatedBackgroundLibrarySortRank(for path: String) -> Int {
-        let normalized = path.replacingOccurrences(of: "\\", with: "/").lowercased()
-        if normalized.contains("/backgrounds/chosen-references/") { return 0 }
-        if normalized.contains("/backgrounds/places/") { return 1 }
-        if normalized.contains("/backgrounds/place-batches/") { return 2 }
-        if normalized.contains("/backgrounds/pipeline/batches/") { return 3 }
-        if normalized.contains("/backgrounds/pipeline/tests/") { return 4 }
-        return 5
+        Self.generatedBackgroundLibrarySortRank(for: path)
     }
 
     @discardableResult
@@ -11237,7 +11520,15 @@ final class AnimateStore {
     /// Get the star rating (0-5) for a specific place image. 0 = unrated.
     func placeImageRating(path: String, placeID: UUID) -> Int {
         guard let idx = backgrounds.firstIndex(where: { $0.id == placeID }) else { return 0 }
-        return backgrounds[idx].imageRatings[path] ?? 0
+        return backgrounds[idx].imageRatings[path] ?? imageLibraryRating(for: path) ?? 0
+    }
+
+    func placeImageIsRejected(path: String) -> Bool {
+        imageLibraryIsRejected(for: path)
+    }
+
+    func placeImageNotes(path: String) -> String {
+        imageLibraryNotes(for: path)
     }
 
     /// Set the star rating (0-5) for a place image. 0 clears the rating.
@@ -11248,6 +11539,9 @@ final class AnimateStore {
             backgrounds[idx].imageRatings.removeValue(forKey: path)
         } else {
             backgrounds[idx].imageRatings[path] = clamped
+        }
+        mutateImageLibrarySidecar(for: path) { metadata in
+            metadata.rating = clamped == 0 ? nil : clamped
         }
         save(writePlaces: true)
     }

@@ -70,20 +70,7 @@ struct ImagineSceneShotGalleryView: View {
         let isSelected = selectedPath == path
         let url = URL(fileURLWithPath: path)
 
-        AsyncImage(url: url) { phase in
-            switch phase {
-            case .success(let image):
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: thumbnailSize, height: thumbnailSize)
-                    .clipped()
-            default:
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.secondary.opacity(0.1))
-                    .frame(width: thumbnailSize, height: thumbnailSize)
-            }
-        }
+        CachedThumbnailView(path: path, size: thumbnailSize)
         .clipShape(RoundedRectangle(cornerRadius: 4))
         .overlay(
             RoundedRectangle(cornerRadius: 4)

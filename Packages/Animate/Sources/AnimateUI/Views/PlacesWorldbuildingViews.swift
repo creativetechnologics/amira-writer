@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 import ProjectKit
 
@@ -2112,10 +2113,17 @@ final class PlacesWorldAutoPlacementModel: ObservableObject {
             }
 
         refreshTask?.cancel()
+        if inputs.isEmpty {
+            placements = [:]
+            isRefreshing = false
+            return
+        }
         isRefreshing = true
         let animateURL = store.animateURL
         let backgrounds = store.backgrounds
-        refreshTask = Task(priority: .userInitiated) { [service] in
+        refreshTask = Task(priority: .utility) { [service] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
             let resolved = await service.inferPlacements(inputs: inputs, places: backgrounds, animateURL: animateURL)
             guard !Task.isCancelled else { return }
             await MainActor.run {
@@ -2190,11 +2198,10 @@ struct PlacesWorldMapBrowserView: View {
             .frame(minHeight: 420)
         }
         .onAppear {
-            refreshCachedMapImage()
             autoPlacementModel.refresh(store: store, snapshot: snapshot, workflowMode: workflowMode)
         }
-        .onChange(of: snapshot.masterMapPath) { _, _ in
-            refreshCachedMapImage()
+        .task(id: snapshot.masterMapPath ?? "") {
+            await refreshCachedMapImage()
         }
         .onChange(of: workflowMode) { _, _ in
             autoPlacementModel.refresh(store: store, snapshot: snapshot, workflowMode: workflowMode)
@@ -2578,13 +2585,13 @@ struct PlacesWorldMapBrowserView: View {
         .padding(16)
     }
 
-    private func refreshCachedMapImage() {
+    private func refreshCachedMapImage() async {
         let path = snapshot.masterMapPath
-        guard path != cachedMapPath else { return }
+        guard path != cachedMapPath || cachedMapImage == nil else { return }
         cachedMapPath = path
         guard let path,
               let url = resolvedAssetURL(for: path),
-              let image = NSImage(contentsOf: url),
+              let image = await loadSharedPreviewImage(at: url.path, maxPixelSize: 2400),
               image.size.width > 0,
               image.size.height > 0 else {
             cachedMapImage = nil
@@ -3171,11 +3178,8 @@ struct PlacesWorldCaptureInspectorCard: View {
 
     @ViewBuilder
     private func preview(for capture: PlacesWorldbuildingSnapshot.Capture) -> some View {
-        if let url = store.resolvedCharacterAssetURL(for: capture.imagePath) ?? (capture.imagePath.hasPrefix("/") ? URL(fileURLWithPath: capture.imagePath) : nil),
-           let image = NSImage(contentsOf: url) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
+        if let url = store.resolvedCharacterAssetURL(for: capture.imagePath) ?? (capture.imagePath.hasPrefix("/") ? URL(fileURLWithPath: capture.imagePath) : nil) {
+            AsyncResolvedImageView(path: url.path, maxPixelSize: 960, contentMode: .fill)
                 .frame(width: 180, height: 120)
                 .scaleEffect(x: effectiveMirrorPreview(for: capture) ? -1 : 1, y: 1)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))

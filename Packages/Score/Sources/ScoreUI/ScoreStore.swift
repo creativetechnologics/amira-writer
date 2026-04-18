@@ -1562,6 +1562,7 @@ final class ScoreStore {
     private var loadedMidiCache: [UUID: ParsedPianoRoll] = [:]
     private var hydratedSongPaths: Set<String> = []
     private var pendingPlaybackStartTask: Task<Void, Never>?
+    private var deferredSelectionLoadTask: Task<Void, Never>?
     private var externalFileWatchWorkItem: DispatchWorkItem?
     private var lastKnownExternalSnapshots: [String: ExternalProjectFileSnapshot] = [:]
     // MARK: - Lyric Alignment Computed Properties
@@ -1923,7 +1924,7 @@ final class ScoreStore {
             // Auto-select first song
             if let first = songAssets.first {
                 novotroDebugLog("loadProject auto-selecting first song: \(first.relativePath)")
-                setSelectedMidi(id: first.id)
+                setSelectedMidi(id: first.id, deferLoading: true)
             }
 
             recordExternalFileSnapshots()
@@ -2310,8 +2311,13 @@ final class ScoreStore {
 
     // MARK: - Song Selection
 
-    func setSelectedMidi(id: MidiAsset.ID?, stopPlaybackBeforeSelect: Bool = true) {
+    func setSelectedMidi(
+        id: MidiAsset.ID?,
+        stopPlaybackBeforeSelect: Bool = true,
+        deferLoading: Bool = false
+    ) {
         cancelPendingPlaybackStart()
+        cancelDeferredSelectionLoad()
         if stopPlaybackBeforeSelect {
             stopPlayback()
         }
@@ -2329,7 +2335,11 @@ final class ScoreStore {
            let libretto = librettoFiles.first(where: { $0.relativePath == selectedPath }) {
             selectedLibrettoID = libretto.id
         }
-        loadSelectedMidiIfPossible()
+        if deferLoading {
+            scheduleDeferredSelectionLoad()
+        } else {
+            loadSelectedMidiIfPossible()
+        }
     }
 
     func setSelectedLibretto(id: ProjectTextFile.ID?) {
@@ -2965,6 +2975,20 @@ final class ScoreStore {
     private func cancelPendingPlaybackStart() {
         pendingPlaybackStartTask?.cancel()
         pendingPlaybackStartTask = nil
+    }
+
+    private func cancelDeferredSelectionLoad() {
+        deferredSelectionLoadTask?.cancel()
+        deferredSelectionLoadTask = nil
+    }
+
+    private func scheduleDeferredSelectionLoad() {
+        deferredSelectionLoadTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard let self, !Task.isCancelled else { return }
+            self.deferredSelectionLoadTask = nil
+            self.loadSelectedMidiIfPossible()
+        }
     }
 
     // Tracks song IDs for which a deferred playback start has already been attempted this

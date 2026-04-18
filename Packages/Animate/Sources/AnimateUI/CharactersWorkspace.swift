@@ -152,13 +152,8 @@ private struct CharactersWorkspaceContent: View {
 
     @ViewBuilder
     private func characterHeaderThumbnail(path: String?, fallbackIcon: String) -> some View {
-        if let path,
-           let url = store.resolvedCharacterAssetURL(for: path),
-           let nsImage = NSImage(contentsOf: url) {
-            Image(nsImage: nsImage)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 32, height: 32)
+        if let resolvedPath = path.flatMap({ store.resolvedCharacterAssetURL(for: $0)?.path }) {
+            CachedThumbnailView(path: resolvedPath, size: 32)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
             Image(systemName: fallbackIcon)

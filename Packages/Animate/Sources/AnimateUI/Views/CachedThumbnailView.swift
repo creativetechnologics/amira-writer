@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 @available(macOS 26.0, *)
 struct CachedThumbnailView: View {
@@ -44,5 +44,50 @@ struct CachedThumbnailView: View {
                 image = await ImagineThumbnailCache.shared.thumbnail(for: path, maxPixelSize: maxPixelSize)
             }
         }
+    }
+}
+
+@available(macOS 26.0, *)
+enum SharedAsyncImageContentMode {
+    case fit
+    case fill
+}
+
+@available(macOS 26.0, *)
+func loadSharedPreviewImage(at path: String, maxPixelSize: Int) async -> NSImage? {
+    if let cached = ImagineThumbnailCache.shared.cached(for: path, maxPixelSize: maxPixelSize) {
+        return cached
+    }
+    return await ImagineThumbnailCache.shared.thumbnail(for: path, maxPixelSize: maxPixelSize)
+}
+
+@available(macOS 26.0, *)
+struct AsyncResolvedImageView: View {
+    let path: String
+    let maxPixelSize: Int
+    var contentMode: SharedAsyncImageContentMode = .fit
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                render(image)
+            } else if let cached = ImagineThumbnailCache.shared.cached(for: path, maxPixelSize: maxPixelSize) {
+                render(cached)
+            } else {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.1))
+            }
+        }
+        .task(id: "\(path)#\(maxPixelSize)") {
+            image = await loadSharedPreviewImage(at: path, maxPixelSize: maxPixelSize)
+        }
+    }
+
+    private func render(_ image: NSImage) -> some View {
+        Image(nsImage: image)
+            .resizable()
+            .aspectRatio(contentMode: contentMode == .fill ? .fill : .fit)
     }
 }

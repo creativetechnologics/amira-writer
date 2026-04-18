@@ -231,19 +231,22 @@ struct OperaShellView: View {
     @AppStorage("novotro.score.sidebarVisible") private var scoreSidebarVisible: Bool = true
     @AppStorage("novotro.animate.sidebarVisible") private var animateSidebarVisible: Bool = true
     @AppStorage("novotro.characters.sidebarVisible") private var charactersSidebarVisible: Bool = true
-    @AppStorage("novotro.places.sidebar.visible") private var placesSidebarVisible: Bool = true
+    @AppStorage("novotro.places.sidebarVisible") private var placesSidebarVisible: Bool = true
     @AppStorage("novotro.props.sidebarVisible") private var propsSidebarVisible: Bool = true
     @AppStorage("novotro.mix.sidebarVisible") private var mixSidebarVisible: Bool = true
     @AppStorage("novotro.imagine.sidebarVisible") private var imagineSidebarVisible: Bool = true
+    @AppStorage("novotro.allImages.sidebarVisible") private var allImagesSidebarVisible: Bool = true
 
     // Inspector visibility (per-mode, shared with each mode's ContentView via same AppStorage key)
     @AppStorage("novotro.write.showInspector") private var writeInspectorVisible: Bool = true
     @AppStorage("novotro.score.showInspector") private var scoreInspectorVisible: Bool = true
     @AppStorage("novotro.animate.showInspector") private var animateInspectorVisible: Bool = true
     @AppStorage("novotro.characters.showInspector") private var charactersInspectorVisible: Bool = true
-    @AppStorage("novotro.places.inspector.visible") private var placesInspectorVisible: Bool = true
+    @AppStorage("novotro.places.showInspector") private var placesInspectorVisible: Bool = true
     @AppStorage("novotro.props.inspector.visible") private var propsInspectorVisible: Bool = true
     @AppStorage("novotro.mix.inspector.visible") private var mixInspectorVisible: Bool = true
+    @AppStorage("novotro.imagine.showInspector") private var imagineInspectorVisible: Bool = true
+    @AppStorage("novotro.allImages.showInspector") private var allImagesInspectorVisible: Bool = true
     private static let controlFileCandidates = [
         "Metadata/project.json",
         "project.json"
@@ -440,7 +443,7 @@ struct OperaShellView: View {
         case .places: return placesSidebarVisible
         case .props: return propsSidebarVisible
         case .animate: return animateSidebarVisible
-        case .allImages: return false
+        case .allImages: return allImagesSidebarVisible
         }
     }
 
@@ -508,7 +511,7 @@ struct OperaShellView: View {
             case .places: placesSidebarVisible.toggle()
             case .props: propsSidebarVisible.toggle()
             case .animate: animateSidebarVisible.toggle()
-            case .allImages: break
+            case .allImages: allImagesSidebarVisible.toggle()
             }
         }
     }
@@ -518,12 +521,12 @@ struct OperaShellView: View {
         case .write: return writeInspectorVisible
         case .score: return scoreInspectorVisible
         case .mix: return mixInspectorVisible
-        case .imagine: return charactersInspectorVisible
+        case .imagine: return imagineInspectorVisible
         case .characters: return charactersInspectorVisible
         case .places: return placesInspectorVisible
         case .props: return propsInspectorVisible
         case .animate: return animateInspectorVisible
-        case .allImages: return false
+        case .allImages: return allImagesInspectorVisible
         }
     }
 
@@ -533,12 +536,12 @@ struct OperaShellView: View {
             case .write: writeInspectorVisible.toggle()
             case .score: scoreInspectorVisible.toggle()
             case .mix: mixInspectorVisible.toggle()
-            case .imagine: charactersInspectorVisible.toggle()
+            case .imagine: imagineInspectorVisible.toggle()
             case .characters: charactersInspectorVisible.toggle()
             case .places: placesInspectorVisible.toggle()
             case .props: propsInspectorVisible.toggle()
             case .animate: animateInspectorVisible.toggle()
-            case .allImages: break
+            case .allImages: allImagesInspectorVisible.toggle()
             }
         }
     }
@@ -998,7 +1001,7 @@ struct OperaShellView: View {
         }
 
         let modeLoadTask = Task { await load(mode: mode, projectURL: projectURL) }
-        let timeoutNanoseconds: UInt64 = 8_000_000_000
+        let timeoutNanoseconds: UInt64 = 500_000_000
 
         let result = await withTaskGroup(of: OperaModeLoadResult.self, returning: OperaModeLoadResult.self) { group in
             group.addTask {

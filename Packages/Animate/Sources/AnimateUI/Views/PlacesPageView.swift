@@ -5,7 +5,8 @@ import ProjectKit
 @available(macOS 26.0, *)
 private struct PendingPlaceGenerationPlan: Identifiable {
     var id: UUID = UUID()
-    var placeID: UUID
+    var placeID: UUID?
+    var sourceDescription: String
     var workflow: PlaceWorkflowMode
     var routeID: UUID? = nil
     var nodeIDs: [UUID] = []
@@ -23,9 +24,9 @@ private struct PlaceAllImagesGallerySection: View {
     @Binding var selectedPaths: Set<String>
     @Binding var lastClickedPath: String?
     /// When non-nil, PlaceAllImagesThumbnail exposes an "Edit with Gemini"
-    /// entry in its right-click menu for any record whose `linkedPlaceID`
-    /// resolves to a known place. Caller routes through the parent view's
-    /// preflight sheet plumbing.
+    /// entry in its right-click menu. The parent view decides whether the
+    /// clicked record routes back into a linked place or stays unattached in
+    /// the shared library.
     var onEditWithGemini: ((GeneratedBackgroundLibraryRecord) -> Void)? = nil
     var onGenerateWithGemini: ((GeneratedBackgroundLibraryRecord, Int) -> Void)? = nil
     @FocusState private var galleryKeyboardFocused: Bool
@@ -297,6 +298,8 @@ private struct PlaceAllImagesThumbnail: View {
             caption: displayName,
             isSelected: isSelected,
             isRejected: record.isRejected,
+            hasNotes: !(record.rejectionNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
             rating: record.rating,
             selectedCount: selectedCount,
             actions: UnifiedImageActions(
@@ -866,7 +869,7 @@ struct PlacesPageView: View {
                         store: store,
                         viewMode: $viewMode,
                         selectedLandmarkID: $selectedLandmarkID,
-                        allImageCount: allBackgroundImagePaths.count,
+                        allImageCount: store.allBackgroundHierarchyImageCount(),
                         worldSnapshot: worldbuildingSnapshot
                     )
                         .frame(width: min(geo.size.width * 0.3, 280))
@@ -888,16 +891,30 @@ struct PlacesPageView: View {
                 title: plan.title,
                 confirmTitle: plan.confirmTitle,
                 onConfirm: { drafts, mode in
-                    guard let place = store.backgrounds.first(where: { $0.id == plan.placeID }) else {
-                        placePendingPlan = nil
-                        return
-                    }
                     placePendingPlan = nil
-                    switch mode {
-                    case .standard:
-                        runPlaceGeneration(drafts, for: place, workflow: plan.workflow)
-                    case .batch:
-                        submitPlaceBatch(drafts, for: place, workflow: plan.workflow)
+                    if let placeID = plan.placeID,
+                       let place = store.backgrounds.first(where: { $0.id == placeID }) {
+                        switch mode {
+                        case .standard:
+                            runPlaceGeneration(drafts, for: place, workflow: plan.workflow)
+                        case .batch:
+                            submitPlaceBatch(drafts, for: place, workflow: plan.workflow)
+                        }
+                    } else {
+                        switch mode {
+                        case .standard:
+                            runUnattachedLibraryGeneration(
+                                drafts,
+                                workflow: plan.workflow,
+                                sourceDescription: plan.sourceDescription
+                            )
+                        case .batch:
+                            submitUnattachedLibraryBatch(
+                                drafts,
+                                workflow: plan.workflow,
+                                sourceDescription: plan.sourceDescription
+                            )
+                        }
                     }
                 },
                 onCancel: {
@@ -940,7 +957,7 @@ struct PlacesPageView: View {
             }
         }
         .onAppear {
-            store.syncGeneratedBackgroundLibrary()
+            store.refreshGeneratedBackgroundLibraryIfNeededInBackground()
             store.refreshSuggestedLandmarkProfiles()
             if selectedLandmarkID == nil {
                 selectedLandmarkID = sortedLandmarkProfiles.first?.id
@@ -1121,11 +1138,8 @@ struct PlacesPageView: View {
             }
 
             if let path = effectivePath,
-               let url = resolvedAssetURL(for: path),
-               let image = NSImage(contentsOf: url) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
+               let url = resolvedAssetURL(for: path) {
+                AsyncResolvedImageView(path: url.path, maxPixelSize: 1440, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .frame(height: 220)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -1210,10 +1224,6 @@ struct PlacesPageView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-    }
-
-    private var allBackgroundImagePaths: [String] {
-        store.allBackgroundHierarchyImagePaths()
     }
 
     private var viewModeHelpText: String {
@@ -1360,6 +1370,7 @@ struct PlacesPageView: View {
         placeGenerationDrafts = drafts
         placePendingPlan = PendingPlaceGenerationPlan(
             placeID: place.id,
+            sourceDescription: place.name,
             workflow: workflowMode,
             routeID: uuid(from: route.id),
             nodeIDs: drafts.compactMap(\.worldNodeID),
@@ -1595,23 +1606,20 @@ struct PlacesPageView: View {
                 onEditWithGemini: { record in
                     guard let placeID = record.linkedPlaceID,
                           let place = store.backgrounds.first(where: { $0.id == placeID })
-                    else { return }
-                    beginEditWithGemini(
-                        for: place,
-                        imagePath: record.activePath,
-                        workflow: record.workflow
-                    )
+                    else {
+                        beginEditWithGemini(for: record)
+                        return
+                    }
+                    beginEditWithGemini(for: place, imagePath: record.activePath, workflow: record.workflow)
                 },
                 onGenerateWithGemini: { record, count in
                     guard let placeID = record.linkedPlaceID,
                           let place = store.backgrounds.first(where: { $0.id == placeID })
-                    else { return }
-                    beginGenerateWithGemini(
-                        for: place,
-                        imagePath: record.activePath,
-                        count: count,
-                        workflow: record.workflow
-                    )
+                    else {
+                        beginGenerateWithGemini(for: record, count: count)
+                        return
+                    }
+                    beginGenerateWithGemini(for: place, imagePath: record.activePath, count: count, workflow: record.workflow)
                 }
             )
         }
@@ -2208,6 +2216,10 @@ struct PlacesPageView: View {
                     beginEditWithGemini(for: place, imagePath: path, workflow: workflowMode)
                 },
                 ratingFor: { path in store.placeImageRating(path: path, placeID: place.id) },
+                isRejectedFor: { path in store.placeImageIsRejected(path: path) },
+                hasNotesFor: { path in
+                    !store.placeImageNotes(path: path).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                },
                 onSetRating: { path, rating in
                     store.setPlaceImageRating(path: path, rating: rating, placeID: place.id)
                 },
@@ -2540,6 +2552,7 @@ struct PlacesPageView: View {
         }
         placePendingPlan = PendingPlaceGenerationPlan(
             placeID: place.id,
+            sourceDescription: place.name,
             workflow: workflow,
             routeID: nil,
             nodeIDs: [],
@@ -2547,6 +2560,44 @@ struct PlacesPageView: View {
             title: count == 1
                 ? "Generate from \(filename)"
                 : "\(place.name) • \(workflow.displayName) • \(specs.count) draft\(specs.count == 1 ? "" : "s")",
+            confirmTitle: count == 1 ? "Generate Draft" : "Generate Drafts"
+        )
+    }
+
+    private func beginGenerateWithGemini(for record: GeneratedBackgroundLibraryRecord, count: Int) {
+        let config = store.workflowConfig(for: record.workflow)
+        let metadata = store.generationMetadata(for: record.activePath)
+        let filename = URL(fileURLWithPath: record.activePath).lastPathComponent
+        let reference = GeminiGenerationReferenceDraft(
+            label: "Reference: \(filename)",
+            path: record.activePath,
+            isIncluded: true
+        )
+        let prompt = metadata?.prompt ?? ""
+
+        placeGenerationDrafts = (0..<max(1, count)).map { index in
+            GeminiGenerationDraft(
+                title: count == 1
+                    ? "Generate from \(filename)"
+                    : "Batch \(index + 1) from \(filename)",
+                destinationDescription: "Places • All Images",
+                prompt: prompt,
+                contextNote: "This library image is not linked to a specific place yet. Use it as a visual reference and the result will land back in Places → All Images.",
+                model: metadata.flatMap { GeminiModel(rawValue: $0.model) } ?? config.model,
+                aspectRatio: metadata?.aspectRatio ?? config.aspectRatio,
+                imageSize: metadata?.imageSize ?? config.imageSize,
+                referenceItems: [reference],
+                pricingMode: count > 1 ? .batch : .standard
+            )
+        }
+        placePendingPlan = PendingPlaceGenerationPlan(
+            placeID: nil,
+            sourceDescription: filename,
+            workflow: record.workflow,
+            routeID: nil,
+            nodeIDs: [],
+            count: placeGenerationDrafts.count,
+            title: count == 1 ? "Generate from \(filename)" : "All Images • \(placeGenerationDrafts.count) draft\(placeGenerationDrafts.count == 1 ? "" : "s")",
             confirmTitle: count == 1 ? "Generate Draft" : "Generate Drafts"
         )
     }
@@ -2581,7 +2632,43 @@ struct PlacesPageView: View {
         placeGenerationDrafts = [draft]
         placePendingPlan = PendingPlaceGenerationPlan(
             placeID: place.id,
+            sourceDescription: place.name,
             workflow: workflow,
+            routeID: nil,
+            nodeIDs: [],
+            count: 1,
+            title: "Edit \(filename)",
+            confirmTitle: "Regenerate"
+        )
+    }
+
+    private func beginEditWithGemini(for record: GeneratedBackgroundLibraryRecord) {
+        let config = store.workflowConfig(for: record.workflow)
+        let metadata = store.generationMetadata(for: record.activePath)
+        let filename = URL(fileURLWithPath: record.activePath).lastPathComponent
+        let reference = GeminiGenerationReferenceDraft(
+            label: "Source: \(filename)",
+            path: record.activePath,
+            isIncluded: true
+        )
+
+        var draft = GeminiGenerationDraft(
+            title: "Edit \(filename)",
+            destinationDescription: "Places • All Images",
+            prompt: metadata?.prompt ?? "",
+            contextNote: "Editing an unattached library image — describe only what to change in the Adjustments box below. The result will land back in Places → All Images.",
+            model: metadata.flatMap { GeminiModel(rawValue: $0.model) } ?? config.model,
+            aspectRatio: metadata?.aspectRatio ?? config.aspectRatio,
+            imageSize: metadata?.imageSize ?? config.imageSize,
+            referenceItems: [reference],
+            pricingMode: .standard
+        )
+        draft.editInstructions = ""
+        placeGenerationDrafts = [draft]
+        placePendingPlan = PendingPlaceGenerationPlan(
+            placeID: nil,
+            sourceDescription: filename,
+            workflow: record.workflow,
             routeID: nil,
             nodeIDs: [],
             count: 1,
@@ -2612,6 +2699,7 @@ struct PlacesPageView: View {
         let confirm = count == 1 ? "Generate Draft" : "Generate Drafts"
         placePendingPlan = PendingPlaceGenerationPlan(
             placeID: place.id,
+            sourceDescription: place.name,
             workflow: workflowMode,
             routeID: nil,
             nodeIDs: [],
@@ -3251,6 +3339,146 @@ struct PlacesPageView: View {
         }
     }
 
+    private func runUnattachedLibraryGeneration(
+        _ drafts: [GeminiGenerationDraft],
+        workflow: PlaceWorkflowMode,
+        sourceDescription: String
+    ) {
+        guard store.isGeminiAllowed() else {
+            placeGenerationErrorMessage = "Gemini API calls are blocked. Enable Gemini API Calls in Inspector > Tools."
+            return
+        }
+
+        Task { @MainActor in
+            let service = GeminiImageService()
+            var finishedCount = 0
+            for (index, draft) in drafts.enumerated() {
+                let activityID = store.registerGeminiActivity(
+                    kind: .immediate,
+                    title: draft.title,
+                    source: "Places • All Images • \(sourceDescription)"
+                )
+                let request = GeminiImageService.GenerationRequest(
+                    prompt: draft.effectivePrompt,
+                    referenceImages: buildReferenceImages(from: draft.referenceItems),
+                    model: draft.model,
+                    aspectRatio: draft.aspectRatio,
+                    imageSize: draft.imageSize
+                )
+                store.logGeminiAPICall(
+                    endpoint: "image-generation",
+                    source: "PlacesPageView.runUnattachedLibraryGeneration()"
+                )
+                do {
+                    let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
+                    let storedPath = try store.storeUnattachedGeneratedImage(
+                        imageData: result.imageData,
+                        prompt: draft.effectivePrompt,
+                        model: draft.model,
+                        aspectRatio: draft.aspectRatio,
+                        imageSize: draft.imageSize
+                    )
+                    store.updateGeminiActivity(
+                        activityID,
+                        status: .completed,
+                        outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent
+                    )
+                    finishedCount += 1
+                } catch {
+                    store.updateGeminiActivity(
+                        activityID,
+                        status: .failed,
+                        errorMessage: error.localizedDescription
+                    )
+                    placeGenerationErrorMessage = error.localizedDescription
+                    break
+                }
+
+                if index < drafts.count - 1 {
+                    await vertexImmediateCooldown(afterCompletedDraft: index + 1, totalDrafts: drafts.count, placeID: nil)
+                }
+            }
+
+            if finishedCount > 0 {
+                store.statusMessage = "Generated \(finishedCount) \(workflow.displayName.lowercased()) library image\(finishedCount == 1 ? "" : "s")"
+            }
+        }
+    }
+
+    private func submitUnattachedLibraryBatch(
+        _ drafts: [GeminiGenerationDraft],
+        workflow: PlaceWorkflowMode,
+        sourceDescription: String
+    ) {
+        guard let animateURL = store.animateURL else { return }
+        guard store.isGeminiAllowed() else {
+            placeGenerationErrorMessage = "Gemini API calls are blocked. Enable Gemini API Calls in Inspector > Tools."
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                let config = store.workflowConfig(for: workflow)
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.timeZone = TimeZone(secondsFromGMT: 0)
+                formatter.dateFormat = "yyyyMMdd'T'HHmmssSSS'Z'"
+                let stamp = formatter.string(from: Date())
+                let sourceSlug = PlacesScriptIndexService.fileStem(for: sourceDescription)
+                let outputRoot = animateURL
+                    .appendingPathComponent("backgrounds")
+                    .appendingPathComponent("place-batches")
+                    .appendingPathComponent("unattached-library")
+                    .appendingPathComponent(workflow.rawValue)
+                    .appendingPathComponent(stamp)
+
+                let promptRequests = try drafts.map { draft in
+                    GeminiBatchSubmissionPlan.PromptRequest(
+                        id: sanitizedFilenameStem(for: draft.title),
+                        title: draft.title,
+                        prompt: draft.effectivePrompt,
+                        referencePaths: try resolvedBatchReferencePaths(from: draft.includedReferenceItems)
+                    )
+                }
+
+                let plan = GeminiBatchSubmissionPlan(
+                    characterName: sourceDescription,
+                    characterSlug: sourceSlug.isEmpty ? "unattached-library" : sourceSlug,
+                    displayName: "unattached-\(workflow.rawValue)-\(stamp.lowercased())",
+                    model: drafts.first?.model ?? config.model,
+                    aspectRatio: drafts.first?.aspectRatio ?? config.aspectRatio,
+                    imageSize: drafts.first?.imageSize ?? config.imageSize,
+                    outputRoot: outputRoot,
+                    prompts: promptRequests
+                )
+
+                let service = GeminiBatchService()
+                let submission = try await service.submit(plan: plan, apiKey: store.geminiAPIKey)
+                try service.launchWatchdog(metadataPath: submission.metadataPath, apiKey: store.geminiAPIKey)
+                store.registerWorldGenerationBatch(
+                    PlaceWorldGenerationBatch(
+                        placeID: nil,
+                        workflow: workflow,
+                        title: "All Images • \(sourceDescription)",
+                        state: "submitted",
+                        nodeIDs: [],
+                        promptCount: submission.promptCount,
+                        imageSize: drafts.first?.imageSize ?? config.imageSize,
+                        aspectRatio: drafts.first?.aspectRatio ?? config.aspectRatio,
+                        model: drafts.first?.model ?? config.model,
+                        submittedAt: Date(),
+                        metadataPath: submission.metadataPath.path,
+                        outputRootPath: outputRoot.path,
+                        generatedImagePaths: []
+                    )
+                )
+                store.statusMessage = "Submitted all-images batch from \(sourceDescription)"
+            } catch {
+                placeGenerationErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
     private func submitPlaceBatch(
         _ drafts: [GeminiGenerationDraft],
         for place: BackgroundPlate,
@@ -3264,6 +3492,7 @@ struct PlacesPageView: View {
 
         Task { @MainActor in
             do {
+                let config = store.workflowConfig(for: workflow)
                 let formatter = DateFormatter()
                 formatter.locale = Locale(identifier: "en_US_POSIX")
                 formatter.timeZone = TimeZone(secondsFromGMT: 0)
@@ -3290,9 +3519,9 @@ struct PlacesPageView: View {
                     characterName: place.name,
                     characterSlug: placeSlug,
                     displayName: "\(placeSlug)-\(workflow.rawValue)-\(stamp.lowercased())",
-                    model: drafts.first?.model ?? workflowConfig.model,
-                    aspectRatio: drafts.first?.aspectRatio ?? workflowConfig.aspectRatio,
-                    imageSize: drafts.first?.imageSize ?? workflowConfig.imageSize,
+                    model: drafts.first?.model ?? config.model,
+                    aspectRatio: drafts.first?.aspectRatio ?? config.aspectRatio,
+                    imageSize: drafts.first?.imageSize ?? config.imageSize,
                     outputRoot: outputRoot,
                     prompts: promptRequests
                 )
@@ -3309,8 +3538,9 @@ struct PlacesPageView: View {
                         state: "submitted",
                         nodeIDs: selectedDrafts.compactMap(\.worldNodeID),
                         promptCount: submission.promptCount,
-                        imageSize: drafts.first?.imageSize ?? workflowConfig.imageSize,
-                        model: drafts.first?.model ?? workflowConfig.model,
+                        imageSize: drafts.first?.imageSize ?? config.imageSize,
+                        aspectRatio: drafts.first?.aspectRatio ?? config.aspectRatio,
+                        model: drafts.first?.model ?? config.model,
                         submittedAt: Date(),
                         metadataPath: submission.metadataPath.path,
                         outputRootPath: outputRoot.path,
@@ -3703,11 +3933,8 @@ struct PlaceGridCard: View {
     @ViewBuilder
     private var thumbnailView: some View {
         if let path = place.approvedImagePath(for: workflowMode),
-           let url = store.resolvedCharacterAssetURL(for: path),
-           let image = NSImage(contentsOf: url) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
+           let url = store.resolvedCharacterAssetURL(for: path) {
+            AsyncResolvedImageView(path: url.path, maxPixelSize: 720, contentMode: .fill)
         } else {
             ZStack {
                 Color.gray.opacity(0.1)
@@ -3818,6 +4045,11 @@ private struct PlaceLandmarkDetailView: View {
                 },
                 onCopy: onCopy,
                 onShowInFinder: onShowInFinder,
+                ratingFor: { path in store.imageLibraryRating(for: path) ?? 0 },
+                isRejectedFor: { path in store.imageLibraryIsRejected(for: path) },
+                hasNotesFor: { path in
+                    !store.imageLibraryNotes(for: path).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                },
                 selectedPaths: $selectedPaths,
                 lastClickedPath: $lastClickedPath,
                 onDropURLs: { urls in
@@ -3920,11 +4152,8 @@ private struct PlaceLandmarkDetailView: View {
             }
 
             if let primaryImagePath,
-               let url = resolvedAssetURL(for: primaryImagePath),
-               let image = NSImage(contentsOf: url) {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
+               let url = resolvedAssetURL(for: primaryImagePath) {
+                AsyncResolvedImageView(path: url.path, maxPixelSize: 1600, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .frame(height: 360)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -4682,11 +4911,8 @@ struct AngleImageCard: View {
 
     @ViewBuilder
     private var angleImageThumbnail: some View {
-        if let url = store.resolvedCharacterAssetURL(for: angleImage.imagePath),
-           let image = NSImage(contentsOf: url) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
+        if let url = store.resolvedCharacterAssetURL(for: angleImage.imagePath) {
+            AsyncResolvedImageView(path: url.path, maxPixelSize: 720, contentMode: .fill)
         } else {
             ZStack {
                 Color.gray.opacity(0.1)

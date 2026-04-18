@@ -301,21 +301,23 @@ struct ImagineCanvasPageView: View {
     @ViewBuilder
     private func galleryCell(_ gen: AnimateStore.CanvasGeneration) -> some View {
         let imageURL = URL(fileURLWithPath: gen.imagePath)
-        let nsImg = NSImage(contentsOf: imageURL)
 
         VStack(alignment: .leading, spacing: 6) {
             Group {
-                if let img = nsImg {
-                    Image(nsImage: img)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    Rectangle()
-                        .fill(Color(nsColor: .separatorColor).opacity(0.3))
-                        .overlay(
-                            Image(systemName: "photo")
-                                .foregroundStyle(OperaChromeTheme.textTertiary)
-                        )
+                AsyncResolvedImageView(
+                    path: gen.imagePath,
+                    maxPixelSize: 720,
+                    contentMode: .fill
+                )
+                .overlay {
+                    if !FileManager.default.fileExists(atPath: gen.imagePath) {
+                        Rectangle()
+                            .fill(Color(nsColor: .separatorColor).opacity(0.3))
+                            .overlay(
+                                Image(systemName: "photo")
+                                    .foregroundStyle(OperaChromeTheme.textTertiary)
+                            )
+                    }
                 }
             }
             .frame(height: 160)
@@ -348,14 +350,14 @@ struct ImagineCanvasPageView: View {
                 Label("Show in Finder", systemImage: "folder")
             }
 
-            if let img = nsImg {
-                Button {
+            Button {
+                if let img = NSImage(contentsOf: imageURL) {
                     let pb = NSPasteboard.general
                     pb.clearContents()
                     pb.writeObjects([img])
-                } label: {
-                    Label("Copy Image", systemImage: "doc.on.doc")
                 }
+            } label: {
+                Label("Copy Image", systemImage: "doc.on.doc")
             }
 
             Button {

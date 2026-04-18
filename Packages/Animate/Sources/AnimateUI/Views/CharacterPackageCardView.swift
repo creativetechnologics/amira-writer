@@ -109,10 +109,8 @@ struct CharacterPackageCardView: View {
 
     @ViewBuilder
     private var previewThumbnail: some View {
-        if let previewURL, let image = NSImage(contentsOf: previewURL) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
+        if let previewURL {
+            AsyncResolvedImageView(path: previewURL.path, maxPixelSize: 448, contentMode: .fill)
                 .frame(width: 112, height: 112)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
         } else {

@@ -1,5 +1,49 @@
 import AppKit
+import ImageIO
 import SwiftUI
+
+@available(macOS 26.0, *)
+struct SharedInspectorTabItem<Value: Hashable & Identifiable>: Identifiable {
+    let value: Value
+    let title: String
+    let systemImage: String
+
+    var id: Value.ID { value.id }
+}
+
+@available(macOS 26.0, *)
+struct SharedInspectorTabBar<Value: Hashable & Identifiable>: View {
+    @Binding var selection: Value
+    let items: [SharedInspectorTabItem<Value>]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(items) { item in
+                Button {
+                    selection = item.value
+                } label: {
+                    Label(item.title, systemImage: item.systemImage)
+                        .font(.caption)
+                        .fontWeight(selection == item.value ? .semibold : .regular)
+                        .foregroundStyle(selection == item.value ? .primary : .secondary)
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .padding(.horizontal, 10)
+                        .background(
+                            selection == item.value
+                                ? AnyShapeStyle(Color.accentColor.opacity(0.12))
+                                : AnyShapeStyle(Color.clear),
+                            in: RoundedRectangle(cornerRadius: 8)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .frame(maxWidth: .infinity)
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+    }
+}
 
 // MARK: - Protocol
 
@@ -14,10 +58,18 @@ protocol DetailedImageSelection {
     var notes: String { get }
     var metadataRows: [(label: String, value: String)] { get }
     var emptyStateMessage: String { get }
+    var supportsRating: Bool { get }
+    var supportsNotes: Bool { get }
 
     func setRating(_ newValue: Int?)
     func toggleRejected()
     func setNotes(_ newValue: String)
+}
+
+@available(macOS 26.0, *)
+extension DetailedImageSelection {
+    var supportsRating: Bool { true }
+    var supportsNotes: Bool { true }
 }
 
 // MARK: - Shared View
@@ -54,8 +106,12 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
 
             if selection.imageURL != nil {
                 previewCard
-                ratingSection
-                notesEditor
+                if selection.supportsRating {
+                    ratingSection
+                }
+                if selection.supportsNotes {
+                    notesEditor
+                }
                 extraActions()
                 if !selection.metadataRows.isEmpty {
                     Divider()
@@ -118,15 +174,20 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                 .frame(maxWidth: .infinity)
                 .frame(height: CGFloat(previewHeight))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .task(id: url) {
+                .task(id: "\(url.path)#\(previewPixelSize)") {
                     // Load off the main thread so tab switches / selection
-                    // changes don't block UI (NSImage(contentsOf:) reads and
-                    // decodes synchronously — fine for thumbnails, not for
-                    // full 4K images).
-                    if loadedImageURL == url, loadedImage != nil { return }
+                    // changes don't block UI. Decode an inspector-sized
+                    // preview instead of the full source asset so 4K/8K
+                    // images don't beachball the main actor.
+                    if loadedImageURL == url,
+                       let loadedImage,
+                       Int(max(loadedImage.size.width, loadedImage.size.height)) >= previewPixelSize {
+                        return
+                    }
                     let target = url
+                    let pixelSize = previewPixelSize
                     let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
-                        return NSImage(contentsOf: target)
+                        return loadInspectorPreview(url: target, maxPixelSize: pixelSize)
                     }.value
                     if !Task.isCancelled {
                         loadedImage = image
@@ -187,6 +248,10 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
         }
         .padding(12)
         .background(.background.opacity(0.5), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var previewPixelSize: Int {
+        max(720, Int(CGFloat(previewHeight) * 2.0))
     }
 
     // MARK: - Rating
@@ -290,6 +355,26 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                 }
         }
     }
+}
+
+@available(macOS 26.0, *)
+private func loadInspectorPreview(url: URL, maxPixelSize: Int) -> NSImage? {
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+        return NSImage(contentsOf: url)
+    }
+    let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true
+    ]
+    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        return NSImage(contentsOf: url)
+    }
+    return NSImage(
+        cgImage: cgImage,
+        size: NSSize(width: cgImage.width, height: cgImage.height)
+    )
 }
 
 // Convenience init when no extra actions are needed
@@ -545,6 +630,8 @@ struct PropImageSelection: DetailedImageSelection {
     var notes: String { "" }
     var metadataRows: [(label: String, value: String)] { [] }
     var emptyStateMessage: String { "No prop image selected." }
+    var supportsRating: Bool { false }
+    var supportsNotes: Bool { false }
 
     func setRating(_ newValue: Int?) {}
     func toggleRejected() {}

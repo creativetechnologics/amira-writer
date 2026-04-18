@@ -39,6 +39,7 @@ struct UnifiedImageTile: View {
     var isSelected: Bool = false
     var isCurated: Bool = false
     var isRejected: Bool = false
+    var hasNotes: Bool = false
     /// 1...5 star rating. Nil or 0 hides the badge.
     var rating: Int? = nil
     /// When true, a checkmark overlay is drawn at top-trailing on selection.
@@ -143,6 +144,14 @@ struct UnifiedImageTile: View {
     private var bottomLeadingSlot: some View {
         if let bottomLeadingOverlay {
             bottomLeadingOverlay
+        } else if hasNotes {
+            Image(systemName: "note.text")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.55), in: Capsule())
+                .padding(4)
         }
     }
 
