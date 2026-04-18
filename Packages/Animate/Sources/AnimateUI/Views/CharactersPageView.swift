@@ -1229,48 +1229,9 @@ private struct AsyncApprovedVariantView: View {
     }
 }
 
-/// Generic async thumbnail used by gallery sheets.
-@available(macOS 26.0, *)
-private struct AsyncSheetThumbnail: View {
-    let store: AnimateStore
-    let path: String
-    let size: CGFloat
-    let aspectMultiplier: CGFloat
-    let minHeight: CGFloat
-
-    @State private var image: NSImage?
-
-    private var boxHeight: CGFloat { max(minHeight, size * aspectMultiplier) }
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.quaternary.opacity(0.22))
-                .frame(width: size, height: boxHeight)
-
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: size, height: boxHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .transition(.opacity.animation(.easeIn(duration: 0.15)))
-            } else {
-                Image(systemName: "photo")
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .frame(width: size, height: boxHeight)
-        .task(id: "\(path)#\(Int(size))") {
-            if let cached = store.thumbnailImage(for: path, maxSize: size) {
-                image = cached
-                return
-            }
-            let loaded = await store.thumbnailImageAsync(for: path, maxSize: size)
-            if !Task.isCancelled { image = loaded }
-        }
-    }
-}
+// AsyncSheetThumbnail was removed 2026-04-17 (Pass 4). Gallery sheets now
+// route through UnifiedImageTile → CachedThumbnailView, same pipeline as
+// every main-app grid.
 
 // MARK: - Image Gallery Section
 
@@ -2342,51 +2303,40 @@ struct InspirationGallerySheet: View {
 
     @ViewBuilder
     private func galleryThumbnail(path: String, index: Int) -> some View {
+        // Pass 4 (Gary): inspiration gallery sheet now uses UnifiedImageTile.
         let geminiEnabled = !store.geminiAPIKey.isEmpty && store.geminiMasterSwitch
-        VStack(spacing: 4) {
-            thumbnailImage(for: path)
-                .contextMenu {
-                    UnifiedImageContextMenuContent(
-                        selectedCount: 0,
-                        isSelected: false,
-                        actions: UnifiedImageActions(
-                            onSetAsProfile: {
-                                if let character = store.selectedCharacter {
-                                    store.prepareProfilePicCrop(from: path, for: character.id)
-                                }
-                            },
-                            onShowInFinder: {
-                                if let url = store.resolvedCharacterAssetURL(for: path) {
-                                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                                }
-                            },
-                            onQuickLook: {
-                                openQuickLook(for: character.inspirationImagePaths, startingAt: index)
-                            },
-                            onGenerateWithGemini: geminiEnabled ? { count in
-                                beginGenerateWithGemini(imagePath: path, count: count)
-                            } : nil,
-                            onRemoveFromCollection: {
-                                store.removeInspirationImage(at: index, for: character.id)
-                            }
-                        )
-                    )
-                }
-                .onTapGesture(count: 2) {
+        let resolvedURL = store.resolvedCharacterAssetURL(for: path)
+        let displayName = resolvedURL?.lastPathComponent ?? URL(fileURLWithPath: path).lastPathComponent
+        UnifiedImageTile(
+            path: path,
+            resolvedPath: resolvedURL?.path,
+            thumbnailSize: thumbnailBaseSize,
+            caption: displayName,
+            actions: UnifiedImageActions(
+                onSetAsProfile: {
+                    if let character = store.selectedCharacter {
+                        store.prepareProfilePicCrop(from: path, for: character.id)
+                    }
+                },
+                onShowInFinder: {
+                    if let url = store.resolvedCharacterAssetURL(for: path) {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                },
+                onQuickLook: {
                     openQuickLook(for: character.inspirationImagePaths, startingAt: index)
+                },
+                onGenerateWithGemini: geminiEnabled ? { count in
+                    beginGenerateWithGemini(imagePath: path, count: count)
+                } : nil,
+                onRemoveFromCollection: {
+                    store.removeInspirationImage(at: index, for: character.id)
                 }
-
-            Text(store.resolvedCharacterAssetURL(for: path)?.lastPathComponent ?? URL(fileURLWithPath: path).lastPathComponent)
-                .font(.caption2)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .foregroundStyle(.tertiary)
-        }
-    }
-
-    @ViewBuilder
-    private func thumbnailImage(for path: String) -> some View {
-        AsyncSheetThumbnail(store: store, path: path, size: thumbnailBaseSize, aspectMultiplier: 0.68, minHeight: 96)
+            ),
+            onDoubleTap: {
+                openQuickLook(for: character.inspirationImagePaths, startingAt: index)
+            }
+        )
     }
 
     private func openQuickLook(for paths: [String], startingAt index: Int) {
@@ -2660,52 +2610,40 @@ struct ReferenceImagesSheet: View {
 
     @ViewBuilder
     private func referenceGalleryThumbnail(path: String, index: Int) -> some View {
+        // Pass 4 (Gary): reference images sheet now uses UnifiedImageTile.
         let geminiEnabled = !store.geminiAPIKey.isEmpty && store.geminiMasterSwitch
-        VStack(spacing: 4) {
-            thumbnailImage(for: path)
-                .contextMenu {
-                    UnifiedImageContextMenuContent(
-                        selectedCount: 0,
-                        isSelected: false,
-                        actions: UnifiedImageActions(
-                            onSetAsProfile: {
-                                if let character = store.selectedCharacter {
-                                    store.prepareProfilePicCrop(from: path, for: character.id)
-                                }
-                            },
-                            onShowInFinder: {
-                                if let url = store.resolvedCharacterAssetURL(for: path) {
-                                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                                }
-                            },
-                            onQuickLook: {
-                                openQuickLook(for: character.referenceImagePaths, startingAt: index)
-                            },
-                            onGenerateWithGemini: (geminiEnabled && onGenerateWithGemini != nil) ? { count in
-                                onGenerateWithGemini?(path, count)
-                            } : nil,
-                            onRemoveFromCollection: {
-                                store.removeReferenceImage(at: index, for: character.id)
-                            }
-                        )
-                    )
-                }
-                .onTapGesture(count: 2) {
+        let resolvedURL = store.resolvedCharacterAssetURL(for: path)
+        let displayName = resolvedURL?.lastPathComponent ?? URL(fileURLWithPath: path).lastPathComponent
+        UnifiedImageTile(
+            path: path,
+            resolvedPath: resolvedURL?.path,
+            thumbnailSize: thumbnailBaseSize,
+            caption: displayName,
+            actions: UnifiedImageActions(
+                onSetAsProfile: {
+                    if let character = store.selectedCharacter {
+                        store.prepareProfilePicCrop(from: path, for: character.id)
+                    }
+                },
+                onShowInFinder: {
+                    if let url = store.resolvedCharacterAssetURL(for: path) {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                },
+                onQuickLook: {
                     openQuickLook(for: character.referenceImagePaths, startingAt: index)
+                },
+                onGenerateWithGemini: (geminiEnabled && onGenerateWithGemini != nil) ? { count in
+                    onGenerateWithGemini?(path, count)
+                } : nil,
+                onRemoveFromCollection: {
+                    store.removeReferenceImage(at: index, for: character.id)
                 }
-
-            Text(store.resolvedCharacterAssetURL(for: path)?.lastPathComponent ?? URL(fileURLWithPath: path).lastPathComponent)
-                .font(.caption2)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    @ViewBuilder
-    private func thumbnailImage(for path: String) -> some View {
-        AsyncSheetThumbnail(store: store, path: path, size: thumbnailBaseSize, aspectMultiplier: 0.68, minHeight: 88)
+            ),
+            onDoubleTap: {
+                openQuickLook(for: character.referenceImagePaths, startingAt: index)
+            }
+        )
     }
 
     private func openQuickLook(for paths: [String], startingAt index: Int) {

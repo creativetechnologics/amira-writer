@@ -103,43 +103,29 @@ struct UniversalImagePickerSheet: View {
 
     @ViewBuilder
     private func pickerThumbnail(entry: ImagineImagePickerEntry) -> some View {
+        // Pass 4 (Gary): even the picker sheets route through UnifiedImageTile
+        // so selection highlighting, padding, and decode pipeline stay
+        // identical to the main app grids.
         let isSelected = selectedPaths.contains(entry.path)
-
-        ZStack(alignment: .topTrailing) {
-            AsyncStoreThumbnailImage<AnyView>.rounded(
-                store: store,
-                path: entry.path,
-                maxSize: 160,
-                width: 80,
-                height: 80,
-                contentMode: .fill,
-                cornerRadius: 4
-            )
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2))
-
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 16))
-                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                .background(Circle().fill(.ultraThinMaterial).frame(width: 18, height: 18))
-                .padding(4)
-        }
-        .onTapGesture { toggleSelection(entry.path) }
+        UnifiedImageTile(
+            path: entry.path,
+            thumbnailSize: 80,
+            isSelected: isSelected,
+            selectedCount: selectedPaths.count,
+            onTap: { toggleSelection(entry.path) }
+        )
     }
 
     private var stagingTray: some View {
+        // Staging tray: small 50pt chips of already-selected images with a
+        // red xmark for instant removal. Still routed through the shared
+        // CachedThumbnailView so decode/cache stays unified.
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(selectedPaths, id: \.self) { path in
                     ZStack(alignment: .topTrailing) {
-                        AsyncStoreThumbnailImage<AnyView>.rounded(
-                            store: store,
-                            path: path,
-                            maxSize: 100,
-                            width: 50,
-                            height: 50,
-                            contentMode: .fill,
-                            cornerRadius: 4
-                        )
+                        CachedThumbnailView(path: path, size: 50)
+                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
 
                         Button {
                             selectedPaths.removeAll { $0 == path }

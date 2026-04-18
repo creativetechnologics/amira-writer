@@ -865,18 +865,16 @@ struct GeminiGenerationPreflightSheet: View {
         reference: Binding<GeminiGenerationReferenceDraft>,
         draftID: UUID
     ) -> some View {
+        // Pass 4 (Gary): Gemini preflight reference cards now use
+        // UnifiedImageTile for the thumbnail portion so decode/cache/radius
+        // matches every other grid in the app. The outer card border still
+        // signals the per-reference isIncluded state, and the toggle row
+        // below is unique to this sheet.
         VStack(alignment: .leading, spacing: 8) {
-            referenceThumbnail(path: reference.wrappedValue.path)
-                .overlay(alignment: .topTrailing) {
-                    Button {
-                        removeReference(reference.wrappedValue.id, from: draftID)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary, .thinMaterial)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(6)
-                }
+            referenceTile(
+                path: reference.wrappedValue.path,
+                onRemove: { removeReference(reference.wrappedValue.id, from: draftID) }
+            )
 
             Toggle(isOn: reference.isIncluded) {
                 Text(reference.wrappedValue.label)
@@ -898,17 +896,10 @@ struct GeminiGenerationPreflightSheet: View {
         reference: Binding<GeminiGenerationReferenceDraft>
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            referenceThumbnail(path: reference.wrappedValue.path)
-                .overlay(alignment: .topTrailing) {
-                    Button {
-                        removeSharedReference(reference.wrappedValue.id)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary, .thinMaterial)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(6)
-                }
+            referenceTile(
+                path: reference.wrappedValue.path,
+                onRemove: { removeSharedReference(reference.wrappedValue.id) }
+            )
 
             Toggle(isOn: reference.isIncluded) {
                 Text(reference.wrappedValue.label)
@@ -927,11 +918,20 @@ struct GeminiGenerationPreflightSheet: View {
     }
 
     @ViewBuilder
-    private func referenceThumbnail(path: String) -> some View {
-        GeminiPreflightReferenceThumbnail(
-            store: store,
+    private func referenceTile(path: String, onRemove: @escaping () -> Void) -> some View {
+        let fallback = resolvedAbsoluteURL(for: path)?.path
+        UnifiedImageTile(
             path: path,
-            fallbackAbsolutePath: resolvedAbsoluteURL(for: path)?.path
+            resolvedPath: fallback,
+            thumbnailSize: 120,
+            topTrailingOverlay: AnyView(
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary, .thinMaterial)
+                }
+                .buttonStyle(.plain)
+                .padding(6)
+            )
         )
     }
 
@@ -1109,54 +1109,5 @@ struct GeminiGenerationPreflightSheet: View {
     }
 }
 
-// MARK: - Async thumbnail for preflight references
-
-private struct GeminiPreflightReferenceThumbnail: View {
-    let store: AnimateStore
-    let path: String
-    let fallbackAbsolutePath: String?
-
-    @State private var image: NSImage?
-
-    var body: some View {
-        Group {
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 120, height: 120)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            } else {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(.quaternary.opacity(0.25))
-                    .frame(width: 120, height: 120)
-                    .overlay {
-                        Image(systemName: "photo")
-                            .foregroundStyle(.tertiary)
-                    }
-            }
-        }
-        .task(id: path) {
-            // Immediate: cache-only lookup on the main actor so we don't flash a placeholder
-            // for thumbnails that have already been decoded.
-            if let cached = store.cachedThumbnailImage(for: path, maxSize: 120) {
-                image = cached
-                return
-            }
-            if let fallback = fallbackAbsolutePath,
-               let cached = store.cachedThumbnailImage(for: fallback, maxSize: 120) {
-                image = cached
-                return
-            }
-            // Cache miss: decode off the main thread.
-            if let decoded = await store.thumbnailImageAsync(for: path, maxSize: 120) {
-                image = decoded
-                return
-            }
-            if let fallback = fallbackAbsolutePath,
-               let decoded = await store.thumbnailImageAsync(for: fallback, maxSize: 120) {
-                image = decoded
-            }
-        }
-    }
-}
+// GeminiPreflightReferenceThumbnail was removed 2026-04-17 (Pass 4).
+// Preflight reference tiles use UnifiedImageTile → CachedThumbnailView now.

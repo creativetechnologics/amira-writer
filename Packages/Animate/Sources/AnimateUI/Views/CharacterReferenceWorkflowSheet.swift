@@ -1882,60 +1882,48 @@ struct MiniVariantChip: View {
     let onAdjustCrop: () -> Void
 
     var body: some View {
+        // Pass 4 (Gary): the thumbnail portion routes through
+        // UnifiedImageTile so decode/cache/radius match every other grid.
+        // The approve/edit/prompt/delete button row stays below — these
+        // are chip-specific verbs not present on generic image tiles. The
+        // green approval ring stays to communicate the distinct "chosen
+        // final pose" state (semantically different from normal selection).
+        let resolvedURL = store.resolvedCharacterAssetURL(for: variant.imagePath)
         VStack(spacing: 4) {
-            ZStack(alignment: .bottomTrailing) {
-                AsyncStoreThumbnailImage.rounded(
-                    store: store,
-                    path: variant.imagePath,
-                    maxSize: 72,
-                    width: 72,
-                    height: 72,
-                    cornerRadius: 10,
-                    placeholderOpacity: 0.2
-                )
-                .onTapGesture(count: 2, perform: onQuickLook)
-                .onTapGesture(count: 1) {
-                    // Surface this variant in the Inspector Details pane.
-                    store.imaginePreviewImagePath = variant.imagePath
-                }
-                .contextMenu {
-                    Button("View Prompt", systemImage: "eye.circle") {
-                        onShowPrompt()
-                    }
-                    Button("Edit", systemImage: "slider.horizontal.3") {
-                        onEdit()
-                    }
-                    Button("Show in Finder", systemImage: "folder") {
+            UnifiedImageTile(
+                path: variant.imagePath,
+                resolvedPath: resolvedURL?.path,
+                thumbnailSize: 72,
+                actions: UnifiedImageActions(
+                    onShowPrompt: onShowPrompt,
+                    onShowInFinder: {
                         if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
                             NSWorkspace.shared.activateFileViewerSelecting([url])
                         }
-                    }
-                    Button("Copy Image", systemImage: "doc.on.doc") {
-                        onCopy()
-                    }
-                    Divider()
-                    Button("Adjust Crop", systemImage: "crop") {
-                        onAdjustCrop()
-                    }
-                    Button("Quick Look", systemImage: "eye") {
-                        onQuickLook()
-                    }
-                    Divider()
-                    if !isApproved {
-                        Button("Use This Variant", systemImage: "checkmark.circle") {
-                            onApprove()
-                        }
-                    }
-                    Button("Delete", systemImage: "trash", role: .destructive) {
-                        onDelete()
-                    }
-                }
+                    },
+                    onCopy: onCopy,
+                    onQuickLook: onQuickLook,
+                    onEditWithGemini: onEdit
+                ),
+                onTap: {
+                    // Surface this variant in the Inspector Details pane.
+                    store.imaginePreviewImagePath = variant.imagePath
+                },
+                onDoubleTap: onQuickLook,
+                bottomTrailingOverlay: isApproved
+                    ? AnyView(
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.green)
+                            .background(Circle().fill(.black.opacity(0.5)).padding(-2))
+                            .padding(4)
+                    )
+                    : nil
+            )
+            .overlay {
                 if isApproved {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.green)
-                        .background(Circle().fill(.black.opacity(0.5)).padding(-2))
-                        .padding(4)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.green.opacity(0.5), lineWidth: 2)
                 }
             }
 
@@ -1969,12 +1957,6 @@ struct MiniVariantChip: View {
                 .controlSize(.mini)
                 .help("Delete")
             }
-        }
-        .padding(6)
-        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isApproved ? Color.green.opacity(0.5) : .clear, lineWidth: 2)
         }
     }
 }

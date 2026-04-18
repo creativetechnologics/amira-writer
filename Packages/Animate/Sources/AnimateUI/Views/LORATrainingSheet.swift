@@ -121,20 +121,16 @@ struct LORATrainingSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
             } else {
+                // Pass 4 (Gary): read-only LORA training preview grid now
+                // routes through UnifiedImageTile. The purple border +
+                // custom stroke was dropped for visual parity with the
+                // main app grids — every image is included in training by
+                // definition, so the visual hint is redundant.
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 80))], spacing: 6) {
                     ForEach(previewPaths, id: \.self) { path in
-                        AsyncStoreThumbnailImage<AnyView>.rounded(
-                            store: store,
+                        UnifiedImageTile(
                             path: path,
-                            maxSize: 160,
-                            width: 80,
-                            height: 80,
-                            contentMode: .fill,
-                            cornerRadius: 4
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(Color.purple.opacity(0.6), lineWidth: 1.5)
+                            thumbnailSize: 80
                         )
                         .allowsHitTesting(false)
                     }

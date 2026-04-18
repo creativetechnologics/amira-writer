@@ -4547,32 +4547,25 @@ private struct PlaceReferenceThumbnailCard: View {
     let onShowInFinder: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack(alignment: .topTrailing) {
-                if let url = store.resolvedCharacterAssetURL(for: reference.imagePath) ?? (FileManager.default.fileExists(atPath: reference.imagePath) ? URL(fileURLWithPath: reference.imagePath) : nil) {
-                    CachedThumbnailView(path: url.path, size: 150)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                } else {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.secondary.opacity(0.1))
-                        .frame(width: 150, height: 150)
-                }
+        // Pass 4 (Gary): reference cards in Places now wrap UnifiedImageTile.
+        // The per-card category pill remains below because it's metadata
+        // unique to this card type (no other grid has it). The ellipsis
+        // menu is subsumed by the tile's right-click menu.
+        let resolvedURL = store.resolvedCharacterAssetURL(for: reference.imagePath)
+            ?? (FileManager.default.fileExists(atPath: reference.imagePath) ? URL(fileURLWithPath: reference.imagePath) : nil)
+        VStack(alignment: .leading, spacing: 6) {
+            UnifiedImageTile(
+                path: reference.imagePath,
+                resolvedPath: resolvedURL?.path,
+                thumbnailSize: 150,
+                caption: reference.title,
+                actions: UnifiedImageActions(
+                    onShowInFinder: { onShowInFinder() },
+                    onRemoveFromCollection: { onRemove() },
+                    removeFromCollectionLabel: "Remove Reference"
+                )
+            )
 
-                Menu {
-                    Button("Show in Finder") { onShowInFinder() }
-                    Button("Remove", systemImage: "trash", role: .destructive) { onRemove() }
-                } label: {
-                    Image(systemName: "ellipsis.circle.fill")
-                        .font(.title3)
-                        .symbolRenderingMode(.hierarchical)
-                        .padding(6)
-                }
-                .menuStyle(.borderlessButton)
-            }
-
-            Text(reference.title)
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
             Text(reference.category.displayName)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -4580,7 +4573,7 @@ private struct PlaceReferenceThumbnailCard: View {
                 .padding(.vertical, 3)
                 .background(.quaternary.opacity(0.2), in: Capsule())
         }
-        .frame(width: 150, alignment: .leading)
+        .frame(width: 162, alignment: .leading)
     }
 }
 
