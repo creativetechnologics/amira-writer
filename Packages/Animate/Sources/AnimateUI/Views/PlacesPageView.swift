@@ -405,11 +405,12 @@ struct PlacesSidebarView: View {
     @Binding var selectedLandmarkID: UUID?
     let allImageCount: Int
     let worldSnapshot: PlacesWorldbuildingSnapshot
+    let showsThumbnails: Bool
     @AppStorage("animate.places.workflowMode.v1") private var workflowModeRawValue = PlaceWorkflowMode.photorealistic.rawValue
     @State private var dropTargetPlaceID: UUID?
     @State private var dropTargetLandmarkID: UUID?
-    @State private var landmarksExpanded = true
-    @State private var placesExpanded = true
+    @State private var landmarksExpanded = false
+    @State private var placesExpanded = false
 
     private var workflowMode: PlaceWorkflowMode {
         PlaceWorkflowMode(rawValue: workflowModeRawValue) ?? .photorealistic
@@ -429,13 +430,15 @@ struct PlacesSidebarView: View {
         viewMode: Binding<PlacesViewMode>,
         selectedLandmarkID: Binding<UUID?> = .constant(nil),
         allImageCount: Int,
-        worldSnapshot: PlacesWorldbuildingSnapshot = .empty
+        worldSnapshot: PlacesWorldbuildingSnapshot = .empty,
+        showsThumbnails: Bool = true
     ) {
         _store = Bindable(store)
         _viewMode = viewMode
         _selectedLandmarkID = selectedLandmarkID
         self.allImageCount = allImageCount
         self.worldSnapshot = worldSnapshot
+        self.showsThumbnails = showsThumbnails
     }
 
     var body: some View {
@@ -477,41 +480,43 @@ struct PlacesSidebarView: View {
             }
 
             DisclosureGroup(isExpanded: $landmarksExpanded) {
-                VStack(spacing: 2) {
-                    if sortedLandmarkProfiles.isEmpty {
-                        sidebarEmptyState("No landmark profiles yet.")
-                    } else {
-                        ForEach(sortedLandmarkProfiles) { profile in
-                            Button {
-                                selectedLandmarkID = profile.id
-                                viewMode = .landmarks
-                            } label: {
-                                OperaChromeSidebarRow(
-                                    isSelected: (viewMode == .landmarks && selectedLandmarkID == profile.id) || dropTargetLandmarkID == profile.id
-                                ) {
-                                    landmarkRow(profile)
-                                        .padding(.leading, 18)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .dropDestination(for: URL.self) { urls, _ in
-                                let accepted = store.attachDroppedImagesToLandmark(urls: urls, landmarkID: profile.id)
-                                if accepted {
+                if landmarksExpanded {
+                    VStack(spacing: 2) {
+                        if sortedLandmarkProfiles.isEmpty {
+                            sidebarEmptyState("No landmark profiles yet.")
+                        } else {
+                            ForEach(sortedLandmarkProfiles) { profile in
+                                Button {
                                     selectedLandmarkID = profile.id
                                     viewMode = .landmarks
+                                } label: {
+                                    OperaChromeSidebarRow(
+                                        isSelected: (viewMode == .landmarks && selectedLandmarkID == profile.id) || dropTargetLandmarkID == profile.id
+                                    ) {
+                                        landmarkRow(profile)
+                                            .padding(.leading, 18)
+                                    }
                                 }
-                                return accepted
-                            } isTargeted: { isTargeted in
-                                if isTargeted {
-                                    dropTargetLandmarkID = profile.id
-                                } else if dropTargetLandmarkID == profile.id {
-                                    dropTargetLandmarkID = nil
+                                .buttonStyle(.plain)
+                                .dropDestination(for: URL.self) { urls, _ in
+                                    let accepted = store.attachDroppedImagesToLandmark(urls: urls, landmarkID: profile.id)
+                                    if accepted {
+                                        selectedLandmarkID = profile.id
+                                        viewMode = .landmarks
+                                    }
+                                    return accepted
+                                } isTargeted: { isTargeted in
+                                    if isTargeted {
+                                        dropTargetLandmarkID = profile.id
+                                    } else if dropTargetLandmarkID == profile.id {
+                                        dropTargetLandmarkID = nil
+                                    }
                                 }
                             }
                         }
                     }
+                    .padding(.top, 6)
                 }
-                .padding(.top, 6)
             } label: {
                 sidebarDisclosureLabel(
                     title: "Landmarks",
@@ -521,46 +526,48 @@ struct PlacesSidebarView: View {
             }
 
             DisclosureGroup(isExpanded: $placesExpanded) {
-                VStack(spacing: 2) {
-                    if store.backgrounds.isEmpty {
-                        sidebarEmptyState("No places yet — import a place or sync the place list.")
-                    } else {
-                        ForEach(store.backgrounds) { place in
-                            Button {
-                                store.selectedBackgroundID = place.id
-                                viewMode = .detail
-                            } label: {
-                                OperaChromeSidebarRow(
-                                    isSelected: (viewMode == .detail && store.selectedBackgroundID == place.id) || dropTargetPlaceID == place.id
-                                ) {
-                                    placeRow(place)
-                                        .padding(.leading, 18)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .dropDestination(for: URL.self) { urls, _ in
-                                store.selectedBackgroundID = place.id
-                                let accepted = store.attachDroppedImagesToPlace(urls: urls, placeID: place.id, workflow: workflowMode)
-                                if accepted {
+                if placesExpanded {
+                    VStack(spacing: 2) {
+                        if store.backgrounds.isEmpty {
+                            sidebarEmptyState("No places yet — import a place or sync the place list.")
+                        } else {
+                            ForEach(store.backgrounds) { place in
+                                Button {
+                                    store.selectedBackgroundID = place.id
                                     viewMode = .detail
+                                } label: {
+                                    OperaChromeSidebarRow(
+                                        isSelected: (viewMode == .detail && store.selectedBackgroundID == place.id) || dropTargetPlaceID == place.id
+                                    ) {
+                                        placeRow(place)
+                                            .padding(.leading, 18)
+                                    }
                                 }
-                                return accepted
-                            } isTargeted: { isTargeted in
-                                if isTargeted {
-                                    dropTargetPlaceID = place.id
-                                } else if dropTargetPlaceID == place.id {
-                                    dropTargetPlaceID = nil
+                                .buttonStyle(.plain)
+                                .dropDestination(for: URL.self) { urls, _ in
+                                    store.selectedBackgroundID = place.id
+                                    let accepted = store.attachDroppedImagesToPlace(urls: urls, placeID: place.id, workflow: workflowMode)
+                                    if accepted {
+                                        viewMode = .detail
+                                    }
+                                    return accepted
+                                } isTargeted: { isTargeted in
+                                    if isTargeted {
+                                        dropTargetPlaceID = place.id
+                                    } else if dropTargetPlaceID == place.id {
+                                        dropTargetPlaceID = nil
+                                    }
                                 }
-                            }
-                            .contextMenu {
-                                Button("Delete Place", systemImage: "trash", role: .destructive) {
-                                    store.deletePlace(place.id)
+                                .contextMenu {
+                                    Button("Delete Place", systemImage: "trash", role: .destructive) {
+                                        store.deletePlace(place.id)
+                                    }
                                 }
                             }
                         }
                     }
+                    .padding(.top, 6)
                 }
-                .padding(.top, 6)
             } label: {
                 sidebarDisclosureLabel(
                     title: "Places",
@@ -639,7 +646,8 @@ struct PlacesSidebarView: View {
     @ViewBuilder
     private func placeRow(_ place: BackgroundPlate) -> some View {
         HStack(spacing: OperaChromeSidebarMetrics.rowIconSpacing) {
-            if let image = cachedSidebarThumbnail(for: place.approvedImagePath(for: workflowMode)) {
+            if showsThumbnails,
+               let image = cachedSidebarThumbnail(for: place.approvedImagePath(for: workflowMode)) {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -667,7 +675,8 @@ struct PlacesSidebarView: View {
     @ViewBuilder
     private func landmarkRow(_ profile: PlaceLandmarkProfile) -> some View {
         HStack(spacing: OperaChromeSidebarMetrics.rowIconSpacing) {
-            if let image = cachedSidebarThumbnail(for: profile.primaryImagePath ?? profile.exteriorImagePath ?? profile.galleryImagePaths.first) {
+            if showsThumbnails,
+               let image = cachedSidebarThumbnail(for: profile.primaryImagePath ?? profile.exteriorImagePath ?? profile.galleryImagePaths.first) {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -786,8 +795,13 @@ struct PlacesPageView: View {
     @State private var worldMapPanelMode: PlacesWorldMapPanelMode = .map
     @State private var cachedWorldbuildingSnapshot: PlacesWorldbuildingSnapshot = .empty
     @State private var worldNodeDrafts: [String: PlacesWorldNodeDraft] = [:]
+    @State private var stagedGridPlaceCount: Int = 0
+    @State private var renderGridThumbnails = false
+    @State private var renderSidebarThumbnails = false
+    @State private var renderOverviewDetails = false
     @State private var worldbuildingRefreshTask: Task<Void, Never>?
     @State private var landmarkSuggestionRefreshTask: Task<Void, Never>?
+    @State private var placesRenderStagingTask: Task<Void, Never>?
     @AppStorage("animate.places.workflowMode.v1") private var workflowModeRawValue = PlaceWorkflowMode.photorealistic.rawValue
     var showSidebar: Bool = true
 
@@ -825,26 +839,34 @@ struct PlacesPageView: View {
         cachedWorldbuildingSnapshot.applying(nodeDrafts: worldNodeDrafts)
     }
 
-    private var worldbuildingSnapshotRefreshToken: String {
-        let generatedCount = store.placesWorkflowLibrary.generatedImageRecords.count
-        let generatedUpdated = store.placesWorkflowLibrary.generatedImageRecords
-            .map(\.updatedAt)
-            .max()?
-            .timeIntervalSinceReferenceDate ?? 0
-        let routeCount = store.placesWorkflowLibrary.worldGraph.routes.count
-        let nodeCount = store.placesWorkflowLibrary.worldGraph.nodes.count
-        let reviewCount = store.placesWorkflowLibrary.continuityReviews.count
-        let backgroundCount = store.backgrounds.count
-        return [
-            workflowMode.rawValue,
-            store.placesWorkflowLibrary.masterMapImagePath ?? "",
-            String(backgroundCount),
-            String(generatedCount),
-            String(Int(generatedUpdated)),
-            String(routeCount),
-            String(nodeCount),
-            String(reviewCount)
-        ].joined(separator: "|")
+    private var stagedGridPlaces: [BackgroundPlate] {
+        Array(store.backgrounds.prefix(stagedGridPlaceCount))
+    }
+
+    private var hasMoreStagedGridPlaces: Bool {
+        stagedGridPlaceCount < store.backgrounds.count
+    }
+
+    private struct WorldbuildingSnapshotRefreshKey: Equatable {
+        let workflowMode: PlaceWorkflowMode
+        let masterMapImagePath: String
+        let backgroundCount: Int
+        let generatedCount: Int
+        let routeCount: Int
+        let nodeCount: Int
+        let reviewCount: Int
+    }
+
+    private var worldbuildingSnapshotRefreshKey: WorldbuildingSnapshotRefreshKey {
+        WorldbuildingSnapshotRefreshKey(
+            workflowMode: workflowMode,
+            masterMapImagePath: store.placesWorkflowLibrary.masterMapImagePath ?? "",
+            backgroundCount: store.backgrounds.count,
+            generatedCount: store.placesWorkflowLibrary.generatedImageRecords.count,
+            routeCount: store.placesWorkflowLibrary.worldGraph.routes.count,
+            nodeCount: store.placesWorkflowLibrary.worldGraph.nodes.count,
+            reviewCount: store.placesWorkflowLibrary.continuityReviews.count
+        )
     }
 
     private var selectedWorldRoute: PlacesWorldbuildingSnapshot.Route? {
@@ -900,6 +922,50 @@ struct PlacesPageView: View {
         }
     }
 
+    private func schedulePlacesRenderStaging(reset: Bool = false) {
+        placesRenderStagingTask?.cancel()
+        let totalPlaces = store.backgrounds.count
+
+        if reset {
+            stagedGridPlaceCount = 0
+            renderGridThumbnails = false
+            renderSidebarThumbnails = false
+            renderOverviewDetails = false
+        }
+
+        placesRenderStagingTask = Task { @MainActor in
+            await Task.yield()
+
+            guard totalPlaces > 0 else {
+                renderSidebarThumbnails = true
+                renderGridThumbnails = true
+                renderOverviewDetails = true
+                return
+            }
+
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !Task.isCancelled else { return }
+            stagedGridPlaceCount = min(totalPlaces, 6)
+
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !Task.isCancelled else { return }
+            renderOverviewDetails = true
+            renderSidebarThumbnails = true
+
+            if totalPlaces > stagedGridPlaceCount {
+                stagedGridPlaceCount = min(totalPlaces, 12)
+            }
+
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled else { return }
+            renderGridThumbnails = true
+
+            if totalPlaces > stagedGridPlaceCount {
+                stagedGridPlaceCount = min(totalPlaces, 24)
+            }
+        }
+    }
+
     var body: some View {
         GeometryReader { geo in
             HStack(spacing: 0) {
@@ -909,7 +975,8 @@ struct PlacesPageView: View {
                         viewMode: $viewMode,
                         selectedLandmarkID: $selectedLandmarkID,
                         allImageCount: store.allBackgroundHierarchyImageCount(),
-                        worldSnapshot: worldbuildingSnapshot
+                        worldSnapshot: worldbuildingSnapshot,
+                        showsThumbnails: renderSidebarThumbnails
                     )
                         .frame(width: min(geo.size.width * 0.3, 280))
 
@@ -1000,14 +1067,18 @@ struct PlacesPageView: View {
             if selectedLandmarkID == nil {
                 selectedLandmarkID = sortedLandmarkProfiles.first?.id
             }
-            scheduleLandmarkSuggestionRefreshIfNeeded()
+            schedulePlacesRenderStaging(reset: true)
+        }
+        .onChange(of: worldbuildingSnapshotRefreshKey) { _, _ in
             scheduleWorldbuildingSnapshotRefresh()
         }
-        .onChange(of: worldbuildingSnapshotRefreshToken) { _, _ in
-            scheduleWorldbuildingSnapshotRefresh()
+        .onChange(of: store.backgrounds.count) { _, _ in
+            schedulePlacesRenderStaging(reset: true)
         }
         .onChange(of: viewMode) { _, newValue in
             switch newValue {
+            case .grid:
+                schedulePlacesRenderStaging(reset: false)
             case .landmarks:
                 scheduleLandmarkSuggestionRefreshIfNeeded()
             case .world, .review:
@@ -1019,6 +1090,7 @@ struct PlacesPageView: View {
         .onDisappear {
             worldbuildingRefreshTask?.cancel()
             landmarkSuggestionRefreshTask?.cancel()
+            placesRenderStagingTask?.cancel()
         }
         .onChange(of: store.selectedGeneratedBackgroundRecordID) { _, newValue in
             selectedWorldCaptureRecordID = newValue
@@ -1139,9 +1211,19 @@ struct PlacesPageView: View {
                 overviewPill(title: "Landmark Refs", value: "\(store.placesWorkflowLibrary.landmarkReferences.count)", systemImage: "square.stack.3d.up")
             }
 
-            HStack(alignment: .top, spacing: 16) {
-                masterMapOverviewCard
-                landmarkReferenceOverviewCard
+            if renderOverviewDetails {
+                HStack(alignment: .top, spacing: 16) {
+                    masterMapOverviewCard
+                    landmarkReferenceOverviewCard
+                }
+            } else {
+                HStack {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading map and landmark overview…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(18)
@@ -1498,18 +1580,41 @@ struct PlacesPageView: View {
     }
 
     private var locationGridSection: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 16)], spacing: 16) {
-            ForEach(store.backgrounds) { place in
-                PlaceGridCard(
-                    store: store,
-                    place: place,
-                    workflowMode: workflowMode,
-                    isSelected: store.selectedBackgroundID == place.id,
-                    sceneUsageCount: sceneUsageCount(for: place.id),
-                    requiredShots: store.requiredCameraShots(for: place.id)
-                ) {
-                    store.selectedBackgroundID = place.id
-                    viewMode = .detail
+        VStack(alignment: .leading, spacing: 12) {
+            if hasMoreStagedGridPlaces {
+                HStack {
+                    Text("Loading places… showing \(stagedGridPlaces.count) of \(store.backgrounds.count)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 16)], spacing: 16) {
+                ForEach(stagedGridPlaces) { place in
+                    PlaceGridCard(
+                        store: store,
+                        place: place,
+                        workflowMode: workflowMode,
+                        isSelected: store.selectedBackgroundID == place.id,
+                        sceneUsageCount: sceneUsageCount(for: place.id),
+                        requiredShots: store.requiredCameraShots(for: place.id),
+                        showsThumbnail: renderGridThumbnails
+                    ) {
+                        store.selectedBackgroundID = place.id
+                        viewMode = .detail
+                    }
+                }
+            }
+
+            if hasMoreStagedGridPlaces {
+                HStack {
+                    Spacer()
+                    Button("Load Remaining Places") {
+                        stagedGridPlaceCount = store.backgrounds.count
+                        renderGridThumbnails = true
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
         }
@@ -3909,6 +4014,7 @@ struct PlaceGridCard: View {
     let isSelected: Bool
     let sceneUsageCount: Int
     let requiredShots: Set<String>
+    let showsThumbnail: Bool
     let onSelect: () -> Void
 
     private var coveredCount: Int {
@@ -3986,9 +4092,10 @@ struct PlaceGridCard: View {
 
     @ViewBuilder
     private var thumbnailView: some View {
-        if let path = place.approvedImagePath(for: workflowMode),
+        if showsThumbnail,
+           let path = place.approvedImagePath(for: workflowMode),
            let url = store.resolvedCharacterAssetURL(for: path) {
-            AsyncResolvedImageView(path: url.path, maxPixelSize: 360, contentMode: .fill)
+            AsyncResolvedImageView(path: url.path, maxPixelSize: 256, contentMode: .fill)
         } else {
             ZStack {
                 Color.gray.opacity(0.1)
