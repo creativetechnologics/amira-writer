@@ -9089,9 +9089,6 @@ final class AnimateStore {
     }
 
     func allBackgroundHierarchyImagePaths() -> [String] {
-        if generatedBackgroundLibraryNeedsRefresh {
-            scheduleGeneratedBackgroundLibraryRefresh()
-        }
         let visible = visibleGeneratedBackgroundLibraryRecords()
         if !visible.isEmpty {
             return visible.map(\.activePath)
@@ -9100,9 +9097,6 @@ final class AnimateStore {
     }
 
     func allBackgroundHierarchyImageCount() -> Int {
-        if generatedBackgroundLibraryNeedsRefresh {
-            scheduleGeneratedBackgroundLibraryRefresh()
-        }
         return placesWorkflowLibrary.generatedImageRecords.count
     }
 

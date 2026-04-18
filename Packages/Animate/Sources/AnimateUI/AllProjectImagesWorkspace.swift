@@ -671,6 +671,9 @@ private struct AllProjectImagesWorkspaceContent: View {
                     )
             }
         }
+        .onAppear {
+            store.refreshGeneratedBackgroundLibraryIfNeededInBackground()
+        }
     }
 
     private var workspaceBody: some View {

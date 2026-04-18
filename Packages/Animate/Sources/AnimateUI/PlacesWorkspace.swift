@@ -90,7 +90,7 @@ private struct PlacesWorkspaceContent: View {
                         PlacesSidebarView(
                             store: store,
                             viewMode: $placesViewMode,
-                            allImageCount: store.allBackgroundHierarchyImageCount()
+                            allImageCount: store.placesWorkflowLibrary.generatedImageRecords.count
                         )
                     } else {
                         placesStartupSidebarPlaceholder

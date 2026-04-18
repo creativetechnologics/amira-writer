@@ -961,7 +961,7 @@ struct PlacesPageView: View {
                         store: store,
                         viewMode: $viewMode,
                         selectedLandmarkID: $selectedLandmarkID,
-                        allImageCount: store.allBackgroundHierarchyImageCount(),
+                        allImageCount: store.placesWorkflowLibrary.generatedImageRecords.count,
                         worldSnapshot: worldbuildingSnapshot,
                         showsThumbnails: renderSidebarThumbnails
                     )
@@ -1050,11 +1050,13 @@ struct PlacesPageView: View {
             }
         }
         .onAppear {
-            store.refreshGeneratedBackgroundLibraryIfNeededInBackground()
             if selectedLandmarkID == nil {
                 selectedLandmarkID = sortedLandmarkProfiles.first?.id
             }
             schedulePlacesRenderStaging(reset: true)
+            if viewMode == .library {
+                store.refreshGeneratedBackgroundLibraryIfNeededInBackground()
+            }
         }
         .onChange(of: worldbuildingSnapshotRefreshKey) { _, _ in
             scheduleWorldbuildingSnapshotRefresh()
@@ -1063,6 +1065,9 @@ struct PlacesPageView: View {
             schedulePlacesRenderStaging(reset: true)
         }
         .onChange(of: viewMode) { _, newValue in
+            if newValue == .library {
+                store.refreshGeneratedBackgroundLibraryIfNeededInBackground()
+            }
             switch newValue {
             case .grid:
                 schedulePlacesRenderStaging(reset: false)
