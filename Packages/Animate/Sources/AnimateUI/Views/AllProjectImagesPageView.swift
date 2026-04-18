@@ -277,19 +277,33 @@ struct AllProjectImagesPageView: View {
         .contentShape(Rectangle())
         .onTapGesture { selectedRecordID = record.id }
         .contextMenu {
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting(
-                    [URL(fileURLWithPath: record.resolvedPath)]
+            UnifiedImageContextMenuContent(
+                selectedCount: 0,
+                isSelected: isSelected,
+                actions: UnifiedImageActions(
+                    onShowInFinder: {
+                        NSWorkspace.shared.activateFileViewerSelecting(
+                            [URL(fileURLWithPath: record.resolvedPath)]
+                        )
+                    },
+                    onCopy: {
+                        if let image = NSImage(contentsOfFile: record.resolvedPath) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.writeObjects([image])
+                        } else {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(record.resolvedPath, forType: .string)
+                        }
+                    },
+                    onEditWithGemini: {
+                        selectedRecordID = record.id
+                        inspectorTab = .generate
+                    },
+                    onGenerateWithGemini: { count in
+                        beginGenerate(for: record, count: count)
+                    }
                 )
-            }
-            Button("Copy Absolute Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(record.resolvedPath, forType: .string)
-            }
-            Button("Copy Stored Path") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(record.path, forType: .string)
-            }
+            )
         }
     }
 
@@ -696,6 +710,30 @@ struct AllProjectImagesPageView: View {
         )
         editPendingDrafts = [draft]
         editPendingPreflight = draft
+    }
+
+    private func beginGenerate(for record: ProjectImageRecord, count: Int) {
+        let filename = URL(fileURLWithPath: record.resolvedPath).lastPathComponent
+        let reference = GeminiGenerationReferenceDraft(
+            label: "Reference: \(filename)",
+            path: record.resolvedPath,
+            isIncluded: true
+        )
+        let drafts = (0..<max(1, count)).map { i in
+            GeminiGenerationDraft(
+                title: count == 1
+                    ? "Generate from \(filename)"
+                    : "Batch \(i + 1) from \(filename)",
+                destinationDescription: "Places → Unattached library",
+                prompt: "",
+                model: editModel,
+                aspectRatio: editAspectRatio,
+                imageSize: editImageSize,
+                referenceItems: [reference]
+            )
+        }
+        editPendingDrafts = drafts
+        editPendingPreflight = drafts.first
     }
 
     private func runEditGeneration(

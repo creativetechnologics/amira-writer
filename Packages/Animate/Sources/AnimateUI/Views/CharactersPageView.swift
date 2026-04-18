@@ -991,17 +991,23 @@ private struct AsyncSidebarThumbnail: View {
             }
         }
         .contextMenu {
-            Button("Set as Profile Pic") {
-                if let path = character.profileImagePath,
-                   let character = store.selectedCharacter {
-                    store.prepareProfilePicCrop(from: path, for: character.id)
-                }
-            }
-            Button("Show in Finder", systemImage: "folder") {
-                if let path = character.profileImagePath,
-                   let url = store.resolvedCharacterAssetURL(for: path) {
-                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                }
+            if let path = character.profileImagePath {
+                UnifiedImageContextMenuContent(
+                    selectedCount: 0,
+                    isSelected: false,
+                    actions: UnifiedImageActions(
+                        onSetAsProfile: {
+                            if let character = store.selectedCharacter {
+                                store.prepareProfilePicCrop(from: path, for: character.id)
+                            }
+                        },
+                        onShowInFinder: {
+                            if let url = store.resolvedCharacterAssetURL(for: path) {
+                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                            }
+                        }
+                    )
+                )
             }
         }
         .task(id: character.profileImagePath ?? "") {
@@ -1046,12 +1052,14 @@ private struct AsyncProfileImageView: View {
                     }
                     .contextMenu {
                         if let profilePath = character.profileImagePath {
-                            Button("Set as Profile Pic") {
-                                onSetAsProfilePic(profilePath)
-                            }
-                            Button("Show in Finder", systemImage: "folder") {
-                                onShowInFinder(profilePath)
-                            }
+                            UnifiedImageContextMenuContent(
+                                selectedCount: 0,
+                                isSelected: false,
+                                actions: UnifiedImageActions(
+                                    onSetAsProfile: { onSetAsProfilePic(profilePath) },
+                                    onShowInFinder: { onShowInFinder(profilePath) }
+                                )
+                            )
                         }
                     }
             } else {
@@ -1109,12 +1117,14 @@ private struct AsyncReferenceThumbView: View {
                     }
                     .contextMenu {
                         if let refPath = character.inspirationReferenceImagePath {
-                            Button("Set as Profile Pic") {
-                                onSetAsProfilePic(refPath)
-                            }
-                            Button("Show in Finder", systemImage: "folder") {
-                                onShowInFinder(refPath)
-                            }
+                            UnifiedImageContextMenuContent(
+                                selectedCount: 0,
+                                isSelected: false,
+                                actions: UnifiedImageActions(
+                                    onSetAsProfile: { onSetAsProfilePic(refPath) },
+                                    onShowInFinder: { onShowInFinder(refPath) }
+                                )
+                            )
                         }
                     }
             } else {
@@ -1190,9 +1200,16 @@ private struct AsyncApprovedVariantView: View {
                     store.imaginePreviewImagePath = variant.imagePath
                 }
                 .contextMenu {
-                    Button("Set as Profile Pic") { onSetAsProfilePic() }
-                    Button("Show in Finder", systemImage: "folder") { onShowInFinder() }
-                    Button("Copy Image", systemImage: "doc.on.doc") { onCopy() }
+                    UnifiedImageContextMenuContent(
+                        selectedCount: 0,
+                        isSelected: false,
+                        actions: UnifiedImageActions(
+                            onSetAsProfile: onSetAsProfilePic,
+                            onShowInFinder: onShowInFinder,
+                            onCopy: onCopy,
+                            onQuickLook: onQuickLook
+                        )
+                    )
                 }
 
                 Text(title)
@@ -1642,64 +1659,26 @@ struct ImageGalleryThumbnail: View {
         VStack(spacing: 4) {
             thumbnailImage
                 .contextMenu {
-                    if let onToggleCurated {
-                        Button(isCurated ? "Remove from Curated" : "Add to Curated References",
-                               systemImage: isCurated ? "star.slash" : "star.fill") {
-                            onToggleCurated()
-                        }
-                        Divider()
-                    }
-                    if hasPromptMetadata {
-                        Button("View Prompt", systemImage: "eye.circle") {
-                            onShowPrompt?()
-                        }
-                    }
-                    Button("Show in Finder", systemImage: "folder") {
-                        onShowInFinder()
-                    }
-                    if let onSetAsProfilePic {
-                        Button("Set as Profile Pic") {
-                            onSetAsProfilePic()
-                        }
-                    }
-                    Button("Copy Image", systemImage: "doc.on.doc") {
-                        onCopy()
-                    }
-                    Button("Quick Look", systemImage: "eye") {
-                        onPreview()
-                    }
-                    if let onEditWithGemini {
-                        Divider()
-                        Button("Edit with Gemini…", systemImage: "wand.and.sparkles") {
-                            onEditWithGemini()
-                        }
-                    }
-                    if let onGenerateWithGemini {
-                        if onEditWithGemini == nil { Divider() }
-                        Menu("Generate with Gemini…", systemImage: "sparkles") {
-                            Button("Generate 1 with this as reference") {
-                                onGenerateWithGemini(1)
-                            }
-                            Button("Generate 27 batch variations") {
-                                onGenerateWithGemini(27)
-                            }
-                        }
-                    }
-                    Divider()
-                    if selectedCount > 1, isSelected {
-                        Button("Remove \(selectedCount) Selected", systemImage: "trash", role: .destructive) {
-                            onRemove()
-                        }
-                    } else {
-                        Button("Remove Image", systemImage: "trash", role: .destructive) {
-                            onRemove()
-                        }
-                    }
-                    if let onMoveToTrash {
-                        Button("Move File to Trash", systemImage: "trash.slash", role: .destructive) {
-                            onMoveToTrash()
-                        }
-                    }
+                    UnifiedImageContextMenuContent(
+                        selectedCount: selectedCount,
+                        isSelected: isSelected,
+                        actions: UnifiedImageActions(
+                            onToggleCurated: onToggleCurated,
+                            isCurated: isCurated,
+                            onShowPrompt: hasPromptMetadata ? { onShowPrompt?() } : nil,
+                            onSetAsProfile: onSetAsProfilePic,
+                            onShowInFinder: onShowInFinder,
+                            onCopy: onCopy,
+                            onQuickLook: onPreview,
+                            onEditWithGemini: onEditWithGemini,
+                            onGenerateWithGemini: onGenerateWithGemini,
+                            onSetRating: onSetRating.map { set in { rating in set(rating ?? 0) } },
+                            currentRating: currentRating,
+                            onRemoveFromCollection: onRemove,
+                            removeFromCollectionLabel: "Remove Image",
+                            onMoveToTrash: onMoveToTrash
+                        )
+                    )
                 }
 
             HStack(alignment: .center, spacing: 4) {
@@ -2170,17 +2149,23 @@ private struct ProfileImagePickerSheet: View {
                                             }
                                             .buttonStyle(.plain)
                                             .contextMenu {
-                                                Button("Set as Profile Pic") {
-                                                    if let character = store.selectedCharacter {
-                                                        store.prepareProfilePicCrop(from: path, for: character.id)
-                                                    }
-                                                }
-                                                Button("Show in Finder", systemImage: "folder") {
-                                                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                                                }
-                                                Button("Quick Look", systemImage: "eye") {
-                                                    QuickLookPreviewController.shared.present(urls: [url], startAt: 0)
-                                                }
+                                                UnifiedImageContextMenuContent(
+                                                    selectedCount: 0,
+                                                    isSelected: false,
+                                                    actions: UnifiedImageActions(
+                                                        onSetAsProfile: {
+                                                            if let character = store.selectedCharacter {
+                                                                store.prepareProfilePicCrop(from: path, for: character.id)
+                                                            }
+                                                        },
+                                                        onShowInFinder: {
+                                                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                                                        },
+                                                        onQuickLook: {
+                                                            QuickLookPreviewController.shared.present(urls: [url], startAt: 0)
+                                                        }
+                                                    )
+                                                )
                                             }
                                             .onTapGesture(count: 2) {
                                                 QuickLookPreviewController.shared.present(urls: [url], startAt: 0)
@@ -2484,33 +2469,35 @@ struct InspirationGallerySheet: View {
 
     @ViewBuilder
     private func galleryThumbnail(path: String, index: Int) -> some View {
+        let geminiEnabled = !store.geminiAPIKey.isEmpty && store.geminiMasterSwitch
         VStack(spacing: 4) {
             thumbnailImage(for: path)
                 .contextMenu {
-                    Button("Set as Profile Pic") {
-                        if let character = store.selectedCharacter {
-                            store.prepareProfilePicCrop(from: path, for: character.id)
-                        }
-                    }
-                    Button("Show in Finder", systemImage: "folder") {
-                        if let url = store.resolvedCharacterAssetURL(for: path) {
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
-                        }
-                    }
-                    Divider()
-                    Menu("Generate with Gemini…", systemImage: "sparkles") {
-                        Button("Generate 1 with this as reference") {
-                            beginGenerateWithGemini(imagePath: path, count: 1)
-                        }
-                        Button("Generate 27 batch variations") {
-                            beginGenerateWithGemini(imagePath: path, count: 27)
-                        }
-                    }
-                    .disabled(store.geminiAPIKey.isEmpty || !store.geminiMasterSwitch)
-                    Divider()
-                    Button("Remove Image", systemImage: "trash", role: .destructive) {
-                        store.removeInspirationImage(at: index, for: character.id)
-                    }
+                    UnifiedImageContextMenuContent(
+                        selectedCount: 0,
+                        isSelected: false,
+                        actions: UnifiedImageActions(
+                            onSetAsProfile: {
+                                if let character = store.selectedCharacter {
+                                    store.prepareProfilePicCrop(from: path, for: character.id)
+                                }
+                            },
+                            onShowInFinder: {
+                                if let url = store.resolvedCharacterAssetURL(for: path) {
+                                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                                }
+                            },
+                            onQuickLook: {
+                                openQuickLook(for: character.inspirationImagePaths, startingAt: index)
+                            },
+                            onGenerateWithGemini: geminiEnabled ? { count in
+                                beginGenerateWithGemini(imagePath: path, count: count)
+                            } : nil,
+                            onRemoveFromCollection: {
+                                store.removeInspirationImage(at: index, for: character.id)
+                            }
+                        )
+                    )
                 }
                 .onTapGesture(count: 2) {
                     openQuickLook(for: character.inspirationImagePaths, startingAt: index)
@@ -2545,6 +2532,7 @@ struct ReferenceImagesSheet: View {
     let character: AnimationCharacter
     let store: AnimateStore
     let onDismiss: () -> Void
+    var onGenerateWithGemini: ((String, Int) -> Void)? = nil
 
     @State private var thumbnailBaseSize: CGFloat = 120
     @State private var mainRefImage: NSImage?
@@ -2619,16 +2607,29 @@ struct ReferenceImagesSheet: View {
                         }
                         .contextMenu {
                             if let refPath = character.inspirationReferenceImagePath {
-                                Button("Set as Profile Pic") {
-                                    if let character = store.selectedCharacter {
-                                        store.prepareProfilePicCrop(from: refPath, for: character.id)
-                                    }
-                                }
-                                Button("Show in Finder", systemImage: "folder") {
-                                    if let url = store.resolvedCharacterAssetURL(for: refPath) {
-                                        NSWorkspace.shared.activateFileViewerSelecting([url])
-                                    }
-                                }
+                                let geminiEnabled = !store.geminiAPIKey.isEmpty && store.geminiMasterSwitch
+                                UnifiedImageContextMenuContent(
+                                    selectedCount: 0,
+                                    isSelected: false,
+                                    actions: UnifiedImageActions(
+                                        onSetAsProfile: {
+                                            if let character = store.selectedCharacter {
+                                                store.prepareProfilePicCrop(from: refPath, for: character.id)
+                                            }
+                                        },
+                                        onShowInFinder: {
+                                            if let url = store.resolvedCharacterAssetURL(for: refPath) {
+                                                NSWorkspace.shared.activateFileViewerSelecting([url])
+                                            }
+                                        },
+                                        onQuickLook: {
+                                            openQuickLook(for: [refPath], startingAt: 0)
+                                        },
+                                        onGenerateWithGemini: (geminiEnabled && onGenerateWithGemini != nil) ? { count in
+                                            onGenerateWithGemini?(refPath, count)
+                                        } : nil
+                                    )
+                                )
                             }
                         }
 
@@ -2786,22 +2787,35 @@ struct ReferenceImagesSheet: View {
 
     @ViewBuilder
     private func referenceGalleryThumbnail(path: String, index: Int) -> some View {
+        let geminiEnabled = !store.geminiAPIKey.isEmpty && store.geminiMasterSwitch
         VStack(spacing: 4) {
             thumbnailImage(for: path)
                 .contextMenu {
-                    Button("Set as Profile Pic") {
-                        if let character = store.selectedCharacter {
-                            store.prepareProfilePicCrop(from: path, for: character.id)
-                        }
-                    }
-                    Button("Show in Finder", systemImage: "folder") {
-                        if let url = store.resolvedCharacterAssetURL(for: path) {
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
-                        }
-                    }
-                    Button("Remove Image", systemImage: "trash", role: .destructive) {
-                        store.removeReferenceImage(at: index, for: character.id)
-                    }
+                    UnifiedImageContextMenuContent(
+                        selectedCount: 0,
+                        isSelected: false,
+                        actions: UnifiedImageActions(
+                            onSetAsProfile: {
+                                if let character = store.selectedCharacter {
+                                    store.prepareProfilePicCrop(from: path, for: character.id)
+                                }
+                            },
+                            onShowInFinder: {
+                                if let url = store.resolvedCharacterAssetURL(for: path) {
+                                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                                }
+                            },
+                            onQuickLook: {
+                                openQuickLook(for: character.referenceImagePaths, startingAt: index)
+                            },
+                            onGenerateWithGemini: (geminiEnabled && onGenerateWithGemini != nil) ? { count in
+                                onGenerateWithGemini?(path, count)
+                            } : nil,
+                            onRemoveFromCollection: {
+                                store.removeReferenceImage(at: index, for: character.id)
+                            }
+                        )
+                    )
                 }
                 .onTapGesture(count: 2) {
                     openQuickLook(for: character.referenceImagePaths, startingAt: index)

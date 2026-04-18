@@ -123,20 +123,15 @@ struct LORATrainingSheet: View {
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 80))], spacing: 6) {
                     ForEach(previewPaths, id: \.self) { path in
-                        let resolvedURL = store.resolvedCharacterAssetURL(for: path)
-                            ?? URL(fileURLWithPath: path)
-
-                        AsyncImage(url: resolvedURL) { phase in
-                            switch phase {
-                            case .success(let image):
-                                image.resizable().aspectRatio(contentMode: .fill)
-                                    .frame(width: 80, height: 80).clipped()
-                            default:
-                                RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.1))
-                                    .frame(width: 80, height: 80)
-                            }
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        AsyncStoreThumbnailImage<AnyView>.rounded(
+                            store: store,
+                            path: path,
+                            maxSize: 160,
+                            width: 80,
+                            height: 80,
+                            contentMode: .fill,
+                            cornerRadius: 4
+                        )
                         .overlay(
                             RoundedRectangle(cornerRadius: 4)
                                 .stroke(Color.purple.opacity(0.6), lineWidth: 1.5)
