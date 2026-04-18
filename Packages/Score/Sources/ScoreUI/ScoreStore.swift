@@ -73,6 +73,7 @@ private struct HostedAudioUnitOfflineQualification: Codable, Sendable {
     let envelopeSimilarity: Double
     let durationDeltaSeconds: Double
     let renderProfile: HostedAudioUnitOfflineRenderProfile
+    let leadingAlignmentSeconds: Double?
     let checkedAt: Date
     let detail: String
 }
@@ -4780,7 +4781,7 @@ final class ScoreStore {
                 self.persistHostedAudioUnitOfflineQualificationCache()
             }
 
-            let attemptOfflineFullRender: @Sendable (HostedAudioUnitOfflineRenderProfile) async throws -> Void = { renderProfile in
+            let attemptOfflineFullRender: @Sendable (HostedAudioUnitOfflineRenderProfile, Double?) async throws -> Void = { renderProfile, leadingAlignmentSeconds in
                 NSLog(
                     "[OfflineExport] Attempting %@ offline hosted-instrument export for %@",
                     renderProfile.rawValue,
@@ -4792,6 +4793,13 @@ final class ScoreStore {
                         : "Rendering hosted instruments offline..."
                 )
                 try await performOfflineRender(outputURL, renderProfile)
+                if let leadingAlignmentSeconds,
+                   abs(leadingAlignmentSeconds) > 0 {
+                    try Self.shiftAudioFileLeadingFrames(
+                        at: outputURL,
+                        frameOffset: AVAudioFramePosition(leadingAlignmentSeconds * 48_000)
+                    )
+                }
                 let fileSize = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
                 if Self.isLikelyIncompleteWavExport(at: outputURL, fileSize: fileSize) {
                     throw ChunkExportError.bufferCreationFailed
@@ -4816,6 +4824,7 @@ final class ScoreStore {
                         envelopeSimilarity: 0,
                         durationDeltaSeconds: .infinity,
                         renderProfile: .standard,
+                        leadingAlignmentSeconds: nil,
                         checkedAt: Date(),
                         detail: "No representative note excerpt was available for qualification."
                     )
@@ -4834,6 +4843,7 @@ final class ScoreStore {
                         envelopeSimilarity: 0,
                         durationDeltaSeconds: .infinity,
                         renderProfile: .standard,
+                        leadingAlignmentSeconds: nil,
                         checkedAt: Date(),
                         detail: "Could not create qualification directory: \(error.localizedDescription)"
                     )
@@ -4869,6 +4879,7 @@ final class ScoreStore {
                         envelopeSimilarity: 0,
                         durationDeltaSeconds: .infinity,
                         renderProfile: .standard,
+                        leadingAlignmentSeconds: nil,
                         checkedAt: Date(),
                         detail: "Realtime qualification render failed: \(error.localizedDescription)"
                     )
@@ -4881,10 +4892,12 @@ final class ScoreStore {
                     envelopeSimilarity: 0,
                     durationDeltaSeconds: .infinity,
                     renderProfile: .standard,
+                    leadingAlignmentSeconds: nil,
                     checkedAt: Date(),
                     detail: "No hosted-AU offline render profile completed."
                 )
 
+                let realtimeBounds = Self.audioAudibleBounds(at: realtimeURL)
                 for renderProfile in HostedAudioUnitOfflineRenderProfile.allCases {
                     let offlineURL = tempRoot.appendingPathComponent("\(renderProfile.rawValue).wav")
                     do {
@@ -4919,6 +4932,7 @@ final class ScoreStore {
                             envelopeSimilarity: 0,
                             durationDeltaSeconds: .infinity,
                             renderProfile: renderProfile,
+                            leadingAlignmentSeconds: nil,
                             checkedAt: Date(),
                             detail: "\(renderProfile.rawValue) offline qualification render failed: \(error.localizedDescription)"
                         )
@@ -4926,6 +4940,34 @@ final class ScoreStore {
                             bestQualification = failure
                         }
                         continue
+                    }
+
+                    var appliedLeadingAlignmentSeconds = 0.0
+                    let preAlignmentOfflineBounds = Self.audioAudibleBounds(at: offlineURL)
+                    let onsetDeltaBeforeAlignment: Double?
+                    let tailDeltaBeforeAlignment: Double?
+                    if let realtimeBounds,
+                       let offlineBounds = preAlignmentOfflineBounds {
+                        onsetDeltaBeforeAlignment = Double(offlineBounds.first - realtimeBounds.first) / 48_000
+                        tailDeltaBeforeAlignment = Double(offlineBounds.last - realtimeBounds.last) / 48_000
+                    } else {
+                        onsetDeltaBeforeAlignment = nil
+                        tailDeltaBeforeAlignment = nil
+                    }
+                    if let realtimeBounds,
+                       let offlineBounds = preAlignmentOfflineBounds {
+                        let leadingOffsetFrames = offlineBounds.first - realtimeBounds.first
+                        let minimumAlignmentFrames = AVAudioFramePosition(48_000 * 0.02)
+                        let maximumAlignmentFrames = AVAudioFramePosition(48_000 * 0.5)
+                        if abs(leadingOffsetFrames) >= minimumAlignmentFrames &&
+                            abs(leadingOffsetFrames) <= maximumAlignmentFrames {
+                            do {
+                                try Self.shiftAudioFileLeadingFrames(at: offlineURL, frameOffset: leadingOffsetFrames)
+                                appliedLeadingAlignmentSeconds = Double(leadingOffsetFrames) / 48_000
+                            } catch {
+                                NSLog("[OfflineExport] Failed to align %@ qualification render by %.3fs: %@", renderProfile.rawValue, Double(leadingOffsetFrames) / 48_000, error.localizedDescription)
+                            }
+                        }
                     }
 
                     let offlineDuration = Self.audioDurationSeconds(at: offlineURL) ?? 0
@@ -4945,12 +4987,15 @@ final class ScoreStore {
                         (similarity >= 0.978 && envelopeSimilarity >= 0.999 && durationDelta <= 0.03)
                     )
                     let detail = String(
-                        format: "%@ similarity=%.4f envelope=%.4f activeDelta=%.3fs fileDelta=%.3fs excerpt=%d→%d",
+                        format: "%@ similarity=%.4f envelope=%.4f activeDelta=%.3fs fileDelta=%.3fs onsetDelta=%.3fs tailDelta=%.3fs align=%.3fs excerpt=%d→%d",
                         renderProfile.rawValue,
                         similarity,
                         envelopeSimilarity,
                         durationDelta,
                         abs(offlineDuration - realtimeDuration),
+                        onsetDeltaBeforeAlignment ?? .nan,
+                        tailDeltaBeforeAlignment ?? .nan,
+                        appliedLeadingAlignmentSeconds,
                         excerpt.startTick,
                         excerpt.endTick
                     )
@@ -4962,6 +5007,7 @@ final class ScoreStore {
                         envelopeSimilarity: envelopeSimilarity,
                         durationDeltaSeconds: durationDelta,
                         renderProfile: renderProfile,
+                        leadingAlignmentSeconds: abs(appliedLeadingAlignmentSeconds) > 0 ? appliedLeadingAlignmentSeconds : nil,
                         checkedAt: Date(),
                         detail: detail
                     )
@@ -4985,7 +5031,7 @@ final class ScoreStore {
 
             switch hostedAudioUnitExportMode {
             case .offline:
-                try await attemptOfflineFullRender(.standard)
+                try await attemptOfflineFullRender(.standard, nil)
                 return
             case .realtime:
                 try await performRealtimeHostedRender(outputURL)
@@ -5003,7 +5049,7 @@ final class ScoreStore {
 
                 if qualification.verdict == .qualified {
                     do {
-                        try await attemptOfflineFullRender(qualification.renderProfile)
+                        try await attemptOfflineFullRender(qualification.renderProfile, qualification.leadingAlignmentSeconds)
                         return
                     } catch {
                         cacheQualification(HostedAudioUnitOfflineQualification(
@@ -5012,6 +5058,7 @@ final class ScoreStore {
                             envelopeSimilarity: qualification.envelopeSimilarity,
                             durationDeltaSeconds: qualification.durationDeltaSeconds,
                             renderProfile: qualification.renderProfile,
+                            leadingAlignmentSeconds: qualification.leadingAlignmentSeconds,
                             checkedAt: Date(),
                             detail: "\(qualification.detail); full render fallback after failure: \(error.localizedDescription)"
                         ))
@@ -5743,7 +5790,7 @@ final class ScoreStore {
             .joined(separator: ",")
 
         return [
-            "hosted-au-qualification:v5",
+            "hosted-au-qualification:v9",
             projectIdentifier ?? "__unknown_project__",
             songPath ?? "__unsaved__",
             "ticks:\(startTick)-\(endTick)",
@@ -5825,8 +5872,23 @@ final class ScoreStore {
 
     private nonisolated static func audioActiveDurationSeconds(
         at url: URL,
-        silenceThreshold: Float = 1.0e-4
+        silenceThreshold: Float = 1.0e-6
     ) -> Double? {
+        guard let bounds = audioAudibleBounds(at: url, silenceThreshold: silenceThreshold),
+              let audioFile = try? AVAudioFile(
+                forReading: url,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+              ) else {
+            return nil
+        }
+        return Double(bounds.last) / audioFile.processingFormat.sampleRate
+    }
+
+    private nonisolated static func audioAudibleBounds(
+        at url: URL,
+        silenceThreshold: Float = 1.0e-6
+    ) -> (first: AVAudioFramePosition, last: AVAudioFramePosition)? {
         guard let audioFile = try? AVAudioFile(
             forReading: url,
             commonFormat: .pcmFormatFloat32,
@@ -5835,9 +5897,8 @@ final class ScoreStore {
             return nil
         }
 
-        let sampleRate = audioFile.processingFormat.sampleRate
         let channelCount = Int(audioFile.processingFormat.channelCount)
-        guard sampleRate > 0, channelCount > 0 else { return nil }
+        guard channelCount > 0 else { return nil }
 
         let chunkCapacity = AVAudioFrameCount(min(max(audioFile.length, 1), 65_536))
         guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: chunkCapacity) else {
@@ -5845,6 +5906,7 @@ final class ScoreStore {
         }
 
         var framesRead: AVAudioFramePosition = 0
+        var firstAudibleFrame: AVAudioFramePosition?
         var lastAudibleFrame: AVAudioFramePosition = 0
 
         while true {
@@ -5863,6 +5925,9 @@ final class ScoreStore {
                     peak = max(peak, abs(channelData[channel][frame]))
                 }
                 if peak > silenceThreshold {
+                    if firstAudibleFrame == nil {
+                        firstAudibleFrame = framesRead + AVAudioFramePosition(frame)
+                    }
                     lastAudibleFrame = framesRead + AVAudioFramePosition(frame + 1)
                 }
             }
@@ -5870,7 +5935,72 @@ final class ScoreStore {
             framesRead += AVAudioFramePosition(frameLength)
         }
 
-        return Double(lastAudibleFrame) / sampleRate
+        guard let firstAudibleFrame else { return nil }
+        return (firstAudibleFrame, lastAudibleFrame)
+    }
+
+    private nonisolated static func shiftAudioFileLeadingFrames(
+        at url: URL,
+        frameOffset: AVAudioFramePosition
+    ) throws {
+        guard frameOffset != 0 else { return }
+
+        let inputFile = try AVAudioFile(
+            forReading: url,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+
+        let tempURL = url.deletingLastPathComponent()
+            .appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)-shifted-\(UUID().uuidString).wav")
+        let outputFile = try AVAudioFile(
+            forWriting: tempURL,
+            settings: inputFile.processingFormat.settings,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+
+        let chunkCapacity = AVAudioFrameCount(min(max(inputFile.length, 1), 65_536))
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: inputFile.processingFormat, frameCapacity: chunkCapacity) else {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw ChunkExportError.bufferCreationFailed
+        }
+
+        if frameOffset > 0 {
+            guard frameOffset < inputFile.length else {
+                try? FileManager.default.removeItem(at: tempURL)
+                return
+            }
+            inputFile.framePosition = frameOffset
+        } else {
+            let silenceFrames = AVAudioFrameCount(-frameOffset)
+            guard let silenceBuffer = AVAudioPCMBuffer(
+                pcmFormat: inputFile.processingFormat,
+                frameCapacity: silenceFrames
+            ) else {
+                try? FileManager.default.removeItem(at: tempURL)
+                throw ChunkExportError.bufferCreationFailed
+            }
+            silenceBuffer.frameLength = silenceFrames
+            if let channelData = silenceBuffer.floatChannelData {
+                let channelCount = Int(inputFile.processingFormat.channelCount)
+                for channel in 0..<channelCount {
+                    channelData[channel].initialize(repeating: 0, count: Int(silenceFrames))
+                }
+            }
+            try outputFile.write(from: silenceBuffer)
+            inputFile.framePosition = 0
+        }
+
+        while true {
+            try inputFile.read(into: buffer)
+            guard buffer.frameLength > 0 else { break }
+            try outputFile.write(from: buffer)
+        }
+
+        _ = outputFile
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.moveItem(at: tempURL, to: url)
     }
 
     private nonisolated static func audioEnvelopeSimilarity(

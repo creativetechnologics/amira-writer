@@ -30,6 +30,9 @@ Instead of blindly switching all AU exports to offline mode, the export stack sh
    - a longer **silent warm-up / priming pass** before scheduling notes
    - **silence-aware hosted-AU tail stopping** instead of a fixed 1-second offline tail
    - qualification-time comparison of **active audible duration**, not just raw file duration
+   - **measured leading-latency alignment** when offline hosted-AU renders start earlier or later than the trusted realtime excerpt
+   - cached qualification details now record **onset delta** and **tail delta** so remaining mismatches are diagnosable without reproducing the same render blindly
+   - audible-bound detection now uses a quieter analysis threshold so low-velocity orchestral excerpts still produce usable onset/tail diagnostics
 
 ## Why this matters
 
