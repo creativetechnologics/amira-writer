@@ -639,9 +639,11 @@ struct PlacesSidebarView: View {
     @ViewBuilder
     private func placeRow(_ place: BackgroundPlate) -> some View {
         HStack(spacing: OperaChromeSidebarMetrics.rowIconSpacing) {
-            if let path = place.approvedImagePath(for: workflowMode),
-               let url = store.resolvedCharacterAssetURL(for: path) {
-                CachedThumbnailView(path: url.path, size: 24)
+            if let image = cachedSidebarThumbnail(for: place.approvedImagePath(for: workflowMode)) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 24, height: 24)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             } else {
                 Image(systemName: workflowMode == .photorealistic ? "camera" : "paintbrush.pointed")
@@ -665,8 +667,11 @@ struct PlacesSidebarView: View {
     @ViewBuilder
     private func landmarkRow(_ profile: PlaceLandmarkProfile) -> some View {
         HStack(spacing: OperaChromeSidebarMetrics.rowIconSpacing) {
-            if let url = resolvedLandmarkImageURL(for: profile.primaryImagePath ?? profile.exteriorImagePath ?? profile.galleryImagePaths.first) {
-                CachedThumbnailView(path: url.path, size: 24)
+            if let image = cachedSidebarThumbnail(for: profile.primaryImagePath ?? profile.exteriorImagePath ?? profile.galleryImagePaths.first) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 24, height: 24)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             } else {
                 Image(systemName: "building.columns")
@@ -712,6 +717,11 @@ struct PlacesSidebarView: View {
             return URL(fileURLWithPath: path)
         }
         return nil
+    }
+
+    private func cachedSidebarThumbnail(for path: String?) -> NSImage? {
+        guard let url = resolvedLandmarkImageURL(for: path) else { return nil }
+        return ImagineThumbnailCache.shared.cached(for: url.path, maxPixelSize: 48)
     }
 }
 
@@ -776,6 +786,8 @@ struct PlacesPageView: View {
     @State private var worldMapPanelMode: PlacesWorldMapPanelMode = .map
     @State private var cachedWorldbuildingSnapshot: PlacesWorldbuildingSnapshot = .empty
     @State private var worldNodeDrafts: [String: PlacesWorldNodeDraft] = [:]
+    @State private var worldbuildingRefreshTask: Task<Void, Never>?
+    @State private var landmarkSuggestionRefreshTask: Task<Void, Never>?
     @AppStorage("animate.places.workflowMode.v1") private var workflowModeRawValue = PlaceWorkflowMode.photorealistic.rawValue
     var showSidebar: Bool = true
 
@@ -859,6 +871,33 @@ struct PlacesPageView: View {
 
     private func refreshWorldbuildingSnapshot() {
         cachedWorldbuildingSnapshot = PlacesWorldbuildingSnapshot.make(store: store, workflowMode: workflowMode)
+    }
+
+    private func scheduleWorldbuildingSnapshotRefresh(deferred: Bool = true) {
+        worldbuildingRefreshTask?.cancel()
+        let workflow = workflowMode
+        worldbuildingRefreshTask = Task { @MainActor in
+            if deferred {
+                await Task.yield()
+                try? await Task.sleep(for: .milliseconds(50))
+                guard !Task.isCancelled else { return }
+            }
+            cachedWorldbuildingSnapshot = PlacesWorldbuildingSnapshot.make(store: store, workflowMode: workflow)
+        }
+    }
+
+    private func scheduleLandmarkSuggestionRefreshIfNeeded() {
+        guard store.placesWorkflowLibrary.landmarkProfiles.isEmpty else { return }
+        landmarkSuggestionRefreshTask?.cancel()
+        landmarkSuggestionRefreshTask = Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled else { return }
+            store.refreshSuggestedLandmarkProfiles()
+            if selectedLandmarkID == nil {
+                selectedLandmarkID = sortedLandmarkProfiles.first?.id
+            }
+        }
     }
 
     var body: some View {
@@ -958,14 +997,28 @@ struct PlacesPageView: View {
         }
         .onAppear {
             store.refreshGeneratedBackgroundLibraryIfNeededInBackground()
-            store.refreshSuggestedLandmarkProfiles()
             if selectedLandmarkID == nil {
                 selectedLandmarkID = sortedLandmarkProfiles.first?.id
             }
-            refreshWorldbuildingSnapshot()
+            scheduleLandmarkSuggestionRefreshIfNeeded()
+            scheduleWorldbuildingSnapshotRefresh()
         }
         .onChange(of: worldbuildingSnapshotRefreshToken) { _, _ in
-            refreshWorldbuildingSnapshot()
+            scheduleWorldbuildingSnapshotRefresh()
+        }
+        .onChange(of: viewMode) { _, newValue in
+            switch newValue {
+            case .landmarks:
+                scheduleLandmarkSuggestionRefreshIfNeeded()
+            case .world, .review:
+                scheduleWorldbuildingSnapshotRefresh(deferred: false)
+            default:
+                break
+            }
+        }
+        .onDisappear {
+            worldbuildingRefreshTask?.cancel()
+            landmarkSuggestionRefreshTask?.cancel()
         }
         .onChange(of: store.selectedGeneratedBackgroundRecordID) { _, newValue in
             selectedWorldCaptureRecordID = newValue
@@ -1098,7 +1151,8 @@ struct PlacesPageView: View {
     private var masterMapOverviewCard: some View {
         let explicitPath = store.placesWorkflowLibrary.masterMapImagePath
         let effectivePath = store.effectivePlacesMasterMapPath()
-        let inferredPath = store.inferredPlacesMasterMapRecord()?.activePath
+        let inferredRecord = store.inferredPlacesMasterMapRecord()
+        let inferredPath = inferredRecord?.activePath
         let isInferredMap = explicitPath == nil && effectivePath != nil && effectivePath == inferredPath
 
         return VStack(alignment: .leading, spacing: 10) {
@@ -3799,7 +3853,7 @@ struct PlacesPageView: View {
     }
 
     private func sceneUsageCount(for placeID: UUID) -> Int {
-        store.sceneReferences(for: placeID).count
+        store.sceneUsageCount(for: placeID)
     }
 
     private func openQuickLook(for paths: [String], startingAt index: Int) {
@@ -3934,7 +3988,7 @@ struct PlaceGridCard: View {
     private var thumbnailView: some View {
         if let path = place.approvedImagePath(for: workflowMode),
            let url = store.resolvedCharacterAssetURL(for: path) {
-            AsyncResolvedImageView(path: url.path, maxPixelSize: 720, contentMode: .fill)
+            AsyncResolvedImageView(path: url.path, maxPixelSize: 360, contentMode: .fill)
         } else {
             ZStack {
                 Color.gray.opacity(0.1)

@@ -135,7 +135,11 @@ final class AnimateStore {
     var owpURL: URL?
     var workingOWPURL: URL?
     var animateMetadata: AnimateMetadata?
-    var scenes: [AnimationScene] = []
+    var scenes: [AnimationScene] = [] {
+        didSet {
+            invalidatePlacesSceneDerivedCaches()
+        }
+    }
     var selectedSceneID: UUID? {
         didSet {
             syncSelectedSceneTimeline()
@@ -339,13 +343,25 @@ final class AnimateStore {
 
     // MARK: - Backgrounds
 
-    var backgrounds: [BackgroundPlate] = []
+    var backgrounds: [BackgroundPlate] = [] {
+        didSet {
+            invalidatePlacesIndexCache()
+        }
+    }
     var selectedBackgroundID: UUID?
-    var scriptPlaceRequirements: [PlacesScriptSceneRequirement] = []
+    var scriptPlaceRequirements: [PlacesScriptSceneRequirement] = [] {
+        didSet {
+            invalidatePlacesIndexCache()
+        }
+    }
     var isRefreshingPlacesIndex: Bool = false
     var placeGenerationStatusByID: [UUID: String] = [:]
     var generatingPlaceIDs: Set<UUID> = []
-    var placesWorkflowLibrary: PlacesWorkflowLibrary = .init()
+    var placesWorkflowLibrary: PlacesWorkflowLibrary = .init() {
+        didSet {
+            invalidatePlacesMasterMapCache()
+        }
+    }
     var placesWorldContextBlocks: PlacesWorldContextBlocks = .init()
     var placesWorldMapCanonLibrary: PlacesWorldMapCanonLibrary = .init()
     private var placesWorldMapCanonRawPayload: [String: Any] = [:]
@@ -373,7 +389,17 @@ final class AnimateStore {
         return scriptPlaceRequirements.first { $0.sceneID == selectedSceneID }
     }
 
+    @ObservationIgnored private var indexedPlacesCache: [PlacesIndexedEntry]?
+    @ObservationIgnored private var indexedPlacesLookupCache: [UUID: PlacesIndexedEntry] = [:]
+    @ObservationIgnored private var requiredCameraShotsByPlaceIDCache: [UUID: Set<String>]?
+    @ObservationIgnored private var inferredPlacesMasterMapRecordCache: GeneratedBackgroundLibraryRecord?
+    @ObservationIgnored private var inferredPlacesMasterMapRecordCacheIsValid = false
+
     var indexedPlaces: [PlacesIndexedEntry] {
+        if let cached = indexedPlacesCache {
+            return cached
+        }
+
         let orderByKey = scriptPlaceRequirements
             .flatMap(\.locations)
             .enumerated()
@@ -405,7 +431,9 @@ final class AnimateStore {
             }
         }, by: \.key)
 
-        return grouped.compactMap { key, values in
+        let result: [PlacesIndexedEntry] = grouped.compactMap { entry in
+            let key = entry.key
+            let values = entry.value
             guard let place = backgroundsByKey[key] else { return nil }
 
             let references = Array(Set(values.map(\.reference)))
@@ -433,6 +461,10 @@ final class AnimateStore {
             if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
             return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
         }
+
+        indexedPlacesCache = result
+        indexedPlacesLookupCache = Dictionary(uniqueKeysWithValues: result.map { ($0.placeID, $0) })
+        return result
     }
 
     // MARK: - Timeline
@@ -803,11 +835,24 @@ final class AnimateStore {
     }
 
     func sceneReferences(for placeID: UUID) -> [PlacesScriptSceneReference] {
-        indexedPlaces.first(where: { $0.placeID == placeID })?.sceneReferences ?? []
+        if indexedPlacesCache == nil {
+            _ = indexedPlaces
+        }
+        return indexedPlacesLookupCache[placeID]?.sceneReferences ?? []
+    }
+
+    func sceneUsageCount(for placeID: UUID) -> Int {
+        if indexedPlacesCache == nil {
+            _ = indexedPlaces
+        }
+        return indexedPlacesLookupCache[placeID]?.sceneReferences.count ?? 0
     }
 
     func sourceLines(for placeID: UUID) -> [String] {
-        indexedPlaces.first(where: { $0.placeID == placeID })?.sourceLines ?? []
+        if indexedPlacesCache == nil {
+            _ = indexedPlaces
+        }
+        return indexedPlacesLookupCache[placeID]?.sourceLines ?? []
     }
 
     func isGeneratingPlaceImage(_ placeID: UUID) -> Bool {
@@ -11803,6 +11848,10 @@ final class AnimateStore {
 
     @MainActor
     func inferredPlacesMasterMapRecord() -> GeneratedBackgroundLibraryRecord? {
+        if inferredPlacesMasterMapRecordCacheIsValid {
+            return inferredPlacesMasterMapRecordCache
+        }
+
         var bestRecord: GeneratedBackgroundLibraryRecord?
         var bestScore = 0
         var bestRating = 0
@@ -11824,6 +11873,8 @@ final class AnimateStore {
             }
         }
 
+        inferredPlacesMasterMapRecordCache = bestRecord
+        inferredPlacesMasterMapRecordCacheIsValid = true
         return bestRecord
     }
 
@@ -12880,18 +12931,38 @@ final class AnimateStore {
 
     /// Returns camera shot types required for a given place based on scenes that use it.
     func requiredCameraShots(for placeID: UUID) -> Set<String> {
-        var required = Set<String>()
-        for scene in scenes where scene.backgroundID == placeID {
-            for shot in scene.shots {
-                if let cameraShot = shot.cameraShot {
-                    required.insert(cameraShot.displayName.lowercased())
+        if requiredCameraShotsByPlaceIDCache == nil {
+            var cache: [UUID: Set<String>] = [:]
+            for scene in scenes {
+                guard let backgroundID = scene.backgroundID else { continue }
+                var required = cache[backgroundID] ?? []
+                for shot in scene.shots {
+                    if let cameraShot = shot.cameraShot {
+                        required.insert(cameraShot.displayName.lowercased())
+                    }
                 }
+                cache[backgroundID] = required
             }
+            requiredCameraShotsByPlaceIDCache = cache
         }
-        return required
+        return requiredCameraShotsByPlaceIDCache?[placeID] ?? []
     }
 
     // MARK: - Private Helpers
+
+    private func invalidatePlacesIndexCache() {
+        indexedPlacesCache = nil
+        indexedPlacesLookupCache.removeAll(keepingCapacity: true)
+    }
+
+    private func invalidatePlacesSceneDerivedCaches() {
+        requiredCameraShotsByPlaceIDCache = nil
+    }
+
+    private func invalidatePlacesMasterMapCache() {
+        inferredPlacesMasterMapRecordCache = nil
+        inferredPlacesMasterMapRecordCacheIsValid = false
+    }
 
     private func appendPlaceImagePath(
         _ imagePath: String,
