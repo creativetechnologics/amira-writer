@@ -54,6 +54,10 @@ private struct PlacesWorkspaceContent: View {
         .onAppear {
             scheduleStartupStaging(reset: true)
         }
+        .onChange(of: inspectorVisible) { _, isVisible in
+            guard isVisible, !renderPlacesInspectorContent else { return }
+            scheduleStartupStaging(reset: false)
+        }
         .onDisappear {
             startupStagingTask?.cancel()
         }
@@ -173,6 +177,12 @@ private struct PlacesWorkspaceContent: View {
             try? await Task.sleep(for: .milliseconds(240))
             guard !Task.isCancelled else { return }
             renderPlacesSidebarContent = true
+
+            guard inspectorVisible else { return }
+
+            try? await Task.sleep(for: .milliseconds(420))
+            guard !Task.isCancelled else { return }
+            renderPlacesInspectorContent = true
         }
     }
 

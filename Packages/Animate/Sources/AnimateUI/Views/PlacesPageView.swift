@@ -1267,7 +1267,7 @@ struct PlacesPageView: View {
 
             if let path = effectivePath,
                let url = resolvedAssetURL(for: path) {
-                AsyncResolvedImageView(path: url.path, maxPixelSize: 1440, contentMode: .fit)
+                AsyncResolvedImageView(path: url.path, maxPixelSize: 960, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .frame(height: 220)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -4306,7 +4306,7 @@ private struct PlaceLandmarkDetailView: View {
 
             if let primaryImagePath,
                let url = resolvedAssetURL(for: primaryImagePath) {
-                AsyncResolvedImageView(path: url.path, maxPixelSize: 1600, contentMode: .fit)
+                AsyncResolvedImageView(path: url.path, maxPixelSize: 1200, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .frame(height: 360)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -5065,7 +5065,7 @@ struct AngleImageCard: View {
     @ViewBuilder
     private var angleImageThumbnail: some View {
         if let url = store.resolvedCharacterAssetURL(for: angleImage.imagePath) {
-            AsyncResolvedImageView(path: url.path, maxPixelSize: 720, contentMode: .fill)
+            AsyncResolvedImageView(path: url.path, maxPixelSize: 360, contentMode: .fill)
         } else {
             ZStack {
                 Color.gray.opacity(0.1)
