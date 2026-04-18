@@ -1093,6 +1093,7 @@ final class ScoreStore {
     // MARK: - Full Mix Export
     var isExportingFullMix: Bool = false
     var fullMixExportStatus: String = ""
+    var fullMixExportDetailStatus: String = ""
     /// Export progress from 0.0 to 1.0 — updated during real-time render exports.
     var fullMixExportProgress: Double = 0
 
@@ -4648,7 +4649,14 @@ final class ScoreStore {
 
         // Progress callback — bounces to main actor
         let reportStatus: @Sendable (String) -> Void = { [weak self] msg in
-            Task { @MainActor in self?.statusMessage = msg }
+            Task { @MainActor in
+                guard let self else { return }
+                if self.isExportingFullMix {
+                    self.fullMixExportDetailStatus = msg
+                } else {
+                    self.statusMessage = msg
+                }
+            }
         }
         let reportWarning: @Sendable (String) -> Void = { [weak self] msg in
             Task { @MainActor in self?.appendSunoLog(msg, level: .warning) }
@@ -4790,62 +4798,82 @@ final class ScoreStore {
         let finishedLock = OSAllocatedUnfairLock(initialState: false)
         let playbackErrorLock = OSAllocatedUnfairLock(initialState: Optional<String>.none)
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            func resumeOnce(_ result: Result<Void, Error>) {
-                let alreadyResumed = finishedLock.withLock { state in
-                    let wasFinished = state
-                    if !state { state = true }
-                    return wasFinished
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                func resumeOnce(_ result: Result<Void, Error>) {
+                    let alreadyResumed = finishedLock.withLock { state in
+                        let wasFinished = state
+                        if !state { state = true }
+                        return wasFinished
+                    }
+                    guard !alreadyResumed else { return }
+                    continuation.resume(with: result)
                 }
-                guard !alreadyResumed else { return }
-                continuation.resume(with: result)
-            }
 
-            exportEngine.onPlaybackError = { message in
-                playbackErrorLock.withLock { state in state = message }
-            }
-            exportEngine.onMainMixRecordingComplete = { url in
-                let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                if fileSize <= 4096 {
-                    let message = playbackErrorLock.withLock { $0 } ?? ChunkExportError.bufferCreationFailed.localizedDescription
-                    resumeOnce(.failure(NSError(domain: "RealtimeExport", code: 1, userInfo: [
-                        NSLocalizedDescriptionKey: message
-                    ])))
-                    return
+                exportEngine.onPlaybackError = { message in
+                    playbackErrorLock.withLock { state in state = message }
                 }
-                resumeOnce(.success(()))
-            }
+                exportEngine.onMainMixRecordingComplete = { url in
+                    let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+                    if Self.isLikelyIncompleteWavExport(at: url, fileSize: fileSize) {
+                        let message = playbackErrorLock.withLock { $0 } ?? ChunkExportError.bufferCreationFailed.localizedDescription
+                        resumeOnce(.failure(NSError(domain: "RealtimeExport", code: 1, userInfo: [
+                            NSLocalizedDescriptionKey: message
+                        ])))
+                        return
+                    }
+                    resumeOnce(.success(()))
+                }
 
-            reportStatus("Capturing live BBC render...")
-            exportEngine.startMainMixRecording(outputURL: outputURL)
-            exportEngine.play(
-                notes: clippedNotes,
-                lengthTicks: playbackLengthTicks,
-                ticksPerQuarter: ticksPerQuarter,
-                tempoBPM: shiftedTempoBPM,
-                tempoEvents: shiftedTempoEvents,
-                loop: false,
-                startTick: 0,
-                trackChannelToMappingKey: channelKeyMap,
-                instrumentMappings: effectiveMappings,
-                audioClips: [],
-                renderMode: .midi,
-                mutedTracks: []
-            )
-            for (mappingKey, pan) in panMap {
-                exportEngine.setSamplerPan(mappingKey: mappingKey, pan: pan)
-            }
+                reportStatus("Capturing live BBC render...")
+                exportEngine.startMainMixRecording(outputURL: outputURL)
+                exportEngine.play(
+                    notes: clippedNotes,
+                    lengthTicks: playbackLengthTicks,
+                    ticksPerQuarter: ticksPerQuarter,
+                    tempoBPM: shiftedTempoBPM,
+                    tempoEvents: shiftedTempoEvents,
+                    loop: false,
+                    startTick: 0,
+                    trackChannelToMappingKey: channelKeyMap,
+                    instrumentMappings: effectiveMappings,
+                    audioClips: [],
+                    renderMode: .midi,
+                    mutedTracks: []
+                )
+                for (mappingKey, pan) in panMap {
+                    exportEngine.setSamplerPan(mappingKey: mappingKey, pan: pan)
+                }
 
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64(scheduledStopSeconds * 1_000_000_000))
-                exportEngine.stop()
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64(scheduledStopSeconds * 1_000_000_000))
+                    exportEngine.stop()
+                }
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64(hardTimeoutSeconds * 1_000_000_000))
+                    exportEngine.stopMainMixRecording()
+                    exportEngine.stop()
+                    resumeOnce(.failure(ChunkExportError.realtimeRenderTimedOut))
+                }
             }
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64(hardTimeoutSeconds * 1_000_000_000))
-                exportEngine.stopMainMixRecording()
-                exportEngine.stop()
-                resumeOnce(.failure(ChunkExportError.realtimeRenderTimedOut))
-            }
+        } catch {
+            Self.removeIncompleteExportFile(at: outputURL)
+            throw error
+        }
+    }
+
+    nonisolated private static func isLikelyIncompleteWavExport(at url: URL, fileSize: Int64?) -> Bool {
+        guard url.pathExtension.lowercased() == "wav", let fileSize else { return false }
+        return fileSize > 0 && fileSize <= 4096
+    }
+
+    nonisolated private static func removeIncompleteExportFile(at url: URL) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return }
+        do {
+            try fm.removeItem(at: url)
+        } catch {
+            NSLog("[FullMix] Failed to remove incomplete export at %@: %@", url.path, error.localizedDescription)
         }
     }
 
@@ -5422,6 +5450,7 @@ final class ScoreStore {
         isExportingFullMix = true
         fullMixExportProgress = 0
         fullMixExportStatus = "Rendering full mix..."
+        fullMixExportDetailStatus = ""
 
         let endTick = pianoRollNotes.map { $0.startTick + $0.duration }.max() ?? pianoRollLengthTicks
         guard endTick > 0 else {
@@ -5460,9 +5489,11 @@ final class ScoreStore {
             )
             fullMixExportProgress = 1.0
             fullMixExportStatus = "Exported to \(outputURL.lastPathComponent)"
+            fullMixExportDetailStatus = ""
             NSLog("[FullMix] Exported full mix to %@", outputURL.path)
         } catch {
             fullMixExportStatus = "Export failed: \(error.localizedDescription)"
+            fullMixExportDetailStatus = ""
             NSLog("[FullMix] Export failed: %@", error.localizedDescription)
         }
 
@@ -5511,6 +5542,7 @@ final class ScoreStore {
 
         isExportingFullMix = true
         fullMixExportStatus = "Rendering rehearsal track..."
+        fullMixExportDetailStatus = ""
 
         // Build gain overrides: vocal mappings keep their gain, others get attenuated
         var gainOverrides: [String: Double] = [:]
@@ -5539,9 +5571,11 @@ final class ScoreStore {
                 gainOverrides: gainOverrides
             )
             fullMixExportStatus = "Rehearsal track exported to \(outputURL.lastPathComponent)"
+            fullMixExportDetailStatus = ""
             NSLog("[Rehearsal] Exported rehearsal track to %@", outputURL.path)
         } catch {
             fullMixExportStatus = "Export failed: \(error.localizedDescription)"
+            fullMixExportDetailStatus = ""
             NSLog("[Rehearsal] Export failed: %@", error.localizedDescription)
         }
 
@@ -5585,6 +5619,7 @@ final class ScoreStore {
         }
 
         isExportingFullMix = true
+        fullMixExportDetailStatus = ""
 
         // Group notes by trackIndex
         let trackIndices = Set(pianoRollNotes.map(\.trackIndex)).sorted()
@@ -5623,6 +5658,7 @@ final class ScoreStore {
         }
 
         fullMixExportStatus = "Exported \(exported) stems to \(outputDir.lastPathComponent)/"
+        fullMixExportDetailStatus = ""
         NSLog("[Stems] Exported %d stems to %@", exported, outputDir.path)
         isExportingFullMix = false
     }

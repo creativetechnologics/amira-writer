@@ -3063,6 +3063,7 @@ final class MixStore {
 
         guard Self.audioExtensions.contains(url.pathExtension.lowercased()) else { return nil }
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+        guard Self.isBrowsableAudioFile(at: url, fileSize: size) else { return nil }
         return MixBrowserNode(
             name: url.lastPathComponent,
             path: url.path,
@@ -3070,6 +3071,14 @@ final class MixStore {
             children: [],
             fileSize: size
         )
+    }
+
+    nonisolated private static func isBrowsableAudioFile(at url: URL, fileSize: Int64?) -> Bool {
+        guard let fileSize else { return true }
+        if url.pathExtension.lowercased() == "wav", fileSize > 0, fileSize <= 4096 {
+            return false
+        }
+        return true
     }
 
     private func filterBrowserNodes(_ nodes: [MixBrowserNode], query: String) -> [MixBrowserNode] {

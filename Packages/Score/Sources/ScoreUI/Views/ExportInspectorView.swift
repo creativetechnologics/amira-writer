@@ -117,8 +117,8 @@ struct ExportInspectorView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if !store.statusMessage.isEmpty {
-                Text(store.statusMessage)
+            if !store.fullMixExportDetailStatus.isEmpty {
+                Text(store.fullMixExportDetailStatus)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
