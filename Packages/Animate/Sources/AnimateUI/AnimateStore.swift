@@ -219,6 +219,7 @@ final class AnimateStore {
 
     var selectedImaginePage: ImaginePage = .characters
     var imagineSceneGalleries: [UUID: [ImagineSceneShotGallery]] = [:]
+    private var imagineGalleryRefreshGenerationByScene: [UUID: Int] = [:]
     var imagineBulkRunConfig: ImagineBulkRunConfig = .init()
     var imagineBulkRunProgress: ImagineBulkRunProgress = .init()
     static let geminiMasterSwitchDefaultsKey = "animate.geminiMasterSwitch"
@@ -15905,18 +15906,31 @@ extension AnimateStore {
               let scene = scenes.first(where: { $0.id == sceneID }) else { return }
         let sceneSlug = scene.name.lowercased().replacingOccurrences(of: " ", with: "-")
             .replacingOccurrences(of: "/", with: "-")
-        var galleries: [ImagineSceneShotGallery] = []
-        for (index, shot) in scene.shots.enumerated() {
-            let gallery = ImagineProjectStorage.scanShotGallery(
-                owpURL: owpURL,
-                sceneSlug: sceneSlug,
-                shotIndex: index,
-                shotID: shot.id,
-                sceneID: sceneID
-            )
-            galleries.append(gallery)
+        let shotDescriptors = scene.shots.enumerated().map { (index, shot) in
+            (index: index, shotID: shot.id)
         }
-        imagineSceneGalleries[sceneID] = galleries
+        let projectPath = owpURL.path
+        let generation = (imagineGalleryRefreshGenerationByScene[sceneID] ?? 0) + 1
+        imagineGalleryRefreshGenerationByScene[sceneID] = generation
+
+        Task { [sceneID, sceneSlug, shotDescriptors, projectPath, generation] in
+            let galleries = await Task.detached(priority: .utility) { () -> [ImagineSceneShotGallery] in
+                shotDescriptors.map { descriptor in
+                    ImagineProjectStorage.scanShotGallery(
+                        owpURL: owpURL,
+                        sceneSlug: sceneSlug,
+                        shotIndex: descriptor.index,
+                        shotID: descriptor.shotID,
+                        sceneID: sceneID
+                    )
+                }
+            }.value
+
+            guard !Task.isCancelled else { return }
+            guard self.fileOWPURL?.path == projectPath else { return }
+            guard self.imagineGalleryRefreshGenerationByScene[sceneID] == generation else { return }
+            self.imagineSceneGalleries[sceneID] = galleries
+        }
     }
 
     func ensureImagineDirectories(for sceneID: UUID) {

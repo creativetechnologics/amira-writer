@@ -75,6 +75,7 @@ private struct PropsWorkspaceContent: View {
     @State private var animateWorkspaceState = AnimateWorkspaceState()
     @State private var importConfirmation: String?
     @State private var scannedProps: [PropItem] = []
+    @State private var isScanningProps = false
 
     @AppStorage("novotro.props.sidebarVisible") private var sidebarVisible = true
     @AppStorage("novotro.props.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
@@ -101,11 +102,8 @@ private struct PropsWorkspaceContent: View {
                 importConfirmationOverlay(message: message)
             }
         }
-        .onAppear {
-            scanPropsDirectory()
-        }
-        .onChange(of: store.owpURL) { _, _ in
-            scanPropsDirectory()
+        .task(id: store.owpURL?.path ?? "") {
+            await scanPropsDirectoryInBackground()
         }
     }
 
@@ -215,7 +213,7 @@ private struct PropsWorkspaceContent: View {
                             try? await Task.sleep(for: .seconds(2.5))
                             await MainActor.run { importConfirmation = nil }
                         }
-                        scanPropsDirectory()
+                        await scanPropsDirectoryInBackground()
                     }
                 }
             } label: {
@@ -230,7 +228,13 @@ private struct PropsWorkspaceContent: View {
 
             Divider()
 
-            if scannedProps.isEmpty {
+            if isScanningProps && scannedProps.isEmpty {
+                Spacer()
+                ProgressView("Scanning props…")
+                    .controlSize(.small)
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                Spacer()
+            } else if scannedProps.isEmpty {
                 Spacer()
                 VStack(spacing: 8) {
                     Image(systemName: "shippingbox")
@@ -270,24 +274,28 @@ private struct PropsWorkspaceContent: View {
 
     // MARK: - Prop Scanning
 
-    private func scanPropsDirectory() {
+    private func scanPropsDirectoryInBackground() async {
         guard let projectURL = store.owpURL else {
             scannedProps = []
+            isScanningProps = false
             return
         }
-        let objectsDir = projectURL.appendingPathComponent("Animate/objects", isDirectory: true)
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: objectsDir.path) else {
-            scannedProps = []
-            return
-        }
-        do {
-            let contents = try fm.contentsOfDirectory(
+
+        let projectPath = projectURL.path
+        isScanningProps = true
+
+        let scanned = await Task.detached(priority: .utility) { () -> [PropItem] in
+            let objectsDir = projectURL.appendingPathComponent("Animate/objects", isDirectory: true)
+            let fm = FileManager.default
+            guard fm.fileExists(atPath: objectsDir.path) else { return [] }
+            guard let contents = try? fm.contentsOfDirectory(
                 at: objectsDir,
                 includingPropertiesForKeys: [.isRegularFileKey],
                 options: [.skipsHiddenFiles]
-            )
-            scannedProps = contents
+            ) else {
+                return []
+            }
+            return contents
                 .filter { url in
                     let ext = url.pathExtension.lowercased()
                     return Self.prop3DExtensions.contains(ext)
@@ -300,9 +308,12 @@ private struct PropsWorkspaceContent: View {
                         ext: url.pathExtension.lowercased()
                     )
                 }
-        } catch {
-            scannedProps = []
-        }
+        }.value
+
+        guard !Task.isCancelled else { return }
+        guard store.owpURL?.path == projectPath else { return }
+        scannedProps = scanned
+        isScanningProps = false
     }
 
     private func addPropToScene(_ prop: PropItem) {
