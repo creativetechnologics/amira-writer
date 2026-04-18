@@ -285,6 +285,14 @@ private struct AllProjectImagesWorkspaceContent: View {
     @AppStorage("novotro.allImages.inspector.width") private var inspectorWidth: Double = 340
 
     var body: some View {
+        // Shadow `state` with @Bindable so `$state.editPendingPreflight`
+        // produces a Binding that SwiftUI actually subscribes to when the
+        // property changes. Without this, `@State` on an `@Observable`
+        // reference type + `$state.property` goes through dynamic member
+        // lookup in a way that silently fails to trigger `.sheet(item:)`
+        // — that's why right-clicking "Edit with Gemini…" did nothing
+        // visible even though the closure was firing and mutating state.
+        @Bindable var state = state
         Group {
             if store.owpURL == nil {
                 OperaChromeEmptyState(
@@ -294,6 +302,32 @@ private struct AllProjectImagesWorkspaceContent: View {
                 )
             } else {
                 workspaceBody
+                    .sheet(item: $state.editPendingPreflight) { _ in
+                        GeminiGenerationPreflightSheet(
+                            store: store,
+                            drafts: $state.editPendingDrafts,
+                            title: "Edit with Gemini",
+                            confirmTitle: "Generate",
+                            onConfirm: { finalDrafts, _ in
+                                let sourceRecord = state.selectedRecord
+                                state.editPendingPreflight = nil
+                                runEditGeneration(finalDrafts, sourceRecord: sourceRecord)
+                            },
+                            onCancel: {
+                                state.editPendingPreflight = nil
+                                state.editPendingDrafts = []
+                            }
+                        )
+                    }
+                    .alert(
+                        "Generation Error",
+                        isPresented: Binding(
+                            get: { state.editErrorMessage != nil },
+                            set: { if !$0 { state.editErrorMessage = nil } }
+                        ),
+                        actions: { Button("OK") { state.editErrorMessage = nil } },
+                        message: { Text(state.editErrorMessage ?? "") }
+                    )
             }
         }
     }
@@ -403,35 +437,9 @@ private struct AllProjectImagesWorkspaceContent: View {
             }
         }
         .background(OperaChromeTheme.workspaceBackground)
-        // Preflight + alerts attach at the workspace root so they fire whether
-        // or not the inspector is visible (grid's right-click "Generate with
-        // Gemini" can open the preflight sheet from the cell context menu).
-        .sheet(item: $state.editPendingPreflight) { _ in
-            GeminiGenerationPreflightSheet(
-                store: store,
-                drafts: $state.editPendingDrafts,
-                title: "Edit with Gemini",
-                confirmTitle: "Generate",
-                onConfirm: { finalDrafts, _ in
-                    let sourceRecord = state.selectedRecord
-                    state.editPendingPreflight = nil
-                    runEditGeneration(finalDrafts, sourceRecord: sourceRecord)
-                },
-                onCancel: {
-                    state.editPendingPreflight = nil
-                    state.editPendingDrafts = []
-                }
-            )
-        }
-        .alert(
-            "Generation Error",
-            isPresented: Binding(
-                get: { state.editErrorMessage != nil },
-                set: { if !$0 { state.editErrorMessage = nil } }
-            ),
-            actions: { Button("OK") { state.editErrorMessage = nil } },
-            message: { Text(state.editErrorMessage ?? "") }
-        )
+        // Preflight + alerts live on `body` (not here), with an explicit
+        // @Bindable shadow of `state`, so `$state.editPendingPreflight`
+        // actually triggers the sheet. See comment in `body`.
     }
 
     private var centerPaneTitle: String {
