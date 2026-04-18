@@ -29,6 +29,10 @@ private struct PlacesWorkspaceContent: View {
     @Bindable var store: AnimateStore
     @State private var animateWorkspaceState = AnimateWorkspaceState()
     @State private var placesViewMode: PlacesViewMode = .grid
+    @State private var renderPlacesCenterContent = false
+    @State private var renderPlacesSidebarContent = false
+    @State private var renderPlacesInspectorContent = false
+    @State private var startupStagingTask: Task<Void, Never>?
 
     @AppStorage("novotro.places.sidebarVisible") private var sidebarVisible = true
     @AppStorage("novotro.places.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
@@ -46,6 +50,12 @@ private struct PlacesWorkspaceContent: View {
             } else {
                 workspaceBody
             }
+        }
+        .onAppear {
+            scheduleStartupStaging(reset: true)
+        }
+        .onDisappear {
+            startupStagingTask?.cancel()
         }
     }
 
@@ -76,11 +86,15 @@ private struct PlacesWorkspaceContent: View {
                         .help("Import Place")
                     }
                 } content: {
-                    PlacesSidebarView(
-                        store: store,
-                        viewMode: $placesViewMode,
-                        allImageCount: store.allBackgroundHierarchyImageCount()
-                    )
+                    if renderPlacesSidebarContent {
+                        PlacesSidebarView(
+                            store: store,
+                            viewMode: $placesViewMode,
+                            allImageCount: store.allBackgroundHierarchyImageCount()
+                        )
+                    } else {
+                        placesStartupSidebarPlaceholder
+                    }
                 }
                 .frame(width: sidebarWidth)
 
@@ -99,7 +113,11 @@ private struct PlacesWorkspaceContent: View {
                     Spacer(minLength: 10)
                 }
             } content: {
-                PlacesPageView(store: store, viewMode: $placesViewMode, showSidebar: false)
+                if renderPlacesCenterContent {
+                    PlacesPageView(store: store, viewMode: $placesViewMode, showSidebar: false)
+                } else {
+                    placesStartupContentPlaceholder
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -122,16 +140,81 @@ private struct PlacesWorkspaceContent: View {
                         }
                     }
                 } content: {
-                    InspectorView(
-                        store: store,
-                        currentPage: .places,
-                        animateWorkspaceState: animateWorkspaceState
-                    )
+                    if renderPlacesInspectorContent {
+                        InspectorView(
+                            store: store,
+                            currentPage: .places,
+                            animateWorkspaceState: animateWorkspaceState
+                        )
+                    } else {
+                        placesStartupInspectorPlaceholder
+                    }
                 }
                 .frame(width: inspectorWidth)
             }
         }
         .background(OperaChromeTheme.workspaceBackground)
+    }
+
+    private func scheduleStartupStaging(reset: Bool = false) {
+        startupStagingTask?.cancel()
+
+        if reset {
+            renderPlacesCenterContent = false
+            renderPlacesSidebarContent = false
+            renderPlacesInspectorContent = false
+        }
+
+        startupStagingTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            renderPlacesCenterContent = true
+
+            try? await Task.sleep(for: .milliseconds(240))
+            guard !Task.isCancelled else { return }
+            renderPlacesSidebarContent = true
+        }
+    }
+
+    private var placesStartupSidebarPlaceholder: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Preparing places sidebar…")
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(OperaChromeTheme.textPrimary)
+            ProgressView()
+                .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(16)
+    }
+
+    private var placesStartupContentPlaceholder: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.regular)
+            Text("Preparing Places workspace…")
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(OperaChromeTheme.textPrimary)
+            Text("Loading the staged Places browser shell.")
+                .font(.system(size: 12))
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var placesStartupInspectorPlaceholder: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Preparing inspector…")
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(OperaChromeTheme.textPrimary)
+            Text("Places metadata tools will appear once the workspace shell is stable.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+            ProgressView()
+                .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(16)
     }
 
 

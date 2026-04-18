@@ -732,7 +732,6 @@ final class AnimateStore {
             guard let self, !Task.isCancelled else { return }
             self.deferredStartupRefreshTask = nil
             self.refreshInspirationBatchJobs()
-            self.refreshPlaceWorldGenerationBatches()
             self.refreshPlaceEditBatchJobs()
         }
     }
@@ -4027,7 +4026,6 @@ final class AnimateStore {
                         self.loadPlacesWorkflowLibrary(from: animateDir)
                     )
                     self.placesWorldContextBlocks = self.loadPlacesWorldContextBlocks(from: animateDir)
-                    self.refreshPlaceWorldGenerationBatches()
                     _ = self.applyScriptPlaceRequirements(self.scriptPlaceRequirements, persistChanges: false)
                     self.markAgentUpdated()
                     self.statusMessage = "Reloaded external project changes"
@@ -4093,7 +4091,6 @@ final class AnimateStore {
                     }
 
                     if self.isPlaceWorldBatchMetadataRelativePath(path) || self.isPlaceWorldBatchResultsRelativePath(path) {
-                        self.refreshPlaceWorldGenerationBatches()
                         self.markAgentUpdated(paths: [path])
                         self.statusMessage = "Reloaded place batch results"
                         return

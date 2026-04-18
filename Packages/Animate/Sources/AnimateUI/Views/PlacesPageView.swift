@@ -938,31 +938,18 @@ struct PlacesPageView: View {
 
             guard totalPlaces > 0 else {
                 renderSidebarThumbnails = true
-                renderGridThumbnails = true
                 renderOverviewDetails = true
                 return
             }
 
-            try? await Task.sleep(for: .milliseconds(60))
+            try? await Task.sleep(for: .milliseconds(80))
             guard !Task.isCancelled else { return }
-            stagedGridPlaceCount = min(totalPlaces, 6)
+            stagedGridPlaceCount = min(totalPlaces, 4)
 
-            try? await Task.sleep(for: .milliseconds(60))
+            try? await Task.sleep(for: .milliseconds(140))
             guard !Task.isCancelled else { return }
             renderOverviewDetails = true
             renderSidebarThumbnails = true
-
-            if totalPlaces > stagedGridPlaceCount {
-                stagedGridPlaceCount = min(totalPlaces, 12)
-            }
-
-            try? await Task.sleep(for: .milliseconds(100))
-            guard !Task.isCancelled else { return }
-            renderGridThumbnails = true
-
-            if totalPlaces > stagedGridPlaceCount {
-                stagedGridPlaceCount = min(totalPlaces, 24)
-            }
         }
     }
 
