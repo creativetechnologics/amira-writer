@@ -799,9 +799,12 @@ struct PlacesPageView: View {
     @State private var renderGridThumbnails = false
     @State private var renderSidebarThumbnails = false
     @State private var renderOverviewDetails = false
+    @State private var renderPlaceDetailPrimaryAssets = false
+    @State private var renderPlaceDetailSecondaryAssets = false
     @State private var worldbuildingRefreshTask: Task<Void, Never>?
     @State private var landmarkSuggestionRefreshTask: Task<Void, Never>?
     @State private var placesRenderStagingTask: Task<Void, Never>?
+    @State private var placeDetailStagingTask: Task<Void, Never>?
     @AppStorage("animate.places.workflowMode.v1") private var workflowModeRawValue = PlaceWorkflowMode.photorealistic.rawValue
     var showSidebar: Bool = true
 
@@ -1054,6 +1057,7 @@ struct PlacesPageView: View {
                 selectedLandmarkID = sortedLandmarkProfiles.first?.id
             }
             schedulePlacesRenderStaging(reset: true)
+            schedulePlaceDetailStaging(reset: true)
             if viewMode == .library {
                 store.refreshGeneratedBackgroundLibraryIfNeededInBackground()
             }
@@ -1064,6 +1068,9 @@ struct PlacesPageView: View {
         .onChange(of: store.backgrounds.count) { _, _ in
             schedulePlacesRenderStaging(reset: true)
         }
+        .onChange(of: store.selectedBackgroundID) { _, _ in
+            schedulePlaceDetailStaging(reset: true)
+        }
         .onChange(of: viewMode) { _, newValue in
             if newValue == .library {
                 store.refreshGeneratedBackgroundLibraryIfNeededInBackground()
@@ -1071,6 +1078,9 @@ struct PlacesPageView: View {
             switch newValue {
             case .grid:
                 schedulePlacesRenderStaging(reset: false)
+                schedulePlaceDetailStaging(reset: true)
+            case .detail:
+                schedulePlaceDetailStaging(reset: true)
             case .landmarks:
                 scheduleLandmarkSuggestionRefreshIfNeeded()
             case .world, .review:
@@ -1083,6 +1093,7 @@ struct PlacesPageView: View {
             worldbuildingRefreshTask?.cancel()
             landmarkSuggestionRefreshTask?.cancel()
             placesRenderStagingTask?.cancel()
+            placeDetailStagingTask?.cancel()
         }
         .onChange(of: store.selectedGeneratedBackgroundRecordID) { _, newValue in
             selectedWorldCaptureRecordID = newValue
@@ -1784,9 +1795,23 @@ struct PlacesPageView: View {
             VStack(alignment: .leading, spacing: 16) {
                 placeHeader(place)
                 shotRequirementsSection(place)
-                workflowOutputSection(place)
-                placeReferencesSection(place)
-                angleImagesSection(place)
+                if renderPlaceDetailPrimaryAssets {
+                    workflowOutputSection(place)
+                } else {
+                    placeDetailSectionPlaceholder(
+                        title: "\(workflowMode.displayName) Output Library",
+                        message: "Preparing the primary place image library…"
+                    )
+                }
+                if renderPlaceDetailSecondaryAssets {
+                    placeReferencesSection(place)
+                    angleImagesSection(place)
+                } else {
+                    placeDetailSectionPlaceholder(
+                        title: "Reference Assets",
+                        message: "Preparing reference and angle image sections…"
+                    )
+                }
                 placeNotesSection(place)
                 generationStudioSection(place)
             }
@@ -1806,6 +1831,44 @@ struct PlacesPageView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func schedulePlaceDetailStaging(reset: Bool) {
+        placeDetailStagingTask?.cancel()
+
+        if reset {
+            renderPlaceDetailPrimaryAssets = false
+            renderPlaceDetailSecondaryAssets = false
+        }
+
+        guard viewMode == .detail, selectedPlace != nil else { return }
+
+        placeDetailStagingTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(140))
+            guard !Task.isCancelled else { return }
+            renderPlaceDetailPrimaryAssets = true
+
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            renderPlaceDetailSecondaryAssets = true
+        }
+    }
+
+    private func placeDetailSectionPlaceholder(title: String, message: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private var map3DSection: some View {
