@@ -4666,12 +4666,61 @@ final class ScoreStore {
             let pairKey = "\(note.trackIndex):\(note.channel)"
             return channelKeyMap[pairKey] ?? "__default__"
         })
-        let needsRealtimePlaybackRender = overrideSF2Path == nil && neededMappingKeys.contains { key in
+        let containsAudioUnitMappings = overrideSF2Path == nil && neededMappingKeys.contains { key in
             guard let mapping = resolvedMappings[key], !mapping.muted else { return false }
             return mapping.effectiveSourceType == .audioUnit && mapping.audioComponentDescription != nil
         }
+        // Hosted Audio Units still default to live capture because the experimental
+        // manual-rendering path is not yet quality-equivalent for all BBC sessions.
+        // Allow opt-in A/B testing without changing the safe default export path.
+        let preferOfflineAudioUnitRender = ProcessInfo.processInfo.environment["AMIRA_PREFER_OFFLINE_AU_EXPORT"] == "1"
 
-        if needsRealtimePlaybackRender {
+        // Tick-to-seconds conversion as a pure function (captures snapshot)
+        let ticksToSec: @Sendable (Int) -> Double = { tick in
+            Self.ticksToSecondsStatic(tick, ticksPerQuarter: tpq, tempoEvents: tempoEvents)
+        }
+
+        let performOfflineRender: @Sendable () async throws -> Void = {
+            // Run ALL heavy work off the main thread
+            try await Task.detached(priority: .userInitiated) {
+                try await Self.renderChunkToWavBackground(
+                    chunkNotes: dynamicsApplied,
+                    startTick: startTick,
+                    endTick: endTick,
+                    outputURL: outputURL,
+                    overrideSF2Path: overrideSF2Path,
+                    gainOverrides: gainOverrides,
+                    channelKeyMap: channelKeyMap,
+                    resolvedMappings: resolvedMappings,
+                    masterVolume: volume,
+                    panMap: panMap,
+                    ticksToSec: ticksToSec,
+                    reportStatus: reportStatus,
+                    reportWarning: reportWarning
+                )
+            }.value
+        }
+
+        if containsAudioUnitMappings && preferOfflineAudioUnitRender {
+            do {
+                NSLog("[OfflineExport] Attempting offline hosted-instrument export for %@", outputURL.lastPathComponent)
+                reportStatus("Rendering hosted instruments offline...")
+                try await performOfflineRender()
+                let fileSize = (try? outputURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+                if Self.isLikelyIncompleteWavExport(at: outputURL, fileSize: fileSize) {
+                    throw ChunkExportError.bufferCreationFailed
+                }
+                NSLog("[OfflineExport] Offline hosted-instrument export succeeded for %@", outputURL.lastPathComponent)
+                return
+            } catch {
+                Self.removeIncompleteExportFile(at: outputURL)
+                NSLog("[OfflineExport] Offline hosted-instrument export failed for %@: %@", outputURL.lastPathComponent, error.localizedDescription)
+                reportWarning("Offline hosted-instrument render failed (\(error.localizedDescription)); falling back to live capture.")
+                reportStatus("Falling back to live hosted-instrument capture...")
+            }
+        }
+
+        if containsAudioUnitMappings {
             try await renderChunkToWavViaPlaybackEngine(
                 notes: dynamicsApplied,
                 startTick: startTick,
@@ -4692,29 +4741,7 @@ final class ScoreStore {
             return
         }
 
-        // Tick-to-seconds conversion as a pure function (captures snapshot)
-        let ticksToSec: @Sendable (Int) -> Double = { tick in
-            Self.ticksToSecondsStatic(tick, ticksPerQuarter: tpq, tempoEvents: tempoEvents)
-        }
-
-        // Run ALL heavy work off the main thread
-        try await Task.detached(priority: .userInitiated) {
-            try await Self.renderChunkToWavBackground(
-                chunkNotes: dynamicsApplied,
-                startTick: startTick,
-                endTick: endTick,
-                outputURL: outputURL,
-                overrideSF2Path: overrideSF2Path,
-                gainOverrides: gainOverrides,
-                channelKeyMap: channelKeyMap,
-                resolvedMappings: resolvedMappings,
-                masterVolume: volume,
-                panMap: panMap,
-                ticksToSec: ticksToSec,
-                reportStatus: reportStatus,
-                reportWarning: reportWarning
-            )
-        }.value
+        try await performOfflineRender()
     }
 
     private func renderChunkToWavViaPlaybackEngine(
@@ -4895,7 +4922,7 @@ final class ScoreStore {
         reportStatus: @Sendable (String) -> Void,
         reportWarning: @Sendable (String) -> Void
     ) async throws {
-        let sampleRate: Double = 44100
+        let sampleRate: Double = 48_000
         guard let outputFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: sampleRate,
@@ -5212,18 +5239,10 @@ final class ScoreStore {
             throw ChunkExportError.bufferCreationFailed
         }
 
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: 2,
-            AVLinearPCMBitDepthKey: 24,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false,
-        ]
+        reportStatus("Rendering mix offline...")
         let outputFile = try AVAudioFile(
             forWriting: outputURL,
-            settings: settings,
+            settings: outputFormat.settings,
             commonFormat: .pcmFormatFloat32,
             interleaved: false
         )
@@ -5469,14 +5488,17 @@ final class ScoreStore {
 
         // Progress timer — updates every 0.25s during the export
         let progressTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] timer in
-            guard let self, self.isExportingFullMix else {
-                timer.invalidate()
-                return
-            }
-            let elapsed = Date().timeIntervalSince(exportStartTime)
-            let progress = estimatedSeconds > 0 ? min(elapsed / (estimatedSeconds + 2), 0.99) : 0
-            Task { @MainActor in
+            let shouldInvalidate = MainActor.assumeIsolated {
+                guard let self, self.isExportingFullMix else {
+                    return true
+                }
+                let elapsed = Date().timeIntervalSince(exportStartTime)
+                let progress = estimatedSeconds > 0 ? min(elapsed / (estimatedSeconds + 2), 0.99) : 0
                 self.fullMixExportProgress = progress
+                return false
+            }
+            if shouldInvalidate {
+                timer.invalidate()
             }
         }
 
