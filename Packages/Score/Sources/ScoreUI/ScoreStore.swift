@@ -4,6 +4,7 @@ import AppKit
 import UIKit
 #endif
 @preconcurrency import AVFoundation
+import Accelerate
 import Foundation
 import ProjectKit
 import os
@@ -4928,7 +4929,9 @@ final class ScoreStore {
                     }
 
                     let offlineDuration = Self.audioDurationSeconds(at: offlineURL) ?? 0
-                    let durationDelta = abs(offlineDuration - realtimeDuration)
+                    let offlineActiveDuration = Self.audioActiveDurationSeconds(at: offlineURL) ?? offlineDuration
+                    let realtimeActiveDuration = Self.audioActiveDurationSeconds(at: realtimeURL) ?? realtimeDuration
+                    let durationDelta = abs(offlineActiveDuration - realtimeActiveDuration)
                     let similarity = (try? MFCCSimilarity.compareFiles(
                         fileA: offlineURL.path,
                         fileB: realtimeURL.path
@@ -4942,11 +4945,12 @@ final class ScoreStore {
                         (similarity >= 0.978 && envelopeSimilarity >= 0.999 && durationDelta <= 0.03)
                     )
                     let detail = String(
-                        format: "%@ similarity=%.4f envelope=%.4f durationDelta=%.3fs excerpt=%d→%d",
+                        format: "%@ similarity=%.4f envelope=%.4f activeDelta=%.3fs fileDelta=%.3fs excerpt=%d→%d",
                         renderProfile.rawValue,
                         similarity,
                         envelopeSimilarity,
                         durationDelta,
+                        abs(offlineDuration - realtimeDuration),
                         excerpt.startTick,
                         excerpt.endTick
                     )
@@ -5230,10 +5234,6 @@ final class ScoreStore {
         // Compute total duration
         let startSeconds = ticksToSec(startTick)
         let endSeconds = ticksToSec(endTick)
-        let totalSeconds = endSeconds - startSeconds
-        let totalFrames = AVAudioFrameCount(totalSeconds * sampleRate) + 44100 // 1s tail for release
-        guard totalFrames > 0 else { return }
-
         // Resolve mapping keys
         var neededMappingKeys = Set<String>()
         for note in chunkNotes {
@@ -5245,6 +5245,18 @@ final class ScoreStore {
             guard let mapping = resolvedMappings[key], !mapping.muted else { return false }
             return mapping.effectiveSourceType == .audioUnit && mapping.audioComponentDescription != nil
         }
+        let totalSeconds = endSeconds - startSeconds
+        let contentFrames = AVAudioFramePosition(max(totalSeconds, 0) * sampleRate)
+        let fixedTailFrames = AVAudioFramePosition(sampleRate)
+        let hostedMinimumTailFrames = AVAudioFramePosition(sampleRate * 0.20)
+        let hostedMaximumTailFrames = AVAudioFramePosition(sampleRate * 2.0)
+        let requiredSilentFramesToStop = AVAudioFramePosition(sampleRate * 0.15)
+        let totalFramesPosition = max(
+            1,
+            contentFrames + (containsHostedAudioUnits ? hostedMaximumTailFrames : fixedTailFrames)
+        )
+        let totalFrames = AVAudioFrameCount(totalFramesPosition)
+        guard totalFrames > 0 else { return }
         // Hosted Audio Units render more faithfully with smaller manual-rendering
         // blocks and a short warm-up pass. This narrows the gap versus the live
         // capture path while still remaining faster than realtime when qualified.
@@ -5579,6 +5591,7 @@ final class ScoreStore {
 
         var currentFrame: AVAudioFramePosition = 0
         var eventIndex = 0
+        var trailingSilentFrames: AVAudioFramePosition = 0
 
         var retryCount = 0
         while currentFrame < AVAudioFramePosition(totalFrames) {
@@ -5624,6 +5637,21 @@ final class ScoreStore {
                 try outputFile.write(from: outputBuffer)
                 currentFrame += AVAudioFramePosition(outputBuffer.frameLength)
                 retryCount = 0
+
+                if containsHostedAudioUnits && currentFrame >= contentFrames {
+                    let bufferRMS = Self.rmsLevel(of: outputBuffer)
+                    if bufferRMS <= 1.0e-4 {
+                        trailingSilentFrames += AVAudioFramePosition(outputBuffer.frameLength)
+                    } else {
+                        trailingSilentFrames = 0
+                    }
+
+                    if currentFrame >= contentFrames + hostedMinimumTailFrames &&
+                        trailingSilentFrames >= requiredSilentFramesToStop &&
+                        eventIndex >= events.count {
+                        break
+                    }
+                }
             case .insufficientDataFromInputNode:
                 currentFrame += AVAudioFramePosition(framesToRender)
                 retryCount = 0
@@ -5715,7 +5743,7 @@ final class ScoreStore {
             .joined(separator: ",")
 
         return [
-            "hosted-au-qualification:v4",
+            "hosted-au-qualification:v5",
             projectIdentifier ?? "__unknown_project__",
             songPath ?? "__unsaved__",
             "ticks:\(startTick)-\(endTick)",
@@ -5795,6 +5823,56 @@ final class ScoreStore {
         return Double(file.length) / sampleRate
     }
 
+    private nonisolated static func audioActiveDurationSeconds(
+        at url: URL,
+        silenceThreshold: Float = 1.0e-4
+    ) -> Double? {
+        guard let audioFile = try? AVAudioFile(
+            forReading: url,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        ) else {
+            return nil
+        }
+
+        let sampleRate = audioFile.processingFormat.sampleRate
+        let channelCount = Int(audioFile.processingFormat.channelCount)
+        guard sampleRate > 0, channelCount > 0 else { return nil }
+
+        let chunkCapacity = AVAudioFrameCount(min(max(audioFile.length, 1), 65_536))
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: chunkCapacity) else {
+            return nil
+        }
+
+        var framesRead: AVAudioFramePosition = 0
+        var lastAudibleFrame: AVAudioFramePosition = 0
+
+        while true {
+            do {
+                try audioFile.read(into: buffer)
+            } catch {
+                return nil
+            }
+
+            let frameLength = Int(buffer.frameLength)
+            guard frameLength > 0, let channelData = buffer.floatChannelData else { break }
+
+            for frame in 0..<frameLength {
+                var peak: Float = 0
+                for channel in 0..<channelCount {
+                    peak = max(peak, abs(channelData[channel][frame]))
+                }
+                if peak > silenceThreshold {
+                    lastAudibleFrame = framesRead + AVAudioFramePosition(frame + 1)
+                }
+            }
+
+            framesRead += AVAudioFramePosition(frameLength)
+        }
+
+        return Double(lastAudibleFrame) / sampleRate
+    }
+
     private nonisolated static func audioEnvelopeSimilarity(
         fileA: URL,
         fileB: URL,
@@ -5822,6 +5900,23 @@ final class ScoreStore {
 
         guard normA > 0, normB > 0 else { return nil }
         return max(0, min(1, dot / (sqrt(normA) * sqrt(normB))))
+    }
+
+    private nonisolated static func rmsLevel(of buffer: AVAudioPCMBuffer) -> Float {
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0, let channelData = buffer.floatChannelData else { return 0 }
+        let channelCount = Int(buffer.format.channelCount)
+        guard channelCount > 0 else { return 0 }
+
+        var sumSquares: Float = 0
+        for channel in 0..<channelCount {
+            var channelSquares: Float = 0
+            vDSP_svesq(channelData[channel], 1, &channelSquares, vDSP_Length(frameLength))
+            sumSquares += channelSquares
+        }
+        let sampleCount = Float(frameLength * channelCount)
+        guard sampleCount > 0 else { return 0 }
+        return sqrt(sumSquares / sampleCount)
     }
 
     private nonisolated static func rmsEnvelope(

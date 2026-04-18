@@ -28,6 +28,8 @@ Instead of blindly switching all AU exports to offline mode, the export stack sh
 4. Improved the hosted-AU offline path with:
    - **profiled manual-rendering block sizes**
    - a longer **silent warm-up / priming pass** before scheduling notes
+   - **silence-aware hosted-AU tail stopping** instead of a fixed 1-second offline tail
+   - qualification-time comparison of **active audible duration**, not just raw file duration
 
 ## Why this matters
 
