@@ -790,15 +790,19 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             }
 
             // 7. Load AU instruments (need running engine)
+            var preparedAULoads: [PreparedAudioUnitLoad] = []
             for (key, mapping) in mappings {
                 if mapping.effectiveSourceType == .audioUnit,
                    let desc = mapping.audioComponentDescription {
                     if let placeholder = self.samplerByMappingKey[key] {
                         placeholder.volume = 0
                     }
-                    self.loadAudioUnitIfNeeded(mappingKey: key, mapping: mapping, description: desc)
+                    if let prepared = self.prepareAudioUnitLoad(mappingKey: key, mapping: mapping, description: desc) {
+                        preparedAULoads.append(prepared)
+                    }
                 }
             }
+            self.installPreparedAudioUnits(preparedAULoads)
 
             _ = self.configureAudioGraphIfNeeded()
             self.fileLog("reloadAllInstruments complete — samplers=\(self.samplerByMappingKey.count) AUs=\(self.auInstrumentByMappingKey.count)")
@@ -863,11 +867,16 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
             _ = self.configureAudioGraphIfNeeded()
 
+            var preparedLoads: [PreparedAudioUnitLoad] = []
+            preparedLoads.reserveCapacity(orderedAUKeys.count)
             for mappingKey in orderedAUKeys {
                 guard let mapping = snapshot[mappingKey],
                       let description = mapping.audioComponentDescription else { continue }
-                self.loadAudioUnitIfNeeded(mappingKey: mappingKey, mapping: mapping, description: description)
+                if let prepared = self.prepareAudioUnitLoad(mappingKey: mappingKey, mapping: mapping, description: description) {
+                    preparedLoads.append(prepared)
+                }
             }
+            self.installPreparedAudioUnits(preparedLoads)
 
             DispatchQueue.main.async { completion?() }
         }
@@ -1841,10 +1850,27 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         }
     }
 
+    private struct PreparedAudioUnitLoad {
+        let mappingKey: String
+        let mapping: InstrumentMapping
+        let signature: SamplerPatchSignature
+        let audioUnit: AVAudioUnit
+        let panMixer: AVAudioMixerNode
+        let replacedAudioUnit: AVAudioUnit?
+        let replacedPanMixer: AVAudioMixerNode?
+    }
+
     /// Load an Audio Unit instrument plugin synchronously on the audio queue.
     /// Uses a semaphore to block until the AU is instantiated — safe because audio queue
     /// is not the main thread and AU instantiation happens out-of-process.
     private func loadAudioUnitIfNeeded(mappingKey: String, mapping: InstrumentMapping, description: AudioComponentDescription) {
+        guard let prepared = prepareAudioUnitLoad(mappingKey: mappingKey, mapping: mapping, description: description) else {
+            return
+        }
+        installPreparedAudioUnits([prepared])
+    }
+
+    private func prepareAudioUnitLoad(mappingKey: String, mapping: InstrumentMapping, description: AudioComponentDescription) -> PreparedAudioUnitLoad? {
         let sig = SamplerPatchSignature(
             soundBankPath: nil, bankMSB: 0, bankLSB: 0, program: 0,
             // Gain changes should not force AU tear-down/re-instantiation.
@@ -1857,30 +1883,16 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             if auInstrumentByMappingKey[mappingKey] != nil {
                 fileLog("loadAU CACHED key=\(mappingKey) renderAlloc=\(auInstrumentByMappingKey[mappingKey]!.auAudioUnit.renderResourcesAllocated)")
                 applyAUGain(mapping.gainDB, mappingKey: mappingKey)
-                return
+                return nil
             }
             fileLog("loadAU STALE CACHE key=\(mappingKey) — AU missing, will retry")
-            // Signature was cached but AU is missing (e.g. failed previous load).
-            // Clear stale cache so we retry instantiation.
             patchSignatureByMappingKey.removeValue(forKey: mappingKey)
         }
 
-        // Remove old AU if exists
-        if let oldAU = auInstrumentByMappingKey.removeValue(forKey: mappingKey) {
-            auObservations.removeValue(forKey: mappingKey)
-            let oldPanMixer = panMixerByMappingKey.removeValue(forKey: mappingKey)
-            withEnginePaused {
-                engine.disconnectNodeOutput(oldAU)
-                engine.detach(oldAU)
-                if let pm = oldPanMixer {
-                    engine.disconnectNodeOutput(pm)
-                    engine.detach(pm)
-                }
-            }
-        }
+        let replacedAudioUnit = auInstrumentByMappingKey.removeValue(forKey: mappingKey)
+        let replacedPanMixer = panMixerByMappingKey.removeValue(forKey: mappingKey)
+        auObservations.removeValue(forKey: mappingKey)
 
-        // Instantiate AU synchronously with timeout — blocks audio queue but NOT main thread.
-        // Out-of-process loading prevents beach balls with large plugins.
         fileLog("loadAU INSTANTIATING key=\(mappingKey) subType=\(description.componentSubType) mfr=\(description.componentManufacturer)")
         let semaphore = DispatchSemaphore(value: 0)
         let loadResult = AULoadResultBox()
@@ -1890,85 +1902,118 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             semaphore.signal()
         }
 
-        let timeout = semaphore.wait(timeout: .now() + 10.0) // 10s timeout for large plugins
+        let timeout = semaphore.wait(timeout: .now() + 10.0)
         let (loadedUnit, loadError) = loadResult.snapshot()
         guard timeout == .success, let audioUnit = loadedUnit else {
             fileLog("loadAU FAILED key=\(mappingKey) error=\(loadError?.localizedDescription ?? "timeout")")
             patchSignatureByMappingKey.removeValue(forKey: mappingKey)
-            return
+            if let replacedAudioUnit {
+                auInstrumentByMappingKey[mappingKey] = replacedAudioUnit
+            }
+            if let replacedPanMixer {
+                panMixerByMappingKey[mappingKey] = replacedPanMixer
+            }
+            return nil
         }
 
-        // Insert a pan mixer between AU and mainMixer for per-channel pan control
         let panMixer = AVAudioMixerNode()
         let maxFrames = recommendedMaximumFramesToRender()
         if !audioUnit.auAudioUnit.renderResourcesAllocated {
             audioUnit.auAudioUnit.maximumFramesToRender = maxFrames
         }
-        withEnginePaused {
-            engine.attach(audioUnit)
-            engine.attach(panMixer)
-            engine.connect(audioUnit, to: panMixer, format: nil)
-            engine.connect(panMixer, to: engine.mainMixerNode, format: nil)
-        }
-        panMixerByMappingKey[mappingKey] = panMixer
-        applyAUGain(mapping.gainDB, mappingKey: mappingKey)
 
-        // Restore preset if available (try plist first, fall back to JSON for legacy data)
-        if let presetData = mapping.auPresetData {
-            fileLog("loadAU PRESET key=\(mappingKey) dataSize=\(presetData.count)")
-            do {
-                if let preset = try PropertyListSerialization.propertyList(from: presetData, format: nil) as? [String: Any] {
-                    // Log any file paths in the preset
-                    if let zones = preset["Zones"] as? [[String: Any]] {
-                        for zone in zones.prefix(2) {
-                            if let path = zone["Sample Path"] as? String {
-                                let exists = FileManager.default.fileExists(atPath: path)
-                                fileLog("  preset zone SF2 path=\(path) exists=\(exists)")
+        return PreparedAudioUnitLoad(
+            mappingKey: mappingKey,
+            mapping: mapping,
+            signature: sig,
+            audioUnit: audioUnit,
+            panMixer: panMixer,
+            replacedAudioUnit: replacedAudioUnit,
+            replacedPanMixer: replacedPanMixer
+        )
+    }
+
+    private func installPreparedAudioUnits(_ preparedLoads: [PreparedAudioUnitLoad]) {
+        guard !preparedLoads.isEmpty else { return }
+
+        // Batch all attach/detach/connect work in one engine pause/start cycle.
+        // Reconfiguring the AVAudioEngine separately for every AU was causing export-time
+        // thread explosions inside AVFAudio/AUHostingService and eventually dispatch soft-limit aborts.
+        withEnginePaused {
+            for prepared in preparedLoads {
+                if let oldAU = prepared.replacedAudioUnit {
+                    engine.disconnectNodeOutput(oldAU)
+                    engine.detach(oldAU)
+                }
+                if let oldPan = prepared.replacedPanMixer {
+                    engine.disconnectNodeOutput(oldPan)
+                    engine.detach(oldPan)
+                }
+            }
+
+            for prepared in preparedLoads {
+                engine.attach(prepared.audioUnit)
+                engine.attach(prepared.panMixer)
+                engine.connect(prepared.audioUnit, to: prepared.panMixer, format: nil)
+                engine.connect(prepared.panMixer, to: engine.mainMixerNode, format: nil)
+            }
+        }
+
+        for prepared in preparedLoads {
+            let mappingKey = prepared.mappingKey
+            let mapping = prepared.mapping
+            let audioUnit = prepared.audioUnit
+
+            panMixerByMappingKey[mappingKey] = prepared.panMixer
+            applyAUGain(mapping.gainDB, mappingKey: mappingKey)
+
+            if let presetData = mapping.auPresetData {
+                fileLog("loadAU PRESET key=\(mappingKey) dataSize=\(presetData.count)")
+                do {
+                    if let preset = try PropertyListSerialization.propertyList(from: presetData, format: nil) as? [String: Any] {
+                        if let zones = preset["Zones"] as? [[String: Any]] {
+                            for zone in zones.prefix(2) {
+                                if let path = zone["Sample Path"] as? String {
+                                    let exists = FileManager.default.fileExists(atPath: path)
+                                    fileLog("  preset zone SF2 path=\(path) exists=\(exists)")
+                                }
                             }
                         }
-                    }
-                    // Also check for file refs in Instrument data
-                    if let inst = preset["Instrument"] as? [String: Any],
-                       let path = inst["file references"] as? [String: Any] {
-                        for (k, v) in path.prefix(2) {
-                            fileLog("  preset fileRef \(k)=\(v)")
+                        if let inst = preset["Instrument"] as? [String: Any],
+                           let path = inst["file references"] as? [String: Any] {
+                            for (k, v) in path.prefix(2) {
+                                fileLog("  preset fileRef \(k)=\(v)")
+                            }
                         }
+                        audioUnit.auAudioUnit.fullState = preset
+                        fileLog("  preset restored OK")
+                    } else if let preset = try JSONSerialization.jsonObject(with: presetData) as? [String: Any] {
+                        audioUnit.auAudioUnit.fullState = preset
+                        fileLog("  preset restored OK (JSON)")
                     }
-                    audioUnit.auAudioUnit.fullState = preset
-                    fileLog("  preset restored OK")
-                } else if let preset = try JSONSerialization.jsonObject(with: presetData) as? [String: Any] {
-                    audioUnit.auAudioUnit.fullState = preset
-                    fileLog("  preset restored OK (JSON)")
+                } catch {
+                    fileLog("loadAU PRESET FAILED key=\(mappingKey) error=\(error.localizedDescription)")
+                    reportError("Could not restore AU preset for \(mappingKey)")
                 }
-            } catch {
-                fileLog("loadAU PRESET FAILED key=\(mappingKey) error=\(error.localizedDescription)")
-                reportError("Could not restore AU preset for \(mappingKey)")
+            } else {
+                fileLog("loadAU NO PRESET key=\(mappingKey)")
             }
-        } else {
-            fileLog("loadAU NO PRESET key=\(mappingKey)")
-        }
 
-        auInstrumentByMappingKey[mappingKey] = audioUnit
-
-        // Observe AU render resources to detect out-of-process disconnect
-        let observation = audioUnit.auAudioUnit.observe(\.renderResourcesAllocated, options: [.new]) { [weak self] au, change in
-            if change.newValue == false {
-                NSLog("[Engine] AU render resources deallocated for '%@' — disconnected", mappingKey)
-                // Do NOT call engine.pause() from this KVO thread — it acquires
-                // internal locks and risks deadlock. Dispatch to audioQueue.
-                self?.audioQueue.async { [weak self] in
-                    guard let self else { return }
-                    // Skip if we intentionally detached this AU for re-initialization
-                    // (isReconfiguring=true during playOnAudioQueue setup).
-                    guard !self.isReconfiguring else { return }
-                    self.handleAUDisconnect(mappingKey: mappingKey)
+            auInstrumentByMappingKey[mappingKey] = audioUnit
+            let observation = audioUnit.auAudioUnit.observe(\.renderResourcesAllocated, options: [.new]) { [weak self] au, change in
+                if change.newValue == false {
+                    NSLog("[Engine] AU render resources deallocated for '%@' — disconnected", mappingKey)
+                    self?.audioQueue.async { [weak self] in
+                        guard let self else { return }
+                        guard !self.isReconfiguring else { return }
+                        self.handleAUDisconnect(mappingKey: mappingKey)
+                    }
                 }
             }
+            auObservations[mappingKey] = observation
+            patchSignatureByMappingKey[mappingKey] = prepared.signature
+            fileLog("loadAU OK key=\(mappingKey) renderAlloc=\(audioUnit.auAudioUnit.renderResourcesAllocated)")
         }
-        auObservations[mappingKey] = observation
-        patchSignatureByMappingKey[mappingKey] = sig
-
-        fileLog("loadAU OK key=\(mappingKey) renderAlloc=\(audioUnit.auAudioUnit.renderResourcesAllocated)")
     }
 
     /// Handle an out-of-process AU that has disconnected.
@@ -2843,6 +2888,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             // Solution: collect all new samplers, attach them ALL in ONE withEnginePaused block.
             // Existing cached samplers don't need attachment — just loadInstrument if sig changed.
             var newSamplerPairs: [(key: String, node: AVAudioUnitSampler, mapping: InstrumentMapping?)] = []
+            var preparedAULoads: [PreparedAudioUnitLoad] = []
             for mappingKey in orderedMappingKeys {
                 let mapping = instrumentMappings[mappingKey]
                 let srcType = mapping?.effectiveSourceType
@@ -2851,17 +2897,23 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 if let mapping, mapping.effectiveSourceType == .audioUnit, let desc = mapping.audioComponentDescription {
                     // AU instruments are hosted directly; do not create placeholder sampler nodes
                     // during playback setup unless we actually need a silent fallback.
-                    loadAudioUnitIfNeeded(mappingKey: mappingKey, mapping: mapping, description: desc)
-                    guard isPlayRequestCurrent(requestID) else {
-                        setPlaying(false)
-                        isReconfiguring = false
-                        return
+                    if let prepared = prepareAudioUnitLoad(mappingKey: mappingKey, mapping: mapping, description: desc) {
+                        preparedAULoads.append(prepared)
                     }
                 } else if samplerByMappingKey[mappingKey] == nil {
                     // New SF2 sampler needed — create node now, attach below in one batch
                     newSamplerPairs.append((key: mappingKey, node: AVAudioUnitSampler(), mapping: mapping))
                 }
                 // Existing samplers: instrument will be (re)loaded after attachment batch below
+            }
+
+            if !preparedAULoads.isEmpty {
+                installPreparedAudioUnits(preparedAULoads)
+                guard isPlayRequestCurrent(requestID) else {
+                    setPlaying(false)
+                    isReconfiguring = false
+                    return
+                }
             }
 
             // Attach all new sampler nodes in a single engine pause (1 pause vs N pauses)
