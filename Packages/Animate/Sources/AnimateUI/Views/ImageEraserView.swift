@@ -34,9 +34,11 @@ struct ImageEraserView: View {
         }
         .frame(minWidth: 900, minHeight: 700)
         .background(Color(nsColor: .windowBackgroundColor))
-        .task {
+        .task(id: imagePath) {
+            loadedImage = nil
+            canvasImage = nil
             guard let url = store.resolvedCharacterAssetURL(for: imagePath),
-                  let img = NSImage(contentsOf: url) else { return }
+                  let img = await loadSharedFullResolutionImage(at: url.path) else { return }
             loadedImage = img
             canvasImage = img.deepCopyForEraser()
         }

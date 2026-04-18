@@ -39,9 +39,11 @@ struct CharacterVariantCropSheet: View {
         }
         .frame(minWidth: 800, minHeight: 700)
         .background(Color(nsColor: .windowBackgroundColor))
-        .task {
+        .task(id: sourceImagePath) {
+            loadedImage = nil
+            pixelSize = .zero
             if let url = store.resolvedCharacterAssetURL(for: sourceImagePath),
-               let image = NSImage(contentsOf: url) {
+               let image = await loadSharedFullResolutionImage(at: url.path) {
                 loadedImage = image
                 if let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
                     pixelSize = CGSize(width: cg.width, height: cg.height)

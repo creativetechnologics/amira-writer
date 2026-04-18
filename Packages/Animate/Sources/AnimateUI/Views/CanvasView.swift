@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import Metal
 import QuartzCore
 import SwiftUI
@@ -41,6 +42,11 @@ struct CanvasRepresentable: NSViewRepresentable {
 @available(macOS 26.0, *)
 @MainActor
 final class AnimationCanvasView: NSView {
+    private static let softwareBackgroundImageCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 32
+        return cache
+    }()
 
     // MARK: - State
 
@@ -327,7 +333,10 @@ final class AnimationCanvasView: NSView {
             drawSoftwarePlaceholderBackdrop(in: context, viewportSize: viewport)
         } else if let backgroundURL = scene.backgroundID
             .flatMap({ id in store.backgrounds.first(where: { $0.id == id })?.sourceURL }),
-            let backgroundImage = NSImage(contentsOf: backgroundURL),
+            let backgroundImage = cachedSoftwareBackgroundImage(
+                for: backgroundURL,
+                targetPixelSize: min(max(Int(max(viewport.width, viewport.height) * 2), 512), 4096)
+            ),
             let cgImage = backgroundImage.cgImage(forProposedRect: nil, context: nil, hints: nil) {
             context.saveGState()
             context.setAlpha(1)
@@ -357,6 +366,40 @@ final class AnimationCanvasView: NSView {
         )
 
         return context.makeImage()
+    }
+
+    private func cachedSoftwareBackgroundImage(for url: URL, targetPixelSize: Int) -> NSImage? {
+        let key = "\(url.path)#\(targetPixelSize)" as NSString
+        if let cached = Self.softwareBackgroundImageCache.object(forKey: key) {
+            return cached
+        }
+
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            if let fallback = NSImage(contentsOf: url) {
+                Self.softwareBackgroundImageCache.setObject(fallback, forKey: key)
+                return fallback
+            }
+            return nil
+        }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: targetPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+
+        let image: NSImage?
+        if let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+            image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        } else {
+            image = NSImage(contentsOf: url)
+        }
+
+        if let image {
+            Self.softwareBackgroundImageCache.setObject(image, forKey: key)
+        }
+        return image
     }
 
     private func renderMetal() {

@@ -2042,6 +2042,7 @@ struct ImageCropperView: View {
     @State private var cropRect: CGRect = .zero
     @State private var hasInitializedCrop = false
     @State private var dragStartOrigin: CGPoint?
+    @State private var loadedImage: NSImage?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2051,6 +2052,9 @@ struct ImageCropperView: View {
         }
         .frame(width: 600, height: 500)
         .background(Color(nsColor: .windowBackgroundColor))
+        .task(id: imagePath) {
+            loadedImage = await loadSharedFullResolutionImage(at: imagePath)
+        }
     }
 
     private var headerBar: some View {
@@ -2069,13 +2073,13 @@ struct ImageCropperView: View {
     private var imageCanvas: some View {
         GeometryReader { geo in
             ZStack {
-                if let image = NSImage(contentsOfFile: imagePath) {
+                if let image = loadedImage {
                     imageCropView(image: image, geo: geo)
                         .onAppear {
                             initializeCropIfNeeded(for: image)
                         }
                 } else {
-                    Text("Failed to load image")
+                    Text("Loading image…")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -2154,7 +2158,7 @@ struct ImageCropperView: View {
 
             HStack(spacing: 16) {
                 Button("1:1 Square") {
-                    if let image = NSImage(contentsOfFile: imagePath) {
+                    if let image = loadedImage {
                         makeSquareCrop(for: image)
                     }
                 }

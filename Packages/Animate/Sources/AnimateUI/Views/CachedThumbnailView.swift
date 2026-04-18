@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 
 @available(macOS 26.0, *)
@@ -59,6 +60,26 @@ func loadSharedPreviewImage(at path: String, maxPixelSize: Int) async -> NSImage
         return cached
     }
     return await ImagineThumbnailCache.shared.thumbnail(for: path, maxPixelSize: maxPixelSize)
+}
+
+@available(macOS 26.0, *)
+func loadSharedFullResolutionImage(at path: String) async -> NSImage? {
+    await Task.detached(priority: .userInitiated) {
+        let url = URL(fileURLWithPath: path)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return NSImage(contentsOf: url)
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        if let cgImage = CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary) {
+            return NSImage(
+                cgImage: cgImage,
+                size: NSSize(width: cgImage.width, height: cgImage.height)
+            )
+        }
+        return NSImage(contentsOf: url)
+    }.value
 }
 
 @available(macOS 26.0, *)
