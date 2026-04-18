@@ -801,6 +801,7 @@ struct PlacesPageView: View {
     @State private var renderOverviewDetails = false
     @State private var renderPlaceDetailPrimaryAssets = false
     @State private var renderPlaceDetailSecondaryAssets = false
+    @State private var renderPlaceDetailGenerationStudio = false
     @State private var worldbuildingRefreshTask: Task<Void, Never>?
     @State private var landmarkSuggestionRefreshTask: Task<Void, Never>?
     @State private var placesRenderStagingTask: Task<Void, Never>?
@@ -1813,7 +1814,14 @@ struct PlacesPageView: View {
                     )
                 }
                 placeNotesSection(place)
-                generationStudioSection(place)
+                if renderPlaceDetailGenerationStudio {
+                    generationStudioSection(place)
+                } else {
+                    placeDetailSectionPlaceholder(
+                        title: "Gemini Generation Studio",
+                        message: "Preparing Gemini drafting controls…"
+                    )
+                }
             }
         } else {
             VStack(spacing: 16) {
@@ -1839,6 +1847,7 @@ struct PlacesPageView: View {
         if reset {
             renderPlaceDetailPrimaryAssets = false
             renderPlaceDetailSecondaryAssets = false
+            renderPlaceDetailGenerationStudio = false
         }
 
         guard viewMode == .detail, selectedPlace != nil else { return }
@@ -1851,6 +1860,10 @@ struct PlacesPageView: View {
             try? await Task.sleep(for: .milliseconds(220))
             guard !Task.isCancelled else { return }
             renderPlaceDetailSecondaryAssets = true
+
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            renderPlaceDetailGenerationStudio = true
         }
     }
 
