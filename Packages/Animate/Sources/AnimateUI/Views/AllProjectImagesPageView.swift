@@ -191,11 +191,14 @@ struct AllProjectImagesPageView: View {
                     }
                 },
                 onEditWithGemini: {
-                    // Select the record and flip the inspector to the
-                    // Edit-with-Gemini tab so the user can fill in an
-                    // adjustments prompt and hit "Open Preflight…".
+                    // Open the preflight sheet immediately so the user can
+                    // type the adjustment there and hit Generate. Also
+                    // select the record + flip the inspector tab so after
+                    // the sheet closes they can keep iterating from the
+                    // Edit-with-Gemini tab without re-hunting the image.
                     state.selectedRecordID = record.id
                     state.inspectorTab = .generate
+                    beginEdit(for: record)
                 },
                 onGenerateWithGemini: { count in
                     beginGenerate(for: record, count: count)
@@ -203,6 +206,34 @@ struct AllProjectImagesPageView: View {
             ),
             onTap: { state.selectedRecordID = record.id }
         )
+    }
+
+    // MARK: - Inline edit (right-click → Edit with Gemini)
+
+    /// Builds a single-draft preflight for "Edit with Gemini…" and pushes it
+    /// to `state.editPendingPreflight`. The workspace-root `.sheet(item:)`
+    /// presents the preflight regardless of whether the inspector is open,
+    /// so this works from anywhere in the grid.
+    private func beginEdit(for record: ProjectImageRecord) {
+        let reference = GeminiGenerationReferenceDraft(
+            label: URL(fileURLWithPath: record.resolvedPath)
+                .deletingPathExtension()
+                .lastPathComponent,
+            path: record.resolvedPath,
+            isIncluded: true
+        )
+        let draft = GeminiGenerationDraft(
+            title: "Edit: \(record.originLabel)",
+            destinationDescription: "Places → Unattached library",
+            prompt: "",
+            model: state.editModel,
+            aspectRatio: state.editAspectRatio,
+            imageSize: state.editImageSize,
+            referenceItems: [reference],
+            editInstructions: state.editAdjustments.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        state.editPendingDrafts = [draft]
+        state.editPendingPreflight = draft
     }
 
     // MARK: - Inline generate (right-click → Generate with Gemini)

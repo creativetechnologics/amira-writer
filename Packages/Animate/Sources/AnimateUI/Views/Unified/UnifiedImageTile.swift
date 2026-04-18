@@ -62,11 +62,14 @@ struct UnifiedImageTile: View {
     private var effectivePath: String { resolvedPath ?? path }
 
     var body: some View {
-        VStack(spacing: 4) {
+        // No captions under tiles, per Gary (2026-04-17): "All thumbnails
+        // should be equidistant from each other. In ALL grids. NO FILENAMES."
+        // The `caption` / `isCurated` params are still accepted so callers
+        // don't have to change their call sites, but they no longer render.
+        // The curated ★ is moved into the thumbnail's top-leading corner in
+        // the rare cases callers want it (handled by sourceLabel overlay).
+        VStack(spacing: 0) {
             thumbnailLayer
-            if caption != nil || isCurated {
-                captionLayer
-            }
         }
         .padding(6)
         .background(
@@ -175,24 +178,10 @@ struct UnifiedImageTile: View {
         }
     }
 
-    @ViewBuilder
-    private var captionLayer: some View {
-        HStack(spacing: 4) {
-            if isCurated {
-                Image(systemName: "star.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.yellow)
-            }
-            if let caption {
-                Text(caption)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-        }
-        .frame(maxWidth: thumbnailSize)
-    }
+    // `captionLayer` intentionally removed per app-wide "no filenames under
+    // thumbnails" rule (see top-level comment in `body`). The `caption` and
+    // `isCurated` parameters are retained on the public API so grid call
+    // sites compile unchanged; they are inert at render time.
 }
 
 /// Separate modifier so the single/double tap pair doesn't fight SwiftUI's

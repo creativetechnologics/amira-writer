@@ -1709,9 +1709,10 @@ struct CharacterReferenceWorkflowSheet: View {
                 get: { isIncluded },
                 set: { store.setMasterReferenceSourceInclusion($0, path: path, for: characterID) }
             )) {
-                Text(URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent)
-                    .font(.caption2)
-                    .lineLimit(2)
+                // No filename caption, per Gary's "NO FILENAMES in any grid"
+                // rule (2026-04-17). The inclusion state is conveyed by the
+                // card's accent border + the checkbox state itself.
+                Text("Include").font(.caption2)
             }
             .toggleStyle(.checkbox)
             .frame(width: 132, alignment: .leading)
