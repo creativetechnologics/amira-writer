@@ -17,6 +17,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
     case places
     case props
     case animate
+    case allImages
 
     var id: String { rawValue }
 
@@ -30,6 +31,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .places: return "Places"
         case .props: return "Props"
         case .animate: return "Animate"
+        case .allImages: return "All Images"
         }
     }
 
@@ -43,6 +45,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .places: return "Background plates, locations, and set imagery"
         case .props: return "Scene objects, vehicles, and interactive props"
         case .animate: return "Staging, scenes, and timeline animation"
+        case .allImages: return "Every generated image across the project"
         }
     }
 
@@ -56,6 +59,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .places: return "map"
         case .props: return "shippingbox"
         case .animate: return "sparkles.tv"
+        case .allImages: return "photo.on.rectangle.angled"
         }
     }
 }
@@ -213,7 +217,6 @@ struct OperaShellView: View {
     @State private var activeProjectTitle: String?
     @State private var renderedMode: OperaMode = .write
     @State private var activeModal: OperaModal?
-    @State private var showAllProjectImages: Bool = false
     @State private var loadState: OperaLoadState = .idle
     @State private var recentProjects: [URL] = []
     @State private var activeProjectLoadError: String?
@@ -411,11 +414,6 @@ struct OperaShellView: View {
                 recentProjectsSheet
             }
         }
-        .sheet(isPresented: $showAllProjectImages) {
-            animateController.allProjectImagesPageView {
-                showAllProjectImages = false
-            }
-        }
     }
 
     private var activeSaveIndicator: SaveIndicatorState {
@@ -428,6 +426,7 @@ struct OperaShellView: View {
         case .places: return animateController.saveIndicator
         case .props: return animateController.saveIndicator
         case .animate: return animateController.saveIndicator
+        case .allImages: return animateController.saveIndicator
         }
     }
 
@@ -441,6 +440,7 @@ struct OperaShellView: View {
         case .places: return placesSidebarVisible
         case .props: return propsSidebarVisible
         case .animate: return animateSidebarVisible
+        case .allImages: return false
         }
     }
 
@@ -508,6 +508,7 @@ struct OperaShellView: View {
             case .places: placesSidebarVisible.toggle()
             case .props: propsSidebarVisible.toggle()
             case .animate: animateSidebarVisible.toggle()
+            case .allImages: break
             }
         }
     }
@@ -522,6 +523,7 @@ struct OperaShellView: View {
         case .places: return placesInspectorVisible
         case .props: return propsInspectorVisible
         case .animate: return animateInspectorVisible
+        case .allImages: return false
         }
     }
 
@@ -536,6 +538,7 @@ struct OperaShellView: View {
             case .places: placesInspectorVisible.toggle()
             case .props: propsInspectorVisible.toggle()
             case .animate: animateInspectorVisible.toggle()
+            case .allImages: break
             }
         }
     }
@@ -575,12 +578,6 @@ struct OperaShellView: View {
             Spacer(minLength: 4)
 
             HStack(spacing: 6) {
-                OperaChromeActionButton(
-                    systemImage: "photo.on.rectangle.angled",
-                    isSelected: showAllProjectImages
-                ) {
-                    showAllProjectImages = true
-                }
                 animateController.geminiStatusBadgeView()
                 animateController.globalSettingsGearView()
 
@@ -634,6 +631,8 @@ struct OperaShellView: View {
             PropsWorkspace(controller: animateController)
         case .animate:
             AnimateWorkspace(controller: animateController)
+        case .allImages:
+            animateController.allProjectImagesPageView()
         }
     }
 
@@ -899,6 +898,7 @@ struct OperaShellView: View {
         case .places: animateController.suspendBackgroundWork()
         case .props: animateController.suspendBackgroundWork()
         case .animate: animateController.suspendBackgroundWork()
+        case .allImages: animateController.suspendBackgroundWork()
         }
 
         let projectName = activeProjectTitle ?? displayName(for: activeProjectURL)
@@ -979,6 +979,8 @@ struct OperaShellView: View {
             return await animateController.ensureProjectLoaded(projectURL)
         case .animate:
             return await animateController.ensureProjectLoaded(projectURL)
+        case .allImages:
+            return await animateController.ensureProjectLoaded(projectURL)
         }
     }
 
@@ -988,7 +990,7 @@ struct OperaShellView: View {
         projectURL: URL,
         onBackgroundCompletion: (@MainActor (String?) -> Void)? = nil
     ) async -> OperaModeLoadResult {
-        guard mode == .animate || mode == .characters || mode == .places || mode == .props || mode == .mix || mode == .imagine else {
+        guard mode == .animate || mode == .characters || mode == .places || mode == .props || mode == .mix || mode == .imagine || mode == .allImages else {
             if let error = await load(mode: mode, projectURL: projectURL) {
                 return .failure(error)
             }
@@ -1124,6 +1126,8 @@ struct OperaShellView: View {
             return animateController.activeProjectPath
         case .animate:
             return animateController.activeProjectPath
+        case .allImages:
+            return animateController.activeProjectPath
         }
     }
 
@@ -1145,6 +1149,8 @@ struct OperaShellView: View {
             return animateController.currentSelectionPath()
         case .animate:
             return animateController.currentSelectionPath()
+        case .allImages:
+            return nil
         }
     }
 
@@ -1167,12 +1173,14 @@ struct OperaShellView: View {
             return animateController.applySelectionPath(relativePath)
         case .animate:
             return animateController.applySelectionPath(relativePath)
+        case .allImages:
+            return false
         }
     }
 
     private func setSelectionRestorePending(_ isPending: Bool, for mode: OperaMode) {
         switch mode {
-        case .write, .score:
+        case .write, .score, .allImages:
             return
         case .mix:
             mixController.setSelectionRestorePending(isPending)
@@ -1289,6 +1297,8 @@ struct OperaShellView: View {
             return "Loading prop and object data from local files."
         case .animate:
             return "Loading scene, character, and timeline data from local files."
+        case .allImages:
+            return "Scanning every generated image across the project."
         }
     }
 
@@ -1309,6 +1319,8 @@ struct OperaShellView: View {
         case .props:
             return animateController.loadStatusMessage
         case .animate:
+            return animateController.loadStatusMessage
+        case .allImages:
             return animateController.loadStatusMessage
         }
     }
@@ -1331,6 +1343,8 @@ struct OperaShellView: View {
             return Color(red: 0.78, green: 0.62, blue: 0.38)
         case .animate:
             return Color(red: 0.72, green: 0.58, blue: 0.82)
+        case .allImages:
+            return Color(red: 0.66, green: 0.66, blue: 0.78)
         }
     }
 
@@ -1353,6 +1367,8 @@ struct OperaShellView: View {
         case .props:
             animateController.save()
         case .animate:
+            animateController.save()
+        case .allImages:
             animateController.save()
         }
     }

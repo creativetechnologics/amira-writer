@@ -1514,214 +1514,160 @@ struct ImagineCharactersPageView: View {
 
     @ViewBuilder
     private func cachedThumbnail(path: String, index: Int, character: AnimationCharacter) -> some View {
+        // Pass 3 (2026-04-17): migrated to the shared `UnifiedImageTile` so
+        // this grid renders with the same outer shell (12-corner, 6 padding,
+        // accent@10% bg on selection, 2pt accent border) as Characters, All
+        // Images, and Places. Grid-specific widgets (LORA L checkbox, "new"
+        // green dot) live in the unified overlay slots; the right-click menu
+        // routes through `UnifiedImageContextMenuContent` with wardrobe
+        // presets folded into `extraGeminiGenerateEntries`.
         let selectionKey = gallerySelectionKey(for: path)
         let resolvedPath = resolvedGalleryAssetPath(for: path)
-        // Yellow-ring multi-selection is transient and keyed on raw `path`
-        // values (not normalized selectionKeys) — the set never persists to
-        // disk, so we don't need path normalization for equality checks.
-        let isSelected = yellowSelection.contains(path)
+        let isYellowSelected = yellowSelection.contains(path)
         let isLoraPicked = galleryState.loraSelectedPaths.contains(selectionKey)
         let isFocused = index == focusedIndex
         let shouldShowFocusBorder = isFocused && hasShownFocusHighlight
-        let showYellowRing = isSelected || shouldShowFocusBorder
+        let isSelected = isYellowSelected || shouldShowFocusBorder
         let rating = character.inspirationRatings?[path]
         let isRejected = character.inspirationRejectedPaths.contains(path)
+        let isNew = !character.reviewedInspirationImagePaths.contains(path)
+        let charID = character.id
+        let geminiActive = !store.geminiAPIKey.isEmpty && store.geminiMasterSwitch
 
-        CachedThumbnailView(path: resolvedPath ?? path, size: galleryThumbnailBaseSize)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .opacity(isRejected ? 0.45 : 1.0)
-            // Unified yellow ring — both the keyboard focus cursor and the
-            // cmd/shift-click multi-selection use the same color, so the
-            // user never has to decode which kind of "highlighted" they're
-            // looking at. The old two-tone (yellow-focus / accent-selection)
-            // + gray checkmark overlay were retired on 2026-04-16 because
-            // the persistent "Gemini selection" concept was replaced by
-            // the transient `yellowSelection` set.
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(
-                        showYellowRing ? Color.yellow : Color.clear,
-                        lineWidth: showYellowRing ? 3 : 0
-                    )
-            )
-            // LORA checkbox — TOP RIGHT (purple). Hidden when LoRA features
-            // are disabled in Global Settings.
-            .overlay(alignment: .topTrailing) {
-                if loraEnabled {
-                    ZStack {
-                        Image(systemName: isLoraPicked ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 18))
-                            .foregroundStyle(isLoraPicked ? Color.purple : Color.white.opacity(0.85))
-                            .shadow(color: .black.opacity(0.6), radius: 2, x: 0, y: 1)
-                        Text("L")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(isLoraPicked ? .white : Color.purple)
-                    }
-                    .padding(5)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        galleryKeyboardFocused = true
-                        hasShownFocusHighlight = true
-                        if isLoraPicked {
-                            galleryState.loraSelectedPaths.remove(selectionKey)
-                        } else {
-                            galleryState.loraSelectedPaths.insert(selectionKey)
-                        }
-                        syncFocusedIndex(preferredPath: path)
-                        flushGalleryStateSaveImmediately(for: character)
-                    }
-                    .help("LORA training (L=pick, K=unpick)")
-                }
-            }
-            // Rejected indicator (bottom-center) — unified dim+eye.slash visual
-            // that replaced the legacy per-device Hidden overlay on 2026-04-16.
-            // Uses the same eye.slash iconography the old Hide button had, but
-            // keyed off the persistent per-character `inspirationRejectedPaths`
-            // set so rejections survive app restarts and project-folder syncs.
-            .overlay(alignment: .bottom) {
-                if isRejected {
-                    Image(systemName: "eye.slash.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.55), radius: 3, x: 0, y: 1)
-                        .padding(6)
-                        .help("Rejected — toggle with X or the context menu")
-                }
-            }
-            // "New / unreviewed" dot — BOTTOM LEFT (green)
-            .overlay(alignment: .bottomLeading) {
-                if !character.reviewedInspirationImagePaths.contains(path) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 10, height: 10)
-                        .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1.5))
-                        .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
-                        .padding(6)
-                        .help("New — not yet reviewed")
-                }
-            }
-            // Star rating — BOTTOM RIGHT (yellow). The "Rejected" xmark label
-            // that used to live in this branch was retired on 2026-04-16; the
-            // unified dim+eye.slash overlay above now carries that signal.
-            .overlay(alignment: .bottomTrailing) {
-                if let rating, rating > 0 {
-                    Label("\(rating)", systemImage: "star.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.yellow)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(.black.opacity(0.55), in: Capsule())
-                        .shadow(color: .black.opacity(0.4), radius: 2, x: 0, y: 1)
-                        .padding(5)
-                        .help("Rating: \(rating)/5")
-                }
-            }
-        .contentShape(Rectangle())
-        // Single-tap = instant selection. We intentionally do NOT use a
-        // double-tap + .exclusively(before:) combo here because SwiftUI has to
-        // wait the full macOS double-click interval (~250-500ms) before firing
-        // the single-tap, which the user experienced as a "click lag".
-        // Quick Look is still available via Space (keyboard) and context menu.
-        //
-        // Modifier-aware multi-select:
-        //   plain click  → replace yellowSelection with just this path
-        //   ⌘-click      → toggle this path in yellowSelection (anchor moves)
-        //   ⇧-click      → extend range from rangeAnchorPath to this path
-        // NSEvent.modifierFlags reads the live keyboard state at the moment
-        // the tap fires, so we don't need a custom Gesture builder.
-        .onTapGesture {
-            galleryKeyboardFocused = true
-            hasShownFocusHighlight = true
-            focusedIndex = index
-            store.imaginePreviewImagePath = path
-            store.markInspirationImageReviewed(path: path, for: character.id)
-            applyGalleryTapSelection(path: path)
-        }
-        .contextMenu {
-            Button("Quick Look") {
-                if let resolvedPath {
-                    ImagineQuickLook.preview(url: URL(fileURLWithPath: resolvedPath))
-                }
-            }
-            Button("Show in Finder") {
-                if let resolvedPath {
-                    ImagineProjectStorage.revealInFinder(resolvedPath)
-                }
-            }
-            Button("Copy Image") {
-                if let resolvedPath, let image = NSImage(contentsOfFile: resolvedPath) {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.writeObjects([image])
-                }
-            }
-            if let charID = store.selectedCharacter?.id {
-                Divider()
-                Button("Set as Profile Pic") {
+        UnifiedImageTile(
+            path: path,
+            resolvedPath: resolvedPath,
+            thumbnailSize: galleryThumbnailBaseSize,
+            isSelected: isSelected,
+            isRejected: isRejected,
+            rating: rating,
+            selectedCount: yellowSelection.count,
+            actions: UnifiedImageActions(
+                onSetAsProfile: {
                     store.prepareProfilePicCrop(from: path, for: charID)
-                }
-                Button(character.inspirationRejectedPaths.contains(path) ? "Unreject" : "Reject") {
-                    store.toggleInspirationRejected(path: path, for: charID)
-                }
-                // The former Hide/Show toggle was retired on 2026-04-16 — it
-                // was a per-device duplicate of Reject. `x` is the keyboard
-                // shortcut for Reject, matching Places parity.
-                Menu("Rate") {
-                    ForEach(1...5, id: \.self) { r in
-                        Button("\(r) ★") {
-                            store.setInspirationRating(r, path: path, for: charID)
-                        }
+                },
+                onShowInFinder: {
+                    if let resolvedPath {
+                        ImagineProjectStorage.revealInFinder(resolvedPath)
                     }
-                    Divider()
-                    Button("Clear") {
-                        store.setInspirationRating(nil, path: path, for: charID)
+                },
+                onCopy: {
+                    if let resolvedPath, let image = NSImage(contentsOfFile: resolvedPath) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.writeObjects([image])
                     }
-                }
-                Divider()
-                Menu("Generate with Gemini…", systemImage: "sparkles") {
-                    // Existing "photoreal/freeform" path — no wardrobe prompt,
-                    // user fills the prompt in the preflight sheet.
-                    Section("Photoreal") {
-                        Button("Generate 1 with this as reference") {
-                            beginGenerateWithGemini(characterID: charID, imagePath: path, count: 1)
-                        }
-                        Button("Generate 27 batch variations") {
-                            beginGenerateWithGemini(characterID: charID, imagePath: path, count: 27)
-                        }
+                },
+                onQuickLook: {
+                    if let resolvedPath {
+                        ImagineQuickLook.preview(url: URL(fileURLWithPath: resolvedPath))
                     }
-                    // Soldier wardrobe — catalog prompts pre-filled with military
-                    // clothing guidance. Right-clicked image prepended to refs.
-                    Section("Soldier") {
-                        Button("Generate 1 with this as reference") {
-                            beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 1, wardrobe: .soldier)
-                        }
-                        Button("Generate 27 batch variations") {
-                            beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 27, wardrobe: .soldier)
-                        }
-                    }
-                    // Civilian wardrobe — catalog prompts pre-filled with civilian
-                    // clothing guidance.
-                    Section("Civilian") {
-                        Button("Generate 1 with this as reference") {
-                            beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 1, wardrobe: .civilian)
-                        }
-                        Button("Generate 27 batch variations") {
-                            beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 27, wardrobe: .civilian)
-                        }
-                    }
-                }
-                .disabled(store.geminiAPIKey.isEmpty || !store.geminiMasterSwitch)
-                Button("Edit with Gemini…", systemImage: "wand.and.sparkles") {
+                },
+                onEditWithGemini: geminiActive ? {
                     beginEditWithGemini(characterID: charID, imagePath: path)
-                }
-                Divider()
-                Button("Move to Trash", role: .destructive) {
+                } : nil,
+                onGenerateWithGemini: geminiActive ? { count in
+                    beginGenerateWithGemini(characterID: charID, imagePath: path, count: count)
+                } : nil,
+                extraGeminiGenerateEntries: geminiActive ? [
+                    UnifiedGeminiGenerateEntry(
+                        label: "Soldier: Generate 1",
+                        systemImage: "figure.walk",
+                        count: 1,
+                        action: { _ in beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 1, wardrobe: .soldier) }
+                    ),
+                    UnifiedGeminiGenerateEntry(
+                        label: "Soldier: Generate 27",
+                        systemImage: "figure.walk",
+                        count: 27,
+                        action: { _ in beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 27, wardrobe: .soldier) }
+                    ),
+                    UnifiedGeminiGenerateEntry(
+                        label: "Civilian: Generate 1",
+                        systemImage: "tshirt",
+                        count: 1,
+                        action: { _ in beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 1, wardrobe: .civilian) }
+                    ),
+                    UnifiedGeminiGenerateEntry(
+                        label: "Civilian: Generate 27",
+                        systemImage: "tshirt",
+                        count: 27,
+                        action: { _ in beginGenerateWithGeminiWardrobe(characterID: charID, imagePath: path, count: 27, wardrobe: .civilian) }
+                    )
+                ] : [],
+                onSetRating: { r in
+                    store.setInspirationRating(r, path: path, for: charID)
+                },
+                currentRating: rating,
+                onToggleRejected: {
+                    store.toggleInspirationRejected(path: path, for: charID)
+                },
+                isRejected: isRejected,
+                onMoveToTrash: {
                     store.deleteInspirationImageToTrash(path: path, for: charID)
                     if let refreshed = store.characters.first(where: { $0.id == charID }) {
                         refreshPreloadedPaths(character: refreshed)
                     }
                 }
-            }
+            ),
+            onTap: {
+                galleryKeyboardFocused = true
+                hasShownFocusHighlight = true
+                focusedIndex = index
+                store.imaginePreviewImagePath = path
+                store.markInspirationImageReviewed(path: path, for: character.id)
+                applyGalleryTapSelection(path: path)
+            },
+            topTrailingOverlay: loraEnabled
+                ? AnyView(loraBadge(isPicked: isLoraPicked, path: path, selectionKey: selectionKey, character: character))
+                : nil,
+            bottomLeadingOverlay: isNew ? AnyView(unreviewedDot) : nil
+        )
+    }
+
+    /// The purple "L" LORA-pick checkbox that lives in the top-trailing
+    /// overlay slot of each Imagine → Characters gallery tile. Extracted so
+    /// the `UnifiedImageTile` call site stays readable.
+    @ViewBuilder
+    private func loraBadge(
+        isPicked: Bool,
+        path: String,
+        selectionKey: String,
+        character: AnimationCharacter
+    ) -> some View {
+        ZStack {
+            Image(systemName: isPicked ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 18))
+                .foregroundStyle(isPicked ? Color.purple : Color.white.opacity(0.85))
+                .shadow(color: .black.opacity(0.6), radius: 2, x: 0, y: 1)
+            Text("L")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(isPicked ? .white : Color.purple)
         }
+        .padding(5)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            galleryKeyboardFocused = true
+            hasShownFocusHighlight = true
+            if isPicked {
+                galleryState.loraSelectedPaths.remove(selectionKey)
+            } else {
+                galleryState.loraSelectedPaths.insert(selectionKey)
+            }
+            syncFocusedIndex(preferredPath: path)
+            flushGalleryStateSaveImmediately(for: character)
+        }
+        .help("LORA training (L=pick, K=unpick)")
+    }
+
+    /// The green "new / unreviewed" dot for the bottom-leading overlay slot.
+    private var unreviewedDot: some View {
+        Circle()
+            .fill(Color.green)
+            .frame(width: 10, height: 10)
+            .overlay(Circle().stroke(Color.white.opacity(0.9), lineWidth: 1.5))
+            .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+            .padding(6)
+            .help("New — not yet reviewed")
     }
 
     /// Right-click "Edit with Gemini…" on an Imagine inspiration thumbnail →

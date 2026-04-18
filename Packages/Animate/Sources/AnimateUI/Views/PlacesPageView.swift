@@ -281,128 +281,82 @@ private struct PlaceAllImagesThumbnail: View {
     let onSetRating: (Int?) -> Void
     let onToggleRejected: () -> Void
 
-    private var imageBoxHeight: CGFloat { max(90, tileWidth * 0.72) }
-
     var body: some View {
+        // Pass 3 (Gary): all image grids route through UnifiedImageTile so
+        // padding/radius/border/rejection/rating visuals cannot drift. The
+        // queue + duplicate badges still need to show on places, so they
+        // ride the top-trailing override slot when present.
         let resolvedURL = store.resolvedCharacterAssetURL(for: record.activePath)
         let displayName = resolvedURL?.lastPathComponent ?? URL(fileURLWithPath: record.activePath).lastPathComponent
-        let subtitle = relativeFolderLabel(for: record.activePath)
         let queueItem = store.pendingGeneratedBackgroundEditQueueItem(for: record.id)
 
-        VStack(alignment: .leading, spacing: 6) {
-            PlaceAllImagesAsyncThumbnail(
-                store: store,
-                record: record,
-                tileWidth: tileWidth,
-                imageBoxHeight: imageBoxHeight,
-                isSelected: isSelected
+        UnifiedImageTile(
+            path: record.activePath,
+            resolvedPath: resolvedURL?.path,
+            thumbnailSize: tileWidth,
+            caption: displayName,
+            isSelected: isSelected,
+            isRejected: record.isRejected,
+            rating: record.rating,
+            selectedCount: selectedCount,
+            actions: UnifiedImageActions(
+                onShowInFinder: { onShowInFinder() },
+                onCopy: { onCopy() },
+                onQuickLook: { onQuickLook() },
+                onEditWithGemini: onEditWithGemini,
+                onGenerateWithGemini: onGenerateWithGemini,
+                onSetRating: { rating in onSetRating(rating) },
+                currentRating: record.rating,
+                onToggleRejected: { onToggleRejected() },
+                isRejected: record.isRejected
+            ),
+            onTap: {
+                let flags = NSEvent.modifierFlags
+                if flags.contains(.command) {
+                    onClick(GalleryClickEvent(modifiers: .command))
+                } else if flags.contains(.shift) {
+                    onClick(GalleryClickEvent(modifiers: .shift))
+                } else {
+                    onClick(GalleryClickEvent(modifiers: .none))
+                }
+            },
+            topTrailingOverlay: Self.trailingBadgesOverlay(
+                queueItem: queueItem,
+                duplicateCount: record.duplicatePaths.count
             )
-            .overlay(alignment: .topTrailing) {
-                VStack(alignment: .trailing, spacing: 6) {
-                    if isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.white, Color.accentColor)
-                    }
-                    if let queueItem {
-                        badgeLabel(
-                            systemName: queueItem.state == .failed ? "exclamationmark.triangle.fill" : "tray.and.arrow.down.fill",
-                            text: queueItem.state.rawValue.capitalized,
-                            tint: queueItem.state == .failed ? .orange : .blue
-                        )
-                    }
-                    if record.duplicatePaths.count > 0 {
-                        badgeLabel(systemName: "square.on.square", text: "\(record.duplicatePaths.count + 1)x", tint: .secondary)
-                    }
-                }
-                .padding(6)
-            }
-            // Unified rejection visual (2026-04-16) — dim+eye.slash. Matches
-            // the Imagine Characters gallery. Footer-row "Rejected" xmark
-            // label was removed below in favor of this single overlay.
-            .overlay(alignment: .bottom) {
-                if record.isRejected {
-                    Image(systemName: "eye.slash.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.55), radius: 3, x: 0, y: 1)
-                        .padding(6)
-                        .help("Rejected — toggle with X")
-                }
-            }
-
-            Text(displayName)
-                .font(.caption2.weight(.medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .foregroundStyle(isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(OperaChromeTheme.textPrimary))
-
-            HStack(spacing: 6) {
-                Text(subtitle)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                if let rating = record.rating {
-                    Label("\(rating)", systemImage: "star.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.yellow)
-                }
-                // Rejected indicator lives on the thumbnail overlay now — see
-                // unified eye.slash.fill above (2026-04-16).
-            }
-        }
-        .padding(6)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(isSelected ? Color.accentColor : Color.white.opacity(0.06), lineWidth: isSelected ? 2 : 1)
-        )
-        .opacity(record.isRejected ? 0.45 : 1.0)
-        .contentShape(RoundedRectangle(cornerRadius: 12))
-        .onTapGesture(count: 1) {
-            let flags = NSEvent.modifierFlags
-            if flags.contains(.command) {
-                onClick(GalleryClickEvent(modifiers: .command))
-            } else if flags.contains(.shift) {
-                onClick(GalleryClickEvent(modifiers: .shift))
-            } else {
-                onClick(GalleryClickEvent(modifiers: .none))
-            }
-        }
-        .contextMenu {
-            UnifiedImageContextMenuContent(
-                selectedCount: selectedCount,
-                isSelected: isSelected,
-                actions: UnifiedImageActions(
-                    onShowInFinder: { onShowInFinder() },
-                    onCopy: { onCopy() },
-                    onQuickLook: { onQuickLook() },
-                    onEditWithGemini: onEditWithGemini,
-                    onGenerateWithGemini: onGenerateWithGemini,
-                    onSetRating: { rating in onSetRating(rating) },
-                    currentRating: record.rating,
-                    onToggleRejected: { onToggleRejected() },
-                    isRejected: record.isRejected
-                )
-            )
-        }
         .help("Click to select. Press Space to Quick Look.")
         .draggable(resolvedURL ?? URL(fileURLWithPath: record.activePath))
     }
 
-    private func relativeFolderLabel(for path: String) -> String {
-        let normalized = path.replacingOccurrences(of: "\\", with: "/")
-        let components = normalized.split(separator: "/")
-        guard components.count > 1 else { return "backgrounds" }
-        return components.dropLast().suffix(3).joined(separator: "/")
+    /// Builds the top-trailing badge stack (queue status + duplicate count).
+    /// Returns nil when nothing needs to render so the tile's default slot
+    /// stays empty (Pass 3: no accent checkmark — border alone marks
+    /// selection, matching Characters/AllProjectImages).
+    private static func trailingBadgesOverlay(
+        queueItem: PlaceImageEditQueueItem?,
+        duplicateCount: Int
+    ) -> AnyView? {
+        guard queueItem != nil || duplicateCount > 0 else { return nil }
+        return AnyView(
+            VStack(alignment: .trailing, spacing: 6) {
+                if let queueItem {
+                    badgeLabel(
+                        systemName: queueItem.state == .failed ? "exclamationmark.triangle.fill" : "tray.and.arrow.down.fill",
+                        text: queueItem.state.rawValue.capitalized,
+                        tint: queueItem.state == .failed ? .orange : .blue
+                    )
+                }
+                if duplicateCount > 0 {
+                    badgeLabel(systemName: "square.on.square", text: "\(duplicateCount + 1)x", tint: .secondary)
+                }
+            }
+            .padding(6)
+        )
     }
 
-    private func badgeLabel(systemName: String, text: String, tint: Color) -> some View {
+    @ViewBuilder
+    private static func badgeLabel(systemName: String, text: String, tint: Color) -> some View {
         Label(text, systemImage: systemName)
             .font(.system(size: 9, weight: .semibold))
             .padding(.horizontal, 7)
@@ -412,51 +366,9 @@ private struct PlaceAllImagesThumbnail: View {
     }
 }
 
-@available(macOS 26.0, *)
-private struct PlaceAllImagesAsyncThumbnail: View {
-    let store: AnimateStore
-    let record: GeneratedBackgroundLibraryRecord
-    let tileWidth: CGFloat
-    let imageBoxHeight: CGFloat
-    let isSelected: Bool
-
-    @State private var loadedImage: NSImage?
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(
-                    isSelected
-                        ? AnyShapeStyle(Color.accentColor.opacity(0.12))
-                        : AnyShapeStyle(.quaternary.opacity(0.22))
-                )
-                .frame(width: tileWidth, height: imageBoxHeight)
-
-            if let loadedImage {
-                Image(nsImage: loadedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: tileWidth, height: imageBoxHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                Image(systemName: "photo")
-                    .foregroundStyle(.tertiary)
-                    .frame(width: tileWidth, height: imageBoxHeight)
-            }
-        }
-        .frame(width: tileWidth, height: imageBoxHeight)
-        .task(id: "\(record.activePath)#\(Int(tileWidth))") {
-            if let cached = store.thumbnailImage(for: record.activePath, maxSize: tileWidth) {
-                loadedImage = cached
-                return
-            }
-            let image = await store.thumbnailImageAsync(for: record.activePath, maxSize: tileWidth)
-            if !Task.isCancelled {
-                loadedImage = image
-            }
-        }
-    }
-}
+// Pass 3 (2026-04-17, Gary): PlaceAllImagesAsyncThumbnail was removed. The
+// all-images grid now renders through UnifiedImageTile → CachedThumbnailView
+// so every image grid in the app shares the same decode/cache pipeline.
 
 @available(macOS 26.0, *)
 private struct PlaceGenerationSpec: Hashable {

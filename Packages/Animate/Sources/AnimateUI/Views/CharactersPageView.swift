@@ -1647,219 +1647,92 @@ struct ImageGalleryThumbnail: View {
     let onSetRating: ((Int) -> Void)?
     let showsInlineRemoveButton: Bool
 
-    private var imageBoxHeight: CGFloat {
-        max(88, tileWidth * 0.68)
-    }
-
     var body: some View {
+        // Pass 3 (2026-04-17, Gary): routes through UnifiedImageTile so every
+        // image grid (Characters, Places, AllProjectImages, Imagine) shares
+        // the same visual spec. Rating is set via the right-click menu now —
+        // the bottom-center StarRatingRow is gone. The yellow-border curated
+        // cue is gone; isCurated paints the small caption star instead.
+        // Prompt viewing stays available through the right-click "Show
+        // Prompt" action (the inline eye.circle shortcut was removed for
+        // "EXACTLY THE SAME" consistency).
         let resolvedURL = store.resolvedCharacterAssetURL(for: path)
         let displayName = resolvedURL?.lastPathComponent ?? URL(fileURLWithPath: path).lastPathComponent
         let hasPromptMetadata = onShowPrompt != nil && store.generationMetadata(for: path) != nil
+        let displayRating: Int? = {
+            guard let currentRating, currentRating > 0 else { return nil }
+            return currentRating
+        }()
 
-        VStack(spacing: 4) {
-            thumbnailImage
-                .contextMenu {
-                    UnifiedImageContextMenuContent(
-                        selectedCount: selectedCount,
-                        isSelected: isSelected,
-                        actions: UnifiedImageActions(
-                            onToggleCurated: onToggleCurated,
-                            isCurated: isCurated,
-                            onShowPrompt: hasPromptMetadata ? { onShowPrompt?() } : nil,
-                            onSetAsProfile: onSetAsProfilePic,
-                            onShowInFinder: onShowInFinder,
-                            onCopy: onCopy,
-                            onQuickLook: onPreview,
-                            onEditWithGemini: onEditWithGemini,
-                            onGenerateWithGemini: onGenerateWithGemini,
-                            onSetRating: onSetRating.map { set in { rating in set(rating ?? 0) } },
-                            currentRating: currentRating,
-                            onRemoveFromCollection: onRemove,
-                            removeFromCollectionLabel: "Remove Image",
-                            onMoveToTrash: onMoveToTrash
-                        )
-                    )
+        UnifiedImageTile(
+            path: path,
+            resolvedPath: resolvedURL?.path,
+            thumbnailSize: tileWidth,
+            caption: displayName,
+            isSelected: isSelected,
+            isCurated: isCurated,
+            rating: displayRating,
+            selectedCount: selectedCount,
+            actions: UnifiedImageActions(
+                onToggleCurated: onToggleCurated,
+                isCurated: isCurated,
+                onShowPrompt: hasPromptMetadata ? { onShowPrompt?() } : nil,
+                onSetAsProfile: onSetAsProfilePic,
+                onShowInFinder: onShowInFinder,
+                onCopy: onCopy,
+                onQuickLook: onPreview,
+                onEditWithGemini: onEditWithGemini,
+                onGenerateWithGemini: onGenerateWithGemini,
+                onSetRating: onSetRating.map { set in { rating in set(rating ?? 0) } },
+                currentRating: currentRating,
+                onRemoveFromCollection: onRemove,
+                removeFromCollectionLabel: "Remove Image",
+                onMoveToTrash: onMoveToTrash
+            ),
+            onTap: {
+                let flags = NSEvent.modifierFlags
+                if flags.contains(.command) {
+                    onClick(GalleryClickEvent(modifiers: .command))
+                } else if flags.contains(.shift) {
+                    onClick(GalleryClickEvent(modifiers: .shift))
+                } else {
+                    onClick(GalleryClickEvent(modifiers: .none))
                 }
-
-            HStack(alignment: .center, spacing: 4) {
-                if isCurated {
-                    Image(systemName: "star.fill")
-                        .font(.system(size: 8))
-                        .foregroundStyle(.yellow)
-                }
-                Text(displayName)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .foregroundStyle(
-                        isSelected
-                            ? AnyShapeStyle(Color.accentColor)
-                            : AnyShapeStyle(.tertiary)
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                if hasPromptMetadata {
-                    Button {
-                        onShowPrompt?()
-                    } label: {
-                        Image(systemName: "eye.circle")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("View Prompt")
-                }
-            }
-        }
-        .padding(6)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(
-                    isCurated ? Color.yellow.opacity(0.5) : (isSelected ? Color.accentColor : Color.white.opacity(0.06)),
-                    lineWidth: isSelected || isCurated ? 2 : 1
-                )
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 12))
-        .onTapGesture(count: 2) {
-            onClick(GalleryClickEvent(modifiers: .none))
-            onPreview()
-        }
-        .onTapGesture(count: 1) {
-            let flags = NSEvent.modifierFlags
-            if flags.contains(.command) {
-                onClick(GalleryClickEvent(modifiers: .command))
-            } else if flags.contains(.shift) {
-                onClick(GalleryClickEvent(modifiers: .shift))
-            } else {
+            },
+            onDoubleTap: {
                 onClick(GalleryClickEvent(modifiers: .none))
-            }
-        }
-        .modifier(FileDragModifier(url: store.resolvedCharacterAssetURL(for: path)))
+                onPreview()
+            },
+            topTrailingOverlay: Self.inlineRemoveOverlay(enabled: showsInlineRemoveButton, onRemove: onRemove)
+        )
+        .modifier(FileDragModifier(url: resolvedURL))
     }
 
-    @ViewBuilder
-    private var thumbnailImage: some View {
-        AsyncThumbnailView(store: store, path: path, tileWidth: tileWidth, imageBoxHeight: imageBoxHeight, isSelected: isSelected)
-        .overlay(alignment: .topTrailing) {
-            HStack(spacing: 4) {
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.white, Color.accentColor)
-                }
-                if showsInlineRemoveButton {
-                    Button {
-                        onRemove()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(.white, Color.red.opacity(0.82))
-                            .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Remove from this place (file stays on disk)")
-                }
+    /// Top-trailing inline remove button used by the Character detail gallery
+    /// where "Remove from this Place/Character" needs to be one click away.
+    /// Returns nil when disabled so the default slot stays empty.
+    private static func inlineRemoveOverlay(enabled: Bool, onRemove: @escaping () -> Void) -> AnyView? {
+        guard enabled else { return nil }
+        return AnyView(
+            Button {
+                onRemove()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.white, Color.red.opacity(0.82))
+                    .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
             }
+            .buttonStyle(.plain)
+            .help("Remove from this place (file stays on disk)")
             .padding(6)
-        }
-        .overlay(alignment: .topLeading) {
-            if isCurated {
-                Image(systemName: "star.fill")
-                    .font(.caption)
-                    .foregroundStyle(.yellow)
-                    .padding(6)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if currentRating != nil, let onSetRating {
-                StarRatingRow(rating: currentRating ?? 0, onSet: onSetRating)
-                    .padding(.bottom, 4)
-            }
-        }
+        )
     }
 }
 
-@available(macOS 26.0, *)
-private struct StarRatingRow: View {
-    let rating: Int
-    let onSet: (Int) -> Void
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(1...5, id: \.self) { star in
-                Button {
-                    // Click again on current rating to clear.
-                    onSet(rating == star ? 0 : star)
-                } label: {
-                    Image(systemName: star <= rating ? "star.fill" : "star")
-                        .font(.system(size: 11))
-                        .foregroundStyle(star <= rating ? .yellow : .white.opacity(0.75))
-                        .shadow(color: .black.opacity(0.6), radius: 1.5, x: 0, y: 0.5)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
-        .background(Color.black.opacity(0.35), in: Capsule())
-    }
-}
-
-// MARK: - Async Thumbnail
-
-@available(macOS 26.0, *)
-private struct AsyncThumbnailView: View {
-    let store: AnimateStore
-    let path: String
-    let tileWidth: CGFloat
-    let imageBoxHeight: CGFloat
-    let isSelected: Bool
-
-    @State private var loadedImage: NSImage?
-    @State private var loadTaskID: UUID?
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(
-                    isSelected
-                        ? AnyShapeStyle(Color.accentColor.opacity(0.12))
-                        : AnyShapeStyle(.quaternary.opacity(0.22))
-                )
-                .frame(width: tileWidth, height: imageBoxHeight)
-
-            if let loadedImage {
-                Image(nsImage: loadedImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: tileWidth, height: imageBoxHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .transition(.opacity.animation(.easeIn(duration: 0.15)))
-            } else {
-                Image(systemName: "photo")
-                    .foregroundStyle(.tertiary)
-                    .frame(width: tileWidth, height: imageBoxHeight)
-            }
-        }
-        .frame(width: tileWidth, height: imageBoxHeight)
-        .contentShape(RoundedRectangle(cornerRadius: 8))
-        .task(id: "\(path)#\(Int(tileWidth))") {
-            // Check synchronous cache first (instant for already-loaded thumbnails)
-            if let cached = store.thumbnailImage(for: path, maxSize: tileWidth) {
-                loadedImage = cached
-                return
-            }
-            // Load async off the main thread
-            let image = await store.thumbnailImageAsync(for: path, maxSize: tileWidth)
-            if !Task.isCancelled {
-                loadedImage = image
-            }
-        }
-    }
-}
+// StarRatingRow + AsyncThumbnailView were removed 2026-04-17 (Pass 3).
+// Rating is now set via the right-click menu across every grid; async
+// thumbnail loading is handled centrally by UnifiedImageTile →
+// CachedThumbnailView.
 
 // MARK: - Image Preview Overlay
 

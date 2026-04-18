@@ -78,7 +78,10 @@ enum AllProjectImagesSortMode: String, CaseIterable, Identifiable, Hashable {
 @available(macOS 26.0, *)
 struct AllProjectImagesPageView: View {
     @Bindable var store: AnimateStore
-    var onDismiss: () -> Void
+    /// Optional dismiss closure. When nil (the common case, since this page is
+    /// now hosted as a top-level tab in the Opera shell), no close button is
+    /// rendered. Pre-existing sheet callsites can still pass a dismiss handler.
+    var onDismiss: (() -> Void)?
 
     @State private var selectedSource: AllProjectImagesSource? = nil
     @State private var selectedRecordID: String? = nil
@@ -96,7 +99,7 @@ struct AllProjectImagesPageView: View {
     @State private var cachedAllRecords: [ProjectImageRecord] = []
     @State private var lastBuildSignature: Int = -1
 
-    init(store: AnimateStore, onDismiss: @escaping () -> Void) {
+    init(store: AnimateStore, onDismiss: (() -> Void)? = nil) {
         self.store = store
         self.onDismiss = onDismiss
     }
@@ -135,13 +138,15 @@ struct AllProjectImagesPageView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Button(action: onDismiss) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.secondary)
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Close")
             }
-            .buttonStyle(.plain)
-            .help("Close")
 
             Text("All Project Images")
                 .font(.system(size: 16, weight: .semibold))
@@ -251,60 +256,39 @@ struct AllProjectImagesPageView: View {
     @ViewBuilder
     private func thumbnailCell(for record: ProjectImageRecord) -> some View {
         let isSelected = selectedRecordID == record.id
-        VStack(spacing: 4) {
-            CachedThumbnailView(path: record.resolvedPath, size: thumbnailSize)
-                .overlay(alignment: .topLeading) {
-                    Label(record.source.displayName, systemImage: record.source.systemImage)
-                        .font(.system(size: 9, weight: .medium))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.55), in: Capsule())
-                        .foregroundStyle(.white)
-                        .padding(4)
-                }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            Text(record.originLabel)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(width: thumbnailSize)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture { selectedRecordID = record.id }
-        .contextMenu {
-            UnifiedImageContextMenuContent(
-                selectedCount: 0,
-                isSelected: isSelected,
-                actions: UnifiedImageActions(
-                    onShowInFinder: {
-                        NSWorkspace.shared.activateFileViewerSelecting(
-                            [URL(fileURLWithPath: record.resolvedPath)]
-                        )
-                    },
-                    onCopy: {
-                        if let image = NSImage(contentsOfFile: record.resolvedPath) {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.writeObjects([image])
-                        } else {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(record.resolvedPath, forType: .string)
-                        }
-                    },
-                    onEditWithGemini: {
-                        selectedRecordID = record.id
-                        inspectorTab = .generate
-                    },
-                    onGenerateWithGemini: { count in
-                        beginGenerate(for: record, count: count)
+        UnifiedImageTile(
+            path: record.path,
+            resolvedPath: record.resolvedPath,
+            thumbnailSize: thumbnailSize,
+            caption: record.originLabel,
+            sourceLabel: record.source.displayName,
+            sourceSystemImage: record.source.systemImage,
+            isSelected: isSelected,
+            actions: UnifiedImageActions(
+                onShowInFinder: {
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [URL(fileURLWithPath: record.resolvedPath)]
+                    )
+                },
+                onCopy: {
+                    if let image = NSImage(contentsOfFile: record.resolvedPath) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.writeObjects([image])
+                    } else {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(record.resolvedPath, forType: .string)
                     }
-                )
-            )
-        }
+                },
+                onEditWithGemini: {
+                    selectedRecordID = record.id
+                    inspectorTab = .generate
+                },
+                onGenerateWithGemini: { count in
+                    beginGenerate(for: record, count: count)
+                }
+            ),
+            onTap: { selectedRecordID = record.id }
+        )
     }
 
     // MARK: - Inspector

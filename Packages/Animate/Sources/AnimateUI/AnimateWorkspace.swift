@@ -95,7 +95,7 @@ public final class AnimateWorkspaceController: ObservableObject {
     /// Returns the project-wide All Images page bound to this workspace's store.
     /// Hosted by the Opera shell so users can browse every image in the project
     /// (Places, Canvas, Characters, Scene Shots, Map 3D Captures) from one surface.
-    public func allProjectImagesPageView(onDismiss: @escaping () -> Void) -> some View {
+    public func allProjectImagesPageView(onDismiss: (() -> Void)? = nil) -> some View {
         AllProjectImagesPageView(store: store, onDismiss: onDismiss)
     }
 
