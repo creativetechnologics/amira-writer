@@ -384,6 +384,12 @@ final class AnimateStore {
                 )
             }
 
+        let backgroundsByKey = Dictionary(
+            uniqueKeysWithValues: backgrounds.map {
+                (PlacesScriptIndexService.normalizedKey(for: $0.name), $0)
+            }
+        )
+
         let grouped = Dictionary(grouping: scriptPlaceRequirements.flatMap { requirement in
             requirement.locations.map { location in
                 (
@@ -400,11 +406,7 @@ final class AnimateStore {
         }, by: \.key)
 
         return grouped.compactMap { key, values in
-            guard let place = backgrounds.first(where: {
-                PlacesScriptIndexService.normalizedKey(for: $0.name) == key
-            }) else {
-                return nil
-            }
+            guard let place = backgroundsByKey[key] else { return nil }
 
             let references = Array(Set(values.map(\.reference)))
                 .sorted { lhs, rhs in
@@ -628,6 +630,7 @@ final class AnimateStore {
     private let sceneAutomationPlanner = SceneAutomationPlanner()
     let audioPlayer = AnimationAudioPlayer()
     private var backgroundIndexRefreshTask: Task<Void, Never>?
+    private var deferredStartupRefreshTask: Task<Void, Never>?
     private var fileWatchTask: Task<Void, Never>?
     private var lastKnownExternalSnapshots: [String: AnimateExternalFileSnapshot] = [:]
     @ObservationIgnored private var lastSavedPersistenceFingerprint: String?
@@ -688,6 +691,18 @@ final class AnimateStore {
             selectedGeminiModel = .flash
         }
         isHydratingGeminiSettings = false
+    }
+
+    private func scheduleDeferredStartupRefreshes() {
+        deferredStartupRefreshTask?.cancel()
+        deferredStartupRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard let self, !Task.isCancelled else { return }
+            self.deferredStartupRefreshTask = nil
+            self.refreshInspirationBatchJobs()
+            self.refreshPlaceWorldGenerationBatches()
+            self.refreshPlaceEditBatchJobs()
+        }
     }
 
     private func hydrateMiniMaxSettings() {
@@ -4897,6 +4912,7 @@ final class AnimateStore {
         statusMessage = "Opening project..."
         saveIndicator = .idle
         backgroundIndexRefreshTask?.cancel()
+        deferredStartupRefreshTask?.cancel()
         stopExternalFileWatch()
         externalChangeTimes.removeAll()
         isAgentSyncInProgress = false
@@ -5025,7 +5041,7 @@ final class AnimateStore {
             // 6. Sync characters with OWP characters.json
             syncCharactersFromOWP(result.characters)
             let didMigrateCharacterStorage = migrateAllCharacterStorageSlugsIfNeeded()
-            refreshInspirationBatchJobs()
+            scheduleDeferredStartupRefreshes()
 
             for index in scenes.indices {
                 guard let savedScene = savedScenesBySongPath[scenes[index].owpSongPath] else {
@@ -5076,8 +5092,6 @@ final class AnimateStore {
             if !skipBackgroundRefresh {
                 scheduleGeneratedBackgroundLibraryRefresh()
             }
-            refreshPlaceWorldGenerationBatches()
-            refreshPlaceEditBatchJobs()
             Task { [weak self] in
                 guard let self else { return }
                 _ = await self.refreshPlacesFromScript(persistChanges: true)
@@ -11789,20 +11803,28 @@ final class AnimateStore {
 
     @MainActor
     func inferredPlacesMasterMapRecord() -> GeneratedBackgroundLibraryRecord? {
-        placesWorkflowLibrary.generatedImageRecords
-            .filter { !$0.isRejected }
-            .sorted { lhs, rhs in
-                let lhsScore = inferredPlacesMasterMapScore(lhs)
-                let rhsScore = inferredPlacesMasterMapScore(rhs)
-                if lhsScore != rhsScore {
-                    return lhsScore > rhsScore
-                }
-                if (lhs.rating ?? 0) != (rhs.rating ?? 0) {
-                    return (lhs.rating ?? 0) > (rhs.rating ?? 0)
-                }
-                return lhs.updatedAt > rhs.updatedAt
+        var bestRecord: GeneratedBackgroundLibraryRecord?
+        var bestScore = 0
+        var bestRating = 0
+        var bestUpdatedAt = Date.distantPast
+
+        for record in placesWorkflowLibrary.generatedImageRecords where !record.isRejected {
+            let score = inferredPlacesMasterMapScore(record)
+            guard score > 0 else { continue }
+
+            let rating = record.rating ?? 0
+            if bestRecord == nil
+                || score > bestScore
+                || (score == bestScore && rating > bestRating)
+                || (score == bestScore && rating == bestRating && record.updatedAt > bestUpdatedAt) {
+                bestRecord = record
+                bestScore = score
+                bestRating = rating
+                bestUpdatedAt = record.updatedAt
             }
-            .first(where: { inferredPlacesMasterMapScore($0) > 0 })
+        }
+
+        return bestRecord
     }
 
     @MainActor

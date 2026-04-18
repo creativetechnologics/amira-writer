@@ -21,19 +21,9 @@ enum ProjectDatabaseBridge {
 
     static func loadScoreProject(url: URL) async throws -> ScoreProjectLoad {
         let (metadata, stubs, _) = try await OWPProjectIO.loadPhase1(from: url)
-        var songAssets: [OWSSongAsset] = []
-        var librettoFiles: [ProjectTextFile] = []
-        var hydratedPaths = Set<String>()
-        for stub in stubs {
-            let asset = try await OWPProjectIO.loadSongAsync(stub: stub)
-            songAssets.append(asset)
-            hydratedPaths.insert(asset.relativePath)
-            if let version = asset.document.activeVersion() {
-                librettoFiles.append(
-                    ProjectTextFile(id: UUID(), relativePath: asset.relativePath, content: version.lyrics)
-                )
-            }
-        }
+        let songAssets = stubs.map(placeholderSongAsset(for:))
+        let librettoFiles = stubs.map { ProjectTextFile(id: UUID(), relativePath: $0.relativePath, content: "") }
+        let hydratedPaths = Set<String>()
 
         let projectInstrumentMappings: [String: InstrumentMapping]
         if url.pathExtension.lowercased() != "ows" {
@@ -50,6 +40,23 @@ enum ProjectDatabaseBridge {
             songAssets: songAssets,
             librettoFiles: librettoFiles,
             hydratedSongPaths: hydratedPaths
+        )
+    }
+
+    private static func placeholderSongAsset(for stub: SongStub) -> OWSSongAsset {
+        let title = stub.displayName.toTitleCase()
+        return OWSSongAsset(
+            relativePath: stub.relativePath,
+            document: OWSSongDocument(
+                songID: UUID(),
+                title: title,
+                canonicalTitle: title.lowercased(),
+                notes: "",
+                updatedAt: Date(),
+                activeVersionID: nil,
+                versions: [],
+                instrumentMappings: [:]
+            )
         )
     }
 

@@ -993,7 +993,7 @@ struct OperaShellView: View {
         projectURL: URL,
         onBackgroundCompletion: (@MainActor (String?) -> Void)? = nil
     ) async -> OperaModeLoadResult {
-        guard mode == .animate || mode == .characters || mode == .places || mode == .props || mode == .mix || mode == .imagine || mode == .allImages else {
+        guard mode == .score || mode == .animate || mode == .characters || mode == .places || mode == .props || mode == .mix || mode == .imagine || mode == .allImages else {
             if let error = await load(mode: mode, projectURL: projectURL) {
                 return .failure(error)
             }
@@ -1001,7 +1001,7 @@ struct OperaShellView: View {
         }
 
         let modeLoadTask = Task { await load(mode: mode, projectURL: projectURL) }
-        let timeoutNanoseconds: UInt64 = 500_000_000
+        let timeoutNanoseconds: UInt64 = 350_000_000
 
         let result = await withTaskGroup(of: OperaModeLoadResult.self, returning: OperaModeLoadResult.self) { group in
             group.addTask {
