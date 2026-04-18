@@ -3158,11 +3158,22 @@ struct PlacesPageView: View {
     }
 
     private func handleMap3DCaptureResult(_ result: PlacesMap3DView.MapCaptureResult) {
-        guard let masterMapPath = store.placesWorkflowLibrary.masterMapImagePath,
+        // effectivePlacesMasterMapPath() first returns the explicit user
+        // choice, then falls back to the canonical master-map file on disk
+        // (the one the 3D pipeline itself uses), then to the best-scoring
+        // generated record. The capture feature only fails hard when none
+        // of those exist — i.e., a brand-new project with no master map at
+        // all. In that case we also auto-persist the canonical path so
+        // future captures don't need to set it manually in Places → World.
+        let effectivePath = store.effectivePlacesMasterMapPath()
+        guard let masterMapPath = effectivePath,
               let masterMapURL = store.resolvedCharacterAssetURL(for: masterMapPath) else {
             map3dCaptureErrorMessage = "No master map is configured. Set one in Places → World before using 3D Map capture."
             deleteMap3DCaptureTempFile(path: result.captureImagePath)
             return
+        }
+        if store.placesWorkflowLibrary.masterMapImagePath == nil {
+            store.useGeneratedImageAsMasterPlaceMap(masterMapPath)
         }
         var draft = store.buildMap3DCapturePreflightDraft(
             captureImagePath: result.captureImagePath,

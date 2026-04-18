@@ -372,10 +372,17 @@ private struct AllProjectImagesWorkspaceContent: View {
 
             // MARK: Right Inspector
             if inspectorVisible {
+                // Raise the split handle on top of everything so the
+                // inspector's ScrollView + the picture view below it can't
+                // shadow the 10px-wide gesture zone (that's how this handle
+                // went invisible once a record was selected — the ScrollView
+                // drawn inside the inspector pane registered hover/hit
+                // regions a few pixels into the handle's strip).
                 OperaChromeSplitHandle(
                     onDragChanged: resizeInspector,
                     onDragEnded: { }
                 )
+                .zIndex(2)
 
                 OperaChromeFlatPane {
                     OperaChromePaneHeader(
@@ -447,10 +454,13 @@ private struct AllProjectImagesWorkspaceContent: View {
     }
 
     private func resizeInspector(_ delta: CGFloat) {
-        inspectorWidth = min(
-            max(inspectorWidth - Double(delta), 280),
-            600
-        )
+        // Anchor off the larger of the persisted value or the clamp floor
+        // before subtracting the delta. Without this, a previously saved
+        // width below 280 would stay stuck at 280 visually but drift under
+        // the hood, making drags feel unresponsive until you pulled enough
+        // pixels to overcome the accumulated offset.
+        let anchor = max(inspectorWidth, 280.0)
+        inspectorWidth = min(max(anchor - Double(delta), 280.0), 600.0)
     }
 
     // MARK: - Generate pipeline (lives at workspace root so both the grid's
@@ -650,8 +660,12 @@ private struct AllProjectImagesInspectorView: View {
     private func detailsTab(for record: ProjectImageRecord) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                CachedThumbnailView(path: record.resolvedPath, size: 280)
+                // Use a fixed 240x240 thumbnail (smaller than the 280 min
+                // inspector width) so it can NEVER overflow into the split
+                // handle's gesture zone when the user shrinks the inspector.
+                CachedThumbnailView(path: record.resolvedPath, size: 240)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 detailRow(label: "Source", value: record.source.displayName)
                 detailRow(label: "Origin", value: record.originLabel)
@@ -694,8 +708,9 @@ private struct AllProjectImagesInspectorView: View {
     private func generateTab(for record: ProjectImageRecord) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                CachedThumbnailView(path: record.resolvedPath, size: 220)
+                CachedThumbnailView(path: record.resolvedPath, size: 200)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 Text("Uses this image as the reference; output lands in Places → Unattached where you can re-file it.")
                     .font(.system(size: 10))

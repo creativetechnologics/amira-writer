@@ -49,9 +49,12 @@ struct PlacesMap3DView: View {
     @State private var viewerURL: URL?
     @State private var missingMessage: String?
     @State private var reloadToken: Int = 0
-    // Default-open while we're debugging the black-canvas regression. Once
-    // the viewer loads cleanly in the wild, flip this back to `false`.
-    @State private var showDiagnostics: Bool = true
+    // Diagnostics panel is opt-in: the Map3DDiagnostics object still mirrors
+    // log entries to ~/Library/Caches/AmiraWriter/map3d-diagnostics.log behind
+    // the scenes, and the status pill flips red on errors. The in-viewer UI
+    // panel is kept for future regressions but hidden by default so it doesn't
+    // clutter the Places → 3D Map page in normal use.
+    @State private var showDiagnostics: Bool = false
     @State private var isCapturing: Bool = false
     @State private var webCoordinator: Map3DWebView.Coordinator? = nil
     @StateObject private var diagnostics = Map3DDiagnostics()
@@ -81,16 +84,18 @@ struct PlacesMap3DView: View {
             Text("Map").font(.title2).fontWeight(.semibold)
             statusPill
             Spacer()
-            Button {
-                showDiagnostics.toggle()
-            } label: {
-                Label(
-                    diagnostics.hasErrors ? "Debug (!)" : "Debug",
-                    systemImage: diagnostics.hasErrors ? "exclamationmark.triangle.fill" : "ladybug"
-                )
+            // The Debug toggle only becomes visible if the viewer actually
+            // errored. In the normal path the status pill stays "3D viewer"
+            // green and the button stays hidden so the page isn't cluttered.
+            if diagnostics.hasErrors {
+                Button {
+                    showDiagnostics.toggle()
+                } label: {
+                    Label("Debug (!)", systemImage: "exclamationmark.triangle.fill")
+                }
+                .controlSize(.small)
+                .tint(.red)
             }
-            .controlSize(.small)
-            .tint(diagnostics.hasErrors ? .red : .secondary)
 
             Button {
                 performCapture()
