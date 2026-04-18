@@ -92,12 +92,11 @@ public final class AnimateWorkspaceController: ObservableObject {
         GlobalSettingsGear(store: store)
     }
 
-    /// Returns the project-wide All Images page bound to this workspace's store.
-    /// Hosted by the Opera shell so users can browse every image in the project
-    /// (Places, Canvas, Characters, Scene Shots, Map 3D Captures) from one surface.
-    public func allProjectImagesPageView(onDismiss: (() -> Void)? = nil) -> some View {
-        AllProjectImagesPageView(store: store, onDismiss: onDismiss)
-    }
+    // Note: AllProjectImages is now dispatched from `OperaShellView` as a
+    // first-class `AllProjectImagesWorkspace(controller: animateController)`,
+    // matching every other workspace (Characters, Places, …). The old
+    // `allProjectImagesPageView()` helper was removed because it returned a
+    // raw page without the shared sidebar/inspector chrome.
 
     public func setSelectionRestorePending(_ isPending: Bool) {
         isSelectionRestorePending = isPending

@@ -632,7 +632,7 @@ struct OperaShellView: View {
         case .animate:
             AnimateWorkspace(controller: animateController)
         case .allImages:
-            animateController.allProjectImagesPageView()
+            AllProjectImagesWorkspace(controller: animateController)
         }
     }
 
