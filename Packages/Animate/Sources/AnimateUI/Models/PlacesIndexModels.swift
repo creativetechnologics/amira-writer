@@ -1,6 +1,6 @@
 import Foundation
 
-struct PlacesScriptLocationRequirement: Hashable, Sendable {
+struct PlacesScriptLocationRequirement: Codable, Hashable, Sendable {
     var displayName: String
     var normalizedKey: String
     var inferredCategory: String
@@ -8,7 +8,7 @@ struct PlacesScriptLocationRequirement: Hashable, Sendable {
     var isFallback: Bool = false
 }
 
-struct PlacesScriptSceneRequirement: Identifiable, Hashable, Sendable {
+struct PlacesScriptSceneRequirement: Codable, Identifiable, Hashable, Sendable {
     var sceneID: UUID
     var sceneName: String
     var songPath: String

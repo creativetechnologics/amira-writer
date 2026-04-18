@@ -21,19 +21,19 @@ private final class AnimateDisplayLinkProxy: NSObject {
     }
 }
 
-private struct AnimateExternalFileSnapshot: Equatable, Sendable {
+private struct AnimateExternalFileSnapshot: Codable, Equatable, Sendable {
     let modificationDate: Date
     let fileSize: Int64
 }
 
-private struct GeneratedBackgroundScannedFile: Sendable {
+private struct GeneratedBackgroundScannedFile: Codable, Sendable {
     let normalizedPath: String
     let absolutePath: String
     let snapshot: AnimateExternalFileSnapshot
     let fingerprint: String?
 }
 
-private struct GeneratedBackgroundLibraryScan: Sendable {
+private struct GeneratedBackgroundLibraryScan: Codable, Sendable {
     let files: [GeneratedBackgroundScannedFile]
 
     var discoveredPaths: [String] {
@@ -45,6 +45,25 @@ private struct GeneratedBackgroundLibraryScan: Sendable {
             file.fingerprint.map { (file.normalizedPath, $0) }
         })
     }
+}
+
+private struct PersistedPlacesScriptIndexSong: Codable, Sendable {
+    let songPath: String
+    let sceneName: String
+    let fileSnapshot: AnimateExternalFileSnapshot
+    let locations: [PlacesScriptLocationRequirement]
+}
+
+private struct PersistedPlacesScriptIndexCache: Codable, Sendable {
+    var schemaVersion: Int = 1
+    var updatedAt: Date = .now
+    var songs: [PersistedPlacesScriptIndexSong]
+}
+
+private struct PersistedGeneratedBackgroundLibraryScanCache: Codable, Sendable {
+    var schemaVersion: Int = 1
+    var updatedAt: Date = .now
+    var scan: GeneratedBackgroundLibraryScan
 }
 
 private struct PlaceWorldGenerationBatchResultsSummary: Sendable {
@@ -4096,6 +4115,13 @@ final class AnimateStore {
                         return
                     }
 
+                    if path.hasPrefix("Animate/backgrounds/") {
+                        self.generatedBackgroundLibraryNeedsRefresh = true
+                        self.markAgentUpdated(paths: [path])
+                        self.statusMessage = "Background library will refresh when needed"
+                        return
+                    }
+
                     self.markAgentUpdated()
                     self.statusMessage = "Reloaded external project changes"
                 }
@@ -4112,9 +4138,6 @@ final class AnimateStore {
     func resumeBackgroundWork() {
         if !disableExternalFileWatch {
             startExternalFileWatch()
-        }
-        if generatedBackgroundLibraryNeedsRefresh {
-            scheduleGeneratedBackgroundLibraryRefresh()
         }
     }
 
@@ -4195,7 +4218,7 @@ final class AnimateStore {
 
             let fingerprint: String?
             if let cached = cachedFingerprints[absolutePath],
-               cached.snapshot == snapshot {
+               snapshotsMatch(cached.snapshot, snapshot) {
                 fingerprint = cached.digest
             } else {
                 fingerprint = generatedBackgroundFingerprint(atPath: absolutePath)
@@ -4226,6 +4249,14 @@ final class AnimateStore {
         let modificationDate = (attrs[.modificationDate] as? Date) ?? .distantPast
         let fileSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
         return AnimateExternalFileSnapshot(modificationDate: modificationDate, fileSize: fileSize)
+    }
+
+    nonisolated private static func snapshotsMatch(
+        _ lhs: AnimateExternalFileSnapshot,
+        _ rhs: AnimateExternalFileSnapshot
+    ) -> Bool {
+        lhs.fileSize == rhs.fileSize &&
+        abs(lhs.modificationDate.timeIntervalSinceReferenceDate - rhs.modificationDate.timeIntervalSinceReferenceDate) < 0.001
     }
 
     nonisolated private static func generatedBackgroundFingerprint(atPath path: String) -> String? {
@@ -5130,13 +5161,26 @@ final class AnimateStore {
             }
             placesWorkflowLibrary = hydratedPlacesWorkflowLibrary(loadPlacesWorkflowLibrary(from: animateDir))
             placesWorldContextBlocks = loadPlacesWorldContextBlocks(from: animateDir)
-            generatedBackgroundLibraryNeedsRefresh = !skipBackgroundRefresh
-            if !skipBackgroundRefresh {
-                scheduleGeneratedBackgroundLibraryRefresh()
+            if let cachedBackgroundScan = loadPersistedGeneratedBackgroundLibraryScan(from: animateDir) {
+                applyGeneratedBackgroundLibraryScan(cachedBackgroundScan)
+                generatedBackgroundLibraryNeedsRefresh = false
+            } else {
+                generatedBackgroundLibraryNeedsRefresh = !skipBackgroundRefresh
             }
-            Task { [weak self] in
-                guard let self else { return }
-                _ = await self.refreshPlacesFromScript(persistChanges: true)
+
+            if let cachedRequirements = loadPersistedPlacesScriptRequirements(
+                projectURL: effectiveProjectURL,
+                animateDir: animateDir,
+                scenes: scenes
+            ) {
+                scriptPlaceRequirements = cachedRequirements
+                _ = applyScriptPlaceRequirements(cachedRequirements, persistChanges: false)
+            } else {
+                scriptPlaceRequirements = []
+                Task { [weak self] in
+                    guard let self else { return }
+                    _ = await self.refreshPlacesFromScript(persistChanges: true)
+                }
             }
 
             // 8. Load motion clips
@@ -8815,6 +8859,9 @@ final class AnimateStore {
             scenes: scenes
         )
         scriptPlaceRequirements = requirements
+        if let animateDir = animateURL {
+            persistPlacesScriptRequirements(requirements, projectURL: projectURL, animateDir: animateDir)
+        }
         return applyScriptPlaceRequirements(requirements, persistChanges: persistChanges)
     }
 
@@ -10004,6 +10051,9 @@ final class AnimateStore {
             guard let fingerprint = file.fingerprint else { continue }
             generatedBackgroundFingerprintCache[file.absolutePath] = (file.snapshot, fingerprint)
         }
+        if let animateURL {
+            persistGeneratedBackgroundLibraryScan(scan, in: animateURL)
+        }
         reconcileGeneratedBackgroundLibrary(
             discoveredPaths: scan.discoveredPaths,
             fingerprintsByPath: scan.fingerprintsByPath
@@ -10630,7 +10680,7 @@ final class AnimateStore {
         }
 
         if let cached = generatedBackgroundFingerprintCache[resolvedURL.path],
-           cached.snapshot == snapshot {
+           Self.snapshotsMatch(cached.snapshot, snapshot) {
             return cached.digest
         }
 
@@ -13074,6 +13124,109 @@ final class AnimateStore {
             return .init()
         }
         return decoded
+    }
+
+    private func startupCacheDirectory(in animateDir: URL) -> URL {
+        animateDir.appendingPathComponent("cache", isDirectory: true)
+    }
+
+    private func placesScriptIndexCacheURL(in animateDir: URL) -> URL {
+        startupCacheDirectory(in: animateDir).appendingPathComponent("places-script-index.json")
+    }
+
+    private func generatedBackgroundLibraryScanCacheURL(in animateDir: URL) -> URL {
+        startupCacheDirectory(in: animateDir).appendingPathComponent("generated-background-library-scan.json")
+    }
+
+    private func loadPersistedPlacesScriptRequirements(
+        projectURL: URL,
+        animateDir: URL,
+        scenes: [AnimationScene]
+    ) -> [PlacesScriptSceneRequirement]? {
+        let url = placesScriptIndexCacheURL(in: animateDir)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(PersistedPlacesScriptIndexCache.self, from: data) else {
+            return nil
+        }
+
+        let cachedBySongPath = Dictionary(uniqueKeysWithValues: decoded.songs.map { ($0.songPath, $0) })
+        guard cachedBySongPath.count == scenes.count else { return nil }
+
+        var requirements: [PlacesScriptSceneRequirement] = []
+        requirements.reserveCapacity(scenes.count)
+
+        for scene in scenes {
+            guard let cached = cachedBySongPath[scene.owpSongPath] else { return nil }
+            let songURL = projectURL.appendingPathComponent(scene.owpSongPath)
+            guard let snapshot = Self.fileSnapshot(atPath: songURL.path),
+                  Self.snapshotsMatch(snapshot, cached.fileSnapshot) else {
+                return nil
+            }
+
+            requirements.append(
+                PlacesScriptSceneRequirement(
+                    sceneID: scene.id,
+                    sceneName: scene.name,
+                    songPath: scene.owpSongPath,
+                    locations: cached.locations
+                )
+            )
+        }
+
+        return requirements
+    }
+
+    private func persistPlacesScriptRequirements(
+        _ requirements: [PlacesScriptSceneRequirement],
+        projectURL: URL,
+        animateDir: URL
+    ) {
+        let songs = requirements.compactMap { requirement -> PersistedPlacesScriptIndexSong? in
+            let songURL = projectURL.appendingPathComponent(requirement.songPath)
+            guard let snapshot = Self.fileSnapshot(atPath: songURL.path) else { return nil }
+            return PersistedPlacesScriptIndexSong(
+                songPath: requirement.songPath,
+                sceneName: requirement.sceneName,
+                fileSnapshot: snapshot,
+                locations: requirement.locations
+            )
+        }
+
+        guard songs.count == requirements.count else { return }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let cache = PersistedPlacesScriptIndexCache(songs: songs)
+        guard let data = try? encoder.encode(cache) else { return }
+
+        let cacheDir = startupCacheDirectory(in: animateDir)
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        try? writeProtectedData(data, to: placesScriptIndexCacheURL(in: animateDir))
+    }
+
+    private func loadPersistedGeneratedBackgroundLibraryScan(from animateDir: URL) -> GeneratedBackgroundLibraryScan? {
+        let url = generatedBackgroundLibraryScanCacheURL(in: animateDir)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(PersistedGeneratedBackgroundLibraryScanCache.self, from: data) else {
+            return nil
+        }
+        return decoded.scan
+    }
+
+    private func persistGeneratedBackgroundLibraryScan(
+        _ scan: GeneratedBackgroundLibraryScan,
+        in animateDir: URL
+    ) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let cache = PersistedGeneratedBackgroundLibraryScanCache(scan: scan)
+        guard let data = try? encoder.encode(cache) else { return }
+
+        let cacheDir = startupCacheDirectory(in: animateDir)
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        try? writeProtectedData(data, to: generatedBackgroundLibraryScanCacheURL(in: animateDir))
     }
 
     private func hydratedPlacesWorkflowLibrary(_ library: PlacesWorkflowLibrary) -> PlacesWorkflowLibrary {
