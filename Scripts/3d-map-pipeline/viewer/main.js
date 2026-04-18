@@ -63,13 +63,15 @@ async function init() {
   state.controls = new OrbitControls(state.camera, state.renderer.domElement);
   state.controls.enableDamping = true;
   state.controls.dampingFactor = 0.08;
-  state.controls.minDistance = 100;
+  // 2026-04-17 (Gary): dropped minDistance from 100→15 so the camera can
+  // actually sit inside valleys/streets for close-up grounding captures.
+  state.controls.minDistance = 15;
   state.controls.maxDistance = 8000;
 
   window.addEventListener('resize', onResize);
   bindHUD();
 
-  setInfo('Loading scene.json…');
+  console.log('[map3d] loading scene.json…');
   // WKWebView under `file://` returns `status=0` for successful fetches of
   // sibling files (there is no HTTP status line), which would fail the
   // `.ok` check even though the file is present. Treat status=0 as "try to
@@ -78,18 +80,17 @@ async function init() {
   const sceneResp = await fetch('scene.json');
   console.log('[map3d] scene.json fetch: ok=' + sceneResp.ok + ' status=' + sceneResp.status + ' type=' + sceneResp.type);
   if (!sceneResp.ok && sceneResp.status !== 0) {
-    setInfo('scene.json not found — run 04_compose_scene.py first.');
+    console.error('[map3d] scene.json not found — run 04_compose_scene.py first.');
     return;
   }
   try {
     state.sceneData = await sceneResp.json();
   } catch (err) {
-    setInfo('scene.json parse failed: ' + err.message);
-    console.error('scene.json parse failed', err);
+    console.error('[map3d] scene.json parse failed', err);
     return;
   }
 
-  setInfo('Loading textures…');
+  console.log('[map3d] loading textures…');
   const loader = new THREE.TextureLoader();
   loader.crossOrigin = '';  // file:// URLs hang with 'anonymous' in WKWebView
   const [tex, hmapImg] = await Promise.all([
@@ -111,7 +112,6 @@ async function init() {
   bindBuildingPicker();
 
   resetView();
-  renderInfoSummary();
   animate();
 }
 
@@ -491,25 +491,9 @@ function topView() {
   state.controls.update();
 }
 
-function renderInfoSummary() {
-  const sc = state.sceneData;
-  const nB = sc.buildings.features.length;
-  const nR = sc.roads.features.length;
-  const nW = sc.water.features.length;
-  const sun = sc.sun;
-  const shadowLine = (sun.n_buildings_with_shadow !== undefined)
-    ? `Shadow-derived heights: ${sun.n_buildings_with_shadow}/${sun.n_buildings_total}`
-    : `Sun: placeholder (no building shadow source yet)`;
-  setInfo(
-`Source: ${sc.source_image || 'unknown'}
-World ${sc.world.image_w_px}×${sc.world.image_h_px} px · ${sc.world.meters_per_pixel.toFixed(2)} m/px
-Valley ≈ ${(sc.world.image_w_px * sc.world.meters_per_pixel / 1000).toFixed(2)} km across · peak ${sc.world.peak_alt_m} m
-Sun az ${sun.azimuth_deg}° · el ${sun.elevation_deg}°
-${shadowLine}
-Layers: ${nB} buildings · ${nR} roads · ${nW} water`);
-}
-
-function setInfo(t) { document.getElementById('info').textContent = t; }
+// 2026-04-17 (Gary): renderInfoSummary() + setInfo() removed — the debug
+// info panel they populated was stripped from index.html. Load progress and
+// errors now flow to `console.log` / `console.error` instead.
 
 function onResize() {
   state.renderer.setSize(window.innerWidth, window.innerHeight);
