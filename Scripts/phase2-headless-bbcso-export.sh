@@ -79,21 +79,41 @@ open -W -n \
   "$APP_BUNDLE" &
 APP_PID=$!
 
-# Poll for WAV to appear or timeout
+# Poll for the "done" line in the app log — wait for full completion, not just file creation.
+# The app writes [HeadlessFullMix] done status=... when the WAV is fully flushed.
 WAIT=0
-while [[ ! -f "$OUTPUT_WAV" ]] || [[ $(stat -f%z "$OUTPUT_WAV" 2>/dev/null || echo 0) -le 4096 ]]; do
-  if [[ $WAIT -ge $TIMEOUT_SECS ]]; then
-    echo "TIMEOUT after ${TIMEOUT_SECS}s — WAV not written."
-    kill $APP_PID 2>/dev/null || true
-    echo "FAIL: export timed out"
-    exit 1
+DONE=0
+while [[ $WAIT -lt $TIMEOUT_SECS ]]; do
+  if [[ -f "$LOG_FILE" ]] && grep -q "\[HeadlessFullMix\] done status=success" "$LOG_FILE" 2>/dev/null; then
+    DONE=1
+    break
+  fi
+  # Also check for error termination
+  if [[ -f "$LOG_FILE" ]] && grep -q "\[HeadlessFullMix\] done status=error" "$LOG_FILE" 2>/dev/null; then
+    echo "Export reported error status."
+    break
+  fi
+  # Check if app process died unexpectedly
+  if ! kill -0 $APP_PID 2>/dev/null; then
+    # App exited — check if WAV was written
+    if [[ -f "$OUTPUT_WAV" ]] && [[ $(stat -f%z "$OUTPUT_WAV" 2>/dev/null || echo 0) -gt 4096 ]]; then
+      DONE=1
+    fi
+    break
   fi
   sleep 2
   WAIT=$((WAIT + 2))
 done
 
-# Give app a moment to flush then terminate it
-sleep 3
+if [[ $DONE -eq 0 && $WAIT -ge $TIMEOUT_SECS ]]; then
+  echo "TIMEOUT after ${TIMEOUT_SECS}s — export did not complete."
+  kill $APP_PID 2>/dev/null || true
+  echo "FAIL: export timed out"
+  exit 1
+fi
+
+# Give app a moment to fully terminate
+sleep 2
 kill $APP_PID 2>/dev/null || true
 wait $APP_PID 2>/dev/null || true
 
@@ -103,17 +123,27 @@ WALL_ELAPSED=$((WALL_END - WALL_START))
 echo ""
 echo "=== Wall-clock: ${WALL_ELAPSED}s ==="
 
-# --- afinfo check -------------------------------------------------------------
+# --- WAV inspection -----------------------------------------------------------
 echo ""
-echo "--- afinfo ---"
-afinfo "$OUTPUT_WAV" || { echo "FAIL: afinfo failed on WAV"; exit 1; }
-
-WAV_DURATION=$(afinfo "$OUTPUT_WAV" 2>/dev/null | grep "estimated duration" | grep -oE '[0-9]+\.[0-9]+' | head -1)
+echo "--- WAV inspection ---"
 WAV_BYTES=$(stat -f%z "$OUTPUT_WAV" 2>/dev/null || echo 0)
+echo "WAV file size: ${WAV_BYTES} bytes"
+
+# Use afinfo for header info (may report duration=0 for non-interleaved float WAVs — that's OK)
+afinfo "$OUTPUT_WAV" 2>/dev/null || true
+
+# Use soundfile (Python) for reliable duration — afinfo misreads non-interleaved Float32 headers
+WAV_DURATION=$(python3 -c "
+import soundfile as sf, sys
+try:
+    info = sf.info(sys.argv[1])
+    print(f'{info.frames / info.samplerate:.2f}')
+except Exception as e:
+    print('0')
+" "$OUTPUT_WAV" 2>/dev/null || echo "0")
 
 echo ""
-echo "WAV duration : ${WAV_DURATION:-unknown}s"
-echo "WAV file size: ${WAV_BYTES} bytes"
+echo "WAV duration (soundfile): ${WAV_DURATION}s"
 
 # --- Speedup ratio from in-app log -------------------------------------------
 SPEEDUP_LINE=""
@@ -207,6 +237,12 @@ FAIL_REASONS=()
 # Check WAV size (must be > 4 KB)
 if [[ "${WAV_BYTES:-0}" -le 4096 ]]; then
   FAIL_REASONS+=("WAV file is too small (${WAV_BYTES} bytes) — likely incomplete")
+fi
+
+# Check WAV audio duration (must be > 10s — indicates real content was rendered)
+WAV_DUR_INT=$(python3 -c "print(int(float('${WAV_DURATION:-0}')))" 2>/dev/null || echo 0)
+if [[ $WAV_DUR_INT -lt 10 ]]; then
+  FAIL_REASONS+=("WAV audio duration is ${WAV_DURATION:-0}s (< 10s) — export appears incomplete")
 fi
 
 # Check wall-clock < 180s (Overture is ~180s audio)
