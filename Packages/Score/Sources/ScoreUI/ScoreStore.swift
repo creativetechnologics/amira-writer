@@ -5231,6 +5231,12 @@ final class ScoreStore {
             }
         }
 
+        // Raise I/O buffer to 4096 frames for export — gives the render thread ~85ms
+        // headroom instead of ~5ms, eliminating buffer-underrun glitches under heavy
+        // BBC SO load. leaveExportMode() (sync) restores the prior value on exit.
+        exportEngine.enterExportMode()
+        defer { exportEngine.leaveExportMode() }
+
         let finishedLock = OSAllocatedUnfairLock(initialState: false)
         let playbackErrorLock = OSAllocatedUnfairLock(initialState: Optional<String>.none)
 

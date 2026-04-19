@@ -114,6 +114,9 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     private var masterMeterRaw: MeterLevels = .zero
     private var meterPublishTimer: DispatchSourceTimer?
     private var meterTapsInstalled = false
+    /// When > 0, installMeterTaps uses this as the tap bufferSize instead of the live default.
+    /// Set by enterExportMode() to reduce render-thread deadline misses during WAV export.
+    private var exportTapBufferFrames: AVAudioFrameCount = 0
     /// Held peak values (decay 24dB/sec)
     private var meterPeakHold: [UUID: (peakL: Float, peakR: Float)] = [:]
     private var masterPeakHold: (peakL: Float, peakR: Float) = (-160, -160)
@@ -3805,7 +3808,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     private func installMeterTaps() {
         guard !meterTapsInstalled else { return }
         meterTapsInstalled = true
-        let bufferSize: AVAudioFrameCount = 1024
+        let bufferSize: AVAudioFrameCount = exportTapBufferFrames > 0 ? exportTapBufferFrames : 1024
 
         // Install tap on each track's submix node (skip detached nodes)
         let attached = engine.attachedNodes
@@ -4098,6 +4101,45 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    // MARK: - Export Buffer Mode
+
+    /// Saved preferredBufferFrames value before entering export mode.
+    private var priorPlaybackBufferFrames: UInt32 = 0
+
+    /// Call BEFORE play() during a WAV export. Raises the tap bufferSize and
+    /// maximumFramesToRender to 4096 frames so the render thread has ~85ms
+    /// headroom instead of the default ~5ms, eliminating dropout glitches under
+    /// heavy BBC SO load. Must be called on audioQueue.
+    private func enterExportModeOnAudioQueue() {
+        let exportFrames: UInt32 = 4096
+        priorPlaybackBufferFrames = preferredBufferFrames
+        preferredBufferFrames = exportFrames
+        exportTapBufferFrames = AVAudioFrameCount(exportFrames)
+        applyRenderBufferSettingsOnAudioQueue()
+        NSLog("[ExportBuffer] entered export mode, bufferSize=%u frames (was %u)", exportFrames, priorPlaybackBufferFrames)
+    }
+
+    /// Call AFTER play() completes (success or failure) during a WAV export.
+    /// Restores the prior live-playback buffer size. Must be called on audioQueue.
+    private func leaveExportModeOnAudioQueue() {
+        let restored = priorPlaybackBufferFrames > 0 ? priorPlaybackBufferFrames : 512
+        preferredBufferFrames = restored
+        exportTapBufferFrames = 0
+        applyRenderBufferSettingsOnAudioQueue()
+        NSLog("[ExportBuffer] restored playback buffer=%u frames", restored)
+    }
+
+    /// Public entry point — dispatches to audioQueue (fire-and-forget).
+    func enterExportMode() {
+        audioQueue.async { [weak self] in self?.enterExportModeOnAudioQueue() }
+    }
+
+    /// Public exit point — dispatches to audioQueue synchronously so the
+    /// caller knows the state is restored before returning.
+    func leaveExportMode() {
+        audioQueue.sync { [weak self] in self?.leaveExportModeOnAudioQueue() }
     }
 
     private func setPlaying(_ playing: Bool) {
