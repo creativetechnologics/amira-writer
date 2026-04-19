@@ -5017,6 +5017,22 @@ final class ScoreStore {
                         }
                     }
 
+                    // Phase 2a: Trim the offline excerpt tail to match the realtime audible end.
+                    // BBC SO's reverb tail extends past the fixed realtime-engine stop timer,
+                    // causing the offline file to be ~0.3s longer than the realtime file.
+                    // We cap the offline file at realtimeBounds.last+1 frames before comparison
+                    // so the duration gate reflects a fair like-for-like comparison.
+                    // This only touches the qualification excerpt copy — full-song export is unaffected.
+                    if let realtimeBounds {
+                        let targetFrameCount = AVAudioFramePosition(realtimeBounds.last + 1)
+                        do {
+                            try Self.trimAudioFileToFrameCount(at: offlineURL, frameCount: targetFrameCount)
+                        } catch {
+                            NSLog("[OfflineExport] Phase2a tail trim failed for %@: %@",
+                                  offlineURL.lastPathComponent, error.localizedDescription)
+                        }
+                    }
+
                     let offlineDuration = Self.audioDurationSeconds(at: offlineURL) ?? 0
                     let offlineActiveDuration = Self.audioActiveDurationSeconds(at: offlineURL) ?? offlineDuration
                     let realtimeActiveDuration = Self.audioActiveDurationSeconds(at: realtimeURL) ?? realtimeDuration
@@ -6266,6 +6282,64 @@ final class ScoreStore {
         _ = outputFile
         try? FileManager.default.removeItem(at: url)
         try FileManager.default.moveItem(at: tempURL, to: url)
+    }
+
+    /// Truncates a WAV file in-place to at most `frameCount` frames.
+    /// If the file is already shorter or equal, this is a no-op.
+    /// Used by the hosted-AU qualification path (Phase 2a) to cap the offline
+    /// excerpt tail at the realtime engine's audible end frame before comparison.
+    private nonisolated static func trimAudioFileToFrameCount(
+        at url: URL,
+        frameCount: AVAudioFramePosition
+    ) throws {
+        guard frameCount > 0 else { return }
+
+        guard let inputFile = openAnalysisAudioFile(at: url) else {
+            throw ChunkExportError.bufferCreationFailed
+        }
+        guard inputFile.length > frameCount else {
+            // File is already at or within the target length — nothing to do.
+            return
+        }
+
+        let tempURL = url.deletingLastPathComponent()
+            .appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)-trimmed-\(UUID().uuidString).wav")
+        let outputFile = try AVAudioFile(
+            forWriting: tempURL,
+            settings: inputFile.processingFormat.settings,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+
+        let chunkCapacity = AVAudioFrameCount(65_536)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: inputFile.processingFormat, frameCapacity: chunkCapacity) else {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw ChunkExportError.bufferCreationFailed
+        }
+
+        inputFile.framePosition = 0
+        var framesRemaining = frameCount
+        while framesRemaining > 0 {
+            let framesToRead = AVAudioFrameCount(min(framesRemaining, AVAudioFramePosition(chunkCapacity)))
+            buffer.frameLength = 0
+            do {
+                try inputFile.read(into: buffer, frameCount: framesToRead)
+            } catch {
+                // EOF thrown by AVAudioFile — treat as end of data.
+                if buffer.frameLength > 0 {
+                    try outputFile.write(from: buffer)
+                }
+                break
+            }
+            guard buffer.frameLength > 0 else { break }
+            try outputFile.write(from: buffer)
+            framesRemaining -= AVAudioFramePosition(buffer.frameLength)
+        }
+
+        _ = outputFile
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.moveItem(at: tempURL, to: url)
+        NSLog("[Phase2a] trimAudioFileToFrameCount: trimmed %@ to %lld frames", url.lastPathComponent, frameCount)
     }
 
     private nonisolated static func audioEnvelopeSimilarity(
