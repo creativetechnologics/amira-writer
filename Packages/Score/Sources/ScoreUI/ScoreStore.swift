@@ -5343,13 +5343,12 @@ final class ScoreStore {
     ) -> AVAudioFrameCount {
         switch profile {
         case .standard:
-            // 256 frames (5.3ms @ 48kHz). BBC SO polarity-flip artifacts are eliminated
-            // by snapping note-on framePositions to block boundaries (see event-building
-            // code in Phase 4), not by increasing block size. Larger blocks (1024, 4096)
-            // were tested but caused new artifacts or silent output.
-            return 256
+            // 4096 frames (85ms @ 48kHz). Larger offline render blocks give BBC SO's
+            // disk-streaming engine more time per call to fetch samples, preventing the
+            // buffer-underrun-style zeros/stale-samples that produce audible clicks.
+            return 4096
         case .conservative:
-            return 128
+            return 4096
         }
     }
 
@@ -6074,11 +6073,8 @@ final class ScoreStore {
         // relative to the existing mix, producing a sharp discontinuity. This pass scans
         // the rendered WAV for sample-to-sample |Δ| > threshold and applies a short
         // cosine crossfade window around each spike — inaudible at 32 samples (0.67ms).
-        // Release the output file first so the deglitch pass can open it for reading.
+        // Release the output file cleanly before returning.
         outputFile = nil
-        if containsHostedAudioUnits {
-            Self.deglitchWavFile(at: outputURL, sampleRate: sampleRate)
-        }
 
         // Wall-clock performance log — key metric for faster-than-realtime validation
         let offlineRenderWallElapsed = Date().timeIntervalSince(offlineRenderWallStart)
@@ -6095,89 +6091,6 @@ final class ScoreStore {
                 offlineEngine.disconnectNodeOutput(mixer)
                 offlineEngine.detach(mixer)
             }
-        }
-    }
-
-    /// Fix F: Post-render de-glitch for hosted AU WAV exports.
-    ///
-    /// BBC SO has a 16-sample internal voice-start latency. When ≥3 voices are triggered
-    /// simultaneously, the entering voice may have an inverted waveform phase relative to
-    /// the mix, producing a sharp sample-to-sample discontinuity (measured Δ up to 0.36).
-    /// This pass finds all such spikes and applies a 32-sample raised-cosine crossfade
-    /// centred on each spike — blending a short linear ramp from the pre-spike level to
-    /// the post-spike level. At 32/48000 = 0.67ms the repair is completely inaudible.
-    ///
-    /// The WAV is read into memory, repaired in-place, then rewritten atomically.
-    private nonisolated static func deglitchWavFile(at url: URL, sampleRate: Double) {
-        let threshold: Float = 0.12   // slightly below the 0.15 detection threshold
-        let halfWin = 16              // half-width of the crossfade window (32 samples total)
-
-        guard let inFile = try? AVAudioFile(forReading: url) else {
-            NSLog("[FixF] deglitch: could not open %@", url.lastPathComponent)
-            return
-        }
-        let format = inFile.processingFormat
-        let frameCount = AVAudioFrameCount(inFile.length)
-        guard frameCount > AVAudioFrameCount(halfWin * 4) else { return }
-        guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
-        buf.frameLength = frameCount
-        do { try inFile.read(into: buf) } catch {
-            NSLog("[FixF] deglitch: read error: %@", error.localizedDescription)
-            return
-        }
-
-        let channelCount = Int(format.channelCount)
-        var totalFixed = 0
-
-        // Process each channel independently
-        for ch in 0..<channelCount {
-            guard let ptr = buf.floatChannelData?[ch] else { continue }
-            var i = halfWin
-            while i < Int(frameCount) - halfWin {
-                let delta = ptr[i + 1] - ptr[i]
-                if abs(delta) > threshold {
-                    // Apply a cosine blend: ramp from ptr[i] to ptr[i+1] over [i-halfWin .. i+halfWin]
-                    let startVal = ptr[i - halfWin]
-                    let endVal   = ptr[i + halfWin]
-                    for j in -halfWin...halfWin {
-                        // Raised-cosine weight: 0→1 over the window
-                        let t = Double(j + halfWin) / Double(2 * halfWin)
-                        let w = Float((1.0 - cos(t * .pi * 2.0)) * 0.5)
-                        ptr[i + j] = startVal * (1.0 - w) + endVal * w
-                    }
-                    totalFixed += 1
-                    i += halfWin  // skip past the repaired region
-                } else {
-                    i += 1
-                }
-            }
-        }
-
-        guard totalFixed > 0 else {
-            NSLog("[FixF] deglitch: no spikes found (threshold %.2f) — WAV unchanged", threshold)
-            return
-        }
-
-        NSLog("[FixF] deglitch: repaired %d spike(s) in %@", totalFixed, url.lastPathComponent)
-
-        // Rewrite the file atomically
-        let tmpURL = url.deletingLastPathComponent()
-            .appendingPathComponent(url.deletingPathExtension().lastPathComponent + "_deglitch_tmp.wav")
-        do {
-            let settings = inFile.fileFormat.settings
-            let outFile = try AVAudioFile(
-                forWriting: tmpURL,
-                settings: settings,
-                commonFormat: format.commonFormat,
-                interleaved: false
-            )
-            try outFile.write(from: buf)
-            // Atomic replace
-            _ = try FileManager.default.replaceItemAt(url, withItemAt: tmpURL)
-            NSLog("[FixF] deglitch: %@ rewritten successfully", url.lastPathComponent)
-        } catch {
-            NSLog("[FixF] deglitch: write error: %@ — original WAV preserved", error.localizedDescription)
-            try? FileManager.default.removeItem(at: tmpURL)
         }
     }
 
