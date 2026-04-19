@@ -164,6 +164,11 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     private var mixdownRecordingHadWriteError: Bool = false
     private let mixdownWriterQueue = DispatchQueue(label: "Score.MixdownWriter")
     private let mixdownWriteGroup = DispatchGroup()
+    // Phase0 tap diagnostics — reset on each recording start
+    private var phase0TapPrevSampleTime: Int64 = -1
+    private var phase0TapTotalFrames: Int64 = 0
+    private var phase0TapGapCount: Int = 0
+    private var phase0TapLastHeartbeat: CFAbsoluteTime = 0
     private var inputMonitorNodes: [UUID: AVAudioMixerNode] = [:]
     /// Callback fired on main thread when recording stops, providing the output file URL
     var onRecordingComplete: ((URL) -> Void)?
@@ -1096,6 +1101,12 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             isRecordingMainMix = true
             os_unfair_lock_unlock(&mixdownRecordingLock)
             mixdownRecordingHadWriteError = false
+            // Phase0: reset tap diagnostics at start of each recording
+            phase0TapPrevSampleTime = -1
+            phase0TapTotalFrames = 0
+            phase0TapGapCount = 0
+            phase0TapLastHeartbeat = 0
+            NSLog("[Phase0Tap] Recording started — tap diagnostics reset")
         } catch {
             reportError("Failed to create mix export file: \(error.localizedDescription)")
         }
@@ -1109,6 +1120,10 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         mixdownRecordingFile = nil
         isRecordingMainMix = false
         os_unfair_lock_unlock(&mixdownRecordingLock)
+
+        // Phase0: report cumulative tap stats at end of recording
+        NSLog("[Phase0Tap] Recording stopped — totalFramesCaptured=%lld totalGaps=%d",
+              phase0TapTotalFrames, phase0TapGapCount)
 
         mixdownWriteGroup.wait()
 
@@ -3810,7 +3825,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         }
 
         // Install tap on master mixer
-        engine.mainMixerNode.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, _ in
+        engine.mainMixerNode.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, time in
             guard let self else { return }
             os_unfair_lock_lock(&self.mixdownRecordingLock)
             let mixdownRecording = self.isRecordingMainMix
@@ -3825,6 +3840,38 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                     } catch {
                         self?.mixdownRecordingHadWriteError = true
                     }
+                }
+            }
+            // Phase0: tap delivery-gap detection using AVAudioTime.sampleTime
+            if mixdownRecording {
+                let frameLen = Int64(buffer.frameLength)
+                let curSampleTime: Int64 = time.isSampleTimeValid ? time.sampleTime : -1
+                let now = CFAbsoluteTimeGetCurrent()
+                self.phase0TapTotalFrames += frameLen
+                if curSampleTime >= 0 {
+                    let prev = self.phase0TapPrevSampleTime
+                    if prev >= 0 {
+                        let actualGap = curSampleTime - prev
+                        let expectedGap = Int64(buffer.frameLength)
+                        if actualGap > expectedGap {
+                            self.phase0TapGapCount += 1
+                            NSLog("[Phase0Tap] GAP #%d sampleTime=%lld prevSampleTime=%lld expected=%lld actual=%lld skipped=%lld frameLen=%d totalFrames=%lld",
+                                  self.phase0TapGapCount,
+                                  curSampleTime, prev,
+                                  expectedGap, actualGap,
+                                  actualGap - expectedGap,
+                                  buffer.frameLength,
+                                  self.phase0TapTotalFrames)
+                        }
+                    }
+                    self.phase0TapPrevSampleTime = curSampleTime
+                }
+                // Heartbeat: once per 2 seconds
+                if now - self.phase0TapLastHeartbeat >= 2.0 {
+                    self.phase0TapLastHeartbeat = now
+                    NSLog("[Phase0Tap] heartbeat totalFrames=%lld gaps=%d frameLen=%d sampleTime=%lld",
+                          self.phase0TapTotalFrames, self.phase0TapGapCount,
+                          buffer.frameLength, curSampleTime)
                 }
             }
             // Copy buffer data on the audio render thread (pointer only valid during callback)

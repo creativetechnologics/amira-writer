@@ -4910,7 +4910,10 @@ final class ScoreStore {
                     detail: "No hosted-AU offline render profile completed."
                 )
 
+                NSLog("[Phase0Bounds] querying REALTIME bounds file=%@", realtimeURL.lastPathComponent)
                 let realtimeBounds = await Self.waitForQualificationAudioAudibleBounds(at: realtimeURL)
+                NSLog("[Phase0Bounds] REALTIME bounds result=%@",
+                      realtimeBounds.map { "first=\($0.first) last=\($0.last)" } ?? "nil")
                 for renderProfile in HostedAudioUnitOfflineRenderProfile.allCases {
                     let offlineURL = tempRoot.appendingPathComponent("\(renderProfile.rawValue).wav")
                     do {
@@ -4956,7 +4959,11 @@ final class ScoreStore {
                     }
 
                     var appliedLeadingAlignmentSeconds = 0.0
+                    NSLog("[Phase0Bounds] querying OFFLINE-%@ bounds file=%@", renderProfile.rawValue, offlineURL.lastPathComponent)
                     let preAlignmentOfflineBounds = await Self.waitForQualificationAudioAudibleBounds(at: offlineURL)
+                    NSLog("[Phase0Bounds] OFFLINE-%@ bounds result=%@",
+                          renderProfile.rawValue,
+                          preAlignmentOfflineBounds.map { "first=\($0.first) last=\($0.last)" } ?? "nil")
                     let onsetDeltaBeforeAlignment: Double?
                     let tailDeltaBeforeAlignment: Double?
                     if let realtimeBounds,
@@ -6040,9 +6047,33 @@ final class ScoreStore {
         at url: URL,
         silenceThreshold: Float = 1.0e-6
     ) async -> (first: AVAudioFramePosition, last: AVAudioFramePosition)? {
+        let name = url.lastPathComponent
+        NSLog("[Phase0Bounds] waitForQualificationAudioAudibleBounds BEGIN file=%@", name)
+
         if let bounds = await waitForAudioAudibleBounds(at: url, silenceThreshold: silenceThreshold) {
+            NSLog("[Phase0Bounds] waitForAudioAudibleBounds SUCCEEDED file=%@ first=%lld last=%lld",
+                  name, bounds.first, bounds.last)
             return bounds
         }
+
+        NSLog("[Phase0Bounds] waitForAudioAudibleBounds FAILED file=%@ — attempting clone fallback", name)
+
+        // Log file size and AVAudioFile open attempt before clone
+        let fileSizeStr: String
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let sz = attrs[.size] as? Int64 {
+            fileSizeStr = "\(sz)"
+        } else {
+            fileSizeStr = "unavailable"
+        }
+        let openResult: String
+        if (try? AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)) != nil {
+            openResult = "ok"
+        } else {
+            openResult = "failed"
+        }
+        NSLog("[Phase0Bounds] pre-clone diagnostics file=%@ fileSize=%@ AVAudioFile-open=%@",
+              name, fileSizeStr, openResult)
 
         let cloneURL = url.deletingLastPathComponent()
             .appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)-analysis-\(UUID().uuidString).wav")
@@ -6050,8 +6081,16 @@ final class ScoreStore {
         do {
             try FileManager.default.copyItem(at: url, to: cloneURL)
             defer { try? FileManager.default.removeItem(at: cloneURL) }
-            return await waitForAudioAudibleBounds(at: cloneURL, silenceThreshold: silenceThreshold)
+            if let bounds = await waitForAudioAudibleBounds(at: cloneURL, silenceThreshold: silenceThreshold) {
+                NSLog("[Phase0Bounds] clone fallback SUCCEEDED file=%@ cloneFirst=%lld cloneLast=%lld",
+                      name, bounds.first, bounds.last)
+                return bounds
+            } else {
+                NSLog("[Phase0Bounds] clone fallback FAILED file=%@ — returning nil", name)
+                return nil
+            }
         } catch {
+            NSLog("[Phase0Bounds] clone copy THREW file=%@ error=%@", name, error.localizedDescription)
             return nil
         }
     }
