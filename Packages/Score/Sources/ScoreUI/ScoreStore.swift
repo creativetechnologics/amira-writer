@@ -5343,6 +5343,10 @@ final class ScoreStore {
     ) -> AVAudioFrameCount {
         switch profile {
         case .standard:
+            // 256 frames (5.3ms @ 48kHz). BBC SO polarity-flip artifacts are eliminated
+            // by snapping note-on framePositions to block boundaries (see event-building
+            // code in Phase 4), not by increasing block size. Larger blocks (1024, 4096)
+            // were tested but caused new artifacts or silent output.
             return 256
         case .conservative:
             return 128
@@ -5691,6 +5695,67 @@ final class ScoreStore {
         }
         events.sort()
 
+        // Phase 4a: Enforce minimum retrigger gap for hosted AUs (Fix C — RR polarity fix).
+        // BBC SO's round-robin sampler selects a new sample variant on each note-on.
+        // Consecutive RR variants may have inverted polarity. When a note-on fires for
+        // a (mappingKey, pitch) that is currently sounding (legato retrigger), BBC SO
+        // switches to the next RR buffer 16 samples into the render block (its internal
+        // processing latency). The old buffer and the new buffer may have opposite polarity,
+        // producing a sharp discontinuity (Δ up to 0.34 measured in Phase 1 analysis).
+        //
+        // The fix: detect legato retriggers (two consecutive note-ons for the same
+        // mappingKey+pitch with no intervening note-off) in hosted AU tracks, and insert
+        // an explicit early note-off so the old voice has MIN_GAP frames of silence before
+        // the new note-on. MIN_GAP is 2× renderBlockSize: one block to ensure the note-off
+        // is processed before the note-on block, plus one block for BBC SO's 16-sample
+        // internal decay. Total timing advance ≤ 10ms at 256 frames — inaudible.
+        if containsHostedAudioUnits {
+            let minGapFrames = AVAudioFramePosition(renderBlockSize) * 2
+            let blockSz = AVAudioFramePosition(renderBlockSize)
+
+            // Pass 1: identify legato retriggers and collect early note-offs to insert.
+            // Track the frame of the most recent active note-on per (mappingKey, pitch).
+            var activeNoteOnFrame: [String: AVAudioFramePosition] = [:]
+            var extraNoteOffs: [MidiEvent] = []
+
+            for ev in events {
+                guard auNodes[ev.mappingKey] != nil else { continue }
+                let key = "\(ev.mappingKey):\(ev.pitch)"
+                if ev.isNoteOn {
+                    if let prevOnFrame = activeNoteOnFrame[key] {
+                        // A note is still nominally sounding (no note-off seen yet).
+                        // Insert a note-off snapped to a block boundary so BBC SO cuts
+                        // the voice at a clean block edge. Position it minGapFrames before
+                        // the new note-on, then round DOWN to the nearest block boundary
+                        // so the sampleOffset passed to scheduleMIDI is 0 (not mid-block).
+                        // This prevents the note-off itself from introducing a mid-block
+                        // voice cut that generates its own click.
+                        let rawOff = max(prevOnFrame + blockSz, ev.framePosition - minGapFrames)
+                        let earlyOffFrame = (rawOff / blockSz) * blockSz
+                        guard earlyOffFrame > prevOnFrame else { activeNoteOnFrame[key] = ev.framePosition; continue }
+                        extraNoteOffs.append(MidiEvent(
+                            framePosition: earlyOffFrame,
+                            pitch: ev.pitch,
+                            velocity: 0,
+                            isNoteOn: false,
+                            mappingKey: ev.mappingKey
+                        ))
+                        NSLog("[FixC] Inserted early note-off for %@ pitch=%d at frame %lld (gap before retrigger at %lld)",
+                              ev.mappingKey, ev.pitch, earlyOffFrame, ev.framePosition)
+                    }
+                    activeNoteOnFrame[key] = ev.framePosition
+                } else {
+                    activeNoteOnFrame.removeValue(forKey: key)
+                }
+            }
+
+            if !extraNoteOffs.isEmpty {
+                events.append(contentsOf: extraNoteOffs)
+                events.sort()
+                NSLog("[FixC] Inserted %d early note-offs for legato BBC SO retriggers", extraNoteOffs.count)
+            }
+        }
+
         // Phase 4b: Active sample-caching warmup for hosted Audio Units (Fix B)
         // BBC SO uses disk-streaming; offline render outruns the streaming threads and
         // returns silence for unloaded samples. We fire every unique (mappingKey, pitch)
@@ -5722,25 +5787,28 @@ final class ScoreStore {
                       seen.count, warmupCap, skipped)
             }
 
-            // BBC SO beefed-up warmup (Phase 2b):
-            //   - Two velocity passes: vel 40 (pp samples) then vel 100 (ff samples)
+            // BBC SO beefed-up warmup (Phase 2c — round-robin fix):
+            //   - Four velocity passes: vel 40/64/100/127 (pp/mp/mf/ff)
+            //     BBC SO has up to 4 round-robin variants per note per velocity layer.
+            //     Two passes only primed one RR slot; subsequent notes hit unloaded RR
+            //     slots producing polarity-flip discontinuities (Δ up to 0.34) in the export.
             //   - 15 ms stagger between note-ons — allows light disk-stream overlap
             //   - 400 ms note-off delay — holds through attack + initial sustain layers
-            //   - 15 s settle window — BBC SO disk streaming needs extended settle time
-            //   - Hard cap 60 s total warmup
+            //   - 25 s settle window — extended to cover all 4 RR slots loading
+            //   - Hard cap 120 s total warmup
             let staggerSec = 0.015          // 15 ms between note-ons
             let noteOffDelaySec = 0.400     // note-off 400 ms after note-on (through attack+sustain)
-            let settleSeconds = 15.0        // BBC SO disk-streaming settle window
-            let warmupVelocities: [UInt8] = [40, 100]  // pp pass then ff pass
+            let settleSeconds = 25.0        // BBC SO disk-streaming settle window (4 RR slots need more time)
+            let warmupVelocities: [UInt8] = [40, 64, 100, 127]  // pp/mp/mf/ff — covers all RR slots
             let numPasses = warmupVelocities.count
-            // Duration = passes × (N × stagger) + settle, capped at 60 s
+            // Duration = passes × (N × stagger) + settle, capped at 120 s
             let rawDuration = Double(numPasses) * Double(warmupNotes.count) * staggerSec + settleSeconds
-            let warmupDuration = min(rawDuration, 60.0)
+            let warmupDuration = min(rawDuration, 120.0)
             let warmupFramesTarget = AVAudioFramePosition(sampleRate * warmupDuration)
 
             NSLog("[FixB Warmup] Scheduling %d unique notes × %d velocity passes; warmup duration %.2f s (settle=%.0f s)",
                   warmupNotes.count, numPasses, warmupDuration, settleSeconds)
-            reportStatus("Priming BBC SO samples (two-pass warmup, \(Int(warmupDuration))s)...")
+            reportStatus("Priming BBC SO samples (four-pass warmup, \(Int(warmupDuration))s)...")
 
             // Build per-frame warmup MIDI event schedule.
             // Two passes: first at vel 40 (pp samples), then at vel 100 (ff samples).
@@ -5818,11 +5886,18 @@ final class ScoreStore {
                 }
             }
 
-            // Send all-notes-off (CC 123) to every AU, then render 200 ms settle silence
+            // Send CC 123 (All Notes Off) + CC 120 (All Sound Off) to every AU,
+            // then render 1000 ms settle silence so all RR voices fully decay.
             let allNotesOff: [UInt8] = [0xB0, 123, 0]
+            let allSoundOff: [UInt8] = [0xB0, 120, 0]
             for (_, auUnit) in auNodes {
                 if let scheduleMIDI = auUnit.auAudioUnit.scheduleMIDIEventBlock {
                     allNotesOff.withUnsafeBufferPointer { buf in
+                        if let ptr = buf.baseAddress {
+                            scheduleMIDI(AUEventSampleTime(0), 0, 3, ptr)
+                        }
+                    }
+                    allSoundOff.withUnsafeBufferPointer { buf in
                         if let ptr = buf.baseAddress {
                             scheduleMIDI(AUEventSampleTime(0), 0, 3, ptr)
                         }
@@ -5833,7 +5908,7 @@ final class ScoreStore {
                 sampler.stopNote(0xFF, onChannel: 0) // AVAudioUnitSampler does not support CC 123 directly; stopNote is sufficient
             }
 
-            let settleFramesTarget = AVAudioFramePosition(sampleRate * 0.2)
+            let settleFramesTarget = AVAudioFramePosition(sampleRate * 1.0) // 1000 ms — enough for all RR voices to decay
             var settleFrame: AVAudioFramePosition = 0
             while settleFrame < settleFramesTarget {
                 let framesToRender = min(
