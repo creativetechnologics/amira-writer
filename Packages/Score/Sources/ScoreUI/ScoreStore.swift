@@ -5324,12 +5324,12 @@ final class ScoreStore {
     @Sendable
     private nonisolated static func hostedAudioUnitOfflineRenderTuning(
         for profile: HostedAudioUnitOfflineRenderProfile
-    ) -> (renderBlockSize: AVAudioFrameCount, warmupSeconds: Double) {
+    ) -> AVAudioFrameCount {
         switch profile {
         case .standard:
-            return (renderBlockSize: 256, warmupSeconds: 0.35)
+            return 256
         case .conservative:
-            return (renderBlockSize: 128, warmupSeconds: 0.60)
+            return 128
         }
     }
 
@@ -5384,11 +5384,10 @@ final class ScoreStore {
         let totalFrames = AVAudioFrameCount(totalFramesPosition)
         guard totalFrames > 0 else { return }
         // Hosted Audio Units render more faithfully with smaller manual-rendering
-        // blocks and a short warm-up pass. This narrows the gap versus the live
-        // capture path while still remaining faster than realtime when qualified.
-        let hostedAudioUnitTuning = Self.hostedAudioUnitOfflineRenderTuning(for: hostedAudioUnitRenderProfile)
+        // blocks. A sample-caching warmup (Fix B) fires before the real render to
+        // pre-load disk-streamed samples into memory.
         let renderBlockSize: AVAudioFrameCount = containsHostedAudioUnits
-            ? hostedAudioUnitTuning.renderBlockSize
+            ? Self.hostedAudioUnitOfflineRenderTuning(for: hostedAudioUnitRenderProfile)
             : 2048
 
         // Phase 1: Create engine, attach samplers and AU instruments
@@ -5632,32 +5631,6 @@ final class ScoreStore {
             }
         }
 
-        if containsHostedAudioUnits {
-            reportStatus("Priming hosted instruments...")
-            let warmupFramesTarget = AVAudioFramePosition(sampleRate * hostedAudioUnitTuning.warmupSeconds)
-            var warmedFrames: AVAudioFramePosition = 0
-            guard let warmupBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: renderBlockSize) else {
-                throw ChunkExportError.bufferCreationFailed
-            }
-            while warmedFrames < warmupFramesTarget {
-                let framesToRender = min(
-                    renderBlockSize,
-                    AVAudioFrameCount(warmupFramesTarget - warmedFrames)
-                )
-                let status = try offlineEngine.renderOffline(framesToRender, to: warmupBuffer)
-                switch status {
-                case .success, .insufficientDataFromInputNode:
-                    warmedFrames += AVAudioFramePosition(warmupBuffer.frameLength > 0 ? warmupBuffer.frameLength : framesToRender)
-                case .cannotDoInCurrentContext:
-                    try await Task.sleep(nanoseconds: 1_000_000)
-                case .error:
-                    throw ChunkExportError.bufferCreationFailed
-                @unknown default:
-                    warmedFrames += AVAudioFramePosition(framesToRender)
-                }
-            }
-        }
-
         // Phase 4: Build sorted event list
         struct MidiEvent: Comparable {
             let framePosition: AVAudioFramePosition
@@ -5701,6 +5674,159 @@ final class ScoreStore {
             ))
         }
         events.sort()
+
+        // Phase 4b: Active sample-caching warmup for hosted Audio Units (Fix B)
+        // BBC SO uses disk-streaming; offline render outruns the streaming threads and
+        // returns silence for unloaded samples. We fire every unique (mappingKey, pitch)
+        // at low velocity before the real render so all samples are in memory.
+        if containsHostedAudioUnits {
+            // Collect unique (mappingKey, pitch) pairs from the event list
+            struct WarmupNote: Hashable {
+                let mappingKey: String
+                let pitch: UInt8
+            }
+            var seen = Set<WarmupNote>()
+            var warmupNotes: [WarmupNote] = []
+            for event in events where event.isNoteOn {
+                let key = WarmupNote(mappingKey: event.mappingKey, pitch: event.pitch)
+                if seen.insert(key).inserted {
+                    warmupNotes.append(key)
+                }
+            }
+
+            // Cap at 500 unique notes; sample uniformly if over limit
+            let warmupCap = 500
+            let skipped = max(0, warmupNotes.count - warmupCap)
+            if skipped > 0 {
+                let stride = Double(warmupNotes.count) / Double(warmupCap)
+                warmupNotes = (0..<warmupCap).map { i in
+                    warmupNotes[min(Int(Double(i) * stride), warmupNotes.count - 1)]
+                }
+                NSLog("[FixB Warmup] Note count %d exceeds cap %d — skipped %d notes (sampled uniformly)",
+                      seen.count, warmupCap, skipped)
+            }
+
+            let staggerSec = 0.010          // 10 ms between note-ons
+            let noteOffDelaySec = 0.020     // note-off 20 ms after note-on
+            let settleSeconds = 3.0         // streaming settle window after all notes fired
+            let rawDuration = Double(warmupNotes.count) * staggerSec + settleSeconds
+            let warmupDuration = min(rawDuration, 30.0)
+            let warmupFramesTarget = AVAudioFramePosition(sampleRate * warmupDuration)
+
+            NSLog("[FixB Warmup] Scheduling %d unique notes; warmup duration %.2f s",
+                  warmupNotes.count, warmupDuration)
+            reportStatus("Priming hosted instruments (sample caching)...")
+
+            // Build per-frame warmup MIDI event schedule
+            // Each note-on fires at its stagger offset; note-off 20 ms later.
+            // All offsets are in frames relative to warmup-render start (frame 0).
+            struct WarmupMidiEvent {
+                let frameOffset: AVAudioFramePosition
+                let mappingKey: String
+                let midiBytes: [UInt8]
+            }
+            var warmupEvents: [WarmupMidiEvent] = []
+            for (idx, wn) in warmupNotes.enumerated() {
+                let noteOnFrame  = AVAudioFramePosition(Double(idx) * staggerSec * sampleRate)
+                let noteOffFrame = AVAudioFramePosition((Double(idx) * staggerSec + noteOffDelaySec) * sampleRate)
+                warmupEvents.append(WarmupMidiEvent(frameOffset: noteOnFrame,  mappingKey: wn.mappingKey, midiBytes: [0x90, wn.pitch, 40]))
+                warmupEvents.append(WarmupMidiEvent(frameOffset: noteOffFrame, mappingKey: wn.mappingKey, midiBytes: [0x80, wn.pitch, 0]))
+            }
+            warmupEvents.sort { $0.frameOffset < $1.frameOffset }
+
+            guard let warmupBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: renderBlockSize) else {
+                throw ChunkExportError.bufferCreationFailed
+            }
+
+            var warmupFrame: AVAudioFramePosition = 0
+            var warmupEventIndex = 0
+            var warmupRetry = 0
+
+            while warmupFrame < warmupFramesTarget {
+                let framesToRender = min(
+                    renderBlockSize,
+                    AVAudioFrameCount(warmupFramesTarget - warmupFrame)
+                )
+                let blockEnd = warmupFrame + AVAudioFramePosition(framesToRender)
+
+                // Schedule warmup MIDI events that fall in this block
+                while warmupEventIndex < warmupEvents.count &&
+                        warmupEvents[warmupEventIndex].frameOffset < blockEnd {
+                    let wev = warmupEvents[warmupEventIndex]
+                    let sampleOffset = AUEventSampleTime(wev.frameOffset - warmupFrame)
+                    if let auUnit = auNodes[wev.mappingKey],
+                       let scheduleMIDI = auUnit.auAudioUnit.scheduleMIDIEventBlock {
+                        wev.midiBytes.withUnsafeBufferPointer { buf in
+                            if let ptr = buf.baseAddress {
+                                scheduleMIDI(sampleOffset, 0, 3, ptr)
+                            }
+                        }
+                    } else if let sampler = samplers[wev.mappingKey] {
+                        // SF2 sampler path — apply warmup too
+                        if wev.midiBytes[0] == 0x90 {
+                            sampler.startNote(wev.midiBytes[1], withVelocity: wev.midiBytes[2], onChannel: 0)
+                        } else {
+                            sampler.stopNote(wev.midiBytes[1], onChannel: 0)
+                        }
+                    }
+                    warmupEventIndex += 1
+                }
+
+                let wStatus = try offlineEngine.renderOffline(framesToRender, to: warmupBuffer)
+                switch wStatus {
+                case .success, .insufficientDataFromInputNode:
+                    warmupFrame += AVAudioFramePosition(warmupBuffer.frameLength > 0 ? warmupBuffer.frameLength : framesToRender)
+                    warmupRetry = 0
+                case .cannotDoInCurrentContext:
+                    warmupRetry += 1
+                    guard warmupRetry < 1000 else { throw ChunkExportError.bufferCreationFailed }
+                    try await Task.sleep(nanoseconds: 1_000_000)
+                case .error:
+                    throw ChunkExportError.bufferCreationFailed
+                @unknown default:
+                    warmupFrame += AVAudioFramePosition(framesToRender)
+                    warmupRetry = 0
+                }
+            }
+
+            // Send all-notes-off (CC 123) to every AU, then render 200 ms settle silence
+            let allNotesOff: [UInt8] = [0xB0, 123, 0]
+            for (_, auUnit) in auNodes {
+                if let scheduleMIDI = auUnit.auAudioUnit.scheduleMIDIEventBlock {
+                    allNotesOff.withUnsafeBufferPointer { buf in
+                        if let ptr = buf.baseAddress {
+                            scheduleMIDI(AUEventSampleTime(0), 0, 3, ptr)
+                        }
+                    }
+                }
+            }
+            for (_, sampler) in samplers {
+                sampler.stopNote(0xFF, onChannel: 0) // AVAudioUnitSampler does not support CC 123 directly; stopNote is sufficient
+            }
+
+            let settleFramesTarget = AVAudioFramePosition(sampleRate * 0.2)
+            var settleFrame: AVAudioFramePosition = 0
+            while settleFrame < settleFramesTarget {
+                let framesToRender = min(
+                    renderBlockSize,
+                    AVAudioFrameCount(settleFramesTarget - settleFrame)
+                )
+                let sStatus = try offlineEngine.renderOffline(framesToRender, to: warmupBuffer)
+                switch sStatus {
+                case .success, .insufficientDataFromInputNode:
+                    settleFrame += AVAudioFramePosition(warmupBuffer.frameLength > 0 ? warmupBuffer.frameLength : framesToRender)
+                case .cannotDoInCurrentContext:
+                    try await Task.sleep(nanoseconds: 1_000_000)
+                case .error:
+                    throw ChunkExportError.bufferCreationFailed
+                @unknown default:
+                    settleFrame += AVAudioFramePosition(framesToRender)
+                }
+            }
+
+            NSLog("[FixB Warmup] Complete — %d notes primed, %.2f s warmup. Starting real render.",
+                  warmupNotes.count, warmupDuration)
+        }
 
         // Phase 5: Render offline — stream directly to file
         guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: renderBlockSize) else {
@@ -5869,7 +5995,7 @@ final class ScoreStore {
             .joined(separator: ",")
 
         return [
-            "hosted-au-qualification:v13",
+            "hosted-au-qualification:v14",
             projectIdentifier ?? "__unknown_project__",
             songPath ?? "__unsaved__",
             "ticks:\(startTick)-\(endTick)",
