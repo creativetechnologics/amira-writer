@@ -6618,6 +6618,24 @@ final class ScoreStore {
             return
         }
 
+        // Prevent App Nap / automatic termination from killing a long export.
+        // This matters in headless mode (no visible window) and on laptops
+        // where macOS may nap inactive apps mid-render.
+        let activityOptions: ProcessInfo.ActivityOptions = [
+            .userInitiated,
+            .latencyCritical,
+            .idleSystemSleepDisabled
+        ]
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: activityOptions,
+            reason: "WAV export"
+        )
+        ProcessInfo.processInfo.disableSuddenTermination()
+        defer {
+            ProcessInfo.processInfo.enableSuddenTermination()
+            ProcessInfo.processInfo.endActivity(activity)
+        }
+
         isExportingFullMix = true
         fullMixExportProgress = 0
         fullMixExportStatus = "Rendering full mix..."
@@ -6664,11 +6682,12 @@ final class ScoreStore {
             fullMixExportProgress = 1.0
             fullMixExportStatus = "Exported to \(outputURL.lastPathComponent)"
             fullMixExportDetailStatus = ""
-            NSLog("[FullMix] Exported full mix to %@", outputURL.path)
+            let exportedBytes = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
+            NSLog("[FullMix] export returning status=success bytes=%lld path=%@", exportedBytes, outputURL.path)
         } catch {
             fullMixExportStatus = "Export failed: \(error.localizedDescription)"
             fullMixExportDetailStatus = ""
-            NSLog("[FullMix] Export failed: %@", error.localizedDescription)
+            NSLog("[FullMix] export returning status=error reason=%@", error.localizedDescription)
         }
 
         progressTimer.invalidate()

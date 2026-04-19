@@ -408,8 +408,25 @@ public enum ScoreBootstrap {
         NSLog("[Phase1cHook] runHeadlessFullMixExport calling exportFullMixToWav")
         NSLog("[HeadlessFullMix] exporting song=%@ notes=%d", songName, store.pianoRollNotes.count)
 
+        // Prevent macOS automatic termination / App Nap / sudden-termination from
+        // killing the headless process mid-export (the process has no visible window,
+        // so AppKit considers it idle and eligible for reaping).
+        let activityOptions: ProcessInfo.ActivityOptions = [
+            .userInitiated,
+            .latencyCritical,
+            .idleSystemSleepDisabled
+        ]
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: activityOptions,
+            reason: "Headless WAV export"
+        )
+        ProcessInfo.processInfo.disableSuddenTermination()
+
         // Export using the same path as the GUI "Export Audio..." menu item
         await store.exportFullMixToWav(outputURL: outputURL)
+
+        ProcessInfo.processInfo.enableSuddenTermination()
+        ProcessInfo.processInfo.endActivity(activity)
 
         // Report result
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
