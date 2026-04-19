@@ -4751,6 +4751,8 @@ final class ScoreStore {
             guard let mapping = resolvedMappings[key], !mapping.muted else { return false }
             return mapping.effectiveSourceType == .audioUnit && mapping.audioComponentDescription != nil
         }
+        NSLog("[OfflineExport] containsAudioUnitMappings=%@ neededKeys=%d",
+              containsAudioUnitMappings ? "YES" : "NO", neededMappingKeys.count)
         let hostedAudioUnitExportMode = HostedAudioUnitExportMode.current()
 
         // Tick-to-seconds conversion as a pure function (captures snapshot)
@@ -4781,23 +4783,27 @@ final class ScoreStore {
         }
 
         let performRealtimeHostedRender: @Sendable (URL) async throws -> Void = { outputURLToUse in
-            try await self.renderChunkToWavViaPlaybackEngine(
-                notes: dynamicsApplied,
-                startTick: startTick,
-                endTick: endTick,
-                outputURL: outputURLToUse,
-                gainOverrides: gainOverrides,
-                channelKeyMap: channelKeyMap,
-                resolvedMappings: resolvedMappings,
-                masterVolume: volume,
-                panMap: panMap,
-                tempoBPM: baseTempoBPM,
-                tempoEvents: tempoEvents,
-                ticksPerQuarter: tpq,
-                preferredBufferFrames: preferredBufferFrames,
-                timeSignatures: timeSignatures,
-                reportStatus: reportStatus
-            )
+            // Run off the main actor — leaveExportMode() calls audioQueue.sync which
+            // would block the main thread if this ran on MainActor.
+            try await Task.detached(priority: .userInitiated) {
+                try await Self.renderChunkToWavViaPlaybackEngine(
+                    notes: dynamicsApplied,
+                    startTick: startTick,
+                    endTick: endTick,
+                    outputURL: outputURLToUse,
+                    gainOverrides: gainOverrides,
+                    channelKeyMap: channelKeyMap,
+                    resolvedMappings: resolvedMappings,
+                    masterVolume: volume,
+                    panMap: panMap,
+                    tempoBPM: baseTempoBPM,
+                    tempoEvents: tempoEvents,
+                    ticksPerQuarter: tpq,
+                    preferredBufferFrames: preferredBufferFrames,
+                    timeSignatures: timeSignatures,
+                    reportStatus: reportStatus
+                )
+            }.value
         }
 
         if containsAudioUnitMappings {
@@ -4894,23 +4900,25 @@ final class ScoreStore {
                 }
 
                 do {
-                    try await self.renderChunkToWavViaPlaybackEngine(
-                        notes: dynamicsApplied,
-                        startTick: excerpt.startTick,
-                        endTick: excerpt.endTick,
-                        outputURL: realtimeURL,
-                        gainOverrides: gainOverrides,
-                        channelKeyMap: channelKeyMap,
-                        resolvedMappings: resolvedMappings,
-                        masterVolume: volume,
-                        panMap: panMap,
-                        tempoBPM: baseTempoBPM,
-                        tempoEvents: tempoEvents,
-                        ticksPerQuarter: tpq,
-                        preferredBufferFrames: preferredBufferFrames,
-                        timeSignatures: timeSignatures,
-                        reportStatus: reportStatus
-                    )
+                    try await Task.detached(priority: .userInitiated) {
+                        try await Self.renderChunkToWavViaPlaybackEngine(
+                            notes: dynamicsApplied,
+                            startTick: excerpt.startTick,
+                            endTick: excerpt.endTick,
+                            outputURL: realtimeURL,
+                            gainOverrides: gainOverrides,
+                            channelKeyMap: channelKeyMap,
+                            resolvedMappings: resolvedMappings,
+                            masterVolume: volume,
+                            panMap: panMap,
+                            tempoBPM: baseTempoBPM,
+                            tempoEvents: tempoEvents,
+                            ticksPerQuarter: tpq,
+                            preferredBufferFrames: preferredBufferFrames,
+                            timeSignatures: timeSignatures,
+                            reportStatus: reportStatus
+                        )
+                    }.value
                 } catch {
                     Self.removeIncompleteExportFile(at: realtimeURL)
                     return HostedAudioUnitOfflineQualification(
@@ -5153,7 +5161,9 @@ final class ScoreStore {
         try await performOfflineRender(outputURL, .standard)
     }
 
-    private func renderChunkToWavViaPlaybackEngine(
+    /// Pure static helper — all ScoreStore data is passed by value; no self access.
+    /// Runs entirely off the main actor via Task.detached at call sites.
+    private nonisolated static func renderChunkToWavViaPlaybackEngine(
         notes: [PianoRollNote],
         startTick: Int,
         endTick: Int,
