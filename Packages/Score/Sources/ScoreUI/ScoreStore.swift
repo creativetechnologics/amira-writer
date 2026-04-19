@@ -76,6 +76,33 @@ private struct HostedAudioUnitOfflineQualification: Codable, Sendable {
     let leadingAlignmentSeconds: Double?
     let checkedAt: Date
     let detail: String
+
+    // Custom encoder: JSONEncoder's default strategy throws on non-finite Double values
+    // (NaN, +infinity, -infinity). durationDeltaSeconds is initialised to .infinity when
+    // no profile has completed, so we clamp non-finite values to Double.greatestFiniteMagnitude
+    // with the sign preserved, and NaN to 0, rather than letting the write fail.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(verdict, forKey: .verdict)
+        try container.encode(Self.finiteDouble(similarity), forKey: .similarity)
+        try container.encode(Self.finiteDouble(envelopeSimilarity), forKey: .envelopeSimilarity)
+        try container.encode(Self.finiteDouble(durationDeltaSeconds), forKey: .durationDeltaSeconds)
+        try container.encode(renderProfile, forKey: .renderProfile)
+        try container.encodeIfPresent(leadingAlignmentSeconds.map(Self.finiteDouble), forKey: .leadingAlignmentSeconds)
+        try container.encode(checkedAt, forKey: .checkedAt)
+        try container.encode(detail, forKey: .detail)
+    }
+
+    private static func finiteDouble(_ value: Double) -> Double {
+        if value.isNaN { return 0 }
+        if value.isInfinite { return value > 0 ? Double.greatestFiniteMagnitude : -Double.greatestFiniteMagnitude }
+        return value
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case verdict, similarity, envelopeSimilarity, durationDeltaSeconds
+        case renderProfile, leadingAlignmentSeconds, checkedAt, detail
+    }
 }
 
 private struct HostedAudioUnitQualificationArtifactRecord: Codable, Sendable {
@@ -6099,68 +6126,83 @@ final class ScoreStore {
         at url: URL,
         silenceThreshold: Float = 1.0e-6
     ) -> (first: AVAudioFramePosition, last: AVAudioFramePosition)? {
-        for attempt in 0...1 {
-            guard let audioFile = openAnalysisAudioFile(at: url) else {
-                return nil
-            }
-
-            let channelCount = Int(audioFile.processingFormat.channelCount)
-            guard channelCount > 0 else { return nil }
-
-            let chunkCapacity = AVAudioFrameCount(min(max(audioFile.length, 1), 65_536))
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: chunkCapacity) else {
-                return nil
-            }
-
-            var framesRead: AVAudioFramePosition = 0
-            var firstAudibleFrame: AVAudioFramePosition?
-            var lastAudibleFrame: AVAudioFramePosition = 0
-            var hadReadableSamples = false
-
-            while true {
-                do {
-                    try audioFile.read(into: buffer)
-                } catch {
-                    return nil
-                }
-
-                let frameLength = Int(buffer.frameLength)
-                guard frameLength > 0 else { break }
-                guard let channelData = buffer.floatChannelData else {
-                    if attempt == 0 {
-                        usleep(20_000)
-                        break
-                    }
-                    return nil
-                }
-                hadReadableSamples = true
-
-                for frame in 0..<frameLength {
-                    var peak: Float = 0
-                    for channel in 0..<channelCount {
-                        peak = max(peak, abs(channelData[channel][frame]))
-                    }
-                    if peak > silenceThreshold {
-                        if firstAudibleFrame == nil {
-                            firstAudibleFrame = framesRead + AVAudioFramePosition(frame)
-                        }
-                        lastAudibleFrame = framesRead + AVAudioFramePosition(frame + 1)
-                    }
-                }
-
-                framesRead += AVAudioFramePosition(frameLength)
-            }
-
-            if let firstAudibleFrame {
-                return (firstAudibleFrame, lastAudibleFrame)
-            }
-
-            if attempt == 0 && !hadReadableSamples {
-                usleep(20_000)
-                continue
-            }
+        guard let audioFile = openAnalysisAudioFile(at: url) else {
             return nil
         }
+
+        // [Phase1Bounds] Force a non-interleaved Float32 read format so floatChannelData is
+        // always non-nil regardless of the WAV file's native interleaved/non-interleaved layout.
+        // openAnalysisAudioFile already requests commonFormat:.pcmFormatFloat32 interleaved:false,
+        // so audioFile.processingFormat is already correct — but we make an explicit readFormat
+        // here to guarantee the buffer contract even if the file object was opened differently.
+        let sampleRate = audioFile.processingFormat.sampleRate
+        let channelCount = Int(audioFile.processingFormat.channelCount)
+        guard channelCount > 0 else { return nil }
+
+        guard let readFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: AVAudioChannelCount(channelCount),
+            interleaved: false
+        ) else {
+            NSLog("[Phase1Bounds] audioAudibleBounds: failed to create non-interleaved read format for %@", url.lastPathComponent)
+            return nil
+        }
+
+        let chunkCapacity = AVAudioFrameCount(min(max(audioFile.length, 1), 65_536))
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: readFormat, frameCapacity: chunkCapacity) else {
+            NSLog("[Phase1Bounds] audioAudibleBounds: buffer alloc failed for %@", url.lastPathComponent)
+            return nil
+        }
+
+        NSLog("[Phase1Bounds] audioAudibleBounds: opened with forced non-interleaved format file=%@ sr=%.0f ch=%d frames=%lld",
+              url.lastPathComponent, sampleRate, channelCount, audioFile.length)
+
+        var framesRead: AVAudioFramePosition = 0
+        var firstAudibleFrame: AVAudioFramePosition?
+        var lastAudibleFrame: AVAudioFramePosition = 0
+
+        while true {
+            do {
+                try audioFile.read(into: buffer, frameCount: chunkCapacity)
+            } catch {
+                NSLog("[Phase1Bounds] audioAudibleBounds: read error file=%@ framesRead=%lld error=%@",
+                      url.lastPathComponent, framesRead, error.localizedDescription)
+                break
+            }
+
+            let frameLength = Int(buffer.frameLength)
+            guard frameLength > 0 else { break }
+
+            guard let channelData = buffer.floatChannelData else {
+                // Should never happen with a non-interleaved Float32 buffer — log and bail.
+                NSLog("[Phase1Bounds] audioAudibleBounds: floatChannelData nil despite non-interleaved format file=%@", url.lastPathComponent)
+                break
+            }
+
+            for frame in 0..<frameLength {
+                var peak: Float = 0
+                for channel in 0..<channelCount {
+                    peak = max(peak, abs(channelData[channel][frame]))
+                }
+                if peak > silenceThreshold {
+                    if firstAudibleFrame == nil {
+                        firstAudibleFrame = framesRead + AVAudioFramePosition(frame)
+                    }
+                    lastAudibleFrame = framesRead + AVAudioFramePosition(frame + 1)
+                }
+            }
+
+            framesRead += AVAudioFramePosition(frameLength)
+        }
+
+        if let firstAudibleFrame {
+            NSLog("[Phase1Bounds] audioAudibleBounds: found audible region file=%@ first=%lld last=%lld totalFramesRead=%lld",
+                  url.lastPathComponent, firstAudibleFrame, lastAudibleFrame, framesRead)
+            return (firstAudibleFrame, lastAudibleFrame)
+        }
+
+        NSLog("[Phase1Bounds] audioAudibleBounds: no audible frames found file=%@ totalFramesRead=%lld", url.lastPathComponent, framesRead)
         return nil
     }
 
