@@ -77,6 +77,7 @@ private final class OperaAppDelegate: NSObject, NSApplicationDelegate {
     private var isRunningHeadlessExport = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSLog("[Phase1cHook] applicationDidFinishLaunching entered")
         // MARK: Headless Full-Mix export hook
         // Triggered when the app is launched with:
         //   AMIRA_HEADLESS_FULLMIX_EXPORT=/absolute/path/to/output.wav
@@ -86,8 +87,14 @@ private final class OperaAppDelegate: NSObject, NSApplicationDelegate {
         // The hook loads the last-used project read-only (no saves), exports the full
         // mix WAV using the same ScoreStore.exportFullMixToWav path the GUI uses, logs
         // a final [HeadlessFullMix] done line, then terminates.
+        //
+        // NOTE: env vars must be injected via `open --env VAR=VALUE`, NOT launchctl setenv.
+        // launchctl setenv writes to the launchd bootstrap context but open/LaunchServices
+        // does NOT inherit those values into the child process environment.
         let env = ProcessInfo.processInfo.environment
-        guard let outputPath = env["AMIRA_HEADLESS_FULLMIX_EXPORT"] else { return }
+        let exportPath = env["AMIRA_HEADLESS_FULLMIX_EXPORT"]
+        NSLog("[Phase1cHook] env var AMIRA_HEADLESS_FULLMIX_EXPORT = %@", exportPath ?? "(nil)")
+        guard let outputPath = exportPath else { return }
 
         isRunningHeadlessExport = true
         let outputURL = URL(fileURLWithPath: outputPath)

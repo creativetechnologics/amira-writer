@@ -342,6 +342,7 @@ public enum ScoreBootstrap {
     /// `NSApplication.shared.terminate(nil)` when complete.
     @MainActor
     public static func runHeadlessFullMixExport(outputURL: URL, songHint: String?) async {
+        NSLog("[Phase1cHook] runHeadlessFullMixExport entered")
         NSLog("[HeadlessFullMix] starting outputPath=%@", outputURL.path)
 
         // Prepare output directory
@@ -356,6 +357,7 @@ public enum ScoreBootstrap {
         }
 
         // Spin up a dedicated ScoreStore (does not affect any GUI store)
+        NSLog("[Phase1cHook] runHeadlessFullMixExport awaiting project load")
         let store = ScoreStore()
         store.restoreLastProject()
 
@@ -369,6 +371,7 @@ public enum ScoreBootstrap {
             return
         }
 
+        NSLog("[Phase1cHook] runHeadlessFullMixExport project loaded: %@", store.projectURL?.path ?? "(nil)")
         NSLog("[HeadlessFullMix] project loaded songs=%d", store.songAssets.count)
 
         // Select song
@@ -389,6 +392,8 @@ public enum ScoreBootstrap {
             return
         }
 
+        let resolvedSongName = store.songAssets.first(where: { $0.id == songID })?.displayName ?? "(unknown)"
+        NSLog("[Phase1cHook] runHeadlessFullMixExport resolved song: %@", resolvedSongName)
         store.setSelectedMidi(id: songID)
 
         // Wait up to 60 s for notes to load
@@ -400,6 +405,7 @@ public enum ScoreBootstrap {
         }
 
         let songName = store.selectedMidiAsset?.displayName ?? store.songAssets.first?.displayName ?? "unknown"
+        NSLog("[Phase1cHook] runHeadlessFullMixExport calling exportFullMixToWav")
         NSLog("[HeadlessFullMix] exporting song=%@ notes=%d", songName, store.pianoRollNotes.count)
 
         // Export using the same path as the GUI "Export Audio..." menu item
@@ -408,8 +414,10 @@ public enum ScoreBootstrap {
         // Report result
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
         let status = fileSize > 0 ? "success" : "error"
+        NSLog("[Phase1cHook] runHeadlessFullMixExport export done: %@", status)
         NSLog("[HeadlessFullMix] done status=%@ bytes=%lld path=%@", status, fileSize, outputURL.path)
 
+        NSLog("[Phase1cHook] runHeadlessFullMixExport terminating app")
         NSApplication.shared.terminate(nil)
     }
 
