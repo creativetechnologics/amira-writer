@@ -5792,41 +5792,44 @@ final class ScoreStore {
                       seen.count, warmupCap, skipped)
             }
 
-            // RR-exhaustion warmup parameters:
-            //   - 8 iterations per (mappingKey, pitch) tuple at vel 100 (dominant BBC SO mf/f layer)
-            //     BBC SO has 2-4 RR variants; 8 iterations guarantees full wrap-around for all known
-            //     articulations, landing the counter at a predictable (typically 0) position.
+            // RR-exhaustion warmup parameters (Round 3 — dual-velocity):
+            //   - 6 iterations at vel 80 then 6 iterations at vel 100 = 12 total per tuple
+            //     Alternating velocities covers both pp/mp and mf/f BBC SO velocity layers,
+            //     each of which has its own independent RR counter. 6 iters per velocity
+            //     guarantees wrap-around for all known articulations (max 4 RR variants).
             //   - Note duration: 100 ms (note-on then note-off 100 ms later)
             //   - Inter-iteration gap: 50 ms silence before next note-on
-            //   - Per-tuple cycle: 8 × 150 ms = 1.2 s
+            //   - Per-tuple cycle: 12 × 150 ms = 1.8 s (6 vel-80 + 6 vel-100 back-to-back)
             //   - Stagger: 15 ms between tuple start times — ~10 tuples firing simultaneously
-            //   - Firing phase: N × 15 ms stagger + 1.2 s last tuple tail
+            //   - Firing phase: N × 15 ms stagger + 1.8 s last tuple tail
             //   - Then: CC 123 All Notes Off + CC 120 All Sound Off + 1 s decay silence
-            //   - Then: 25 s settle window for BBC SO streaming engine to flush and stabilise
-            //   - Total warmup: ~3.5 s firing + 1 s decay + 25 s settle ≈ 29.5 s
+            //   - Then: 35 s settle window for BBC SO streaming engine to flush and stabilise
             //   - Hard cap 120 s
-            let rrIterations = 8
+            let rrIterationsPerVel = 6
+            let warmupVelocities: [UInt8] = [80, 100]  // two BBC SO velocity layers
             let staggerSec = 0.015          // 15 ms between tuple start times
             let noteDurSec  = 0.100         // 100 ms note duration
             let iterGapSec  = 0.050         // 50 ms gap between iterations
             let iterCycleSec = noteDurSec + iterGapSec  // 150 ms per iteration
-            let warmupVelocity: UInt8 = 100  // dominant mf/f layer for BBC SO
-            let settleSeconds = 25.0         // BBC SO streaming flush + RR counter stabilise
+            let settleSeconds = 35.0         // BBC SO streaming flush + RR counter stabilise (Round 3)
+            let totalIters = rrIterationsPerVel * warmupVelocities.count  // 12 total
 
-            // Per-tuple firing span: rrIterations × iterCycleSec
-            let tupleDurSec = Double(rrIterations) * iterCycleSec
+            // Per-tuple firing span: totalIters × iterCycleSec
+            let tupleDurSec = Double(totalIters) * iterCycleSec
             // Total firing window: all tuples staggered + last tuple's full span
             let firingWindowSec = Double(warmupNotes.count) * staggerSec + tupleDurSec
             let rawDuration = firingWindowSec + 1.0 + settleSeconds  // +1 s decay
             let warmupDuration = min(rawDuration, 120.0)
             let warmupFramesTarget = AVAudioFramePosition(sampleRate * warmupDuration)
 
-            NSLog("[RRExhaust Warmup] Scheduling %d tuples × %d iterations @ vel %d; stagger=15ms; settle=%.0fs; total=%.1fs",
-                  warmupNotes.count, rrIterations, warmupVelocity, settleSeconds, warmupDuration)
-            reportStatus("Priming BBC SO RR counter (\(warmupNotes.count) tuples × \(rrIterations) iters, \(Int(warmupDuration))s)...")
+            NSLog("[RRExhaust Warmup] Scheduling %d tuples × %d iters (%d vels × %d) @ vels %@; stagger=15ms; settle=%.0fs; total=%.1fs",
+                  warmupNotes.count, totalIters, warmupVelocities.count, rrIterationsPerVel,
+                  warmupVelocities.map { String($0) }.joined(separator: "+") as NSString,
+                  settleSeconds, warmupDuration)
+            reportStatus("Priming BBC SO RR counter (\(warmupNotes.count) tuples × \(totalIters) iters, \(Int(warmupDuration))s)...")
 
             // Build per-frame warmup MIDI event schedule.
-            // Each tuple fires rrIterations note-on/note-off pairs, starting at its stagger offset.
+            // Each tuple fires rrIterationsPerVel note-on/off pairs at vel 80, then rrIterationsPerVel at vel 100.
             // All offsets are in frames relative to warmup-render start (frame 0).
             struct WarmupMidiEvent {
                 let frameOffset: AVAudioFramePosition
@@ -5836,12 +5839,16 @@ final class ScoreStore {
             var warmupEvents: [WarmupMidiEvent] = []
             for (idx, wn) in warmupNotes.enumerated() {
                 let tupleStartSec = Double(idx) * staggerSec
-                for iter in 0..<rrIterations {
-                    let iterStartSec = tupleStartSec + Double(iter) * iterCycleSec
-                    let noteOnFrame  = AVAudioFramePosition(iterStartSec * sampleRate)
-                    let noteOffFrame = AVAudioFramePosition((iterStartSec + noteDurSec) * sampleRate)
-                    warmupEvents.append(WarmupMidiEvent(frameOffset: noteOnFrame,  mappingKey: wn.mappingKey, midiBytes: [0x90, wn.pitch, warmupVelocity]))
-                    warmupEvents.append(WarmupMidiEvent(frameOffset: noteOffFrame, mappingKey: wn.mappingKey, midiBytes: [0x80, wn.pitch, 0]))
+                var globalIter = 0
+                for vel in warmupVelocities {
+                    for _ in 0..<rrIterationsPerVel {
+                        let iterStartSec = tupleStartSec + Double(globalIter) * iterCycleSec
+                        let noteOnFrame  = AVAudioFramePosition(iterStartSec * sampleRate)
+                        let noteOffFrame = AVAudioFramePosition((iterStartSec + noteDurSec) * sampleRate)
+                        warmupEvents.append(WarmupMidiEvent(frameOffset: noteOnFrame,  mappingKey: wn.mappingKey, midiBytes: [0x90, wn.pitch, vel]))
+                        warmupEvents.append(WarmupMidiEvent(frameOffset: noteOffFrame, mappingKey: wn.mappingKey, midiBytes: [0x80, wn.pitch, 0]))
+                        globalIter += 1
+                    }
                 }
             }
             warmupEvents.sort { $0.frameOffset < $1.frameOffset }
@@ -5945,7 +5952,7 @@ final class ScoreStore {
             }
 
             NSLog("[RRExhaust Warmup] Complete — %d tuples × %d iters primed, %.2f s warmup. Starting real render.",
-                  warmupNotes.count, rrIterations, warmupDuration)
+                  warmupNotes.count, totalIters, warmupDuration)
         }
 
         // Phase 5: Render offline — stream directly to file
