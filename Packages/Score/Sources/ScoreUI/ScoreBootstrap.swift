@@ -334,6 +334,94 @@ public enum ScoreBootstrap {
         return true
     }
 
+    // MARK: - Headless Full-Mix export (AMIRA_HEADLESS_FULLMIX_EXPORT)
+
+    /// Runs a headless full-mix WAV export using the last-used project.
+    /// Called by the main Opera app when `AMIRA_HEADLESS_FULLMIX_EXPORT` is set.
+    /// Logs `[HeadlessFullMix] done status=... bytes=... path=...` and calls
+    /// `NSApplication.shared.terminate(nil)` when complete.
+    @MainActor
+    public static func runHeadlessFullMixExport(outputURL: URL, songHint: String?) async {
+        NSLog("[HeadlessFullMix] starting outputPath=%@", outputURL.path)
+
+        // Prepare output directory
+        let outputDir = outputURL.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        } catch {
+            NSLog("[HeadlessFullMix] done status=error bytes=0 path=%@ reason=output-dir-failed: %@",
+                  outputURL.path, error.localizedDescription)
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
+        // Spin up a dedicated ScoreStore (does not affect any GUI store)
+        let store = ScoreStore()
+        store.restoreLastProject()
+
+        // Wait up to 30 s for the project to load
+        let projectLoaded = await headlessWaitFor(timeout: 30) {
+            store.projectURL != nil && !store.songAssets.isEmpty
+        }
+        guard projectLoaded else {
+            NSLog("[HeadlessFullMix] done status=error bytes=0 path=%@ reason=project-load-timeout", outputURL.path)
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
+        NSLog("[HeadlessFullMix] project loaded songs=%d", store.songAssets.count)
+
+        // Select song
+        var targetID: UUID?
+        if let hint = songHint {
+            targetID = store.songAssets.first(where: {
+                $0.relativePath == hint
+                    || $0.relativePath.contains(hint)
+                    || $0.displayName == hint
+            })?.id
+        }
+        if targetID == nil {
+            targetID = store.songAssets.first?.id
+        }
+        guard let songID = targetID else {
+            NSLog("[HeadlessFullMix] done status=error bytes=0 path=%@ reason=no-song", outputURL.path)
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
+        store.setSelectedMidi(id: songID)
+
+        // Wait up to 60 s for notes to load
+        let notesLoaded = await headlessWaitFor(timeout: 60) { !store.pianoRollNotes.isEmpty }
+        guard notesLoaded else {
+            NSLog("[HeadlessFullMix] done status=error bytes=0 path=%@ reason=notes-load-timeout", outputURL.path)
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
+        let songName = store.selectedMidiAsset?.displayName ?? store.songAssets.first?.displayName ?? "unknown"
+        NSLog("[HeadlessFullMix] exporting song=%@ notes=%d", songName, store.pianoRollNotes.count)
+
+        // Export using the same path as the GUI "Export Audio..." menu item
+        await store.exportFullMixToWav(outputURL: outputURL)
+
+        // Report result
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
+        let status = fileSize > 0 ? "success" : "error"
+        NSLog("[HeadlessFullMix] done status=%@ bytes=%lld path=%@", status, fileSize, outputURL.path)
+
+        NSApplication.shared.terminate(nil)
+    }
+
+    private static func headlessWaitFor(timeout: Double, condition: @escaping @MainActor () -> Bool) async -> Bool {
+        let steps = Int(timeout / 0.25)
+        for _ in 0..<steps {
+            if await MainActor.run(body: condition) { return true }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return await MainActor.run(body: condition)
+    }
+
     @MainActor
     private static func preloadHeadlessSongAsset(
         store: ScoreStore,

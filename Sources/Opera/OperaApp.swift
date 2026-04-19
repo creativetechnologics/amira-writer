@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ScoreUI
 import SwiftUI
 
 @available(macOS 26.0, *)
@@ -71,7 +72,34 @@ private struct OperaModeCommands: Commands {
 }
 
 private final class OperaAppDelegate: NSObject, NSApplicationDelegate {
+    /// Set to true while a headless Full-Mix export task is running so the
+    /// unsaved-changes quit guard does not prompt the user.
+    private var isRunningHeadlessExport = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // MARK: Headless Full-Mix export hook
+        // Triggered when the app is launched with:
+        //   AMIRA_HEADLESS_FULLMIX_EXPORT=/absolute/path/to/output.wav
+        // Optional:
+        //   AMIRA_HEADLESS_FULLMIX_SONG=<relative song path or stem>  (default: first song)
+        //
+        // The hook loads the last-used project read-only (no saves), exports the full
+        // mix WAV using the same ScoreStore.exportFullMixToWav path the GUI uses, logs
+        // a final [HeadlessFullMix] done line, then terminates.
+        let env = ProcessInfo.processInfo.environment
+        guard let outputPath = env["AMIRA_HEADLESS_FULLMIX_EXPORT"] else { return }
+
+        isRunningHeadlessExport = true
+        let outputURL = URL(fileURLWithPath: outputPath)
+        let songHint = env["AMIRA_HEADLESS_FULLMIX_SONG"]
+
+        Task { @MainActor in
+            await ScoreBootstrap.runHeadlessFullMixExport(outputURL: outputURL, songHint: songHint)
+        }
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
+        guard !isRunningHeadlessExport else { return }
         for url in urls {
             NotificationCenter.default.post(
                 name: OperaShellSignals.openProjectFromURL,
@@ -82,6 +110,10 @@ private final class OperaAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, openFiles filenames: [String]) {
+        guard !isRunningHeadlessExport else {
+            application.reply(toOpenOrPrint: .success)
+            return
+        }
         for path in filenames {
             NotificationCenter.default.post(
                 name: OperaShellSignals.openProjectFromURL,
@@ -97,6 +129,9 @@ private final class OperaAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Headless export calls terminate(nil) directly; skip the unsaved-changes dialog.
+        if isRunningHeadlessExport { return .terminateNow }
+
         let hasDirty = MainActor.assumeIsolated {
             OperaShellSignals.hasUnsavedChanges?() ?? false
         }
