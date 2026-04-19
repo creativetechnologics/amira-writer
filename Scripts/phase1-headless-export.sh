@@ -1,27 +1,37 @@
 #!/usr/bin/env bash
 # phase1-headless-export.sh
-# Phase 1c driver: launch Amira Writer.app via `open --env` so env vars
+# Phase 1d driver: launch Amira Writer.app via `open --env` so env vars
 # are reliably inherited by the app process (launchctl setenv is NOT inherited
 # by apps launched via open/LaunchServices — use open --env instead).
+#
+# What's new in 1d:
+#   - Qualification cache is CLEARED before the run (backed up first) so the
+#     scanner fix is exercised against a fresh BBC Symphony Orchestra AU render.
+#   - AMIRA_HEADLESS_LOG_FILE is passed so the in-process dup2 redirect writes
+#     ALL NSLog / stderr output to a capturable file (no log stream needed).
+#   - Harvest section greps the app-side log file, not log stream.
 #
 # Usage:
 #   Scripts/phase1-headless-export.sh
 #
-# Output WAV: /private/tmp/amira-phase1c/overture.wav
-# Log capture: /private/tmp/amira-phase1c/app.log
+# Output WAV: /private/tmp/amira-phase1d/overture.wav
+# Log file  : /private/tmp/amira-phase1d/overture.headless-log.txt
 #
-# Env override:
+# Env overrides:
 #   PHASE1_SONG_HINT   — song name hint (default: "Overture")
 #   PHASE1_OUTPUT_WAV  — override output WAV path
 set -euo pipefail
 
 APP_BUNDLE="/Volumes/Storage VIII/Programming/!Applications/Amira Writer.app"
 ARTIFACTS_DIR="$HOME/Library/Application Support/Opera/HostedAudioUnitQualificationArtifacts"
-CACHE_DIR="$HOME/Library/Caches/Opera/HostedAudioUnitQualification"
+CACHE_FILE="$HOME/Library/Application Support/Opera/HostedAudioUnitQualificationCache.json"
 
-TMP_DIR="/private/tmp/amira-phase1c"
+TMP_DIR="/private/tmp/amira-phase1d"
 OUTPUT_WAV="${PHASE1_OUTPUT_WAV:-$TMP_DIR/overture.wav}"
-LOG_FILE="$TMP_DIR/app.log"
+# The app derives the log path as <output stem>.headless-log.txt when
+# AMIRA_HEADLESS_LOG_FILE is not set.  Set it explicitly so we know exactly
+# where to find it.
+LOG_FILE="$TMP_DIR/overture.headless-log.txt"
 SONG_HINT="${PHASE1_SONG_HINT:-Overture}"
 
 # --- Validate app bundle -------------------------------------------------------
@@ -33,33 +43,25 @@ fi
 # --- Create temp dir -----------------------------------------------------------
 mkdir -p "$TMP_DIR"
 
-echo "=== Phase 1c headless export via open --env ==="
+echo "=== Phase 1d headless export via open --env ==="
 echo "  App    : $APP_BUNDLE"
 echo "  Output : $OUTPUT_WAV"
 echo "  Song   : $SONG_HINT"
 echo "  Log    : $LOG_FILE"
 echo ""
 
-# --- Back up qualification cache (non-destructive snapshot) -------------------
+# --- Clear qualification cache (back up first, then delete) -------------------
+# This forces a fresh qualification run so the Phase 1d scanner fix is actually
+# exercised; prior phases may have left a v13-rejected entry in the cache.
 CACHE_BACKUP=""
-if [[ -d "$CACHE_DIR" ]]; then
-  CACHE_BACKUP="$TMP_DIR/cache-backup-$(date +%s)"
-  cp -R "$CACHE_DIR" "$CACHE_BACKUP"
-  echo "Cache backed up to: $CACHE_BACKUP"
+if [[ -f "$CACHE_FILE" ]]; then
+  CACHE_BACKUP="$TMP_DIR/HostedAudioUnitQualificationCache.backup.json"
+  cp "$CACHE_FILE" "$CACHE_BACKUP"
+  rm -f "$CACHE_FILE"
+  echo "Qualification cache cleared (backup: $CACHE_BACKUP)"
+else
+  echo "No qualification cache file found — fresh run."
 fi
-
-# --- Start log-stream capture in background ------------------------------------
-# Capture all Amira Writer / Opera subsystem messages
-LOG_STREAM_PID=""
-log stream \
-  --predicate 'process == "Opera" OR subsystem BEGINSWITH "com.creativetechnologics"' \
-  --level debug \
-  > "$LOG_FILE" 2>&1 &
-LOG_STREAM_PID=$!
-echo "log-stream PID: $LOG_STREAM_PID"
-
-# Give log-stream a moment to start before the app launches
-sleep 1
 
 # --- Launch app with env vars injected via open --env -------------------------
 # IMPORTANT: launchctl setenv writes to the launchd bootstrap context but is NOT
@@ -68,14 +70,15 @@ sleep 1
 echo "Launching app (open -W -n --env)..."
 LAUNCH_START="$(date +%s)"
 
-# 8-minute wall-clock cap (480 s). Overture is ~3 min realtime + ~1 min load.
-TIMEOUT_SECS=480
+# 10-minute wall-clock cap (600 s). Qualification adds ~30-60s on top of 3 min realtime.
+TIMEOUT_SECS=600
 
 # open -W blocks until the app quits; -n forces a fresh instance
 # --env injects vars directly into the child process (reliable; no launchctl needed)
 open -W -n \
   --env "AMIRA_HEADLESS_FULLMIX_EXPORT=$OUTPUT_WAV" \
   --env "AMIRA_HEADLESS_FULLMIX_SONG=$SONG_HINT" \
+  --env "AMIRA_HEADLESS_LOG_FILE=$LOG_FILE" \
   "$APP_BUNDLE" &
 OPEN_PID=$!
 
@@ -106,43 +109,62 @@ wait "$WATCHDOG_PID" 2>/dev/null || true
 LAUNCH_END="$(date +%s)"
 ELAPSED=$(( LAUNCH_END - LAUNCH_START ))
 
-# --- Stop log-stream -----------------------------------------------------------
-if [[ -n "$LOG_STREAM_PID" ]]; then
-  kill "$LOG_STREAM_PID" 2>/dev/null || true
-  wait "$LOG_STREAM_PID" 2>/dev/null || true
-fi
-
 echo ""
 echo "=== App ran for ${ELAPSED}s, exit status: $LAUNCH_STATUS ==="
 echo ""
 
-# --- Harvest relevant log lines -----------------------------------------------
-echo "--- [Phase1cHook] entries ---"
-grep '\[Phase1cHook\]' "$LOG_FILE" || echo "(none)"
+# --- Restore qualification cache ----------------------------------------------
+if [[ -n "$CACHE_BACKUP" && -f "$CACHE_BACKUP" ]]; then
+  cp "$CACHE_BACKUP" "$CACHE_FILE"
+  echo "Qualification cache restored from backup."
+fi
 
-echo ""
-echo "--- [HeadlessFullMix] entries ---"
-grep '\[HeadlessFullMix\]' "$LOG_FILE" || echo "(none)"
+# --- Harvest relevant log lines from the app-side log file --------------------
+if [[ ! -f "$LOG_FILE" ]]; then
+  echo "WARNING: Log file not found: $LOG_FILE" >&2
+  echo "  (dup2 redirect may not have fired — check if app launched correctly)"
+  LOG_FILE=""
+fi
 
-echo ""
-echo "--- [Phase0Bounds] entries ---"
-grep '\[Phase0Bounds\]' "$LOG_FILE" || echo "(none)"
+if [[ -n "$LOG_FILE" ]]; then
+  LOG_SIZE="$(stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)"
+  echo "Log file size: ${LOG_SIZE} bytes"
+  echo ""
 
-echo ""
-echo "--- [Phase0Tap] entries (first 20) ---"
-grep '\[Phase0Tap\]' "$LOG_FILE" | head -20 || echo "(none)"
+  echo "--- [Phase1cHook] entries ---"
+  grep '\[Phase1cHook\]' "$LOG_FILE" || echo "(none)"
 
-echo ""
-echo "--- [Phase1Bounds] entries ---"
-grep '\[Phase1Bounds\]' "$LOG_FILE" || echo "(none)"
+  echo ""
+  echo "--- [HeadlessFullMix] entries ---"
+  grep '\[HeadlessFullMix\]' "$LOG_FILE" || echo "(none)"
 
-echo ""
-echo "--- AU instantiation errors (OSStatus) ---"
-grep -i 'OSStatus\|audioUnit.*error\|-3000\|Component.*fail\|instantiat' "$LOG_FILE" | head -30 || echo "(none)"
+  echo ""
+  echo "--- [Phase0Bounds] entries ---"
+  grep '\[Phase0Bounds\]' "$LOG_FILE" || echo "(none)"
 
-echo ""
+  echo ""
+  echo "--- [Phase0Tap] entries (first 20) ---"
+  grep '\[Phase0Tap\]' "$LOG_FILE" | head -20 || echo "(none)"
+
+  echo ""
+  echo "--- [Phase1Bounds] entries ---"
+  grep '\[Phase1Bounds\]' "$LOG_FILE" || echo "(none)"
+
+  echo ""
+  echo "--- [OfflineExport] Qualification entries ---"
+  grep '\[OfflineExport\] Qualification' "$LOG_FILE" || echo "(none)"
+
+  echo ""
+  echo "--- AU instantiation / OSStatus errors ---"
+  grep -i 'OSStatus\|audioUnit.*error\|-3000\|Component.*fail\|instantiat.*fail\|\[OfflineExport\].*fail' "$LOG_FILE" | head -30 || echo "(none)"
+
+  echo ""
+  echo "--- Full log (last 80 lines) ---"
+  tail -80 "$LOG_FILE"
+fi
 
 # --- Check output WAV ---------------------------------------------------------
+echo ""
 echo "=== WAV verification ==="
 if [[ -f "$OUTPUT_WAV" ]]; then
   FILE_SIZE="$(stat -f%z "$OUTPUT_WAV" 2>/dev/null || echo 0)"
@@ -209,5 +231,5 @@ else
 fi
 
 echo ""
-echo "=== Phase 1c run complete ==="
-echo "Full log: $LOG_FILE"
+echo "=== Phase 1d run complete ==="
+echo "Full log: ${LOG_FILE:-N/A}"

@@ -83,6 +83,7 @@ private final class OperaAppDelegate: NSObject, NSApplicationDelegate {
         //   AMIRA_HEADLESS_FULLMIX_EXPORT=/absolute/path/to/output.wav
         // Optional:
         //   AMIRA_HEADLESS_FULLMIX_SONG=<relative song path or stem>  (default: first song)
+        //   AMIRA_HEADLESS_LOG_FILE=<absolute path>                    (default: <output>.headless-log.txt)
         //
         // The hook loads the last-used project read-only (no saves), exports the full
         // mix WAV using the same ScoreStore.exportFullMixToWav path the GUI uses, logs
@@ -93,6 +94,30 @@ private final class OperaAppDelegate: NSObject, NSApplicationDelegate {
         // does NOT inherit those values into the child process environment.
         let env = ProcessInfo.processInfo.environment
         let exportPath = env["AMIRA_HEADLESS_FULLMIX_EXPORT"]
+
+        // ── Stderr → file redirect ────────────────────────────────────────────────
+        // NSLog on macOS writes to stderr (fd 2) when running outside a launchd
+        // agent context — which is the case when launched via `open --env`.  Redirect
+        // stderr to a well-known log file early so ALL [Phase*] / [HeadlessFullMix]
+        // / [OfflineExport] / [Engine] output is capturable by the driver script.
+        if let logPath = env["AMIRA_HEADLESS_LOG_FILE"]
+            ?? exportPath.map({ URL(fileURLWithPath: $0)
+                .deletingLastPathComponent()
+                .appendingPathComponent(
+                    URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent
+                    + ".headless-log.txt"
+                ).path }) {
+            let logDir = URL(fileURLWithPath: logPath).deletingLastPathComponent().path
+            try? FileManager.default.createDirectory(atPath: logDir,
+                                                     withIntermediateDirectories: true)
+            // O_WRONLY | O_CREAT | O_TRUNC
+            let fd = Darwin.open(logPath, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+            if fd >= 0 {
+                Darwin.dup2(fd, STDERR_FILENO)
+                Darwin.close(fd)
+            }
+        }
+
         NSLog("[Phase1cHook] env var AMIRA_HEADLESS_FULLMIX_EXPORT = %@", exportPath ?? "(nil)")
         guard let outputPath = exportPath else { return }
 
