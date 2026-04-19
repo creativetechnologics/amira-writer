@@ -6319,30 +6319,60 @@ final class ScoreStore {
         windowFrames: AVAudioFrameCount
     ) -> [Double]? {
         guard let audioFile = openAnalysisAudioFile(at: url) else {
+            NSLog("[Phase1fEnv] rmsEnvelope: failed to open file %@", url.lastPathComponent)
             return nil
         }
+
+        // [Phase1fEnv] Force a non-interleaved Float32 read format so floatChannelData is
+        // always non-nil regardless of the WAV file's native interleaved/non-interleaved layout.
+        // Mirrors the same fix applied to audioAudibleBounds in Phase 1.
+        let sampleRate = audioFile.processingFormat.sampleRate
+        let channelCount = Int(audioFile.processingFormat.channelCount)
+        guard channelCount > 0 else {
+            NSLog("[Phase1fEnv] rmsEnvelope: channelCount==0 for %@", url.lastPathComponent)
+            return nil
+        }
+
+        guard let readFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: AVAudioChannelCount(channelCount),
+            interleaved: false
+        ) else {
+            NSLog("[Phase1fEnv] rmsEnvelope: failed to create non-interleaved read format for %@", url.lastPathComponent)
+            return nil
+        }
+
         guard let buffer = AVAudioPCMBuffer(
-            pcmFormat: audioFile.processingFormat,
+            pcmFormat: readFormat,
             frameCapacity: AVAudioFrameCount(max(1, min(audioFile.length, 65_536)))
         ) else {
+            NSLog("[Phase1fEnv] rmsEnvelope: buffer alloc failed for %@", url.lastPathComponent)
             return nil
         }
+
+        NSLog("[Phase1fEnv] rmsEnvelope: opened with forced non-interleaved format file=%@ sr=%.0f ch=%d frames=%lld",
+              url.lastPathComponent, sampleRate, channelCount, audioFile.length)
 
         var envelope: [Double] = []
         var sumSquares = 0.0
         var sampleCount = 0
-        let channels = Int(audioFile.processingFormat.channelCount)
+        let channels = channelCount
 
         while true {
             do {
                 try audioFile.read(into: buffer)
             } catch {
+                NSLog("[Phase1fEnv] rmsEnvelope: read error file=%@ error=%@", url.lastPathComponent, error.localizedDescription)
                 return nil
             }
 
             let frameLength = Int(buffer.frameLength)
             guard frameLength > 0 else { break }
-            guard let channelData = buffer.floatChannelData else { return nil }
+            guard let channelData = buffer.floatChannelData else {
+                NSLog("[Phase1fEnv] rmsEnvelope: floatChannelData nil (interleaved?) file=%@", url.lastPathComponent)
+                return nil
+            }
 
             for frame in 0..<frameLength {
                 var monoSample = 0.0
@@ -6365,6 +6395,7 @@ final class ScoreStore {
             envelope.append(sqrt(sumSquares / Double(sampleCount)))
         }
 
+        NSLog("[Phase1fEnv] rmsEnvelope: success file=%@ envelopeCount=%d", url.lastPathComponent, envelope.count)
         return envelope
     }
 
