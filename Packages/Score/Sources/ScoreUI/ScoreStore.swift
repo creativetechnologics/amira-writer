@@ -44,6 +44,12 @@ private enum HostedAudioUnitExportMode: String {
 
     static func current() -> HostedAudioUnitExportMode {
         let environment = ProcessInfo.processInfo.environment
+        // AMIRA_HEADLESS_FORCE_OFFLINE=1 — skip qualification entirely, go straight to
+        // offline render. Use this for BBC SO headless export where qualification always
+        // rejects due to XPC shared-state interference.
+        if environment["AMIRA_HEADLESS_FORCE_OFFLINE"] == "1" {
+            return .offline
+        }
         if environment["AMIRA_PREFER_OFFLINE_AU_EXPORT"] == "1" {
             return .offline
         }
@@ -5716,19 +5722,29 @@ final class ScoreStore {
                       seen.count, warmupCap, skipped)
             }
 
-            let staggerSec = 0.010          // 10 ms between note-ons
-            let noteOffDelaySec = 0.020     // note-off 20 ms after note-on
-            let settleSeconds = 3.0         // streaming settle window after all notes fired
-            let rawDuration = Double(warmupNotes.count) * staggerSec + settleSeconds
-            let warmupDuration = min(rawDuration, 30.0)
+            // BBC SO beefed-up warmup (Phase 2b):
+            //   - Two velocity passes: vel 40 (pp samples) then vel 100 (ff samples)
+            //   - 15 ms stagger between note-ons — allows light disk-stream overlap
+            //   - 400 ms note-off delay — holds through attack + initial sustain layers
+            //   - 15 s settle window — BBC SO disk streaming needs extended settle time
+            //   - Hard cap 60 s total warmup
+            let staggerSec = 0.015          // 15 ms between note-ons
+            let noteOffDelaySec = 0.400     // note-off 400 ms after note-on (through attack+sustain)
+            let settleSeconds = 15.0        // BBC SO disk-streaming settle window
+            let warmupVelocities: [UInt8] = [40, 100]  // pp pass then ff pass
+            let numPasses = warmupVelocities.count
+            // Duration = passes × (N × stagger) + settle, capped at 60 s
+            let rawDuration = Double(numPasses) * Double(warmupNotes.count) * staggerSec + settleSeconds
+            let warmupDuration = min(rawDuration, 60.0)
             let warmupFramesTarget = AVAudioFramePosition(sampleRate * warmupDuration)
 
-            NSLog("[FixB Warmup] Scheduling %d unique notes; warmup duration %.2f s",
-                  warmupNotes.count, warmupDuration)
-            reportStatus("Priming hosted instruments (sample caching)...")
+            NSLog("[FixB Warmup] Scheduling %d unique notes × %d velocity passes; warmup duration %.2f s (settle=%.0f s)",
+                  warmupNotes.count, numPasses, warmupDuration, settleSeconds)
+            reportStatus("Priming BBC SO samples (two-pass warmup, \(Int(warmupDuration))s)...")
 
-            // Build per-frame warmup MIDI event schedule
-            // Each note-on fires at its stagger offset; note-off 20 ms later.
+            // Build per-frame warmup MIDI event schedule.
+            // Two passes: first at vel 40 (pp samples), then at vel 100 (ff samples).
+            // Each note-on fires at its stagger offset; note-off 400 ms later.
             // All offsets are in frames relative to warmup-render start (frame 0).
             struct WarmupMidiEvent {
                 let frameOffset: AVAudioFramePosition
@@ -5736,11 +5752,14 @@ final class ScoreStore {
                 let midiBytes: [UInt8]
             }
             var warmupEvents: [WarmupMidiEvent] = []
-            for (idx, wn) in warmupNotes.enumerated() {
-                let noteOnFrame  = AVAudioFramePosition(Double(idx) * staggerSec * sampleRate)
-                let noteOffFrame = AVAudioFramePosition((Double(idx) * staggerSec + noteOffDelaySec) * sampleRate)
-                warmupEvents.append(WarmupMidiEvent(frameOffset: noteOnFrame,  mappingKey: wn.mappingKey, midiBytes: [0x90, wn.pitch, 40]))
-                warmupEvents.append(WarmupMidiEvent(frameOffset: noteOffFrame, mappingKey: wn.mappingKey, midiBytes: [0x80, wn.pitch, 0]))
+            for (passIdx, velocity) in warmupVelocities.enumerated() {
+                let passOffsetSec = Double(passIdx) * Double(warmupNotes.count) * staggerSec
+                for (idx, wn) in warmupNotes.enumerated() {
+                    let noteOnFrame  = AVAudioFramePosition((passOffsetSec + Double(idx) * staggerSec) * sampleRate)
+                    let noteOffFrame = AVAudioFramePosition((passOffsetSec + Double(idx) * staggerSec + noteOffDelaySec) * sampleRate)
+                    warmupEvents.append(WarmupMidiEvent(frameOffset: noteOnFrame,  mappingKey: wn.mappingKey, midiBytes: [0x90, wn.pitch, velocity]))
+                    warmupEvents.append(WarmupMidiEvent(frameOffset: noteOffFrame, mappingKey: wn.mappingKey, midiBytes: [0x80, wn.pitch, 0]))
+                }
             }
             warmupEvents.sort { $0.frameOffset < $1.frameOffset }
 
@@ -5844,6 +5863,7 @@ final class ScoreStore {
         }
 
         reportStatus("Rendering mix offline...")
+        let offlineRenderWallStart = Date()
         let outputFile = try AVAudioFile(
             forWriting: outputURL,
             settings: outputFormat.settings,
@@ -5930,6 +5950,13 @@ final class ScoreStore {
                 retryCount = 0
             }
         }
+
+        // Wall-clock performance log — key metric for faster-than-realtime validation
+        let offlineRenderWallElapsed = Date().timeIntervalSince(offlineRenderWallStart)
+        let audioDurationForLog = totalSeconds
+        let speedup = audioDurationForLog > 0 ? audioDurationForLog / offlineRenderWallElapsed : 0
+        NSLog("[OfflineExport] wall-clock time=%.1fs for audio duration=%.1fs, speedup=%.2fx",
+              offlineRenderWallElapsed, audioDurationForLog, speedup)
 
         // Cleanup: detach AU nodes from offline engine (in-process AUs share address space)
         for (key, auUnit) in auNodes {
