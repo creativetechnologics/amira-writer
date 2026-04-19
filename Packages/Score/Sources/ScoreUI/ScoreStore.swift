@@ -5726,9 +5726,10 @@ final class ScoreStore {
         // the new note-on. MIN_GAP is 2× renderBlockSize: one block to ensure the note-off
         // is processed before the note-on block, plus one block for BBC SO's 16-sample
         // internal decay. Total timing advance ≤ 10ms at 256 frames — inaudible.
-        // AB_EXPERIMENT_RUN_A: Fix C disabled to measure whether early note-offs cause clicks.
-        let fixCEnabled = false
-        if containsHostedAudioUnits && fixCEnabled {
+        // AB_EXPERIMENT_RUN_B: Fix C re-enabled with ceil (round-UP) block alignment on note-off frame.
+        // Round-up ensures sampleOffset=0 for the note-off (placed at start of a block) rather than
+        // round-down which may still land 1 sample before a block boundary in some edge cases.
+        if containsHostedAudioUnits {
             let minGapFrames = AVAudioFramePosition(renderBlockSize) * 2
             let blockSz = AVAudioFramePosition(renderBlockSize)
 
@@ -5745,12 +5746,11 @@ final class ScoreStore {
                         // A note is still nominally sounding (no note-off seen yet).
                         // Insert a note-off snapped to a block boundary so BBC SO cuts
                         // the voice at a clean block edge. Position it minGapFrames before
-                        // the new note-on, then round DOWN to the nearest block boundary
-                        // so the sampleOffset passed to scheduleMIDI is 0 (not mid-block).
-                        // This prevents the note-off itself from introducing a mid-block
-                        // voice cut that generates its own click.
+                        // the new note-on, then round UP to the next block boundary
+                        // (ceiling alignment) so sampleOffset is always exactly 0 —
+                        // eliminates any possibility of a mid-block voice cut transient.
                         let rawOff = max(prevOnFrame + blockSz, ev.framePosition - minGapFrames)
-                        let earlyOffFrame = (rawOff / blockSz) * blockSz
+                        let earlyOffFrame = ((rawOff + blockSz - 1) / blockSz) * blockSz
                         guard earlyOffFrame > prevOnFrame else { activeNoteOnFrame[key] = ev.framePosition; continue }
                         extraNoteOffs.append(MidiEvent(
                             framePosition: earlyOffFrame,
