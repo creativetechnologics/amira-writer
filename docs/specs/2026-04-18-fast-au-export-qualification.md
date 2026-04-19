@@ -33,6 +33,7 @@ Instead of blindly switching all AU exports to offline mode, the export stack sh
    - **measured leading-latency alignment** when offline hosted-AU renders start earlier or later than the trusted realtime excerpt
    - cached qualification details now record **onset delta** and **tail delta** so remaining mismatches are diagnosable without reproducing the same render blindly
    - audible-bound detection now uses a quieter analysis threshold so low-velocity orchestral excerpts still produce usable onset/tail diagnostics
+   - when qualification still fails badly, preserve the qualification excerpt WAVs + metadata in Application Support so the mismatch can be inspected directly
 
 ## Why this matters
 

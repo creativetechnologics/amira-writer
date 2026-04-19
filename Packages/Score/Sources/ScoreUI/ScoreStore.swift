@@ -78,6 +78,16 @@ private struct HostedAudioUnitOfflineQualification: Codable, Sendable {
     let detail: String
 }
 
+private struct HostedAudioUnitQualificationArtifactRecord: Codable, Sendable {
+    let createdAt: Date
+    let qualificationKey: String
+    let excerptStartTick: Int
+    let excerptEndTick: Int
+    let verdict: HostedAudioUnitOfflineQualification.Verdict
+    let detail: String
+    let files: [String]
+}
+
 // MARK: - Types Not in OPWModels
 
 enum VersionSaveType: String, Codable, Sendable {
@@ -4849,8 +4859,11 @@ final class ScoreStore {
                     )
                 }
 
+                var preservedArtifactDirectory: URL?
                 defer {
-                    try? FileManager.default.removeItem(at: tempRoot)
+                    if preservedArtifactDirectory == nil {
+                        try? FileManager.default.removeItem(at: tempRoot)
+                    }
                 }
 
                 do {
@@ -5014,6 +5027,16 @@ final class ScoreStore {
 
                     if qualified {
                         return candidate
+                    }
+
+                    if candidate.similarity <= 0.5 || candidate.envelopeSimilarity <= 0.5 {
+                        preservedArtifactDirectory = Self.preserveHostedAudioUnitQualificationArtifacts(
+                            tempRoot: tempRoot,
+                            qualificationKey: qualificationKey,
+                            excerptStartTick: excerpt.startTick,
+                            excerptEndTick: excerpt.endTick,
+                            qualification: candidate
+                        )
                     }
 
                     if candidate.similarity > bestQualification.similarity ||
@@ -5790,7 +5813,7 @@ final class ScoreStore {
             .joined(separator: ",")
 
         return [
-            "hosted-au-qualification:v9",
+            "hosted-au-qualification:v10",
             projectIdentifier ?? "__unknown_project__",
             songPath ?? "__unsaved__",
             "ticks:\(startTick)-\(endTick)",
@@ -5807,6 +5830,101 @@ final class ScoreStore {
         return appSupport
             .appendingPathComponent("Opera", isDirectory: true)
             .appendingPathComponent("HostedAudioUnitQualificationCache.json", isDirectory: false)
+    }
+
+    private nonisolated static func hostedAudioUnitQualificationArtifactsDirectory() -> URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let directory = appSupport
+            .appendingPathComponent("Opera", isDirectory: true)
+            .appendingPathComponent("HostedAudioUnitQualificationArtifacts", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            return directory
+        } catch {
+            NSLog("[OfflineExport] Failed to create qualification artifacts directory: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    private nonisolated static func pruneHostedAudioUnitQualificationArtifacts(maxEntries: Int = 8) {
+        guard let root = hostedAudioUnitQualificationArtifactsDirectory(),
+              let entries = try? FileManager.default.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+              ) else { return }
+
+        let sorted = entries.sorted { lhs, rhs in
+            let lhsDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let rhsDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return lhsDate > rhsDate
+        }
+
+        for stale in sorted.dropFirst(maxEntries) {
+            try? FileManager.default.removeItem(at: stale)
+        }
+    }
+
+    private nonisolated static func preserveHostedAudioUnitQualificationArtifacts(
+        tempRoot: URL,
+        qualificationKey: String,
+        excerptStartTick: Int,
+        excerptEndTick: Int,
+        qualification: HostedAudioUnitOfflineQualification
+    ) -> URL? {
+        guard let root = hostedAudioUnitQualificationArtifactsDirectory() else { return nil }
+
+        let safeSlug = qualificationKey
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: "|", with: "_")
+        let destination = root.appendingPathComponent(
+            "\(Int(Date().timeIntervalSince1970))-\(safeSlug.prefix(80))",
+            isDirectory: true
+        )
+
+        do {
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+
+            let sourceFiles = (try? FileManager.default.contentsOfDirectory(
+                at: tempRoot,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []
+
+            var copiedFiles: [String] = []
+            for source in sourceFiles {
+                let destinationFile = destination.appendingPathComponent(source.lastPathComponent)
+                try? FileManager.default.removeItem(at: destinationFile)
+                try FileManager.default.copyItem(at: source, to: destinationFile)
+                copiedFiles.append(destinationFile.lastPathComponent)
+            }
+
+            let metadata = HostedAudioUnitQualificationArtifactRecord(
+                createdAt: Date(),
+                qualificationKey: qualificationKey,
+                excerptStartTick: excerptStartTick,
+                excerptEndTick: excerptEndTick,
+                verdict: qualification.verdict,
+                detail: qualification.detail,
+                files: copiedFiles.sorted()
+            )
+            let metadataURL = destination.appendingPathComponent("metadata.json")
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(metadata).write(to: metadataURL, options: .atomic)
+
+            pruneHostedAudioUnitQualificationArtifacts()
+            NSLog("[OfflineExport] Preserved qualification artifacts at %@", destination.path)
+            return destination
+        } catch {
+            NSLog("[OfflineExport] Failed to preserve qualification artifacts: %@", error.localizedDescription)
+            try? FileManager.default.removeItem(at: destination)
+            return nil
+        }
     }
 
     private nonisolated static func prunedHostedAudioUnitOfflineQualificationCache(
