@@ -5756,10 +5756,15 @@ final class ScoreStore {
             }
         }
 
-        // Phase 4b: Active sample-caching warmup for hosted Audio Units (Fix B)
-        // BBC SO uses disk-streaming; offline render outruns the streaming threads and
-        // returns silence for unloaded samples. We fire every unique (mappingKey, pitch)
-        // at low velocity before the real render so all samples are in memory.
+        // Phase 4b: RR-exhaustion warmup for hosted Audio Units (RRExhaust Warmup)
+        // BBC SO uses round-robin (RR) sample variants — 2-4 distinct recorded takes per
+        // note per velocity layer. If the RR counter is at an inverted-polarity variant
+        // when the real render starts, the first occurrence of that note plays with wrong
+        // polarity, causing a sharp discontinuity (polarity-flip click).
+        //
+        // Fix: fire each (mappingKey, pitch) tuple 8 times rapidly at vel 100 so BBC SO's
+        // RR counter cycles through all variants and wraps back to a predictable position
+        // (typically position 0) before the real render begins.
         if containsHostedAudioUnits {
             // Collect unique (mappingKey, pitch) pairs from the event list
             struct WarmupNote: Hashable {
@@ -5783,36 +5788,45 @@ final class ScoreStore {
                 warmupNotes = (0..<warmupCap).map { i in
                     warmupNotes[min(Int(Double(i) * stride), warmupNotes.count - 1)]
                 }
-                NSLog("[FixB Warmup] Note count %d exceeds cap %d — skipped %d notes (sampled uniformly)",
+                NSLog("[RRExhaust Warmup] Note count %d exceeds cap %d — skipped %d notes (sampled uniformly)",
                       seen.count, warmupCap, skipped)
             }
 
-            // BBC SO beefed-up warmup (Phase 2c — round-robin fix):
-            //   - Four velocity passes: vel 40/64/100/127 (pp/mp/mf/ff)
-            //     BBC SO has up to 4 round-robin variants per note per velocity layer.
-            //     Two passes only primed one RR slot; subsequent notes hit unloaded RR
-            //     slots producing polarity-flip discontinuities (Δ up to 0.34) in the export.
-            //   - 15 ms stagger between note-ons — allows light disk-stream overlap
-            //   - 400 ms note-off delay — holds through attack + initial sustain layers
-            //   - 25 s settle window — extended to cover all 4 RR slots loading
-            //   - Hard cap 120 s total warmup
-            let staggerSec = 0.015          // 15 ms between note-ons
-            let noteOffDelaySec = 0.400     // note-off 400 ms after note-on (through attack+sustain)
-            let settleSeconds = 25.0        // BBC SO disk-streaming settle window (4 RR slots need more time)
-            let warmupVelocities: [UInt8] = [40, 64, 100, 127]  // pp/mp/mf/ff — covers all RR slots
-            let numPasses = warmupVelocities.count
-            // Duration = passes × (N × stagger) + settle, capped at 120 s
-            let rawDuration = Double(numPasses) * Double(warmupNotes.count) * staggerSec + settleSeconds
+            // RR-exhaustion warmup parameters:
+            //   - 8 iterations per (mappingKey, pitch) tuple at vel 100 (dominant BBC SO mf/f layer)
+            //     BBC SO has 2-4 RR variants; 8 iterations guarantees full wrap-around for all known
+            //     articulations, landing the counter at a predictable (typically 0) position.
+            //   - Note duration: 100 ms (note-on then note-off 100 ms later)
+            //   - Inter-iteration gap: 50 ms silence before next note-on
+            //   - Per-tuple cycle: 8 × 150 ms = 1.2 s
+            //   - Stagger: 15 ms between tuple start times — ~10 tuples firing simultaneously
+            //   - Firing phase: N × 15 ms stagger + 1.2 s last tuple tail
+            //   - Then: CC 123 All Notes Off + CC 120 All Sound Off + 1 s decay silence
+            //   - Then: 25 s settle window for BBC SO streaming engine to flush and stabilise
+            //   - Total warmup: ~3.5 s firing + 1 s decay + 25 s settle ≈ 29.5 s
+            //   - Hard cap 120 s
+            let rrIterations = 8
+            let staggerSec = 0.015          // 15 ms between tuple start times
+            let noteDurSec  = 0.100         // 100 ms note duration
+            let iterGapSec  = 0.050         // 50 ms gap between iterations
+            let iterCycleSec = noteDurSec + iterGapSec  // 150 ms per iteration
+            let warmupVelocity: UInt8 = 100  // dominant mf/f layer for BBC SO
+            let settleSeconds = 25.0         // BBC SO streaming flush + RR counter stabilise
+
+            // Per-tuple firing span: rrIterations × iterCycleSec
+            let tupleDurSec = Double(rrIterations) * iterCycleSec
+            // Total firing window: all tuples staggered + last tuple's full span
+            let firingWindowSec = Double(warmupNotes.count) * staggerSec + tupleDurSec
+            let rawDuration = firingWindowSec + 1.0 + settleSeconds  // +1 s decay
             let warmupDuration = min(rawDuration, 120.0)
             let warmupFramesTarget = AVAudioFramePosition(sampleRate * warmupDuration)
 
-            NSLog("[FixB Warmup] Scheduling %d unique notes × %d velocity passes; warmup duration %.2f s (settle=%.0f s)",
-                  warmupNotes.count, numPasses, warmupDuration, settleSeconds)
-            reportStatus("Priming BBC SO samples (four-pass warmup, \(Int(warmupDuration))s)...")
+            NSLog("[RRExhaust Warmup] Scheduling %d tuples × %d iterations @ vel %d; stagger=15ms; settle=%.0fs; total=%.1fs",
+                  warmupNotes.count, rrIterations, warmupVelocity, settleSeconds, warmupDuration)
+            reportStatus("Priming BBC SO RR counter (\(warmupNotes.count) tuples × \(rrIterations) iters, \(Int(warmupDuration))s)...")
 
             // Build per-frame warmup MIDI event schedule.
-            // Two passes: first at vel 40 (pp samples), then at vel 100 (ff samples).
-            // Each note-on fires at its stagger offset; note-off 400 ms later.
+            // Each tuple fires rrIterations note-on/note-off pairs, starting at its stagger offset.
             // All offsets are in frames relative to warmup-render start (frame 0).
             struct WarmupMidiEvent {
                 let frameOffset: AVAudioFramePosition
@@ -5820,12 +5834,13 @@ final class ScoreStore {
                 let midiBytes: [UInt8]
             }
             var warmupEvents: [WarmupMidiEvent] = []
-            for (passIdx, velocity) in warmupVelocities.enumerated() {
-                let passOffsetSec = Double(passIdx) * Double(warmupNotes.count) * staggerSec
-                for (idx, wn) in warmupNotes.enumerated() {
-                    let noteOnFrame  = AVAudioFramePosition((passOffsetSec + Double(idx) * staggerSec) * sampleRate)
-                    let noteOffFrame = AVAudioFramePosition((passOffsetSec + Double(idx) * staggerSec + noteOffDelaySec) * sampleRate)
-                    warmupEvents.append(WarmupMidiEvent(frameOffset: noteOnFrame,  mappingKey: wn.mappingKey, midiBytes: [0x90, wn.pitch, velocity]))
+            for (idx, wn) in warmupNotes.enumerated() {
+                let tupleStartSec = Double(idx) * staggerSec
+                for iter in 0..<rrIterations {
+                    let iterStartSec = tupleStartSec + Double(iter) * iterCycleSec
+                    let noteOnFrame  = AVAudioFramePosition(iterStartSec * sampleRate)
+                    let noteOffFrame = AVAudioFramePosition((iterStartSec + noteDurSec) * sampleRate)
+                    warmupEvents.append(WarmupMidiEvent(frameOffset: noteOnFrame,  mappingKey: wn.mappingKey, midiBytes: [0x90, wn.pitch, warmupVelocity]))
                     warmupEvents.append(WarmupMidiEvent(frameOffset: noteOffFrame, mappingKey: wn.mappingKey, midiBytes: [0x80, wn.pitch, 0]))
                 }
             }
@@ -5887,7 +5902,8 @@ final class ScoreStore {
             }
 
             // Send CC 123 (All Notes Off) + CC 120 (All Sound Off) to every AU,
-            // then render 1000 ms settle silence so all RR voices fully decay.
+            // then render 1000 ms decay silence, then the remaining 25s settle window
+            // (already included in warmupFramesTarget via rawDuration) flushes BBC SO streaming.
             let allNotesOff: [UInt8] = [0xB0, 123, 0]
             let allSoundOff: [UInt8] = [0xB0, 120, 0]
             for (_, auUnit) in auNodes {
@@ -5928,8 +5944,8 @@ final class ScoreStore {
                 }
             }
 
-            NSLog("[FixB Warmup] Complete — %d notes primed, %.2f s warmup. Starting real render.",
-                  warmupNotes.count, warmupDuration)
+            NSLog("[RRExhaust Warmup] Complete — %d tuples × %d iters primed, %.2f s warmup. Starting real render.",
+                  warmupNotes.count, rrIterations, warmupDuration)
         }
 
         // Phase 5: Render offline — stream directly to file
