@@ -5726,7 +5726,9 @@ final class ScoreStore {
         // the new note-on. MIN_GAP is 2× renderBlockSize: one block to ensure the note-off
         // is processed before the note-on block, plus one block for BBC SO's 16-sample
         // internal decay. Total timing advance ≤ 10ms at 256 frames — inaudible.
-        if containsHostedAudioUnits {
+        // AB_EXPERIMENT_RUN_A: Fix C disabled to measure whether early note-offs cause clicks.
+        let fixCEnabled = false
+        if containsHostedAudioUnits && fixCEnabled {
             let minGapFrames = AVAudioFramePosition(renderBlockSize) * 2
             let blockSz = AVAudioFramePosition(renderBlockSize)
 
