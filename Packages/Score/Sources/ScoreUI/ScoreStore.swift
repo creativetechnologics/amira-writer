@@ -5343,12 +5343,14 @@ final class ScoreStore {
     ) -> AVAudioFrameCount {
         switch profile {
         case .standard:
-            // 4096 frames (85ms @ 48kHz). Larger offline render blocks give BBC SO's
-            // disk-streaming engine more time per call to fetch samples, preventing the
-            // buffer-underrun-style zeros/stale-samples that produce audible clicks.
-            return 4096
+            // 256 frames (5.3ms @ 48kHz). BBC SO polarity-flip artifacts are eliminated
+            // by snapping note-on framePositions to block boundaries (see event-building
+            // code in Phase 4), not by increasing block size. Larger blocks (1024, 4096)
+            // produce silent output — BBC SO returns insufficientDataFromInputNode for
+            // every block, advancing currentFrame without writing audio.
+            return 256
         case .conservative:
-            return 4096
+            return 128
         }
     }
 
@@ -6066,13 +6068,6 @@ final class ScoreStore {
             }
         }
 
-        // Fix F: Post-render de-glitch pass for hosted AUs.
-        // BBC SO has a fixed 16-sample internal voice-start latency; when multiple voices
-        // are triggered simultaneously under high polyphony, the new voice appears 16
-        // samples into the render block with a sample value that may be phase-inverted
-        // relative to the existing mix, producing a sharp discontinuity. This pass scans
-        // the rendered WAV for sample-to-sample |Δ| > threshold and applies a short
-        // cosine crossfade window around each spike — inaudible at 32 samples (0.67ms).
         // Release the output file cleanly before returning.
         outputFile = nil
 
