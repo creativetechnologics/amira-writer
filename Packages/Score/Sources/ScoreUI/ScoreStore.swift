@@ -6363,8 +6363,9 @@ final class ScoreStore {
             do {
                 try audioFile.read(into: buffer)
             } catch {
-                NSLog("[Phase1fEnv] rmsEnvelope: read error file=%@ error=%@", url.lastPathComponent, error.localizedDescription)
-                return nil
+                // AVAudioFile throws at EOF — treat as end of stream, not a fatal error.
+                NSLog("[Phase1fEnv] rmsEnvelope: read error (EOF?) file=%@ error=%@", url.lastPathComponent, error.localizedDescription)
+                break
             }
 
             let frameLength = Int(buffer.frameLength)
