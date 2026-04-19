@@ -4910,7 +4910,7 @@ final class ScoreStore {
                     detail: "No hosted-AU offline render profile completed."
                 )
 
-                let realtimeBounds = Self.audioAudibleBounds(at: realtimeURL)
+                let realtimeBounds = await Self.waitForQualificationAudioAudibleBounds(at: realtimeURL)
                 for renderProfile in HostedAudioUnitOfflineRenderProfile.allCases {
                     let offlineURL = tempRoot.appendingPathComponent("\(renderProfile.rawValue).wav")
                     do {
@@ -4956,7 +4956,7 @@ final class ScoreStore {
                     }
 
                     var appliedLeadingAlignmentSeconds = 0.0
-                    let preAlignmentOfflineBounds = Self.audioAudibleBounds(at: offlineURL)
+                    let preAlignmentOfflineBounds = await Self.waitForQualificationAudioAudibleBounds(at: offlineURL)
                     let onsetDeltaBeforeAlignment: Double?
                     let tailDeltaBeforeAlignment: Double?
                     if let realtimeBounds,
@@ -5813,7 +5813,7 @@ final class ScoreStore {
             .joined(separator: ",")
 
         return [
-            "hosted-au-qualification:v10",
+            "hosted-au-qualification:v13",
             projectIdentifier ?? "__unknown_project__",
             songPath ?? "__unsaved__",
             "ticks:\(startTick)-\(endTick)",
@@ -5988,73 +5988,141 @@ final class ScoreStore {
         return Double(file.length) / sampleRate
     }
 
+    private nonisolated static func openAnalysisAudioFile(
+        at url: URL,
+        retries: Int = 8,
+        retryDelayMicroseconds: useconds_t = 20_000
+    ) -> AVAudioFile? {
+        for attempt in 0...retries {
+            if let file = try? AVAudioFile(
+                forReading: url,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            ) {
+                return file
+            }
+
+            if attempt < retries {
+                usleep(retryDelayMicroseconds * useconds_t(attempt + 1))
+            }
+        }
+        return nil
+    }
+
     private nonisolated static func audioActiveDurationSeconds(
         at url: URL,
         silenceThreshold: Float = 1.0e-6
     ) -> Double? {
         guard let bounds = audioAudibleBounds(at: url, silenceThreshold: silenceThreshold),
-              let audioFile = try? AVAudioFile(
-                forReading: url,
-                commonFormat: .pcmFormatFloat32,
-                interleaved: false
-              ) else {
+              let audioFile = openAnalysisAudioFile(at: url) else {
             return nil
         }
         return Double(bounds.last) / audioFile.processingFormat.sampleRate
+    }
+
+    private nonisolated static func waitForAudioAudibleBounds(
+        at url: URL,
+        silenceThreshold: Float = 1.0e-6,
+        attempts: Int = 60,
+        retryDelayNanoseconds: UInt64 = 50_000_000
+    ) async -> (first: AVAudioFramePosition, last: AVAudioFramePosition)? {
+        for attempt in 0..<max(attempts, 1) {
+            if let bounds = audioAudibleBounds(at: url, silenceThreshold: silenceThreshold) {
+                return bounds
+            }
+            guard attempt + 1 < attempts else { break }
+            try? await Task.sleep(nanoseconds: retryDelayNanoseconds)
+        }
+        return nil
+    }
+
+    private nonisolated static func waitForQualificationAudioAudibleBounds(
+        at url: URL,
+        silenceThreshold: Float = 1.0e-6
+    ) async -> (first: AVAudioFramePosition, last: AVAudioFramePosition)? {
+        if let bounds = await waitForAudioAudibleBounds(at: url, silenceThreshold: silenceThreshold) {
+            return bounds
+        }
+
+        let cloneURL = url.deletingLastPathComponent()
+            .appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)-analysis-\(UUID().uuidString).wav")
+
+        do {
+            try FileManager.default.copyItem(at: url, to: cloneURL)
+            defer { try? FileManager.default.removeItem(at: cloneURL) }
+            return await waitForAudioAudibleBounds(at: cloneURL, silenceThreshold: silenceThreshold)
+        } catch {
+            return nil
+        }
     }
 
     private nonisolated static func audioAudibleBounds(
         at url: URL,
         silenceThreshold: Float = 1.0e-6
     ) -> (first: AVAudioFramePosition, last: AVAudioFramePosition)? {
-        guard let audioFile = try? AVAudioFile(
-            forReading: url,
-            commonFormat: .pcmFormatFloat32,
-            interleaved: false
-        ) else {
-            return nil
-        }
-
-        let channelCount = Int(audioFile.processingFormat.channelCount)
-        guard channelCount > 0 else { return nil }
-
-        let chunkCapacity = AVAudioFrameCount(min(max(audioFile.length, 1), 65_536))
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: chunkCapacity) else {
-            return nil
-        }
-
-        var framesRead: AVAudioFramePosition = 0
-        var firstAudibleFrame: AVAudioFramePosition?
-        var lastAudibleFrame: AVAudioFramePosition = 0
-
-        while true {
-            do {
-                try audioFile.read(into: buffer)
-            } catch {
+        for attempt in 0...1 {
+            guard let audioFile = openAnalysisAudioFile(at: url) else {
                 return nil
             }
 
-            let frameLength = Int(buffer.frameLength)
-            guard frameLength > 0, let channelData = buffer.floatChannelData else { break }
+            let channelCount = Int(audioFile.processingFormat.channelCount)
+            guard channelCount > 0 else { return nil }
 
-            for frame in 0..<frameLength {
-                var peak: Float = 0
-                for channel in 0..<channelCount {
-                    peak = max(peak, abs(channelData[channel][frame]))
-                }
-                if peak > silenceThreshold {
-                    if firstAudibleFrame == nil {
-                        firstAudibleFrame = framesRead + AVAudioFramePosition(frame)
-                    }
-                    lastAudibleFrame = framesRead + AVAudioFramePosition(frame + 1)
-                }
+            let chunkCapacity = AVAudioFrameCount(min(max(audioFile.length, 1), 65_536))
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: chunkCapacity) else {
+                return nil
             }
 
-            framesRead += AVAudioFramePosition(frameLength)
-        }
+            var framesRead: AVAudioFramePosition = 0
+            var firstAudibleFrame: AVAudioFramePosition?
+            var lastAudibleFrame: AVAudioFramePosition = 0
+            var hadReadableSamples = false
 
-        guard let firstAudibleFrame else { return nil }
-        return (firstAudibleFrame, lastAudibleFrame)
+            while true {
+                do {
+                    try audioFile.read(into: buffer)
+                } catch {
+                    return nil
+                }
+
+                let frameLength = Int(buffer.frameLength)
+                guard frameLength > 0 else { break }
+                guard let channelData = buffer.floatChannelData else {
+                    if attempt == 0 {
+                        usleep(20_000)
+                        break
+                    }
+                    return nil
+                }
+                hadReadableSamples = true
+
+                for frame in 0..<frameLength {
+                    var peak: Float = 0
+                    for channel in 0..<channelCount {
+                        peak = max(peak, abs(channelData[channel][frame]))
+                    }
+                    if peak > silenceThreshold {
+                        if firstAudibleFrame == nil {
+                            firstAudibleFrame = framesRead + AVAudioFramePosition(frame)
+                        }
+                        lastAudibleFrame = framesRead + AVAudioFramePosition(frame + 1)
+                    }
+                }
+
+                framesRead += AVAudioFramePosition(frameLength)
+            }
+
+            if let firstAudibleFrame {
+                return (firstAudibleFrame, lastAudibleFrame)
+            }
+
+            if attempt == 0 && !hadReadableSamples {
+                usleep(20_000)
+                continue
+            }
+            return nil
+        }
+        return nil
     }
 
     private nonisolated static func shiftAudioFileLeadingFrames(
@@ -6063,11 +6131,9 @@ final class ScoreStore {
     ) throws {
         guard frameOffset != 0 else { return }
 
-        let inputFile = try AVAudioFile(
-            forReading: url,
-            commonFormat: .pcmFormatFloat32,
-            interleaved: false
-        )
+        guard let inputFile = openAnalysisAudioFile(at: url) else {
+            throw ChunkExportError.bufferCreationFailed
+        }
 
         let tempURL = url.deletingLastPathComponent()
             .appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)-shifted-\(UUID().uuidString).wav")
@@ -6171,11 +6237,7 @@ final class ScoreStore {
         at url: URL,
         windowFrames: AVAudioFrameCount
     ) -> [Double]? {
-        guard let audioFile = try? AVAudioFile(
-            forReading: url,
-            commonFormat: .pcmFormatFloat32,
-            interleaved: false
-        ) else {
+        guard let audioFile = openAnalysisAudioFile(at: url) else {
             return nil
         }
         guard let buffer = AVAudioPCMBuffer(
