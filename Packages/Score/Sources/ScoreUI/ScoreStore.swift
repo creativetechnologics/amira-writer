@@ -5992,6 +5992,9 @@ final class ScoreStore {
         var eventIndex = 0
         var trailingSilentFrames: AVAudioFramePosition = 0
 
+        // Phase 1 diagnostic: count status codes across all render blocks
+        var statusCounts = ["success": 0, "insufficientData": 0, "cannotDo": 0, "error": 0, "unknown": 0]
+
         var retryCount = 0
         while currentFrame < AVAudioFramePosition(totalFrames) {
             let framesToRender = min(renderBlockSize, AVAudioFrameCount(AVAudioFramePosition(totalFrames) - currentFrame))
@@ -6033,6 +6036,7 @@ final class ScoreStore {
 
             switch status {
             case .success:
+                statusCounts["success"]! += 1
                 try outputFile!.write(from: outputBuffer)
                 currentFrame += AVAudioFramePosition(outputBuffer.frameLength)
                 retryCount = 0
@@ -6052,17 +6056,21 @@ final class ScoreStore {
                     }
                 }
             case .insufficientDataFromInputNode:
+                statusCounts["insufficientData"]! += 1
                 currentFrame += AVAudioFramePosition(framesToRender)
                 retryCount = 0
             case .cannotDoInCurrentContext:
+                statusCounts["cannotDo"]! += 1
                 retryCount += 1
                 guard retryCount < 1000 else {
                     throw ChunkExportError.bufferCreationFailed
                 }
                 try await Task.sleep(nanoseconds: 1_000_000)
             case .error:
+                statusCounts["error"]! += 1
                 throw ChunkExportError.bufferCreationFailed
             @unknown default:
+                statusCounts["unknown"]! += 1
                 currentFrame += AVAudioFramePosition(framesToRender)
                 retryCount = 0
             }
@@ -6070,6 +6078,12 @@ final class ScoreStore {
 
         // Release the output file cleanly before returning.
         outputFile = nil
+
+        // Phase 1 diagnostic: report how many times each renderOffline status fired
+        let totalBlocks = statusCounts.values.reduce(0, +)
+        NSLog("[OfflineRender] status counts: success=%d insufficientData=%d cannotDo=%d error=%d unknown=%d totalBlocks=%d",
+              statusCounts["success"]!, statusCounts["insufficientData"]!, statusCounts["cannotDo"]!,
+              statusCounts["error"]!, statusCounts["unknown"]!, totalBlocks)
 
         // Wall-clock performance log — key metric for faster-than-realtime validation
         let offlineRenderWallElapsed = Date().timeIntervalSince(offlineRenderWallStart)
