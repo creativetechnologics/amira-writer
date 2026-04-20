@@ -1427,25 +1427,20 @@ final class ScoreStore {
         sunoSelectedPromptPresetID = preset.id
     }
 
-    /// Returns the Mix flat-export WAV URL and modification date for a song, or nil if it doesn't exist.
+    /// Returns the Mix export WAV URL and modification date for a song, or nil if it doesn't exist.
+    /// Mirrors `mixExportURL(for:)` exactly — same project root, same `Mix/exports/` dir, same
+    /// displayName-based sanitizer (`[^A-Za-z0-9_-]+` → `_`, trimmed of leading/trailing `_`).
     func sunoMixExportInfo(for relativePath: String) -> (url: URL, modifiedAt: Date)? {
-        let sourceURL = workingProjectURL ?? projectURL
-        guard let sourceURL else { return nil }
-        let projectRoot: URL = {
-            if sourceURL.pathExtension.lowercased() == "ows" {
-                let songsDirectory = sourceURL.deletingLastPathComponent()
-                if songsDirectory.lastPathComponent == "Songs" {
-                    return songsDirectory.deletingLastPathComponent()
-                }
-                return songsDirectory
-            }
-            return sourceURL
-        }()
-        let slug = relativePath
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: ".json", with: "")
-        let wavURL = projectRoot.appendingPathComponent("Animate/audio", isDirectory: true)
-            .appendingPathComponent("\(slug)-flat.wav")
+        guard let projectRoot = workingProjectURL ?? projectURL else { return nil }
+        guard let asset = songAssets.first(where: { $0.relativePath == relativePath }) else {
+            return nil
+        }
+        let raw = asset.displayName
+            .replacingOccurrences(of: "[^A-Za-z0-9_-]+", with: "_", options: .regularExpression)
+        let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        let safeName = trimmed.isEmpty ? "untitled" : trimmed
+        let wavURL = projectRoot.appendingPathComponent("Mix/exports", isDirectory: true)
+            .appendingPathComponent("\(safeName).wav")
         let fm = FileManager.default
         guard fm.fileExists(atPath: wavURL.path),
               let attrs = try? fm.attributesOfItem(atPath: wavURL.path),
