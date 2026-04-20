@@ -78,8 +78,7 @@ rtk Scripts/cleanup-opera-cache.sh --project "$HOME/Documents/Amira - A Modern O
 
 Agents and external tools that need to drive the app should read [`docs/API.md`](docs/API.md). It documents:
 
-- The HTTP JSON API on `localhost:19847` (activates once the Score page is loaded) — ~60 endpoints for songs, notes, tempo, playback, export, mixer, versions.
-- The headless full-mix WAV export via env vars on the app bundle (see also [`docs/HOW-TO-EXPORT-WAV.md`](docs/HOW-TO-EXPORT-WAV.md)).
+- The HTTP JSON API on `localhost:19847` (activates once the Score page is loaded) — ~60 endpoints for songs, notes, tempo, playback, export, mixer, versions. **This is the supported WAV-export path for agents: drive the open app.**
 - Forbidden paths (e.g. the `Score` package binary, which only produces sine tones).
 
 ## Important Note

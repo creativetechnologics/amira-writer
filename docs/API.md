@@ -1,13 +1,14 @@
 # Amira Writer API
 
-Canonical reference for programs and agents that need to drive Amira Writer without a human at the keyboard. There are **two** programmatic interfaces. Pick the one that fits the job:
+Canonical reference for programs and agents that need to drive Amira Writer without a human at the keyboard. The supported surface is the HTTP JSON API on `localhost:19847`, reachable once the app is open and on the Score page.
 
 | Interface | When to use | Surface |
 |-----------|-------------|---------|
-| [HTTP JSON API on `localhost:19847`](#1-http-json-api-localhost19847) | Inspecting / editing / playing back a project in an **already-running app instance** | ~60 endpoints covering songs, notes, tracks, tempo, playback, export, mixer, versions, audio units |
-| [Headless full-mix WAV export](#2-headless-full-mix-wav-export-env-var-interface) | Rendering a song to WAV from a **headless script** (no UI interaction) | `open -W -n --env AMIRA_HEADLESS_FULLMIX_EXPORT=...` on the app bundle |
+| [HTTP JSON API on `localhost:19847`](#1-http-json-api-localhost19847) | Inspecting / editing / playing back / WAV-exporting in an **already-running app instance** | ~60 endpoints covering songs, notes, tracks, tempo, playback, export, mixer, versions, audio units |
 
-Both interfaces drive the full Opera app with BBC SO / SF2 instruments. **Do not** use `Scripts/export-headless-wav.sh` or the `Score` package binary for real exports — that binary produces sine tones only, not AudioUnit audio. See [Forbidden paths](#forbidden-paths).
+For WAV export specifically, use `POST /api/export/wav` against the running app. The env-var headless full-mix path (`AMIRA_HEADLESS_FULLMIX_EXPORT`) was documented once and retired — it did not work reliably end-to-end from an agent context. Drive the open app instead.
+
+**Do not** use `Scripts/export-headless-wav.sh` or the `Score` package binary for real exports — that binary produces sine tones only, not AudioUnit audio. See [Forbidden paths](#forbidden-paths).
 
 ---
 
@@ -189,66 +190,11 @@ Swift-side types live in `Packages/Score/Sources/ScoreUI/Services/APITypes.swift
 
 ---
 
-## 2. Headless full-mix WAV export (env-var interface)
+## 2. WAV export via the HTTP API
 
-For producing a clean, click-free full-mix WAV of a song with BBC Symphony Orchestra AudioUnits **without** requiring the app to already be running on the Score page. This is a launch-the-bundle-with-env-vars workflow; the app boots headless, loads the project, renders the song, writes the WAV, and terminates itself.
+Use `POST /api/export/wav` against the running app. **Always `POST /api/song/select` first**, then re-read `/api/status` afterward to confirm `selectedSongPath` matches what you intended. Skipping the select step exports whatever song happens to be active — usually the first one, which is the #1 cause of repeated first-song exports.
 
-**Canonical doc:** [`docs/HOW-TO-EXPORT-WAV.md`](HOW-TO-EXPORT-WAV.md) — read it in full before invoking. It explains song-hint traps (`"Finale"` ≠ Johnny's Goodbye Finale), the flaky XPC cold start (retry once), the verification checklist, and the hard constraints (no BBC SO patches, no SF2 fallback, no post-hoc WAV repair).
-
-### Environment variables
-
-Consumed by `Sources/Opera/OperaApp.swift` → `applicationDidFinishLaunching` and dispatched to `ScoreBootstrap.runHeadlessFullMixExport(outputURL:songHint:)`.
-
-| Env var | Purpose | Default |
-|---------|---------|---------|
-| `AMIRA_HEADLESS_FULLMIX_EXPORT` | Absolute path for output WAV. **Presence of this var triggers headless export mode.** | unset → GUI mode |
-| `AMIRA_HEADLESS_FULLMIX_SONG` | Song name hint. Substring match against `relativePath` or `displayName`. Use a unique substring — `"Finale"` matches `1.28.0 - Something More (Act I Finale)`, not Johnny's Goodbye. | unset → first song in project |
-| `AMIRA_HEADLESS_LOG_FILE` | Absolute path for dup2'd stderr / `NSLog` output — this is where you read markers from. | `<output>.headless-log.txt` |
-| `AMIRA_HEADLESS_FORCE_OFFLINE` | Skip qualification, force offline render path. | **Do not set.** Offline has audible click artifacts; the realtime+4096-buffer path is the shipping config. |
-| `AMIRA_EXPORT_THROTTLE_SPEED` | Per-block sleep cap for offline render (e.g. `5.0`). | **Do not set.** Only affects the abandoned offline path. |
-
-### Invocation template
-
-```bash
-TS=$(date +%Y%m%d-%H%M%S)
-OUT="/Users/gary/Desktop/${SONG_SLUG}-${TS}.wav"
-LOG="/Users/gary/Desktop/${SONG_SLUG}-${TS}.log"
-
-open -W -n \
-  --env "AMIRA_HEADLESS_FULLMIX_EXPORT=$OUT" \
-  --env "AMIRA_HEADLESS_FULLMIX_SONG=$SONG_HINT" \
-  --env "AMIRA_HEADLESS_LOG_FILE=$LOG" \
-  "/Volumes/Storage VIII/Programming/!Applications/Amira Writer.app"
-```
-
-- `open -W` blocks until the app quits (the headless hook terminates it after export).
-- `open -n` forces a fresh instance (the user may already have the GUI app open).
-- `--env` injects env vars into the launched process. **`launchctl setenv` does not propagate to apps launched via LaunchServices — do not use it.**
-
-### Verification
-
-After `open` returns:
-
-1. File exists and is non-zero: `ls -la "$OUT"`
-2. Duration matches expected: `afinfo "$OUT" | head -15` (expect `2 ch, 48000 Hz, Float32, interleaved`)
-3. Log shows success: `grep -E "resolved song|done status" "$LOG"` — expect `[HeadlessFullMix] done status=success bytes=<N> path=<OUT>`
-4. Click-free buffer confirmed: log contains `[ExportBuffer] entered export mode, bufferSize=4096 frames (was 512)`
-5. **`resolved song` matches the song you asked for.** Do not skip this. A successful export of the wrong song is a real failure mode (see below).
-
-Validate end-to-end before asking a human to listen.
-
-### Exporting multiple songs — do not repeat the first song
-
-Previous agents have silently exported the first song in the project over and over while believing they were advancing through a list. Defend against it explicitly:
-
-- `AMIRA_HEADLESS_FULLMIX_SONG` is **required** to target anything other than song index 0. An unset, empty, or non-matching hint falls back to the first song — every time. This is the #1 cause of repeated first-song exports.
-- Each `open -W -n` invocation exports **exactly one song**. There is no batch mode. For N songs, launch N times with different `AMIRA_HEADLESS_FULLMIX_SONG` **and** different `AMIRA_HEADLESS_FULLMIX_EXPORT` paths.
-- Use a unique, specific hint per song (full `relativePath` or a distinctive substring like `"Johnny's Goodbye"`). Avoid generic substrings like `"Finale"` that collide with earlier songs.
-- **`grep "resolved song" "$LOG"` after every run** and compare against the requested hint. File size / duration / `done status=success` can all be green while the wrong song is in the WAV.
-- Encode the intended song in the output filename (`overture-…wav`, `johnnys-goodbye-…wav`) so a misrouted export is visible in `ls`.
-- If two consecutive runs meant to be different songs produce the same `resolved song:` line, **stop and diagnose.** Do not launch a third run.
-
-For HTTP-API-driven exports (`POST /api/export/wav`), the equivalent rule is: **always `POST /api/song/select` before `POST /api/export/wav`, and re-read `/api/status` afterward to confirm `selectedSongPath` matches what you intended.** Skipping the select step exports whatever song happens to be active — usually the first one.
+Validate end-to-end (response status, file exists, duration plausible, selected-song matches the request) before asking a human to listen.
 
 ---
 
@@ -269,7 +215,5 @@ The following exist in the tree but **must not be used for real exports**:
 - HTTP router: `Packages/Score/Sources/ScoreUI/Services/APIRouter.swift`
 - HTTP request/response types: `Packages/Score/Sources/ScoreUI/Services/APITypes.swift`
 - Server lifecycle: `ScoreStore.startAPIServer()` / `stopAPIServer()` in `Packages/Score/Sources/ScoreUI/ScoreStore.swift`
-- Headless export entry point: `Packages/Score/Sources/ScoreUI/ScoreBootstrap.swift` → `runHeadlessFullMixExport(outputURL:songHint:)`
-- Env var dispatch: `Sources/Opera/OperaApp.swift` → `applicationDidFinishLaunching`
 - Realtime render path (click-free shipping path): `ScoreStore.renderChunkToWavViaPlaybackEngine`
 - Export buffer fix: `Packages/Score/Sources/ScoreUI/Services/MIDIPlaybackEngine.swift` → `enterExportMode` / `leaveExportMode`
