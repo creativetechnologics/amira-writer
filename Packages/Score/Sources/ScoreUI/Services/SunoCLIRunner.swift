@@ -14,7 +14,7 @@ enum SunoCLIError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notInstalled(let path):
-            return "Suno CLI not found at \(path). Install it via the SunoSkill venv."
+            return "Suno CLI not found at \(path). Rebuild the venv: bash \"/Volumes/Storage VIII/Programming/Amira Writer/Scripts/setup-suno-cli.sh\"."
         case .captcha(let message):
             return "Suno CAPTCHA required: \(message)"
         case .authFailure(let message):
@@ -60,6 +60,12 @@ final class SunoCLIRunner {
     // MARK: - Config (UserDefaults)
 
     static let defaultCLIPath = "/Volumes/Storage VIII/Programming/SunoSkill/suno_cli/.venv/bin/suno"
+
+    /// Shared Playwright browser cache on Storage VIII so both of Gary's Macs
+    /// use the same Chromium install. Populated by `Scripts/setup-suno-cli.sh`.
+    /// Corresponds to `PLAYWRIGHT_BROWSERS_PATH` env var consumed by the
+    /// `playwright` Python package inside the suno CLI venv.
+    static let defaultPlaywrightBrowsersPath = "/Volumes/Storage VIII/Programming/SunoSkill/.ms-playwright"
 
     static let defaultProfileDir: String = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -249,6 +255,13 @@ final class SunoCLIRunner {
             let currentPath = env["PATH"] ?? "/usr/bin:/bin"
             env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
             env["NOVOTRO_SCORE"] = "1"
+            // Point Playwright at the shared Storage VIII Chromium cache so
+            // the CLI works on both of Gary's Macs without per-machine
+            // `playwright install` steps. Respect an existing override if
+            // Gary has set one intentionally.
+            if env["PLAYWRIGHT_BROWSERS_PATH"] == nil {
+                env["PLAYWRIGHT_BROWSERS_PATH"] = Self.defaultPlaywrightBrowsersPath
+            }
             process.environment = env
 
             let stdoutPipe = Pipe()
