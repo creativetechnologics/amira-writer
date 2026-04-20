@@ -1,3 +1,4 @@
+import ProjectKit
 import SwiftUI
 #if canImport(AppKit)
 import AppKit
@@ -268,7 +269,7 @@ struct FilesInspectorView: View {
 
         // Embedded SoundFonts from OWP bundle
         if let projectURL = store.projectURL {
-            let sfDir = projectURL.appendingPathComponent("SoundFonts")
+            let sfDir = ProjectPaths(root: projectURL).soundFonts
             if let contents = try? FileManager.default.contentsOfDirectory(
                 at: sfDir, includingPropertiesForKeys: [.fileSizeKey]
             ) {

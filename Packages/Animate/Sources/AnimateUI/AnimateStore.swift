@@ -2900,10 +2900,8 @@ final class AnimateStore {
 
     private func discoveredInspirationBatchJobsOnDisk(for character: AnimationCharacter) -> [CharacterInspirationBatchJob] {
         guard let animateURL else { return [] }
-        let batchesRoot = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(character.assetFolderSlug)
-            .appendingPathComponent("inspiration-batches")
+        let batchesRoot = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterInspirationBatches(slug: character.assetFolderSlug)
         guard let enumerator = FileManager.default.enumerator(
             at: batchesRoot,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -3840,7 +3838,7 @@ final class AnimateStore {
         var snapshots: [String: AnimateExternalFileSnapshot] = [:]
 
         let enumerator = FileManager.default.enumerator(
-            at: projectURL.appendingPathComponent("Songs"),
+            at: ProjectPaths(root: projectURL).songs,
             includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         )
@@ -3878,7 +3876,7 @@ final class AnimateStore {
         }
 
         let batchEnumerator = FileManager.default.enumerator(
-            at: projectURL.appendingPathComponent("Animate/characters"),
+            at: ProjectPaths(root: projectURL).animateCharacters,
             includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         )
@@ -3892,7 +3890,7 @@ final class AnimateStore {
         }
 
         let placeBatchEnumerator = FileManager.default.enumerator(
-            at: projectURL.appendingPathComponent("Animate/backgrounds/place-batches"),
+            at: ProjectPaths(root: projectURL).animatePlaceBatches,
             includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         )
@@ -4021,7 +4019,7 @@ final class AnimateStore {
 
                     let selectedScene = self.selectedScene
                     if let animateDir = self.animateURL {
-                        let backgroundDir = animateDir.appendingPathComponent("backgrounds")
+                        let backgroundDir = ProjectPaths(root: animateDir.deletingLastPathComponent()).animateBackgrounds
                         self.backgrounds = (try? self.loadPlaces(from: animateDir, backgroundDirectoryURL: backgroundDir)) ?? []
                         self.placesWorkflowLibrary = self.hydratedPlacesWorkflowLibrary(
                             self.loadPlacesWorkflowLibrary(from: animateDir)
@@ -4040,7 +4038,7 @@ final class AnimateStore {
             case ProjectDatabaseBridge.animatePlacesPath, ProjectDatabaseBridge.animatePlacesWorkflowPath:
                 await MainActor.run {
                     guard let animateDir = self.animateURL else { return }
-                    let backgroundDir = animateDir.appendingPathComponent("backgrounds")
+                    let backgroundDir = ProjectPaths(root: animateDir.deletingLastPathComponent()).animateBackgrounds
                     self.backgrounds = (try? self.loadPlaces(from: animateDir, backgroundDirectoryURL: backgroundDir)) ?? []
                     self.placesWorkflowLibrary = self.hydratedPlacesWorkflowLibrary(
                         self.loadPlacesWorkflowLibrary(from: animateDir)
@@ -4052,14 +4050,14 @@ final class AnimateStore {
                 }
             case ProjectDatabaseBridge.characterPackageSelectionsPath:
                 let manifest = characterPackageSelectionStore
-                    .load(from: projectURL.appendingPathComponent("Animate"))
+                    .load(from: ProjectPaths(root: projectURL).animate)
                 await MainActor.run {
                     self.activePackageIDsByCharacterSlug = manifest.activePackageIDsByCharacterSlug
                     self.markAgentUpdated()
                     self.statusMessage = "Reloaded external project changes"
                 }
             case ProjectDatabaseBridge.shotPresetsPath:
-                let manifest = sceneShotPresetStore.load(from: projectURL.appendingPathComponent("Animate"))
+                let manifest = sceneShotPresetStore.load(from: ProjectPaths(root: projectURL).animate)
                 await MainActor.run {
                     self.shotPresets = self.sortedShotPresets(manifest.presets)
                     self.markAgentUpdated()
@@ -4154,7 +4152,7 @@ final class AnimateStore {
         backgroundIndexRefreshTask?.cancel()
         generatedBackgroundLibraryRefreshRequestID &+= 1
         let requestID = generatedBackgroundLibraryRefreshRequestID
-        let backgroundsRootPath = animateURL.appendingPathComponent("backgrounds").path
+        let backgroundsRootPath = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateBackgrounds.path
         let projectRootPath = animateURL.deletingLastPathComponent().path
         let characterTerms = knownGeneratedBackgroundCharacterTerms()
         let cachedFingerprints = generatedBackgroundFingerprintCache
@@ -5021,14 +5019,14 @@ final class AnimateStore {
             //     are read from / written to <project>/config/api-credentials.json.
             //     Syncthing replicates the file between machines.
             ProjectCredentialStore.shared.setActiveProject(effectiveProjectURL)
-            AppLog.log("STARTUP", "Credentials: project store active at \(effectiveProjectURL.appendingPathComponent("config/api-credentials.json").path)")
+            AppLog.log("STARTUP", "Credentials: project store active at \(ProjectPaths(root: effectiveProjectURL).apiCredentialsJSON.path)")
             hydrateGeminiSettings()
             hydrateMiniMaxSettings()
             hydrateViduSettings()
             hydrateRunPodSettings()
 
             // 2. Ensure Animate/ directory exists
-            let animateDir = effectiveProjectURL.appendingPathComponent("Animate")
+            let animateDir = ProjectPaths(root: effectiveProjectURL).animate
             if hasLocalMirror, !fm.fileExists(atPath: animateDir.path) {
                 try fm.createDirectory(at: animateDir, withIntermediateDirectories: true)
             }
@@ -5154,7 +5152,7 @@ final class AnimateStore {
             }
 
             // 7. Load backgrounds from Animate/backgrounds/
-            let bgDir = animateDir.appendingPathComponent("backgrounds")
+            let bgDir = ProjectPaths(root: animateDir.deletingLastPathComponent()).animateBackgrounds
             if hasLocalMirror, fm.fileExists(atPath: bgDir.path) {
                 backgrounds = try loadPlaces(from: animateDir, backgroundDirectoryURL: bgDir)
             } else {
@@ -5247,6 +5245,7 @@ final class AnimateStore {
             return
         }
         guard let animateDir = animateURL else { return }
+        let savePaths = ProjectPaths(root: animateDir.deletingLastPathComponent())
         saveIndicator = .saving
 
         do {
@@ -5260,7 +5259,7 @@ final class AnimateStore {
             // Write animate.json
             if let metadata = animateMetadata {
                 let data = try encoder.encode(metadata)
-                try data.write(to: animateDir.appendingPathComponent("animate.json"))
+                try data.write(to: savePaths.animateJSON)
             }
 
             // Write scenes.json — convert AnimationScene → AnimateSceneData
@@ -5284,17 +5283,15 @@ final class AnimateStore {
                 )
             }
             let scenesJSON = try encoder.encode(sceneData)
-            try scenesJSON.write(to: animateDir.appendingPathComponent("scenes.json"))
+            try scenesJSON.write(to: savePaths.animateScenesJSON)
 
             // Save each character state to Animate/characters/{slug}/rig.json
             for character in characters {
                 let persisted = persistedCharacter(character)
-                let charDir = animateDir
-                    .appendingPathComponent("characters")
-                    .appendingPathComponent(character.assetFolderSlug)
+                let charDir = savePaths.characterFolder(slug: character.assetFolderSlug)
                 try fm.createDirectory(at: charDir, withIntermediateDirectories: true)
                 let rigData = try encoder.encode(persistedCharacter(character))
-                try rigData.write(to: charDir.appendingPathComponent("rig.json"))
+                try rigData.write(to: savePaths.characterRigJSON(slug: character.assetFolderSlug))
             }
 
             try characterPackageSelectionStore.save(
@@ -5312,11 +5309,11 @@ final class AnimateStore {
             let effectiveProjectURL = workingOWPURL ?? owpURL ?? animateDir.deletingLastPathComponent()
             if writePlaces {
                 let placesData = try encoder.encode(backgrounds.map(persistedBackgroundPlate))
-                try writeProtectedData(placesData, to: animateDir.appendingPathComponent("places.json"))
+                try writeProtectedData(placesData, to: savePaths.animatePlacesJSON)
                 let placesWorkflowData = try encoder.encode(persistedPlacesWorkflowLibrary(placesWorkflowLibrary))
-                try writeProtectedData(placesWorkflowData, to: animateDir.appendingPathComponent("places-workflow.json"))
+                try writeProtectedData(placesWorkflowData, to: savePaths.animatePlacesWorkflowJSON)
                 let worldContextData = try encoder.encode(placesWorldContextBlocks)
-                try writeProtectedData(worldContextData, to: animateDir.appendingPathComponent("places-world-context.json"))
+                try writeProtectedData(worldContextData, to: savePaths.animate.appendingPathComponent("places-world-context.json"))
                 let reviewStateLibrary = rebuiltGeneratedBackgroundReviewStateLibrary(
                     from: placesWorkflowLibrary.generatedImageRecords,
                     existing: self.placesGeneratedReviewStateLibrary
@@ -5448,7 +5445,7 @@ final class AnimateStore {
 
     /// URL for an OWP character's image directory.
     func owpCharacterImageDirectory(for character: OPWCharacter) -> URL? {
-        fileOWPURL?.appendingPathComponent("Characters").appendingPathComponent(character.directoryName)
+        fileOWPURL.map { ProjectPaths(root: $0).characters.appendingPathComponent(character.directoryName) }
     }
 
     /// Find the OWP character data that corresponds to an AnimationCharacter.
@@ -5641,10 +5638,8 @@ final class AnimateStore {
         // Copy file into Animate/characters/{slug}/parts/
         if let animateDir = animateURL {
             let character = characters[charIndex]
-            let partsDir = animateDir
-                .appendingPathComponent("characters")
-                .appendingPathComponent(character.assetFolderSlug)
-                .appendingPathComponent("parts")
+            let partsDir = ProjectPaths(root: animateDir.deletingLastPathComponent())
+                .characterParts(slug: character.assetFolderSlug)
 
             do {
                 try FileManager.default.createDirectory(at: partsDir, withIntermediateDirectories: true)
@@ -5681,14 +5676,15 @@ final class AnimateStore {
               let character = characters.first(where: { $0.id == characterID })
         else { return }
 
-        let charDir = animateDir.appendingPathComponent("characters").appendingPathComponent(character.assetFolderSlug)
+        let charPaths = ProjectPaths(root: animateDir.deletingLastPathComponent())
+        let charDir = charPaths.characterFolder(slug: character.assetFolderSlug)
 
         do {
             try FileManager.default.createDirectory(at: charDir, withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(persistedCharacter(character))
-            try data.write(to: charDir.appendingPathComponent("rig.json"))
+            try data.write(to: charPaths.characterRigJSON(slug: character.assetFolderSlug))
             statusMessage = "Saved rig for \(character.name)"
         } catch {
             statusMessage = "Error saving rig: \(error.localizedDescription)"
@@ -5860,10 +5856,8 @@ final class AnimateStore {
 
         let character = characters.first { $0.id == characterID }
         let slug = character?.assetFolderSlug ?? "unknown"
-        let stagingDir = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(slug)
-            .appendingPathComponent("profile-staging")
+        let stagingDir = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterProfileStaging(slug: slug)
 
         do {
             try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
@@ -6119,8 +6113,9 @@ final class AnimateStore {
     private func migrateCharacterDirectoryIfNeeded(fromSlug oldSlug: String, toSlug newSlug: String) {
         guard let animateDir = animateURL else { return }
         let fileManager = FileManager.default
-        let oldDirectory = animateDir.appendingPathComponent("characters").appendingPathComponent(oldSlug)
-        let newDirectory = animateDir.appendingPathComponent("characters").appendingPathComponent(newSlug)
+        let migratePaths = ProjectPaths(root: animateDir.deletingLastPathComponent())
+        let oldDirectory = migratePaths.characterFolder(slug: oldSlug)
+        let newDirectory = migratePaths.characterFolder(slug: newSlug)
         guard fileManager.fileExists(atPath: oldDirectory.path),
               !fileManager.fileExists(atPath: newDirectory.path) else {
             return
@@ -6225,15 +6220,10 @@ final class AnimateStore {
         }
 
         if let animateDir = animateURL {
-            let oldAbsolutePrefix = animateDir
-                .appendingPathComponent("characters")
-                .appendingPathComponent(oldSlug)
-                .path + "/"
+            let renamePaths = ProjectPaths(root: animateDir.deletingLastPathComponent())
+            let oldAbsolutePrefix = renamePaths.characterFolder(slug: oldSlug).path + "/"
             if path.hasPrefix(oldAbsolutePrefix) {
-                let newAbsolutePrefix = animateDir
-                    .appendingPathComponent("characters")
-                    .appendingPathComponent(newSlug)
-                    .path + "/"
+                let newAbsolutePrefix = renamePaths.characterFolder(slug: newSlug).path + "/"
                 return newAbsolutePrefix + path.dropFirst(oldAbsolutePrefix.count)
             }
         }
@@ -6316,10 +6306,8 @@ final class AnimateStore {
             return nil
         }
 
-        let directory = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(characters[index].assetFolderSlug)
-            .appendingPathComponent("lora")
+        let directory = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterLora(slug: characters[index].assetFolderSlug)
 
         if createIfNeeded {
             do {
@@ -6692,8 +6680,8 @@ final class AnimateStore {
         let filename = "\(filenameStem)-\(timestamp).png"
         let placeSlug = PlacesScriptIndexService.fileStem(for: backgrounds[placeIndex].name)
         let category = workflow == .photorealistic ? "photoreal" : "animated"
-        let directory = animateURL
-            .appendingPathComponent("backgrounds")
+        let directory = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .animateBackgrounds
             .appendingPathComponent("places")
             .appendingPathComponent(placeSlug)
             .appendingPathComponent(category)
@@ -6745,8 +6733,8 @@ final class AnimateStore {
         imageSize: String
     ) throws -> String {
         let animateURL = try requireAnimateURL()
-        let directory = animateURL
-            .appendingPathComponent("backgrounds")
+        let directory = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .animateBackgrounds
             .appendingPathComponent("_map3d-captures")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
@@ -10032,7 +10020,7 @@ final class AnimateStore {
         backgroundIndexRefreshTask = nil
         generatedBackgroundLibraryRefreshRequestID &+= 1
         let scan = Self.scanGeneratedBackgroundLibrary(
-            backgroundsRootPath: animateURL.appendingPathComponent("backgrounds").path,
+            backgroundsRootPath: ProjectPaths(root: animateURL.deletingLastPathComponent()).animateBackgrounds.path,
             projectRootPath: animateURL.deletingLastPathComponent().path,
             characterTerms: knownGeneratedBackgroundCharacterTerms(),
             cachedFingerprints: generatedBackgroundFingerprintCache
@@ -10412,9 +10400,7 @@ final class AnimateStore {
         imageSize: String
     ) throws -> String {
         let animateURL = try requireAnimateURL()
-        let directory = animateURL
-            .appendingPathComponent("backgrounds")
-            .appendingPathComponent("library-edits")
+        let directory = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateBackgroundLibraryEdits
             .appendingPathComponent(recordID.uuidString.lowercased())
             .appendingPathComponent(workflow.rawValue)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -10505,9 +10491,7 @@ final class AnimateStore {
 
         let animateURL = try requireAnimateURL()
         let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
-        let outputRoot = animateURL
-            .appendingPathComponent("backgrounds")
-            .appendingPathComponent("library-edits")
+        let outputRoot = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateBackgroundLibraryEdits
             .appendingPathComponent("batches")
             .appendingPathComponent("\(timestamp)-\(workflow.rawValue)-edits", isDirectory: true)
         try FileManager.default.createDirectory(at: outputRoot, withIntermediateDirectories: true)
@@ -10625,7 +10609,7 @@ final class AnimateStore {
 
     private func scannedGeneratedBackgroundPaths() -> [String] {
         guard let animateURL else { return [] }
-        let backgroundsRoot = animateURL.appendingPathComponent("backgrounds")
+        let backgroundsRoot = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateBackgrounds
         guard FileManager.default.fileExists(atPath: backgroundsRoot.path) else { return [] }
 
         let urls = assetManager.listImages(in: backgroundsRoot)
@@ -13058,7 +13042,7 @@ final class AnimateStore {
         backgroundDirectoryURL: URL
     ) throws -> [BackgroundPlate] {
         let synthesized = try loadBackgrounds(from: backgroundDirectoryURL)
-        let manifestURL = animateDir.appendingPathComponent("places.json")
+        let manifestURL = ProjectPaths(root: animateDir.deletingLastPathComponent()).animatePlacesJSON
         guard FileManager.default.fileExists(atPath: manifestURL.path),
               let data = try? Data(contentsOf: manifestURL),
               let decoded = try? JSONDecoder().decode([BackgroundPlate].self, from: data) else {
@@ -13084,7 +13068,7 @@ final class AnimateStore {
     }
 
     private func loadPlacesWorkflowLibrary(from animateDir: URL) -> PlacesWorkflowLibrary {
-        let libraryURL = animateDir.appendingPathComponent("places-workflow.json")
+        let libraryURL = ProjectPaths(root: animateDir.deletingLastPathComponent()).animatePlacesWorkflowJSON
         placesWorldMapCanonLibrary = loadPlacesWorldMapCanonLibrary(from: animateDir)
         placesGeneratedReviewStateLibrary = loadGeneratedBackgroundReviewStateLibrary(from: animateDir)
         guard FileManager.default.fileExists(atPath: libraryURL.path),
@@ -13112,7 +13096,7 @@ final class AnimateStore {
     }
 
     func loadPlacesWorldContextBlocks(from animateDir: URL) -> PlacesWorldContextBlocks {
-        let url = animateDir.appendingPathComponent("places-world-context.json")
+        let url = ProjectPaths(root: animateDir.deletingLastPathComponent()).animate.appendingPathComponent("places-world-context.json")
         guard FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode(PlacesWorldContextBlocks.self, from: data) else {
@@ -13263,7 +13247,7 @@ final class AnimateStore {
     }
 
     private func placesGeneratedReviewStateURL(in animateDir: URL) -> URL {
-        animateDir.appendingPathComponent("places-generated-review-state.json")
+        ProjectPaths(root: animateDir.deletingLastPathComponent()).animatePlacesGeneratedReviewStateJSON
     }
 
     private func normalizePlaceLandmarkProfile(_ profile: PlaceLandmarkProfile) -> PlaceLandmarkProfile {
@@ -13288,7 +13272,7 @@ final class AnimateStore {
     }
 
     private func placesGeneratedReviewEventsURL(in animateDir: URL) -> URL {
-        animateDir.appendingPathComponent("places-generated-review-events.jsonl")
+        ProjectPaths(root: animateDir.deletingLastPathComponent()).animatePlacesGeneratedReviewEventsJSONL
     }
 
     private func siblingPreviousJSONURL(for url: URL) -> URL {
@@ -13336,7 +13320,7 @@ final class AnimateStore {
     }
 
     private func placesWorldMapCanonURL(in animateDir: URL) -> URL {
-        animateDir.appendingPathComponent("places-world-map-canon.json")
+        ProjectPaths(root: animateDir.deletingLastPathComponent()).animatePlacesWorldMapCanonJSON
     }
 
     private func loadPlacesWorldMapCanonLibrary(from animateDir: URL) -> PlacesWorldMapCanonLibrary {
@@ -14017,9 +14001,7 @@ final class AnimateStore {
 
     private func discoveredPlaceWorldGenerationBatchesOnDisk() -> [PlaceWorldGenerationBatch] {
         guard let animateURL else { return [] }
-        let batchesRoot = animateURL
-            .appendingPathComponent("backgrounds")
-            .appendingPathComponent("place-batches")
+        let batchesRoot = ProjectPaths(root: animateURL.deletingLastPathComponent()).animatePlaceBatches
         guard let enumerator = FileManager.default.enumerator(
             at: batchesRoot,
             includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
@@ -14497,7 +14479,7 @@ final class AnimateStore {
 
     private func persistedCharacterRigURLsOnDisk() -> [URL] {
         guard let animateURL else { return [] }
-        let charactersDirectory = animateURL.appendingPathComponent("characters")
+        let charactersDirectory = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateCharacters
         guard let items = try? FileManager.default.contentsOfDirectory(
             at: charactersDirectory,
             includingPropertiesForKeys: [.isDirectoryKey],
@@ -14519,10 +14501,8 @@ final class AnimateStore {
     private func characterRigURL(for slug: String) -> URL? {
         var directURL: URL?
         if let animateURL {
-            let candidate = animateURL
-                .appendingPathComponent("characters")
-                .appendingPathComponent(slug)
-                .appendingPathComponent("rig.json")
+            let candidate = ProjectPaths(root: animateURL.deletingLastPathComponent())
+                .characterRigJSON(slug: slug)
             if FileManager.default.fileExists(atPath: candidate.path) {
                 directURL = candidate
             }
@@ -14580,6 +14560,7 @@ final class AnimateStore {
         originalData: Data,
         originalSchemaVersion: Int
     ) throws -> URL {
+        // backups/ lives next to rig.json inside the character folder
         let backupsURL = rigURL.deletingLastPathComponent().appendingPathComponent("backups")
         try FileManager.default.createDirectory(at: backupsURL, withIntermediateDirectories: true)
 
@@ -15531,7 +15512,7 @@ final class AnimateStore {
 
         // Step 3 — Generate dialogue audio via TTS
         animateMacroStatus = "Generating dialogue audio..."
-        if let audioBaseDir = animateURL?.appendingPathComponent("dialogue-audio/\(scene.name)") {
+        if let audioBaseDir = animateURL.map({ ProjectPaths(root: $0.deletingLastPathComponent()).animateDialogueAudio.appendingPathComponent(scene.name, isDirectory: true) }) {
             let lyrics = currentSongData?.extractLyrics() ?? ""
             let bpm = currentSongData?.tempoEvents.sorted(by: { $0.tick < $1.tick }).first?.bpm ?? 120
             let totalBeats: Int = {
@@ -15954,11 +15935,11 @@ extension AnimateStore {
     // MARK: - Canvas Persistence
 
     private var canvasDir: URL? {
-        animateURL?.appendingPathComponent("debug/canvas")
+        animateURL.map { ProjectPaths(root: $0.deletingLastPathComponent()).animateCanvasDir }
     }
 
     private var canvasIndexURL: URL? {
-        canvasDir?.appendingPathComponent("_index.json")
+        animateURL.map { ProjectPaths(root: $0.deletingLastPathComponent()).animateCanvasIndexJSON }
     }
 
     /// Reads `_index.json` from the canvas directory and populates `canvasGenerations`.

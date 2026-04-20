@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 struct DrawThingsLoRAReference: Codable, Hashable, Sendable {
     var file: String
@@ -362,10 +363,8 @@ struct DrawThingsLoRAService {
         }
 
         let filename = URL(fileURLWithPath: rawFilename).lastPathComponent
-        let sourceURL = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(character.assetFolderSlug)
-            .appendingPathComponent("lora")
+        let sourceURL = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterLora(slug: character.assetFolderSlug)
             .appendingPathComponent(filename)
 
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {

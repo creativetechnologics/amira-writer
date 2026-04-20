@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 @available(macOS 26.0, *)
 struct ImagineGallerySelectionState: Codable, Equatable {
@@ -47,10 +48,8 @@ struct ImagineGallerySelectionState: Codable, Equatable {
     }
 
     static func load(animateURL: URL, characterSlug: String) -> ImagineGallerySelectionState {
-        let url = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(characterSlug)
-            .appendingPathComponent("inspiration-gallery-state.json")
+        let url = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterInspirationGalleryStateJSON(slug: characterSlug)
         guard let data = try? Data(contentsOf: url),
               let state = try? JSONDecoder().decode(ImagineGallerySelectionState.self, from: data) else {
             return ImagineGallerySelectionState()
@@ -64,11 +63,10 @@ struct ImagineGallerySelectionState: Codable, Equatable {
     }
 
     func save(animateURL: URL, characterSlug: String) {
-        let dir = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(characterSlug)
+        let charPaths = ProjectPaths(root: animateURL.deletingLastPathComponent())
+        let dir = charPaths.characterFolder(slug: characterSlug)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("inspiration-gallery-state.json")
+        let url = charPaths.characterInspirationGalleryStateJSON(slug: characterSlug)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let normalizedState = normalized(animateURL: animateURL)

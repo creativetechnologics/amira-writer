@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 @available(macOS 26.0, *)
 public struct DrawThingsSceneSweepItemResult: Codable, Sendable {
@@ -50,7 +51,7 @@ public extension AnimateAutomation {
             )
         }
 
-        let animateURL = projectURL.appendingPathComponent("Animate", isDirectory: true)
+        let animateURL = ProjectPaths(root: projectURL).animate
         let samples = defaultDrawThingsSceneSweepSamples()
         let targetCharacterSlugs = Set(samples.flatMap(\.expectedCharacterSlugs))
         var drawThingsConfig = store.drawThingsPlaceConfig

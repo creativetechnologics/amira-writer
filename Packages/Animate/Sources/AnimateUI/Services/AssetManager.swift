@@ -2,6 +2,7 @@ import AppKit
 import CryptoKit
 import Foundation
 import ImageIO
+import ProjectKit
 
 /// Manages character images and background plates within an OWP project's Animate/ directory.
 /// Handles import, thumbnail caching, and file organization.
@@ -68,9 +69,8 @@ final class AssetManager {
         category: String,
         animateURL: URL
     ) throws -> URL {
-        let charDir = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(characterSlug)
+        let charDir = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterFolder(slug: characterSlug)
             .appendingPathComponent(category)
 
         try FileManager.default.createDirectory(at: charDir, withIntermediateDirectories: true)
@@ -88,9 +88,8 @@ final class AssetManager {
         category: String,
         animateURL: URL
     ) throws -> URL {
-        let charDir = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(characterSlug)
+        let charDir = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterFolder(slug: characterSlug)
             .appendingPathComponent(category)
 
         try FileManager.default.createDirectory(at: charDir, withIntermediateDirectories: true)

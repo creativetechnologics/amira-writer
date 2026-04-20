@@ -176,7 +176,7 @@ public actor ProjectStore {
     private static let schemaVersion = 1
 
     public static func databaseDirectory(for projectURL: URL) -> URL {
-        projectURL.appendingPathComponent(".novotro", isDirectory: true)
+        ProjectPaths(root: projectURL).novotroDir
     }
 
     public static func databaseURL(for projectURL: URL) -> URL {
@@ -844,12 +844,13 @@ public actor ProjectStore {
     }
 
     private func importProjectArtifacts(importedAt: Date) throws -> String {
-        let metadataURL = projectURL.appendingPathComponent("Metadata/project.json")
-        let instrumentsURL = projectURL.appendingPathComponent("Instruments.json")
-        let writeCharactersURL = projectURL.appendingPathComponent("Characters/characters.json")
-        let animateCharactersURL = projectURL.appendingPathComponent("characters.json")
-        let indexURL = projectURL.appendingPathComponent("index.json")
-        let animateMetadataURL = projectURL.appendingPathComponent("Animate/animate.json")
+        let paths = ProjectPaths(root: projectURL)
+        let metadataURL = paths.projectJSON
+        let instrumentsURL = paths.instrumentsJSON
+        let writeCharactersURL = paths.charactersJSON
+        let animateCharactersURL = paths.legacyCharactersJSON
+        let indexURL = paths.indexJSON
+        let animateMetadataURL = paths.animateJSON
 
         let metadataData = try? Data(contentsOf: metadataURL)
         let instrumentsData = try? Data(contentsOf: instrumentsURL)
@@ -987,7 +988,7 @@ public actor ProjectStore {
     }
 
     private func importAnimationScenes(importedAt: Date) throws -> Int {
-        let scenesURL = projectURL.appendingPathComponent("Animate/scenes.json")
+        let scenesURL = ProjectPaths(root: projectURL).animateScenesJSON
         guard FileManager.default.fileExists(atPath: scenesURL.path),
               let data = try? Data(contentsOf: scenesURL),
               let sceneArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {

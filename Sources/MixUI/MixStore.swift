@@ -808,7 +808,7 @@ final class MixStore {
     /// Discover .ows song files on disk and build NPSceneSummary entries.
     private static func discoverSongSummaries(in projectURL: URL) -> [NPSceneSummary] {
         let fm = FileManager.default
-        let songsDir = projectURL.appendingPathComponent("Songs")
+        let songsDir = ProjectPaths(root: projectURL).songs
         guard fm.fileExists(atPath: songsDir.path) else { return [] }
 
         let enumerator = fm.enumerator(
@@ -1522,7 +1522,7 @@ final class MixStore {
         guard let session = document.sceneSessions[scenePath] else {
             throw FlattenError.noSession
         }
-        let outputDir = projectURL.appendingPathComponent("Animate/audio")
+        let outputDir = ProjectPaths(root: projectURL).animateAudio
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
         let slug = scenePath
             .replacingOccurrences(of: "/", with: "-")
@@ -2959,9 +2959,9 @@ final class MixStore {
     /// Fast scan of project-local paths only (no Desktop traversal) for use when speed matters.
     nonisolated private static func projectBrowserRootsSync(workingProjectURL: URL) -> [MixBrowserNode] {
         let projectCandidates = [
-            workingProjectURL.appendingPathComponent("Suno", isDirectory: true),
-            workingProjectURL.appendingPathComponent("Mix", isDirectory: true).appendingPathComponent("exports", isDirectory: true),
-            workingProjectURL.appendingPathComponent("Mixes", isDirectory: true),
+            ProjectPaths(root: workingProjectURL).suno,
+            ProjectPaths(root: workingProjectURL).mixExports,
+            ProjectPaths(root: workingProjectURL).mixes,
             workingProjectURL.appendingPathComponent("Renders", isDirectory: true),
             workingProjectURL.appendingPathComponent("Exports", isDirectory: true),
         ]
@@ -2989,9 +2989,9 @@ final class MixStore {
 
         if let workingProjectURL {
             let projectCandidates = [
-                workingProjectURL.appendingPathComponent("Suno", isDirectory: true),
-                workingProjectURL.appendingPathComponent("Mix", isDirectory: true).appendingPathComponent("exports", isDirectory: true),
-                workingProjectURL.appendingPathComponent("Mixes", isDirectory: true),
+                ProjectPaths(root: workingProjectURL).suno,
+                ProjectPaths(root: workingProjectURL).mixExports,
+                ProjectPaths(root: workingProjectURL).mixes,
                 workingProjectURL.appendingPathComponent("Renders", isDirectory: true),
                 workingProjectURL.appendingPathComponent("Exports", isDirectory: true),
             ]

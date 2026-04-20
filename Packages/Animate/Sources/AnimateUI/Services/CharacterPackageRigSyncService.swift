@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 struct CharacterPackageRigSyncCoverage: Sendable {
     var packageDisplayName: String
@@ -70,10 +71,8 @@ struct CharacterPackageRigSyncService: Sendable {
             !updatedParts.contains(where: { $0.partType == partType })
         }.sorted { $0.rawValue < $1.rawValue }
 
-        let partsDirectoryURL = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(character.assetFolderSlug)
-            .appendingPathComponent("parts")
+        let partsDirectoryURL = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterParts(slug: character.assetFolderSlug)
 
         try FileManager.default.createDirectory(at: partsDirectoryURL, withIntermediateDirectories: true)
         let packagePrefix = String(package.manifest.id.uuidString.prefix(8))

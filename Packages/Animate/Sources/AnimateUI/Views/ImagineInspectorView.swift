@@ -1,3 +1,4 @@
+import ProjectKit
 import SwiftUI
 
 @available(macOS 26.0, *)
@@ -262,7 +263,8 @@ struct ImagineInspectorView: View {
 
             // Existing LORAs
             if let character = store.selectedCharacter, let animateURL = store.animateURL {
-                let loraDir = animateURL.appendingPathComponent("characters/\(character.assetFolderSlug)/lora")
+                let loraDir = ProjectPaths(root: animateURL.deletingLastPathComponent())
+                    .characterLora(slug: character.assetFolderSlug)
                 let loras = (try? FileManager.default.contentsOfDirectory(at: loraDir, includingPropertiesForKeys: nil))?.filter { $0.pathExtension == "safetensors" } ?? []
                 if !loras.isEmpty {
                     GroupBox {

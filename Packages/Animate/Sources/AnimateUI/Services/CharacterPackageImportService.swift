@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 struct CharacterPackageImportBundle: Sendable {
     var packageURL: URL
@@ -101,10 +102,8 @@ struct CharacterPackageImportService: Sendable {
         var stagedManifest = bundle.manifest
         stagedManifest.slug = resolvedTargetSlug
 
-        let stagingDirectoryURL = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(resolvedTargetSlug)
-            .appendingPathComponent("packages")
+        let stagingDirectoryURL = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterPackages(slug: resolvedTargetSlug)
             .appendingPathComponent(stagedManifest.id.uuidString)
 
         let copyOperations = try stagedManifest.assets.map { asset in

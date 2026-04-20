@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 import simd
 
 @available(macOS 26.0, *)
@@ -248,10 +249,8 @@ struct CharacterRigRenderResolver: Sendable {
         character: AnimationCharacter,
         animateURL: URL
     ) -> URL? {
-        let partsDirectory = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(character.assetFolderSlug)
-            .appendingPathComponent("parts")
+        let partsDirectory = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterParts(slug: character.assetFolderSlug)
 
         let localURL = partsDirectory.appendingPathComponent(variant.filename)
         if FileManager.default.fileExists(atPath: localURL.path) {

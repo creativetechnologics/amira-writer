@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 /// Manages saving and loading MotionClip files in the OWP project bundle.
 ///
@@ -12,7 +13,7 @@ struct MotionClipPersistence: Sendable {
 
     /// Returns the motion-clips directory, creating it if needed.
     static func clipsDirectory(animateURL: URL) throws -> URL {
-        let dir = animateURL.appendingPathComponent("motion-clips")
+        let dir = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateMotionClips
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -46,7 +47,7 @@ struct MotionClipPersistence: Sendable {
 
     /// Load all clips from the motion-clips directory.
     static func loadAll(animateURL: URL) throws -> [MotionClip] {
-        let dir = animateURL.appendingPathComponent("motion-clips")
+        let dir = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateMotionClips
         let fm = FileManager.default
         guard fm.fileExists(atPath: dir.path) else { return [] }
 
@@ -74,7 +75,7 @@ struct MotionClipPersistence: Sendable {
 
     /// Delete a clip file from disk.
     static func delete(clipID: UUID, animateURL: URL) throws {
-        let dir = animateURL.appendingPathComponent("motion-clips")
+        let dir = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateMotionClips
         let fileURL = dir.appendingPathComponent(filename(for: clipID))
         let fm = FileManager.default
         if fm.fileExists(atPath: fileURL.path) {

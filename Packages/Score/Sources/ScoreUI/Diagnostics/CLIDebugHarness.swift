@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 // MARK: - CLIDebugHarness
 
@@ -920,8 +921,7 @@ enum CLIDebugHarness {
 
     /// Load a song's debug data including instrument mappings.
     private static func loadSongDebugData(owpPath: String, songName: String) -> SongDebugData? {
-        let songURL = URL(fileURLWithPath: owpPath)
-            .appendingPathComponent("Songs")
+        let songURL = ProjectPaths(root: URL(fileURLWithPath: owpPath)).songs
             .appendingPathComponent(songName)
 
         guard FileManager.default.fileExists(atPath: songURL.path) else {

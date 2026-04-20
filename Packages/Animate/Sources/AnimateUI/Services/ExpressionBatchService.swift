@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ProjectKit
 
 @available(macOS 26.0, *)
 @MainActor
@@ -141,9 +142,8 @@ final class ExpressionBatchService {
             return GeminiImageService.referenceImage(from: url)
         }
 
-        let outputDir = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(character.assetFolderSlug)
+        let outputDir = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterFolder(slug: character.assetFolderSlug)
             .appendingPathComponent("expressions")
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 

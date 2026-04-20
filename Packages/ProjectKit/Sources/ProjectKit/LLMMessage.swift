@@ -141,7 +141,7 @@ private struct AnyCodable: Codable {
 @available(macOS 14.0, *)
 public enum LLMChatPersistence {
     private static func chatDirectory(projectURL: URL) -> URL {
-        projectURL.appendingPathComponent("ChatHistory", isDirectory: true)
+        ProjectPaths(root: projectURL).chatHistory
     }
 
     private static func sessionFile(projectURL: URL, key: String) -> URL {

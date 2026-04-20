@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 @available(macOS 26.0, *)
 public struct LoRAE2EResult: Sendable {
@@ -22,7 +23,7 @@ public enum AnimateAutomation {
     ) async throws -> LoRAE2EResult {
         let requestedPreset = LORATrainingModels.TrainingPreset(rawValue: presetRawValue) ?? .high
         let preset = LORATrainingModels.TrainingPreset.high
-        let animateURL = projectURL.appendingPathComponent("Animate", isDirectory: true)
+        let animateURL = ProjectPaths(root: projectURL).animate
         let drawThingsConfig = DrawThingsPlaceConfig()
         var characters = try loadCharacters(animateURL: animateURL)
 
@@ -163,7 +164,7 @@ public enum AnimateAutomation {
     private static func loadCharacters(
         animateURL: URL
     ) throws -> [AnimationCharacter] {
-        let charactersDirectory = animateURL.appendingPathComponent("characters", isDirectory: true)
+        let charactersDirectory = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateCharacters
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: charactersDirectory.path) else {
             return []
@@ -188,11 +189,10 @@ public enum AnimateAutomation {
         _ character: AnimationCharacter,
         animateURL: URL
     ) throws {
-        let directory = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(character.assetFolderSlug, isDirectory: true)
+        let charPaths = ProjectPaths(root: animateURL.deletingLastPathComponent())
+        let directory = charPaths.characterFolder(slug: character.assetFolderSlug)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let rigURL = directory.appendingPathComponent("rig.json")
+        let rigURL = charPaths.characterRigJSON(slug: character.assetFolderSlug)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(character)

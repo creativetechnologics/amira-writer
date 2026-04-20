@@ -600,7 +600,7 @@ struct PlacesWorldbuildingSnapshot {
         workflowMode: PlaceWorkflowMode
     ) -> [String: BatchPromptPinMetadata] {
         guard let animateURL = store.animateURL else { return [:] }
-        let rootURL = animateURL.appendingPathComponent("backgrounds/place-batches")
+        let rootURL = ProjectPaths(root: animateURL.deletingLastPathComponent()).animatePlaceBatches
         guard FileManager.default.fileExists(atPath: rootURL.path),
               let enumerator = FileManager.default.enumerator(
                 at: rootURL,
@@ -1863,7 +1863,7 @@ final class PlaceWorldAutoPlacementService {
 
     private func batchPromptPinMetadataLookup(animateURL: URL?) -> [String: BatchPromptPinMetadata] {
         guard let animateURL else { return [:] }
-        let rootURL = animateURL.appendingPathComponent("backgrounds/place-batches")
+        let rootURL = ProjectPaths(root: animateURL.deletingLastPathComponent()).animatePlaceBatches
         guard FileManager.default.fileExists(atPath: rootURL.path),
               let enumerator = FileManager.default.enumerator(
                 at: rootURL,
@@ -5007,10 +5007,7 @@ struct PlacesWorldBatchMonitorSnapshot {
     }
 
     private static func scanBatchMetadataFiles(projectURL: URL?, workflowMode: PlaceWorkflowMode) -> [ParsedBatchMetadata] {
-        guard let root = projectURL?
-            .appendingPathComponent("Animate")
-            .appendingPathComponent("backgrounds")
-            .appendingPathComponent("place-batches"),
+        guard let root = projectURL.map({ ProjectPaths(root: $0).animatePlaceBatches }),
               FileManager.default.fileExists(atPath: root.path) else {
             return []
         }

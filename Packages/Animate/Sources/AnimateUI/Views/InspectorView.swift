@@ -1,4 +1,5 @@
 import AppKit
+import ProjectKit
 import SwiftUI
 
 @available(macOS 26.0, *)
@@ -671,9 +672,8 @@ struct InspectorView: View {
 
                 if let character {
                     let resolvedSlug = firstItem.characterSlug ?? character.assetFolderSlug
-                    outputRoot = animateURL
-                        .appendingPathComponent("characters")
-                        .appendingPathComponent(resolvedSlug)
+                    outputRoot = ProjectPaths(root: animateURL.deletingLastPathComponent())
+                        .characterFolder(slug: resolvedSlug)
                         .appendingPathComponent("batch-queue-batches")
                         .appendingPathComponent("\(stamp)-queue")
                     batchName = character.name

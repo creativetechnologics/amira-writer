@@ -1,4 +1,5 @@
 import AppKit
+import ProjectKit
 import SwiftUI
 
 /// Visual editor for character rig part hierarchy.
@@ -649,10 +650,8 @@ struct CharacterRigEditor: View {
     ) -> URL? {
         guard let animateURL = store.animateURL else { return nil }
 
-        let partsDirectory = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(character.assetFolderSlug)
-            .appendingPathComponent("parts")
+        let partsDirectory = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterParts(slug: character.assetFolderSlug)
 
         let candidate = partsDirectory.appendingPathComponent(variant.filename)
         guard FileManager.default.fileExists(atPath: candidate.path) else {

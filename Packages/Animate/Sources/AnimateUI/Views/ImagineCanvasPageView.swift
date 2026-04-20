@@ -458,7 +458,7 @@ struct ImagineCanvasPageView: View {
         // Resolve canvas dir from animateURL or fallback to ~/Amira - A Modern Opera/Animate/debug/canvas/
         let canvasDir: URL
         if let animateURL = store.animateURL {
-            canvasDir = animateURL.appendingPathComponent("debug/canvas")
+            canvasDir = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateCanvasDir
         } else {
             let home = FileManager.default.homeDirectoryForCurrentUser
             canvasDir = home

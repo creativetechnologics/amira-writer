@@ -285,7 +285,7 @@ private struct PropsWorkspaceContent: View {
         isScanningProps = true
 
         let scanned = await Task.detached(priority: .utility) { () -> [PropItem] in
-            let objectsDir = projectURL.appendingPathComponent("Animate/objects", isDirectory: true)
+            let objectsDir = ProjectPaths(root: projectURL).animateObjects
             let fm = FileManager.default
             guard fm.fileExists(atPath: objectsDir.path) else { return [] }
             guard let contents = try? fm.contentsOfDirectory(

@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 struct InstalledCharacterPackage: Identifiable, Sendable {
     var manifest: CharacterPackageManifest
@@ -23,10 +24,8 @@ struct CharacterPackageLibrary: Sendable {
         in animateURL: URL,
         preferredActivePackageID: UUID? = nil
     ) -> [InstalledCharacterPackage] {
-        let packagesDirectory = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(characterSlug)
-            .appendingPathComponent("packages")
+        let packagesDirectory = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterPackages(slug: characterSlug)
 
         guard let packageDirectories = try? FileManager.default.contentsOfDirectory(
             at: packagesDirectory,

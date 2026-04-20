@@ -658,7 +658,7 @@ enum OWPProjectIO {
     /// Copy an SF2 file into the OWP bundle's SoundFonts/ directory.
     /// Returns the relative path within the bundle. Deduplicates by filename.
     static func embedSoundFont(absolutePath: String, in owpBundleURL: URL) throws -> String {
-        let sfDir = owpBundleURL.appendingPathComponent("SoundFonts")
+        let sfDir = ProjectPaths(root: owpBundleURL).soundFonts
         if !FileManager.default.fileExists(atPath: sfDir.path) {
             try FileManager.default.createDirectory(at: sfDir, withIntermediateDirectories: true)
         }
@@ -746,8 +746,7 @@ enum OWPProjectIO {
                 mapping.sf2FileName = resolvedURL.lastPathComponent
             } else if let fileName = mapping.soundFont?.sf2FileName ?? mapping.sf2FileName {
                 // Fallback: search by filename in SoundFonts/
-                let fallbackURL = owpBundleURL
-                    .appendingPathComponent("SoundFonts")
+                let fallbackURL = ProjectPaths(root: owpBundleURL).soundFonts
                     .appendingPathComponent(fileName)
                 if FileManager.default.fileExists(atPath: fallbackURL.path) {
                     mapping.soundFont?.resolvedPath = fallbackURL.path
@@ -1439,7 +1438,7 @@ final class ScoreStore {
             .replacingOccurrences(of: "[^A-Za-z0-9_-]+", with: "_", options: .regularExpression)
         let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
         let safeName = trimmed.isEmpty ? "untitled" : trimmed
-        let wavURL = projectRoot.appendingPathComponent("Mix/exports", isDirectory: true)
+        let wavURL = ProjectPaths(root: projectRoot).mixExports
             .appendingPathComponent("\(safeName).wav")
         let fm = FileManager.default
         guard fm.fileExists(atPath: wavURL.path),
@@ -3579,7 +3578,7 @@ final class ScoreStore {
         if rawPath.hasPrefix("/") {
             let projectPath = projectURL.standardizedFileURL.path
             let normalizedRawPath = URL(fileURLWithPath: rawPath).standardizedFileURL.path
-            let soundFontsRoot = projectURL.appendingPathComponent("SoundFonts").standardizedFileURL.path + "/"
+            let soundFontsRoot = ProjectPaths(root: projectURL).soundFonts.standardizedFileURL.path + "/"
             if normalizedRawPath.hasPrefix(soundFontsRoot) || normalizedRawPath.hasPrefix(projectPath + "/SoundFonts/") {
                 let relativePath = "SoundFonts/\(fileName)"
                 return (normalizedRawPath, relativePath, fileName)
@@ -7290,7 +7289,7 @@ final class ScoreStore {
             .replacingOccurrences(of: "[^A-Za-z0-9_-]+", with: "_", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
         let safeName = slug.isEmpty ? "untitled" : slug
-        let exportsDir = projectURL.appendingPathComponent("Mix/exports")
+        let exportsDir = ProjectPaths(root: projectURL).mixExports
         return exportsDir.appendingPathComponent("\(safeName).wav")
     }
 
@@ -7349,7 +7348,7 @@ final class ScoreStore {
             return
         }
 
-        let exportsDir = projectURL.appendingPathComponent("Mix/exports")
+        let exportsDir = ProjectPaths(root: projectURL).mixExports
         do {
             try FileManager.default.createDirectory(at: exportsDir, withIntermediateDirectories: true)
         } catch {
@@ -7900,9 +7899,8 @@ final class ScoreStore {
 
     /// Save a Suno render session to the OWP bundle.
     func saveSunoRenderSession(_ session: SunoRenderSession, owpURL: URL) throws {
-        let renderDir = owpURL
-            .appendingPathComponent("SunoRenders")
-            .appendingPathComponent("render-\(session.id.uuidString)")
+        let renderDir = ProjectPaths(root: owpURL)
+            .sunoRenderDir(renderID: session.id.uuidString)
         try FileManager.default.createDirectory(at: renderDir, withIntermediateDirectories: true)
 
         let encoder = JSONEncoder()
@@ -8250,7 +8248,7 @@ extension ScoreStore {
 
         for (index, path) in targets.enumerated() {
             let baseTitle = Self.sunoBaseTitle(from: path)
-            let outputRoot = projectRoot.appendingPathComponent("Suno", isDirectory: true)
+            let outputRoot = ProjectPaths(root: projectRoot).suno
             let version = nextSunoVersion(for: baseTitle, outputRoot: outputRoot)
 
             guard let mixInfo = sunoMixExportInfo(for: path) else {

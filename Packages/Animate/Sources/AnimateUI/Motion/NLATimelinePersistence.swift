@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 /// Handles reading and writing NLATimeline JSON files.
 /// Storage path: `<project>.owp/Animate/motion-timeline-<sceneID>.json`
@@ -15,7 +16,7 @@ struct NLATimelinePersistence: Sendable {
 
     /// Build the file URL for a scene's NLA timeline.
     static func fileURL(animateDir: URL, sceneID: UUID) -> URL {
-        animateDir.appendingPathComponent("motion-timeline-\(sceneID.uuidString).json")
+        ProjectPaths(root: animateDir.deletingLastPathComponent()).animateMotionTimelineJSON(sceneID: sceneID.uuidString)
     }
 
     /// Load an NLA timeline from disk. Returns nil if the file does not exist.

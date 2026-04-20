@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 /// Project-local credential store. Keeps API keys inside the OWP project
 /// folder (at `<project>/config/api-credentials.json`) so they automatically
@@ -42,8 +43,7 @@ final class ProjectCredentialStore: @unchecked Sendable {
                 isPayloadLoaded = false
                 return
             }
-            let dir = owpURL.appendingPathComponent("config", isDirectory: true)
-            let file = dir.appendingPathComponent("api-credentials.json")
+            let file = ProjectPaths(root: owpURL).apiCredentialsJSON
             cachedFileURL = file
 
             if FileManager.default.fileExists(atPath: file.path) {

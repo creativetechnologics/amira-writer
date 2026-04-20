@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 @available(macOS 26.0, *)
 @MainActor
@@ -139,10 +140,8 @@ struct ActionImageService {
 
     /// Directory where action images are stored for a character.
     static func actionImagesDirectory(animateURL: URL, characterSlug: String) -> URL {
-        animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(characterSlug)
-            .appendingPathComponent("action-images")
+        ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterActionImages(slug: characterSlug)
     }
 
     /// Scan existing action images from disk.

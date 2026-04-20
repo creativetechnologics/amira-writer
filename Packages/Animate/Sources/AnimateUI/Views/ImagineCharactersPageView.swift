@@ -2408,10 +2408,8 @@ struct ImagineCharactersPageView: View {
                 formatter.dateFormat = "yyyyMMdd'T'HHmmssSSS'Z'"
                 let stamp = formatter.string(from: Date())
 
-                let outputRoot = animateURL
-                    .appendingPathComponent("characters")
-                    .appendingPathComponent(character.assetFolderSlug)
-                    .appendingPathComponent("inspiration-batches")
+                let outputRoot = ProjectPaths(root: animateURL.deletingLastPathComponent())
+                    .characterInspirationBatches(slug: character.assetFolderSlug)
                     .appendingPathComponent("\(stamp)-\(batchFolderSlugOverride ?? wardrobe.rawValue)")
 
                 let promptRequests = try drafts.map { draft in
@@ -2541,10 +2539,8 @@ struct ImagineCharactersPageView: View {
 
     private func availableLoRAURLs(for character: AnimationCharacter) -> [URL] {
         guard let animateURL = store.animateURL else { return [] }
-        let loraDirectory = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(character.assetFolderSlug)
-            .appendingPathComponent("lora")
+        let loraDirectory = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterLora(slug: character.assetFolderSlug)
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: loraDirectory,
             includingPropertiesForKeys: [.contentModificationDateKey],
@@ -2561,10 +2557,8 @@ struct ImagineCharactersPageView: View {
               let animateURL = store.animateURL else {
             return nil
         }
-        let url = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(character.assetFolderSlug)
-            .appendingPathComponent("lora")
+        let url = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterLora(slug: character.assetFolderSlug)
             .appendingPathComponent(URL(fileURLWithPath: filename).lastPathComponent)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }

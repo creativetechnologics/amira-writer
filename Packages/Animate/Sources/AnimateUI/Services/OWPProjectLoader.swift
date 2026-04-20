@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 /// Loads OWP project packages and extracts data relevant for animation:
 /// characters, song list, lyric alignment, and tempo data.
@@ -109,9 +110,8 @@ struct OWPProjectLoader: Sendable {
     // MARK: - Private
 
     private func loadCharacters(from projectURL: URL, fm: FileManager) throws -> [OPWCharacter] {
-        let candidatePaths = ["Characters/characters.json", "characters.json"]
-        for candidatePath in candidatePaths {
-            let charactersURL = projectURL.appendingPathComponent(candidatePath)
+        let owpPaths = ProjectPaths(root: projectURL)
+        for charactersURL in [owpPaths.charactersJSON, owpPaths.legacyCharactersJSON] {
             guard fm.fileExists(atPath: charactersURL.path) else { continue }
             let data = try Data(contentsOf: charactersURL)
             let file = try JSONDecoder().decode(OPWCharactersFile.self, from: data)
@@ -121,7 +121,7 @@ struct OWPProjectLoader: Sendable {
     }
 
     private func loadIndex(from projectURL: URL, fm: FileManager) throws -> OWPIndexFile? {
-        let indexURL = projectURL.appendingPathComponent("index.json")
+        let indexURL = ProjectPaths(root: projectURL).indexJSON
         guard fm.fileExists(atPath: indexURL.path) else { return nil }
         let data = try Data(contentsOf: indexURL)
         return try JSONDecoder().decode(OWPIndexFile.self, from: data)
@@ -131,7 +131,7 @@ struct OWPProjectLoader: Sendable {
         var songs: [OWPSongStub] = []
         
         // Only look in the Songs directory (same behavior as Score workspace)
-        let songsURL = projectURL.appendingPathComponent("Songs")
+        let songsURL = ProjectPaths(root: projectURL).songs
         guard fm.fileExists(atPath: songsURL.path) else { return [] }
 
         let enumerator = fm.enumerator(

@@ -1,5 +1,6 @@
-import Foundation
 import AppKit
+import Foundation
+import ProjectKit
 import SceneKit
 
 /// Batch-imports USDZ/GLB/OBJ prop files into the project's prop library.
@@ -49,7 +50,7 @@ final class PropBatchImportService {
         guard let store, let animateURL = store.animateURL else {
             return ImportResult(importedCount: 0, skippedCount: 0, errorCount: 1, errors: ["No project open"], importedPropNames: [])
         }
-        let propsDir = animateURL.appendingPathComponent("props")
+        let propsDir = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateProps
         try? FileManager.default.createDirectory(at: propsDir, withIntermediateDirectories: true)
 
         var imported = 0, skipped = 0, errored = 0

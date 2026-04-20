@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ProjectKit
 
 @available(macOS 26.0, *)
 struct ImagineProjectStorage {
@@ -7,7 +8,7 @@ struct ImagineProjectStorage {
     // MARK: - Directory Paths
 
     static func imagineRoot(owpURL: URL) -> URL {
-        owpURL.appendingPathComponent("Animate/imagine", isDirectory: true)
+        ProjectPaths(root: owpURL).animateImagine
     }
 
     static func scenesRoot(owpURL: URL) -> URL {
@@ -158,7 +159,8 @@ struct ImagineProjectStorage {
 
     static func scanAllProjectImages(owpURL: URL, characters: [AnimationCharacter], scenes: [AnimationScene]) -> [ImagineImageCategory: [ImagineImagePickerEntry]] {
         var result: [ImagineImageCategory: [ImagineImagePickerEntry]] = [:]
-        let animateURL = owpURL.appendingPathComponent("Animate")
+        let owpPaths = ProjectPaths(root: owpURL)
+        let animateURL = owpPaths.animate
 
         // Imagine > Scenes
         let scenesDir = scenesRoot(owpURL: owpURL)
@@ -190,7 +192,7 @@ struct ImagineProjectStorage {
         var charEntries: [ImagineImagePickerEntry] = []
         for character in characters {
             let slug = character.assetFolderSlug
-            let inspirationDir = animateURL.appendingPathComponent("characters/\(slug)/inspiration")
+            let inspirationDir = owpPaths.characterInspiration(slug: slug)
             for path in scanImages(in: inspirationDir) {
                 charEntries.append(ImagineImagePickerEntry(
                     path: path,
@@ -198,7 +200,7 @@ struct ImagineProjectStorage {
                     subcategoryLabel: "Inspiration"
                 ))
             }
-            let animatedDir = animateURL.appendingPathComponent("characters/\(slug)/animated")
+            let animatedDir = owpPaths.characterAnimated(slug: slug)
             for path in scanImages(in: animatedDir) {
                 charEntries.append(ImagineImagePickerEntry(
                     path: path,
@@ -210,7 +212,7 @@ struct ImagineProjectStorage {
         result[.characters] = charEntries
 
         // Places
-        let backgroundsDir = animateURL.appendingPathComponent("backgrounds")
+        let backgroundsDir = owpPaths.animateBackgrounds
         var placeEntries: [ImagineImagePickerEntry] = []
         for path in scanImages(in: backgroundsDir) {
             placeEntries.append(ImagineImagePickerEntry(
@@ -222,7 +224,7 @@ struct ImagineProjectStorage {
         result[.places] = placeEntries
 
         // Props
-        let propsDir = animateURL.appendingPathComponent("props")
+        let propsDir = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateProps
         var propEntries: [ImagineImagePickerEntry] = []
         for path in scanImages(in: propsDir) {
             propEntries.append(ImagineImagePickerEntry(

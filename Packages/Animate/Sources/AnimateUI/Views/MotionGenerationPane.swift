@@ -1,5 +1,6 @@
-import SwiftUI
 import AppKit
+import ProjectKit
+import SwiftUI
 
 @available(macOS 26.0, *)
 struct MotionGenerationPane: View {
@@ -213,10 +214,8 @@ struct MotionGenerationPane: View {
         }
 
         let slug = character.owpSlug.isEmpty ? character.id.uuidString : character.owpSlug
-        let destinationDir = animateURL
-            .appendingPathComponent("Characters")
-            .appendingPathComponent(slug)
-            .appendingPathComponent("motions")
+        let destinationDir = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterMotions(slug: slug)
 
         let service = HunyuanMotionService()
         let request = HunyuanMotionService.MotionRequest(

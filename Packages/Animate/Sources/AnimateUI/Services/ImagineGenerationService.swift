@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ProjectKit
 
 @available(macOS 26.0, *)
 @MainActor
@@ -181,7 +182,7 @@ struct ImagineGenerationService {
             )
         }
 
-        let animateURL = owpURL.appendingPathComponent("Animate")
+        let animateURL = ProjectPaths(root: owpURL).animate
         return try await DrawThingsLoRAService().preparePrompt(
             prompt: promptWithHouseStyle,
             characters: characters,

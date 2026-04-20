@@ -11,7 +11,7 @@ public actor ProjectDatabase {
 
     public init(projectURL: URL, databaseDirectoryURL: URL? = nil) {
         self.projectURL = projectURL
-        self.databaseDirectoryURL = databaseDirectoryURL ?? projectURL.appendingPathComponent(".novotro", isDirectory: true)
+        self.databaseDirectoryURL = databaseDirectoryURL ?? ProjectPaths(root: projectURL).novotroDir
         self.databaseURL = self.databaseDirectoryURL.appendingPathComponent("project.sqlite")
     }
 
@@ -826,7 +826,7 @@ public actor ProjectDatabase {
             }
         }
 
-        let songsRoot = projectURL.appendingPathComponent("Songs")
+        let songsRoot = ProjectPaths(root: projectURL).songs
         let songURLs = try enumerateSongFiles(in: songsRoot)
         for (index, songURL) in songURLs.enumerated() {
             let relativePath = relativePath(for: songURL)
@@ -1080,7 +1080,7 @@ public actor ProjectDatabase {
         }
 
         if !animatedSceneData.isEmpty {
-            let destination = project.projectURL.appendingPathComponent("Animate/scenes.json")
+            let destination = ProjectPaths(root: project.projectURL).animateScenesJSON
             try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             let data = try JSONSerialization.data(withJSONObject: animatedSceneData, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: destination, options: .atomic)

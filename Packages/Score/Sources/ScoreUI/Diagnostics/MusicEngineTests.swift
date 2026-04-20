@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 // MARK: - MusicEngineTests
 
@@ -1397,8 +1398,7 @@ enum MusicEngineTests {
 
     /// Load a song's playback data from an .owp package.
     private static func loadSongPlayback(owpPath: String, songName: String) -> SongPlaybackData? {
-        let songURL = URL(fileURLWithPath: owpPath)
-            .appendingPathComponent("Songs")
+        let songURL = ProjectPaths(root: URL(fileURLWithPath: owpPath)).songs
             .appendingPathComponent(songName)
 
         guard FileManager.default.fileExists(atPath: songURL.path) else {

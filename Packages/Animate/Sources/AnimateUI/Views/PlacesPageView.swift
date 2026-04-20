@@ -3665,9 +3665,8 @@ struct PlacesPageView: View {
                 formatter.dateFormat = "yyyyMMdd'T'HHmmssSSS'Z'"
                 let stamp = formatter.string(from: Date())
                 let sourceSlug = PlacesScriptIndexService.fileStem(for: sourceDescription)
-                let outputRoot = animateURL
-                    .appendingPathComponent("backgrounds")
-                    .appendingPathComponent("place-batches")
+                let outputRoot = ProjectPaths(root: animateURL.deletingLastPathComponent())
+                    .animatePlaceBatches
                     .appendingPathComponent("unattached-library")
                     .appendingPathComponent(workflow.rawValue)
                     .appendingPathComponent(stamp)
@@ -3739,9 +3738,8 @@ struct PlacesPageView: View {
                 formatter.dateFormat = "yyyyMMdd'T'HHmmssSSS'Z'"
                 let stamp = formatter.string(from: Date())
                 let placeSlug = PlacesScriptIndexService.fileStem(for: place.name)
-                let outputRoot = animateURL
-                    .appendingPathComponent("backgrounds")
-                    .appendingPathComponent("place-batches")
+                let outputRoot = ProjectPaths(root: animateURL.deletingLastPathComponent())
+                    .animatePlaceBatches
                     .appendingPathComponent(placeSlug)
                     .appendingPathComponent(workflow.rawValue)
                     .appendingPathComponent(stamp)
@@ -3855,9 +3853,7 @@ struct PlacesPageView: View {
 
     private func generatePlaceholders() {
         guard let projectURL = store.workingOWPURL ?? store.owpURL else { return }
-        let outputDirectory = projectURL
-            .appendingPathComponent("Animate")
-            .appendingPathComponent("backgrounds")
+        let outputDirectory = ProjectPaths(root: projectURL).animateBackgrounds
         let existingNames = Set(store.backgrounds.map { $0.filename })
         BackgroundPlaceholderService.generatePlaceholders(
             locations: BackgroundPlaceholderService.amiraLocations,

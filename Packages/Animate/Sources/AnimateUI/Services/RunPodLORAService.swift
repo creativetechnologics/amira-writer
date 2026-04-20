@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 // MARK: - LORA File Logger
 //
@@ -1877,7 +1878,7 @@ final class RunPodLORAService: ObservableObject {
         triggerWord: String,
         fallbackCharacterName: String
     ) -> AnimationCharacter? {
-        let charactersDir = animateURL.appendingPathComponent("characters", isDirectory: true)
+        let charactersDir = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateCharacters
         guard let directories = try? FileManager.default.contentsOfDirectory(
             at: charactersDir,
             includingPropertiesForKeys: nil,
@@ -1955,10 +1956,8 @@ final class RunPodLORAService: ObservableObject {
             LORALogger.shared.log("Skipping rig update for recovered job because character slug is unknown", level: "WARN")
             return
         }
-        let rigURL = animateURL
-            .appendingPathComponent("characters")
-            .appendingPathComponent(job.characterSlug)
-            .appendingPathComponent("rig.json")
+        let rigURL = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterRigJSON(slug: job.characterSlug)
         guard FileManager.default.fileExists(atPath: rigURL.path) else {
             LORALogger.shared.log("No rig.json found for \(job.characterSlug) while finalizing LoRA", level: "WARN")
             return
@@ -1986,10 +1985,8 @@ final class RunPodLORAService: ObservableObject {
         animateURL: URL
     ) throws -> URL {
         if !job.characterSlug.isEmpty {
-            let loraDir = animateURL
-                .appendingPathComponent("characters")
-                .appendingPathComponent(job.characterSlug)
-                .appendingPathComponent("lora")
+            let loraDir = ProjectPaths(root: animateURL.deletingLastPathComponent())
+                .characterLora(slug: job.characterSlug)
             try FileManager.default.createDirectory(at: loraDir, withIntermediateDirectories: true)
             return loraDir.appendingPathComponent(job.config.baseModel.outputFilename(for: job.triggerWord))
         }

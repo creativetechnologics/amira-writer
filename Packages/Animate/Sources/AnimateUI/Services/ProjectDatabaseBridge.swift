@@ -168,13 +168,13 @@ enum ProjectDatabaseBridge {
     // Kept as stubs to preserve method signatures if 3D pipeline is re-enabled later.
 
     static func loadDrawThingsPlacesConfigFromDisk(projectURL: URL) -> DrawThingsPlaceConfig? {
-        let fileURL = projectURL.appendingPathComponent("animate/drawThingsPlacesConfig.json")
+        let fileURL = ProjectPaths(root: projectURL).animateDrawThingsPlacesConfigJSON
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         return try? configuredDecoder().decode(DrawThingsPlaceConfig.self, from: data)
     }
 
     static func saveDrawThingsPlacesConfigToDisk(_ config: DrawThingsPlaceConfig, projectURL: URL) throws {
-        let fileURL = projectURL.appendingPathComponent("animate/drawThingsPlacesConfig.json")
+        let fileURL = ProjectPaths(root: projectURL).animateDrawThingsPlacesConfigJSON
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -246,7 +246,7 @@ enum ProjectDatabaseBridge {
     // MARK: - Gemini Master Switch
 
     static func saveGeminiMasterSwitch(_ enabled: Bool, projectURL: URL) throws {
-        let url = projectURL.appendingPathComponent("Animate/imagine/gemini-switch.json")
+        let url = ProjectPaths(root: projectURL).animateGeminiSwitchJSON
         let dir = url.deletingLastPathComponent()
         if !FileManager.default.fileExists(atPath: dir.path) {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -256,7 +256,7 @@ enum ProjectDatabaseBridge {
     }
 
     static func loadGeminiMasterSwitch(projectURL: URL) -> Bool? {
-        let url = projectURL.appendingPathComponent("Animate/imagine/gemini-switch.json")
+        let url = ProjectPaths(root: projectURL).animateGeminiSwitchJSON
         guard let data = try? Data(contentsOf: url),
               let dict = try? JSONDecoder().decode([String: Bool].self, from: data) else { return nil }
         return dict["enabled"]

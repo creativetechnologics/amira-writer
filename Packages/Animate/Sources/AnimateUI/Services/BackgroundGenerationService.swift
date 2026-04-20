@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ProjectKit
 
 /// Generates background plate images for all locations in the world catalog.
 ///
@@ -67,7 +68,7 @@ final class BackgroundGenerationService {
         onProgress: @escaping @MainActor (Int, Int) -> Void
     ) async throws -> [GenerationResult] {
         let catalog = try loadCatalog(owpURL: owpURL)
-        let backgroundsDir = owpURL.appendingPathComponent("Animate/backgrounds", isDirectory: true)
+        let backgroundsDir = ProjectPaths(root: owpURL).animateBackgrounds
         try FileManager.default.createDirectory(at: backgroundsDir, withIntermediateDirectories: true)
 
         let total = catalog.locations.count
@@ -116,8 +117,7 @@ final class BackgroundGenerationService {
     // MARK: - Catalog Loading
 
     private func loadCatalog(owpURL: URL) throws -> WorldCatalog {
-        let catalogURL = owpURL
-            .appendingPathComponent("Animate/3d/world-catalog/world-catalog.json")
+        let catalogURL = ProjectPaths(root: owpURL).animate3dWorldCatalogJSON
         guard FileManager.default.fileExists(atPath: catalogURL.path) else {
             throw GenerationError.catalogNotFound
         }

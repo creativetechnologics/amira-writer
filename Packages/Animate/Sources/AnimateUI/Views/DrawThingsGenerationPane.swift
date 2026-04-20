@@ -1,4 +1,5 @@
 import AppKit
+import ProjectKit
 import SwiftUI
 
 @available(macOS 26.0, *)
@@ -89,8 +90,8 @@ struct DrawThingsGenerationPane: View {
     private var stagingDirectory: URL? {
         guard let animateURL = store.animateURL else { return nil }
         let slug = PlacesScriptIndexService.fileStem(for: place.name)
-        return animateURL
-            .appendingPathComponent("backgrounds")
+        return ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .animateBackgrounds
             .appendingPathComponent(slug)
             .appendingPathComponent("staging")
     }

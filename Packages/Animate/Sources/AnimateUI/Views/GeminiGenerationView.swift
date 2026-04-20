@@ -1,3 +1,4 @@
+import ProjectKit
 import SwiftUI
 
 /// Sheet for AI-assisted character asset generation.
@@ -505,9 +506,8 @@ struct GeminiGenerationView: View {
     private func saveAcceptedImages() {
         guard let character, let animateURL = store.animateURL else { return }
 
-        let charDir = animateURL.appendingPathComponent("characters").appendingPathComponent(
-            character.assetFolderSlug
-        )
+        let charDir = ProjectPaths(root: animateURL.deletingLastPathComponent())
+            .characterFolder(slug: character.assetFolderSlug)
 
         let subDir: String
         switch generationMode {

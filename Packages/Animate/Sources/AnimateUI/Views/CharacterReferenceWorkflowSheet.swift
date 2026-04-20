@@ -1,4 +1,5 @@
 import AppKit
+import ProjectKit
 import SwiftUI
 
 @available(macOS 26.0, *)
@@ -1440,10 +1441,8 @@ struct CharacterReferenceWorkflowSheet: View {
                     .replacingOccurrences(of: "•", with: "")
                     .replacingOccurrences(of: "  ", with: "-")
 
-                let outputRoot = animateURL
-                    .appendingPathComponent("characters")
-                    .appendingPathComponent(character.assetFolderSlug)
-                    .appendingPathComponent("reference-workflow-batches")
+                let outputRoot = ProjectPaths(root: animateURL.deletingLastPathComponent())
+                    .characterReferenceWorkflowBatches(slug: character.assetFolderSlug)
                     .appendingPathComponent("\(stamp)-\(batchSlug)")
 
                 let promptRequests = try drafts.map { draft in
