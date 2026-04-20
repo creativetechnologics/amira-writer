@@ -25,10 +25,30 @@ public struct CharactersWorkspace: View {
     }
 }
 
+private enum CharactersDetailTab: String, CaseIterable, Identifiable {
+    case imagine
+    case reference
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .imagine: return "Imagine"
+        case .reference: return "Reference"
+        }
+    }
+    var systemImage: String {
+        switch self {
+        case .imagine: return "sparkles"
+        case .reference: return "photo.on.rectangle"
+        }
+    }
+}
+
 @available(macOS 26.0, *)
 private struct CharactersWorkspaceContent: View {
     @Bindable var store: AnimateStore
     @State private var animateWorkspaceState = AnimateWorkspaceState()
+    @State private var selectedTab: CharactersDetailTab = .reference
 
     @AppStorage("novotro.characters.sidebarVisible") private var sidebarVisible = true
     @AppStorage("novotro.characters.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
@@ -113,9 +133,35 @@ private struct CharactersWorkspaceContent: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 10)
+
+                    if store.selectedCharacter != nil {
+                        HStack(spacing: 6) {
+                            ForEach(CharactersDetailTab.allCases) { tab in
+                                OperaChromeActionButton(
+                                    title: tab.title,
+                                    systemImage: tab.systemImage,
+                                    isSelected: selectedTab == tab
+                                ) {
+                                    selectedTab = tab
+                                }
+                            }
+                        }
+                    }
                 }
             } content: {
-                CharactersPageView(store: store, showSidebar: false)
+                switch selectedTab {
+                case .reference:
+                    CharactersPageView(store: store, showSidebar: false)
+                case .imagine:
+                    VStack {
+                        Spacer()
+                        Text("Imagine content wiring in next wave.")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
