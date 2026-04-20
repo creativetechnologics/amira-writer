@@ -1853,6 +1853,14 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         }
     }
 
+    /// Live update of a mapping's output volume — safe to call during playback.
+    /// Use from UI (volume knob drag, mixer slider) when the user changes gain.
+    /// No-ops for mapping keys whose instruments haven't been loaded yet
+    /// (those will pick up the latest mapping.gainDB on next loadInstrument).
+    func setLiveGain(_ gainDB: Double, mappingKey: String) {
+        applyAUGain(gainDB, mappingKey: mappingKey)
+    }
+
     private struct PreparedAudioUnitLoad {
         let mappingKey: String
         let mapping: InstrumentMapping

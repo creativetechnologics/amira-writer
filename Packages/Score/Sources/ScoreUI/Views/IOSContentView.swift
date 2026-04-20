@@ -278,7 +278,7 @@ struct IOSInstrumentPanel: View {
                     .foregroundStyle(.tertiary)
                 Slider(value: Binding(
                     get: { mapping.gainDB },
-                    set: { store.instrumentMappings[key]?.gainDB = $0 }
+                    set: { store.setMappingGain(for: key, gainDB: $0) }
                 ), in: -24...12)
                 .controlSize(.small)
                 Text(String(format: "%.0f dB", mapping.gainDB))

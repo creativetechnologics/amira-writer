@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
 import ProjectKit
 
@@ -64,25 +65,30 @@ private struct MiniVolumeKnob: View {
 
     private let minDB: Double = -24
     private let maxDB: Double = 12
+    private let defaultDB: Double = 0
     private let knobSize: CGFloat = 18
 
     private var normalized: Double {
         (gainDB - minDB) / (maxDB - minDB)
     }
 
-    // Knob indicator angle: -135° (min) to +135° (max)
-    private var angle: Angle {
-        .degrees(-135 + normalized * 270)
+    /// Single source of truth for both the value-arc end and the indicator dot.
+    /// SwiftUI's Path uses screen-space angles where 0° = +X (right) and angles
+    /// increase visually clockwise (because Y is flipped). 135° = bottom-left
+    /// corner of the knob (gain at min); 45° / 405° = bottom-right (gain at max).
+    private var indicatorAngle: Angle {
+        .degrees(135 + normalized * 270)
     }
 
     var body: some View {
         Canvas { context, size in
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
             let radius = min(size.width, size.height) / 2 - 1
+            let arcRadius = radius - 2
 
-            // Track arc (background)
+            // Track arc (background) — gap at the bottom of the knob
             let trackPath = Path { p in
-                p.addArc(center: center, radius: radius - 2,
+                p.addArc(center: center, radius: arcRadius,
                          startAngle: .degrees(135), endAngle: .degrees(45),
                          clockwise: false)
             }
@@ -90,25 +96,30 @@ private struct MiniVolumeKnob: View {
 
             // Value arc
             let valuePath = Path { p in
-                p.addArc(center: center, radius: radius - 2,
+                p.addArc(center: center, radius: arcRadius,
                          startAngle: .degrees(135),
-                         endAngle: .degrees(135 + normalized * 270),
+                         endAngle: indicatorAngle,
                          clockwise: false)
             }
             context.stroke(valuePath, with: .color(color.opacity(0.8)), lineWidth: 2)
 
-            // Indicator dot
-            let dotAngle = angle + .degrees(180)  // offset for coordinate system
-            let dotRadius: CGFloat = radius - 2
+            // Indicator dot — uses the same angle as the arc end so they always agree.
+            let theta = indicatorAngle.radians
             let dotCenter = CGPoint(
-                x: center.x + dotRadius * CGFloat(cos(dotAngle.radians)),
-                y: center.y + dotRadius * CGFloat(sin(dotAngle.radians))
+                x: center.x + arcRadius * CGFloat(cos(theta)),
+                y: center.y + arcRadius * CGFloat(sin(theta))
             )
             let dotRect = CGRect(x: dotCenter.x - 1.5, y: dotCenter.y - 1.5, width: 3, height: 3)
             context.fill(Path(ellipseIn: dotRect), with: .color(.white.opacity(0.9)))
         }
         .frame(width: knobSize, height: knobSize)
         .contentShape(Circle())
+        // Double-click resets to the default (0 dB / unity gain).
+        // Attached BEFORE the drag gesture so SwiftUI gives it priority.
+        .onTapGesture(count: 2) {
+            let snapped = (defaultDB * 2).rounded() / 2
+            gainDB = snapped
+        }
         .gesture(
             DragGesture(minimumDistance: 1)
                 .updating($dragStartDB) { _, state, _ in
@@ -116,12 +127,15 @@ private struct MiniVolumeKnob: View {
                 }
                 .onChanged { value in
                     let start = dragStartDB ?? gainDB
-                    let delta = -value.translation.height / 100.0 * (maxDB - minDB)
+                    // Hold Option to drag 4× finer for precise tuning.
+                    let fine = NSEvent.modifierFlags.contains(.option)
+                    let scale: Double = fine ? 0.25 : 1.0
+                    let delta = -Double(value.translation.height) / 100.0 * (maxDB - minDB) * scale
                     let newDB = min(maxDB, max(minDB, start + delta))
                     gainDB = (newDB * 2).rounded() / 2  // snap to 0.5 dB
                 }
         )
-        .help(String(format: "Volume: %.1f dB", gainDB))
+        .help(String(format: "Volume: %.1f dB  (drag • ⌥-drag for fine • double-click to reset)", gainDB))
     }
 }
 

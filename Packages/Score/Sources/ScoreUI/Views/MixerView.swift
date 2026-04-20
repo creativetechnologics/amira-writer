@@ -103,8 +103,8 @@ private struct ChannelStripView: View {
             get: { store.instrumentMappings[channelKey]?.gainDB ?? mapping.gainDB },
             set: { newVal in
                 let clamped = min(max(newVal, -60.0), 12.0)
-                store.instrumentMappings[channelKey]?.gainDB = clamped
-                store.isDirty = true
+                // Route through setMappingGain so the live audio mixer is updated too.
+                store.setMappingGain(for: channelKey, gainDB: clamped)
                 // Record volume automation if armed
                 if store.automationRecordArmed && store.automationRecordChannelKey == channelKey && store.automationRecordLaneType == .cc7Volume {
                     let normalized = (clamped + 60) / 72 // map -60..12 to 0..1
