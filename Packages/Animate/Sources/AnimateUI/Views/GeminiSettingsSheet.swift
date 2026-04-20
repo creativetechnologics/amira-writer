@@ -287,12 +287,7 @@ struct APISettingsSheet: View {
                 unsavedLabel: "No RunPod key saved yet."
             )
 
-            Text("Used for LORA training on RunPod GPU instances. Get a key at runpod.io/console/user/settings.")
-                .font(.caption)
-                .foregroundStyle(OperaChromeTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("FLUX.2 training also needs a HuggingFace token. Amira Writer auto-reads it from `~/.lora-maker/hf_token` (copied by `Scripts/setup_laptop_for_lora.command`).")
+            Text("Used for RunPod GPU instances (mouth-sync). Get a key at runpod.io/console/user/settings.")
                 .font(.caption)
                 .foregroundStyle(OperaChromeTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)

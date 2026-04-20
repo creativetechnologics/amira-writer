@@ -22,9 +22,7 @@ public final class AnimateWorkspaceController: ObservableObject {
 
     public init() {
         store.disableExternalFileWatch = true
-        _ = RunPodLORAService.shared
         _ = RunPodMouthSyncService.shared
-        RunPodLORAService.shared.setActiveAnimateURL(store.animateURL)
         RunPodMouthSyncService.shared.setActiveAnimateURL(store.animateURL)
         activeProjectPath = store.owpURL?.standardizedFileURL.path
         selectedScenePath = currentSelectionPath()
@@ -57,12 +55,11 @@ public final class AnimateWorkspaceController: ObservableObject {
 
     /// Whether any RunPod-backed Animate workflow currently has an active pod.
     public var isRunPodActive: Bool {
-        RunPodLORAService.shared.podStatus.isActive || RunPodMouthSyncService.shared.podStatus.isActive
+        RunPodMouthSyncService.shared.podStatus.isActive
     }
 
     /// Manual emergency stop for all active RunPod-backed Animate jobs.
     public func terminateRunPodPods() {
-        RunPodLORAService.shared.terminateAllPods()
         RunPodMouthSyncService.shared.terminateAllPods()
     }
 
@@ -124,7 +121,6 @@ public final class AnimateWorkspaceController: ObservableObject {
            !store.isLoadingProject,
            store.loadErrorMessage == nil {
             activeProjectPath = normalizedPath
-            RunPodLORAService.shared.setActiveAnimateURL(store.animateURL)
             RunPodMouthSyncService.shared.setActiveAnimateURL(store.animateURL)
             store.resumeBackgroundWork()
             return nil
@@ -161,7 +157,6 @@ public final class AnimateWorkspaceController: ObservableObject {
            store.loadErrorMessage == nil {
             loadedProjectPath = normalizedPath
             activeProjectPath = normalizedPath
-            RunPodLORAService.shared.setActiveAnimateURL(store.animateURL)
             RunPodMouthSyncService.shared.setActiveAnimateURL(store.animateURL)
             return nil
         }

@@ -10,9 +10,6 @@ struct AnimateMain {
         if await handleSnapshotCommand() {
             return
         }
-        if await handleLoRAE2ECommand() {
-            return
-        }
         if await handleSceneSweepCommand() {
             return
         }
@@ -66,51 +63,6 @@ struct AnimateMain {
     }
 
     @MainActor
-    private static func handleLoRAE2ECommand() async -> Bool {
-        let arguments = Array(CommandLine.arguments.dropFirst())
-        guard arguments.contains("--lora-e2e") else { return false }
-
-        guard let projectPath = argumentValue(after: "--project", in: arguments),
-              let characterQuery = argumentValue(after: "--character", in: arguments) else {
-            fputs("Missing required flags for --lora-e2e.\n", stderr)
-            fputs("Required: --project <path> --character <slug-or-name>\n", stderr)
-            fputs("Optional: --prompt <text> --scene-slug <slug> [--preset accepted but ignored; training is forced to 3000-step high]\n", stderr)
-            Darwin.exit(EXIT_FAILURE)
-        }
-
-        let presetRawValue = argumentValue(after: "--preset", in: arguments) ?? "high"
-        let smokePrompt = argumentValue(after: "--prompt", in: arguments)
-        let sceneSlug = argumentValue(after: "--scene-slug", in: arguments) ?? "lora-smoke-test"
-
-        do {
-            let result = try await AnimateAutomation.runLoRAE2E(
-                projectURL: URL(fileURLWithPath: projectPath),
-                characterQuery: characterQuery,
-                presetRawValue: presetRawValue,
-                prompt: smokePrompt,
-                sceneSlug: sceneSlug,
-                onEvent: { line in
-                    print(line)
-                    fflush(stdout)
-                }
-            )
-
-            print("LORA_E2E_OK")
-            print("character=\(result.characterName)")
-            print("project_lora=\(result.projectLoRAPath)")
-            print("drawthings_lora=\(result.drawThingsLoRAPath)")
-            print("generated_image=\(result.generatedImagePath)")
-            print("prompt_file=\(result.promptFilePath)")
-        } catch {
-            fputs("LoRA E2E failed: \(error.localizedDescription)\n", stderr)
-            fflush(stderr)
-            Darwin.exit(EXIT_FAILURE)
-        }
-
-        return true
-    }
-
-    @MainActor
     private static func handleSceneSweepCommand() async -> Bool {
         let arguments = Array(CommandLine.arguments.dropFirst())
         guard arguments.contains("--scene-lora-sweep") else { return false }
@@ -119,13 +71,12 @@ struct AnimateMain {
               let outputPath = argumentValue(after: "--output", in: arguments) else {
             fputs("Missing required flags for --scene-lora-sweep.\n", stderr)
             fputs("Required: --project <path> --output <server-output-dir>\n", stderr)
-            fputs("Optional: --host <draw-things-host> --port <draw-things-port> --lora-weight-multiplier <value>\n", stderr)
+            fputs("Optional: --host <draw-things-host> --port <draw-things-port>\n", stderr)
             Darwin.exit(EXIT_FAILURE)
         }
 
         let host = argumentValue(after: "--host", in: arguments) ?? "http://Garys-Server.local"
         let port = argumentValue(after: "--port", in: arguments).flatMap(Int.init) ?? 7860
-        let loraWeightMultiplier = argumentValue(after: "--lora-weight-multiplier", in: arguments).flatMap(Double.init) ?? 1.0
 
         do {
             let result = try await AnimateAutomation.runDrawThingsSceneSweep(
@@ -133,7 +84,6 @@ struct AnimateMain {
                 outputDirectoryURL: URL(fileURLWithPath: outputPath),
                 drawThingsHost: host,
                 drawThingsPort: port,
-                loraWeightMultiplier: loraWeightMultiplier,
                 onEvent: { line in
                     print(line)
                     fflush(stdout)

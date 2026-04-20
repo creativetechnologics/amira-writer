@@ -1,6 +1,10 @@
 import Foundation
 import ProjectKit
 
+/// Namespace for CLI automation tasks.
+@available(macOS 26.0, *)
+public enum AnimateAutomation {}
+
 @available(macOS 26.0, *)
 public struct DrawThingsSceneSweepItemResult: Codable, Sendable {
     public let label: String
@@ -36,7 +40,6 @@ public extension AnimateAutomation {
         outputDirectoryURL: URL,
         drawThingsHost: String = "http://Garys-Server.local",
         drawThingsPort: Int = 7860,
-        loraWeightMultiplier: Double = 1.0,
         onEvent: @escaping (String) -> Void = { _ in }
     ) async throws -> DrawThingsSceneSweepResult {
         let store = AnimateStore()
@@ -65,29 +68,6 @@ public extension AnimateAutomation {
             at: outputDirectoryURL,
             withIntermediateDirectories: true
         )
-
-        let syncedCharacters = store.characters
-            .filter { targetCharacterSlugs.contains($0.owpSlug) }
-            .filter { !($0.activeLORAFilename?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }
-            .sorted {
-                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-            }
-        let weightedCharacters = store.characters.map { character -> AnimationCharacter in
-            var updated = character
-            let hasActiveLoRA = !(updated.activeLORAFilename?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-            guard hasActiveLoRA else { return updated }
-            updated.activeLORAWeight = max(0.05, updated.activeLORAWeight * loraWeightMultiplier)
-            return updated
-        }
-
-        for character in syncedCharacters {
-            let syncedFilename = try await DrawThingsLoRAService().syncActiveLoRA(
-                for: character,
-                animateURL: animateURL,
-                config: drawThingsConfig
-            )
-            onEvent("synced_lora character=\(character.name) file=\(syncedFilename)")
-        }
 
         let promptService = ImagineScenePromptService(store: store)
         let generationService = ImagineGenerationService()
@@ -123,16 +103,22 @@ public extension AnimateAutomation {
                 )
                 onEvent("prompt label=\(sample.label) text=\(prompt)")
 
+                let capturedConfig = drawThingsConfig
+                let capturedProjectURL = projectURL
+                let capturedSceneSlug = sanitizedSlug(for: scene.owpSongPath)
+                let capturedShotIndex = sample.shotNumber - 1
+                let capturedMoment = sample.moment
+                let capturedCharacters = store.characters
                 let savedImages = try await retryingGeneration(maxAttempts: 3) {
                     try await generationService.generateWithDrawThings(
                         prompt: prompt,
                         model: .fluxKlein9B,
-                        config: drawThingsConfig,
-                        owpURL: projectURL,
-                        sceneSlug: sanitizedSlug(for: scene.owpSongPath),
-                        shotIndex: sample.shotNumber - 1,
-                        moment: sample.moment,
-                        characters: weightedCharacters,
+                        config: capturedConfig,
+                        owpURL: capturedProjectURL,
+                        sceneSlug: capturedSceneSlug,
+                        shotIndex: capturedShotIndex,
+                        moment: capturedMoment,
+                        characters: capturedCharacters,
                         batchSize: 1
                     )
                 }
@@ -181,7 +167,6 @@ public extension AnimateAutomation {
             generatedAt: ISO8601DateFormatter().string(from: Date()),
             drawThingsHost: drawThingsHost,
             drawThingsPort: drawThingsPort,
-            loraWeightMultiplier: loraWeightMultiplier,
             items: itemResults,
             failures: failures
         )
@@ -225,7 +210,7 @@ private extension AnimateAutomation {
 
     static func retryingGeneration(
         maxAttempts: Int,
-        operation: @escaping () async throws -> [URL]
+        operation: @escaping @Sendable () async throws -> [URL]
     ) async throws -> [URL] {
         var lastError: Error?
         for attempt in 1...maxAttempts {
@@ -315,7 +300,6 @@ private struct SceneSweepManifest: Encodable {
     let generatedAt: String
     let drawThingsHost: String
     let drawThingsPort: Int
-    let loraWeightMultiplier: Double
     let items: [DrawThingsSceneSweepItemResult]
     let failures: [String]
 }

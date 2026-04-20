@@ -549,7 +549,6 @@ struct GeminiBatchSubmissionPlan: Sendable {
         var title: String
         var prompt: String
         var referencePaths: [String]
-        var recommendedLORACaption: String? = nil
     }
 
     var characterName: String
@@ -842,7 +841,6 @@ private extension GeminiBatchService {
             var title: String
             var prompt: String
             var reference_paths: [String]
-            var recommended_lora_caption: String?
         }
 
         var character_name: String
@@ -867,8 +865,7 @@ private extension GeminiBatchService {
                     id: $0.id,
                     title: $0.title,
                     prompt: $0.prompt,
-                    reference_paths: $0.referencePaths,
-                    recommended_lora_caption: $0.recommendedLORACaption
+                    reference_paths: $0.referencePaths
                 )
             }
         }

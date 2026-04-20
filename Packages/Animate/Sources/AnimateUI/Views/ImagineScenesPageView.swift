@@ -52,9 +52,6 @@ struct ImagineScenesPageView: View {
         useGemini || drawThingsSourceImagePath != nil
     }
 
-    private var scenePromptSubjectStyle: ImagineScenePromptService.SubjectStyle {
-        usesReferenceDrivenPromptStyle ? .neutralSubjects : .loraTokens
-    }
 
     var body: some View {
         if let scene = selectedScene {
@@ -563,7 +560,7 @@ struct ImagineScenesPageView: View {
             scene: scene,
             shotIndex: shotIndex,
             moment: selectedMoment,
-            subjectStyle: scenePromptSubjectStyle
+            subjectStyle: .neutralSubjects
         )
     }
 
@@ -578,7 +575,7 @@ struct ImagineScenesPageView: View {
                     scene: scene,
                     shotIndex: shotIndex,
                     moment: selectedMoment,
-                    subjectStyle: scenePromptSubjectStyle
+                    subjectStyle: .neutralSubjects
                 )
             } catch {
                 generationError = error.localizedDescription
@@ -616,8 +613,7 @@ struct ImagineScenesPageView: View {
                         sceneSlug: sceneSlug, shotIndex: shotIndex, moment: selectedMoment,
                         characters: drawThingsSourceImagePath == nil ? store.characters : [],
                         sourceImageURL: drawThingsSourceImagePath.map { URL(fileURLWithPath: $0) },
-                        denoisingStrength: drawThingsDenoisingStrength,
-                        useCharacterLoRAs: drawThingsSourceImagePath == nil
+                        denoisingStrength: drawThingsDenoisingStrength
                     )
                 }
             } catch {

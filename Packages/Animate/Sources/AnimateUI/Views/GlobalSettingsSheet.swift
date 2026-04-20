@@ -14,7 +14,6 @@ struct GlobalSettingsSheet: View {
     @Bindable var store: AnimateStore
     let onDismiss: () -> Void
 
-    @AppStorage("animate.features.loraEnabled") private var loraEnabled: Bool = true
     @AppStorage("animate.features.map3dEnabled") private var map3dEnabled: Bool = true
 
     @State private var selectedTab: Tab = .general
@@ -287,21 +286,6 @@ struct GlobalSettingsSheet: View {
 
     private var featuresTab: some View {
         VStack(alignment: .leading, spacing: 14) {
-            sectionCard(
-                title: "LoRA training features",
-                subtitle: "When OFF, LoRA-specific UI (per-thumbnail 'L' selector, LoRA training sheet, training-batch controls) is hidden across the app. Underlying code stays in place for future use; this just removes the clutter while you're working exclusively with Gemini."
-            ) {
-                Toggle(isOn: $loraEnabled) {
-                    Label("Show LoRA features", systemImage: "brain.head.profile")
-                }
-                if !loraEnabled {
-                    Text("LoRA UI is hidden. Flip this back on to resume training flows.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
             sectionCard(
                 title: "3D Map preview",
                 subtitle: "Shows / hides the Places → 3D Map tab and the Map View camera preset button in Gemini preflight drafts."

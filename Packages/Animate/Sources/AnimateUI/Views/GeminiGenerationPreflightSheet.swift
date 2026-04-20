@@ -53,7 +53,6 @@ struct GeminiGenerationDraft: Identifiable, Hashable, Sendable {
     var title: String
     var destinationDescription: String
     var prompt: String
-    var recommendedLORACaption: String? = nil
     var contextNote: String? = nil
     var model: GeminiModel
     var aspectRatio: String

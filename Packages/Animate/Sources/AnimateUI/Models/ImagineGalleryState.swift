@@ -5,8 +5,6 @@ import ProjectKit
 struct ImagineGallerySelectionState: Codable, Equatable {
     /// Images picked as Gemini generation references (top-left checkbox)
     var selectedPaths: Set<String> = []
-    /// Images picked for LORA training dataset (top-right checkbox)
-    var loraSelectedPaths: Set<String> = []
     /// Rejected / hidden images (greyed out)
     var hiddenPaths: Set<String> = []
     /// Batch job keys the user explicitly removed from the status list.
@@ -14,19 +12,16 @@ struct ImagineGallerySelectionState: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case selectedPaths
-        case loraSelectedPaths
         case hiddenPaths
         case dismissedBatchJobKeys
     }
 
     init(
         selectedPaths: Set<String> = [],
-        loraSelectedPaths: Set<String> = [],
         hiddenPaths: Set<String> = [],
         dismissedBatchJobKeys: Set<String> = []
     ) {
         self.selectedPaths = selectedPaths
-        self.loraSelectedPaths = loraSelectedPaths
         self.hiddenPaths = hiddenPaths
         self.dismissedBatchJobKeys = dismissedBatchJobKeys
     }
@@ -34,7 +29,6 @@ struct ImagineGallerySelectionState: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         selectedPaths = try container.decodeIfPresent(Set<String>.self, forKey: .selectedPaths) ?? []
-        loraSelectedPaths = try container.decodeIfPresent(Set<String>.self, forKey: .loraSelectedPaths) ?? []
         hiddenPaths = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenPaths) ?? []
         dismissedBatchJobKeys = try container.decodeIfPresent(Set<String>.self, forKey: .dismissedBatchJobKeys) ?? []
     }
@@ -42,7 +36,6 @@ struct ImagineGallerySelectionState: Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(selectedPaths, forKey: .selectedPaths)
-        try container.encode(loraSelectedPaths, forKey: .loraSelectedPaths)
         try container.encode(hiddenPaths, forKey: .hiddenPaths)
         try container.encode(dismissedBatchJobKeys, forKey: .dismissedBatchJobKeys)
     }
@@ -78,7 +71,6 @@ struct ImagineGallerySelectionState: Codable, Equatable {
     func normalized(animateURL: URL) -> ImagineGallerySelectionState {
         ImagineGallerySelectionState(
             selectedPaths: Self.normalizedPaths(selectedPaths, animateURL: animateURL),
-            loraSelectedPaths: Self.normalizedPaths(loraSelectedPaths, animateURL: animateURL),
             hiddenPaths: Self.normalizedPaths(hiddenPaths, animateURL: animateURL),
             dismissedBatchJobKeys: dismissedBatchJobKeys
         )

@@ -21,7 +21,6 @@ struct ImagineGenerationService {
         var seed: Int?
         var batch_size: Int = 1
         var n_iter: Int = 1
-        var loras: [DrawThingsLoRAReference]
     }
 
     private struct DrawThingsImg2ImgRequest: Encodable {
@@ -39,7 +38,6 @@ struct ImagineGenerationService {
         var seed: Int?
         var batch_size: Int = 1
         var n_iter: Int = 1
-        var loras: [DrawThingsLoRAReference]
     }
 
     private struct DrawThingsResponse: Decodable {
@@ -61,8 +59,7 @@ struct ImagineGenerationService {
         characters: [AnimationCharacter] = [],
         batchSize: Int = 1,
         sourceImageURL: URL? = nil,
-        denoisingStrength: Double = 0.35,
-        useCharacterLoRAs: Bool = true
+        denoisingStrength: Double = 0.35
     ) async throws -> [URL] {
         guard var components = URLComponents(string: config.apiHost) else {
             throw GenerationError.invalidURL
@@ -79,15 +76,6 @@ struct ImagineGenerationService {
             basePrompt: prompt,
             config: config
         )
-        let preparedPrompt = try await prepareDrawThingsPrompt(
-            promptWithHouseStyle: promptWithHouseStyle,
-            characters: characters,
-            owpURL: owpURL,
-            config: config,
-            useCharacterLoRAs: useCharacterLoRAs
-        )
-        let requestLoRAs = preparedPrompt.loras
-
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -99,7 +87,7 @@ struct ImagineGenerationService {
                 sourceImageURL: sourceImageURL
             )
             let body = DrawThingsImg2ImgRequest(
-                prompt: preparedPrompt.prompt,
+                prompt: promptWithHouseStyle,
                 negative_prompt: config.negativePrompt,
                 init_images: [sourceData.base64EncodedString()],
                 strength: denoisingStrength,
@@ -112,12 +100,11 @@ struct ImagineGenerationService {
                 sampler: model.defaultSampler,
                 seed: config.seed,
                 batch_size: clampedBatch,
-                loras: requestLoRAs
             )
             request.httpBody = try JSONEncoder().encode(body)
         } else {
             let body = DrawThingsRequest(
-                prompt: preparedPrompt.prompt,
+                prompt: promptWithHouseStyle,
                 negative_prompt: config.negativePrompt,
                 width: 1920,
                 height: 1088,
@@ -128,7 +115,6 @@ struct ImagineGenerationService {
                 sampler: model.defaultSampler,
                 seed: config.seed,
                 batch_size: clampedBatch,
-                loras: requestLoRAs
             )
             request.httpBody = try JSONEncoder().encode(body)
         }
@@ -162,33 +148,10 @@ struct ImagineGenerationService {
 
             // Save prompt alongside image for later review
             let promptURL = dir.appendingPathComponent("dt_\(baseTimestamp)_\(i).prompt.txt")
-            try? preparedPrompt.prompt.write(to: promptURL, atomically: true, encoding: .utf8)
+            try? promptWithHouseStyle.write(to: promptURL, atomically: true, encoding: .utf8)
         }
 
         return savedURLs
-    }
-
-    private func prepareDrawThingsPrompt(
-        promptWithHouseStyle: String,
-        characters: [AnimationCharacter],
-        owpURL: URL,
-        config: DrawThingsPlaceConfig,
-        useCharacterLoRAs: Bool
-    ) async throws -> DrawThingsPreparedPrompt {
-        guard useCharacterLoRAs else {
-            return DrawThingsPreparedPrompt(
-                prompt: promptWithHouseStyle,
-                loras: []
-            )
-        }
-
-        let animateURL = ProjectPaths(root: owpURL).animate
-        return try await DrawThingsLoRAService().preparePrompt(
-            prompt: promptWithHouseStyle,
-            characters: characters,
-            animateURL: animateURL,
-            config: config
-        )
     }
 
     private func sourceImagePixelSize(
@@ -432,14 +395,12 @@ struct ImagineGenerationService {
         case invalidURL
         case httpError(Int, String)
         case noImage
-        case drawThingsLoRA(String)
 
         var errorDescription: String? {
             switch self {
             case .invalidURL: "Invalid Draw Things URL."
             case .httpError(let code, let msg): "Draw Things error \(code): \(msg)"
             case .noImage: "Draw Things returned no image."
-            case .drawThingsLoRA(let detail): detail
             }
         }
     }

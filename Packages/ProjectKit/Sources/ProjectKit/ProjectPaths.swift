@@ -330,11 +330,6 @@ public struct ProjectPaths: Sendable {
         characterFolder(slug: slug).appendingPathComponent("parts", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/lora/`
-    public func characterLora(slug: String) -> URL {
-        characterFolder(slug: slug).appendingPathComponent("lora", isDirectory: true)
-    }
-
     /// `<project>/Animate/characters/<slug>/inspiration/`
     public func characterInspiration(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("inspiration", isDirectory: true)

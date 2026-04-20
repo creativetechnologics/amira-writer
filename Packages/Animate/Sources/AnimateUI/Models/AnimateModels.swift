@@ -466,11 +466,6 @@ enum CharacterCanvasRenderMode: String, Codable, Sendable, CaseIterable, Hashabl
 struct CharacterInspirationBatchJob: Identifiable, Codable, Sendable, Hashable {
     enum Kind: String, Codable, Sendable, Hashable {
         case inspiration
-        case loraCandidate = "lora_candidate"
-
-        var autoSelectForLoRA: Bool {
-            self == .loraCandidate
-        }
     }
 
     var id: UUID
@@ -616,9 +611,6 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
     var backstory: String
     var personality: String
     var notes: String
-    var activeLORAFilename: String?
-    var activeLORATriggerWord: String?
-    var activeLORAWeight: Double
     var defaultWardrobeType: CharacterWardrobeType
     var genderType: CharacterGenderType
     var age: Int?
@@ -665,9 +657,6 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         backstory: String = "",
         personality: String = "",
         notes: String = "",
-        activeLORAFilename: String? = nil,
-        activeLORATriggerWord: String? = nil,
-        activeLORAWeight: Double = 1.0,
         defaultWardrobeType: CharacterWardrobeType = .soldier,
         genderType: CharacterGenderType = .person,
         age: Int? = nil,
@@ -707,9 +696,6 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         self.backstory = backstory
         self.personality = personality
         self.notes = notes
-        self.activeLORAFilename = activeLORAFilename
-        self.activeLORATriggerWord = activeLORATriggerWord
-        self.activeLORAWeight = activeLORAWeight
         self.defaultWardrobeType = defaultWardrobeType
         self.genderType = genderType
         self.age = age
@@ -752,9 +738,6 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         backstory = try c.decodeIfPresent(String.self, forKey: .backstory) ?? ""
         personality = try c.decodeIfPresent(String.self, forKey: .personality) ?? ""
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
-        activeLORAFilename = try c.decodeIfPresent(String.self, forKey: .activeLORAFilename)
-        activeLORATriggerWord = try c.decodeIfPresent(String.self, forKey: .activeLORATriggerWord)
-        activeLORAWeight = try c.decodeIfPresent(Double.self, forKey: .activeLORAWeight) ?? 1.0
         defaultWardrobeType = try c.decodeIfPresent(CharacterWardrobeType.self, forKey: .defaultWardrobeType) ?? .soldier
         genderType = try c.decodeIfPresent(CharacterGenderType.self, forKey: .genderType) ?? .person
         age = try c.decodeIfPresent(Int.self, forKey: .age)

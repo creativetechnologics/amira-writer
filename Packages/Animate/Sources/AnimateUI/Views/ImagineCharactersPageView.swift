@@ -7,18 +7,10 @@ import UniformTypeIdentifiers
 @available(macOS 26.0, *)
 struct ImagineCharactersPageView: View {
     @Bindable var store: AnimateStore
-    @State private var showLORATraining = false
     /// Selection state is a value type (Set-backed struct). Mutations copy-on-write and stay cheap at this gallery size.
     @State private var galleryState: ImagineGallerySelectionState = .init()
     @State private var focusedIndex: Int = 0
     @State private var preloadedPaths: [String] = []
-    // LoRA generation path is archived (2026-04-16). All LoRA UI is gated on
-    // this flag, which now defaults to `false` — Gemini is the sole generation
-    // path. To bring LoRA back, flip the Global Settings toggle (or this
-    // default) and the gated sections render again. No Swift source was
-    // deleted; see `loraSelectionSection`, `preparePhotorealLORACandidatePlan`,
-    // and the `.lora` gallery filter case which all stay callable.
-    @AppStorage("animate.features.loraEnabled") private var loraEnabled: Bool = false
     @AppStorage("imagineChars.galleryThumbnailSize") private var thumbnailBaseSize: Double = 120
     @AppStorage("imagineChars.galleryFilter") private var galleryFilterRawValue: String = GalleryFilter.all.rawValue
     /// Minimum rating filter (0 = show all regardless of rating, 1-5 = show only
@@ -38,7 +30,6 @@ struct ImagineCharactersPageView: View {
     @State private var inspirationPendingBatchTitleOverride: String?
     @State private var inspirationPendingBatchFolderSlugOverride: String?
     @State private var inspirationPendingBatchKind: CharacterInspirationBatchJob.Kind = .inspiration
-    @State private var inspirationAutoSelectForLoRA = false
     @State private var inspirationGenerationErrorMessage: String?
     @State private var inspirationGenerationStatus: String?
     @State private var inspirationStatusCharacterID: UUID?
@@ -57,7 +48,6 @@ struct ImagineCharactersPageView: View {
     @State private var inspirationGenerationQueue: [QueuedInspirationRun] = []
     @State private var isSubmittingInspirationBatch: Bool = false
     @State private var submittingInspirationBatchCharacterID: UUID?
-    @ObservedObject private var runpodService = RunPodLORAService.shared
     @FocusState private var galleryKeyboardFocused: Bool
     @State private var hasShownFocusHighlight = false
     @State private var galleryColumnCount: Int = 1
@@ -82,7 +72,7 @@ struct ImagineCharactersPageView: View {
 
 
     /// Visibility filter for the gallery. Places-style pill group drives
-    /// `.all / .unreviewed / .rejected`; `.gemini`, `.lora`, and the legacy
+    /// `.all / .unreviewed / .rejected`; `.gemini` and the legacy
     /// `.hidden` value are retained for persisted backward-compat (old
     /// `@AppStorage` values) and are honored by `isPathVisibleInGallery`
     /// but are not surfaced in the filter pill UI anymore. The per-device
@@ -96,7 +86,6 @@ struct ImagineCharactersPageView: View {
         /// older builds still decode. Treated as `.rejected` at read time.
         case hidden
         case gemini
-        case lora
 
         var title: String {
             switch self {
@@ -105,7 +94,6 @@ struct ImagineCharactersPageView: View {
             case .rejected: return "Rejected"
             case .hidden: return "Rejected"
             case .gemini: return "Gemini"
-            case .lora: return "LoRA"
             }
         }
 
@@ -116,7 +104,6 @@ struct ImagineCharactersPageView: View {
             case .rejected: return "eye.slash.fill"
             case .hidden: return "eye.slash.fill"
             case .gemini: return "sparkles"
-            case .lora: return "cpu"
             }
         }
     }
@@ -154,8 +141,7 @@ struct ImagineCharactersPageView: View {
             // `yellowSelection` drives both the ring visual and (for legacy
             // decode-compat) the `.gemini` filter. Feeding it into the
             // signature keeps the cached `displayedPaths` in sync.
-            selected: yellowSelection,
-            lora: galleryState.loraSelectedPaths
+            selected: yellowSelection
         )
     }
 
@@ -179,11 +165,10 @@ struct ImagineCharactersPageView: View {
                         let batchTitleOverride = inspirationPendingBatchTitleOverride
                         let batchFolderSlugOverride = inspirationPendingBatchFolderSlugOverride
                         let pendingBatchKind = inspirationPendingBatchKind
-                        let autoSelectForLoRA = inspirationAutoSelectForLoRA
                         inspirationPendingPlan = nil
                         switch mode {
                         case .standard:
-                            runInspirationGeneration(drafts, autoSelectForLoRA: autoSelectForLoRA)
+                            runInspirationGeneration(drafts)
                         case .batch:
                             submitInspirationBatch(
                                 drafts,
@@ -196,7 +181,6 @@ struct ImagineCharactersPageView: View {
                         inspirationPendingBatchTitleOverride = nil
                         inspirationPendingBatchFolderSlugOverride = nil
                         inspirationPendingBatchKind = .inspiration
-                        inspirationAutoSelectForLoRA = false
                         inspirationPendingCharacterID = nil
                     },
                     onCancel: {
@@ -204,7 +188,6 @@ struct ImagineCharactersPageView: View {
                         inspirationPendingBatchTitleOverride = nil
                         inspirationPendingBatchFolderSlugOverride = nil
                         inspirationPendingBatchKind = .inspiration
-                        inspirationAutoSelectForLoRA = false
                         inspirationPendingCharacterID = nil
                     },
                     // Refresh button is only meaningful when the draft came
@@ -273,16 +256,6 @@ struct ImagineCharactersPageView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if loraEnabled {
-                Button {
-                    showLORATraining = true
-                } label: {
-                    Label("Train LORA", systemImage: "cpu")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-
             Spacer()
         }
     }
@@ -335,59 +308,21 @@ struct ImagineCharactersPageView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
-                // Train LORA with LORA-selected images — hidden when LoRA
-                // features are disabled in Global Settings.
-                if loraEnabled {
-                    Button {
-                        flushGalleryStateSaveImmediately(for: character)
-                        loadGalleryState(for: character)
-                        showLORATraining = true
-                    } label: {
-                        Label(
-                            galleryState.loraSelectedPaths.isEmpty
-                                ? "Train LORA"
-                                : "Train LORA (\(galleryState.loraSelectedPaths.count))",
-                            systemImage: "cpu"
-                        )
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(!runpodService.hasAPIKey)
-                }
-            }
-            .sheet(isPresented: $showLORATraining) {
-                LORATrainingSheet(
-                    store: store,
-                    character: character,
-                    initialSelectedPaths: galleryState.loraSelectedPaths
-                )
             }
 
-            // Image Generation Status (instant Gemini + Gemini batches + LORA training) — above everything
+            // Image Generation Status (instant Gemini + batches) — above everything
             if !character.inspirationBatchJobs.isEmpty
-                || runpodService.currentJob != nil
-                || !runpodService.queuedJobs.isEmpty
-                || !runpodService.recentJobs.isEmpty
                 || (isGeneratingInspiration && generatingInspirationCharacterID == character.id) {
                 generationStatusSection(character: character)
             }
 
-            if loraEnabled {
-                loraSelectionSection(character)
-            }
-
             // Selection status bar
-            if !yellowSelection.isEmpty || !galleryState.loraSelectedPaths.isEmpty || !character.inspirationRejectedPaths.isEmpty {
+            if !yellowSelection.isEmpty || !character.inspirationRejectedPaths.isEmpty {
                 HStack(spacing: 8) {
                     if !yellowSelection.isEmpty {
                         Text("\(yellowSelection.count) selected")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.yellow)
-                    }
-                    if loraEnabled && !galleryState.loraSelectedPaths.isEmpty {
-                        Text("\(galleryState.loraSelectedPaths.count) LORA")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.purple)
                     }
                     if !character.inspirationRejectedPaths.isEmpty {
                         Text("\(character.inspirationRejectedPaths.count) rejected")
@@ -457,7 +392,7 @@ struct ImagineCharactersPageView: View {
                 }
             }
 
-            if galleryCollapsed && character.inspirationBatchJobs.isEmpty && runpodService.currentJob == nil && runpodService.queuedJobs.isEmpty && runpodService.recentJobs.isEmpty {
+            if galleryCollapsed && character.inspirationBatchJobs.isEmpty {
                 Text("Gallery is collapsed. Expand it to continue.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -562,27 +497,6 @@ struct ImagineCharactersPageView: View {
         .onKeyPress(.init("f")) {
             if let path = focusedPath {
                 yellowSelection.remove(path)
-                hasShownFocusHighlight = true
-            }
-            return .handled
-        }
-        // LORA training shortcuts
-        .onKeyPress(.init("l")) {
-            if let path = focusedPath {
-                let selectionKey = gallerySelectionKey(for: path)
-                galleryState.loraSelectedPaths.insert(selectionKey)
-                syncFocusedIndex(preferredPath: path)
-                flushGalleryStateSaveImmediately(for: character)
-                hasShownFocusHighlight = true
-            }
-            return .handled
-        }
-        .onKeyPress(.init("k")) {
-            if let path = focusedPath {
-                let selectionKey = gallerySelectionKey(for: path)
-                galleryState.loraSelectedPaths.remove(selectionKey)
-                syncFocusedIndex(preferredPath: path)
-                flushGalleryStateSaveImmediately(for: character)
                 hasShownFocusHighlight = true
             }
             return .handled
@@ -782,8 +696,6 @@ struct ImagineCharactersPageView: View {
             // the transient selection so the filter still makes visual
             // sense if a user somehow lands on it.
             return yellowSelection.contains(path)
-        case .lora:
-            return galleryState.loraSelectedPaths.contains(selectionKey)
         }
     }
 
@@ -900,22 +812,6 @@ struct ImagineCharactersPageView: View {
                     instantGenerationRow(character: character)
                 }
 
-                // LORA training row (if any active or recently completed)
-                if let loraJob = runpodService.currentJob {
-                    loraJobRow(job: loraJob) {
-                        runpodService.clearCurrentJob()
-                    }
-                }
-
-                ForEach(runpodService.queuedJobs) { queuedJob in
-                    queuedLoraJobRow(job: queuedJob)
-                }
-
-                ForEach(runpodService.recentJobs) { recentJob in
-                    loraJobRow(job: recentJob) {
-                        runpodService.clearRecentJob(recentJob.id)
-                    }
-                }
 
                 // Gemini batch jobs (newest first)
                 ForEach(character.inspirationBatchJobs.sorted(by: { $0.submittedAt > $1.submittedAt })) { job in
@@ -929,11 +825,6 @@ struct ImagineCharactersPageView: View {
 
     private func generationStatusItemCount(for character: AnimationCharacter) -> Int {
         var count = character.inspirationBatchJobs.count
-        count += runpodService.queuedJobs.count
-        count += runpodService.recentJobs.count
-        if runpodService.currentJob != nil {
-            count += 1
-        }
         if isGeneratingInspiration, generatingInspirationCharacterID == character.id {
             count += 1
         }
@@ -991,174 +882,6 @@ struct ImagineCharactersPageView: View {
             .foregroundStyle(.secondary)
             .help("Cancel this generation run")
         }
-    }
-
-    @ViewBuilder
-    private func loraJobRow(
-        job: LORATrainingModels.TrainingJob,
-        clearAction: @escaping () -> Void
-    ) -> some View {
-        let stateColor: Color = {
-            switch job.status {
-            case .inactive: return .green
-            case .error: return .red
-            case .stopping: return .orange
-            default: return .purple
-            }
-        }()
-
-        HStack(alignment: .top, spacing: 10) {
-            Circle()
-                .fill(stateColor)
-                .frame(width: 10, height: 10)
-                .overlay(
-                    job.status.isActive
-                        ? Circle().stroke(stateColor.opacity(0.4), lineWidth: 2).scaleEffect(1.8).opacity(0.6)
-                        : nil
-                )
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Image(systemName: "cpu")
-                        .font(.caption)
-                        .foregroundStyle(stateColor)
-                    Text("LORA Training — \(job.characterName)")
-                        .font(.caption.weight(.semibold))
-                    Text("•")
-                        .foregroundStyle(.tertiary)
-                    Text(job.status.displayName)
-                        .font(.caption)
-                        .foregroundStyle(stateColor)
-                }
-
-                if job.totalSteps > 0 {
-                    HStack(spacing: 8) {
-                        Text("Step \(job.currentStep)/\(job.totalSteps)")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                        Text("•")
-                            .foregroundStyle(.tertiary)
-                        Text("Trigger: \(job.triggerWord)")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                        TimelineView(.periodic(from: .now, by: 1)) { _ in
-                            HStack(spacing: 8) {
-                                Text("•")
-                                    .foregroundStyle(.tertiary)
-                                Text(job.elapsedDisplay)
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.secondary)
-                                Text("•")
-                                    .foregroundStyle(.tertiary)
-                                Text(String(format: "$%.2f", job.estimatedCostUSD))
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.green)
-                            }
-                        }
-                    }
-                    if job.status.isActive {
-                        ProgressView(value: job.progress)
-                            .controlSize(.mini)
-                    }
-                }
-
-                if let error = job.errorMessage {
-                    Text(error)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
-                }
-
-                if let loraPath = job.outputLORAPath {
-                    Text(URL(fileURLWithPath: loraPath).lastPathComponent)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.green)
-                }
-
-                // Open the on-disk RunPod/LORA log file so Gary can see the
-                // full command trace (ssh/scp stdout+stderr, lifecycle events)
-                // without having to dig through Console.app or the RunPod
-                // web dashboard.
-                Button {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: runpodService.logFilePath))
-                } label: {
-                    Label("Open Log", systemImage: "doc.text.magnifyingglass")
-                        .font(.caption2)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.blue)
-                .help(runpodService.logFilePath)
-            }
-
-            Spacer()
-
-            if job.status.isActive {
-                Button(role: .destructive) {
-                    runpodService.terminateAllPods()
-                } label: {
-                    Image(systemName: "stop.circle.fill")
-                        .foregroundStyle(.red)
-                }
-                .buttonStyle(.plain)
-                .help("Cancel training & terminate pod")
-            } else {
-                // Clear completed/failed LORA job
-                Button(action: clearAction) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Clear from list")
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private func queuedLoraJobRow(job: LORATrainingModels.QueuedTrainingJob) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Circle()
-                .fill(Color.orange)
-                .frame(width: 10, height: 10)
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                    Text("Queued LORA — \(job.characterName)")
-                        .font(.caption.weight(.semibold))
-                    Text("•")
-                        .foregroundStyle(.tertiary)
-                    Text("Waiting")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-
-                HStack(spacing: 8) {
-                    Text(job.summaryLabel)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                    Text("•")
-                        .foregroundStyle(.tertiary)
-                    Text("Queued \(job.queuedAt.formatted(.relative(presentation: .named)))")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-
-            Spacer()
-
-            Button {
-                runpodService.removeQueuedJob(job.id)
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Remove from queue")
-        }
-        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -1369,8 +1092,7 @@ struct ImagineCharactersPageView: View {
         // was replaced by the transient in-session `yellowSelection` on
         // 2026-04-16. Any pre-existing gray checkmarks in the on-disk JSON
         // get cleared on first load and a debounced save strips them from
-        // disk. `loraSelectedPaths` and `dismissedBatchJobKeys` are
-        // preserved since those remain legitimately persistent.
+        // disk. `dismissedBatchJobKeys` is preserved since it remains legitimately persistent.
         if !galleryState.selectedPaths.isEmpty {
             galleryState.selectedPaths.removeAll()
             scheduleGalleryStateSave(for: character)
@@ -1418,9 +1140,8 @@ struct ImagineCharactersPageView: View {
     }
 
     /// Cancel any pending debounced save and persist the current gallery state
-    /// immediately. Call this before any code path that reads the saved state
-    /// from disk (e.g. opening the LORA training sheet), or for infrequent
-    /// deliberate actions like LORA picks that don't benefit from debouncing.
+    /// immediately. Call this for infrequent deliberate actions that don't
+    /// benefit from debouncing.
     private func flushGalleryStateSaveImmediately(for character: AnimationCharacter) {
         pendingGallerySaveTask?.cancel()
         pendingGallerySaveTask = nil
@@ -1517,14 +1238,13 @@ struct ImagineCharactersPageView: View {
         // Pass 3 (2026-04-17): migrated to the shared `UnifiedImageTile` so
         // this grid renders with the same outer shell (12-corner, 6 padding,
         // accent@10% bg on selection, 2pt accent border) as Characters, All
-        // Images, and Places. Grid-specific widgets (LORA L checkbox, "new"
-        // green dot) live in the unified overlay slots; the right-click menu
+        // Images, and Places. Grid-specific widgets ("new" green dot) live in
+        // the unified overlay slots; the right-click menu
         // routes through `UnifiedImageContextMenuContent` with wardrobe
         // presets folded into `extraGeminiGenerateEntries`.
         let selectionKey = gallerySelectionKey(for: path)
         let resolvedPath = resolvedGalleryAssetPath(for: path)
         let isYellowSelected = yellowSelection.contains(path)
-        let isLoraPicked = galleryState.loraSelectedPaths.contains(selectionKey)
         let isFocused = index == focusedIndex
         let shouldShowFocusBorder = isFocused && hasShownFocusHighlight
         let isSelected = isYellowSelected || shouldShowFocusBorder
@@ -1617,46 +1337,9 @@ struct ImagineCharactersPageView: View {
                 store.markInspirationImageReviewed(path: path, for: character.id)
                 applyGalleryTapSelection(path: path)
             },
-            topTrailingOverlay: loraEnabled
-                ? AnyView(loraBadge(isPicked: isLoraPicked, path: path, selectionKey: selectionKey, character: character))
-                : nil,
+            topTrailingOverlay: nil,
             bottomLeadingOverlay: isNew ? AnyView(unreviewedDot) : nil
         )
-    }
-
-    /// The purple "L" LORA-pick checkbox that lives in the top-trailing
-    /// overlay slot of each Imagine → Characters gallery tile. Extracted so
-    /// the `UnifiedImageTile` call site stays readable.
-    @ViewBuilder
-    private func loraBadge(
-        isPicked: Bool,
-        path: String,
-        selectionKey: String,
-        character: AnimationCharacter
-    ) -> some View {
-        ZStack {
-            Image(systemName: isPicked ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 18))
-                .foregroundStyle(isPicked ? Color.purple : Color.white.opacity(0.85))
-                .shadow(color: .black.opacity(0.6), radius: 2, x: 0, y: 1)
-            Text("L")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(isPicked ? .white : Color.purple)
-        }
-        .padding(5)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            galleryKeyboardFocused = true
-            hasShownFocusHighlight = true
-            if isPicked {
-                galleryState.loraSelectedPaths.remove(selectionKey)
-            } else {
-                galleryState.loraSelectedPaths.insert(selectionKey)
-            }
-            syncFocusedIndex(preferredPath: path)
-            flushGalleryStateSaveImmediately(for: character)
-        }
-        .help("LORA training (L=pick, K=unpick)")
     }
 
     /// The green "new / unreviewed" dot for the bottom-leading overlay slot.
@@ -1788,7 +1471,7 @@ struct ImagineCharactersPageView: View {
         inspirationPendingBatchTitleOverride = nil
         inspirationPendingBatchFolderSlugOverride = nil
         inspirationPendingBatchKind = .inspiration
-        inspirationAutoSelectForLoRA = false
+
         inspirationPendingCharacterID = character.id
 
         let specs = Array(CharacterInspirationPromptCatalog.allSpecs.prefix(count))
@@ -1825,95 +1508,6 @@ struct ImagineCharactersPageView: View {
         )
     }
 
-    @ViewBuilder
-    private func loraSelectionSection(_ character: AnimationCharacter) -> some View {
-        let availableLoRAs = availableLoRAURLs(for: character)
-        let activeLoRAURL = activeLoRAProjectURL(for: character)
-        let promptNames = characterPromptNameTokens(for: character).joined(separator: " or ")
-        let hasActiveLoRA = character.activeLORAFilename != nil
-
-        GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                if availableLoRAs.isEmpty {
-                    Text("No trained LORAs yet. Completed RunPod jobs will land in Characters/\(character.assetFolderSlug)/lora and become selectable here.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(alignment: .center, spacing: 10) {
-                    if !availableLoRAs.isEmpty {
-                        Picker("Active LoRA", selection: activeLoRASelectionBinding(for: character)) {
-                            Text("None").tag("__none__")
-                            ForEach(availableLoRAs, id: \.path) { url in
-                                Text(url.lastPathComponent).tag(url.lastPathComponent)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: 320, alignment: .leading)
-                    }
-
-                    Button("Import…") {
-                        importLoRA(for: character)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    if let activeLoRAURL {
-                        Button("Reveal") {
-                            NSWorkspace.shared.activateFileViewerSelecting([activeLoRAURL])
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    } else {
-                        Button("Open Folder") {
-                            revealLoRAFolder(for: character)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-
-                    Spacer()
-                }
-
-                if hasActiveLoRA {
-                    LabeledContent("Trigger Word") {
-                        TextField(
-                            "trigger",
-                            text: activeLORATriggerBinding(for: character)
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 180)
-                    }
-
-                    LabeledContent("Weight") {
-                        Stepper(
-                            value: activeLORAWeightBinding(for: character),
-                            in: 0.05...2.0,
-                            step: 0.05
-                        ) {
-                            Text(String(format: "%.2f", max(0.05, character.activeLORAWeight)))
-                                .font(.caption.monospacedDigit())
-                                .frame(minWidth: 44, alignment: .leading)
-                        }
-                        .frame(maxWidth: 180, alignment: .leading)
-                    }
-
-                    Text("When a Draw Things prompt mentions \(promptNames), Amira Writer auto-syncs this LoRA into Draw Things and attaches it to the txt2img request.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Choose or import a LoRA to have Imagine auto-apply it when prompts mention \(promptNames).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        } label: {
-            Label("Character LoRA", systemImage: "person.crop.rectangle.stack")
-                .font(.subheadline.weight(.semibold))
-        }
-    }
-
-
     private var inspirationGenerationAlertBinding: Binding<Bool> {
         Binding(
             get: { inspirationGenerationErrorMessage != nil },
@@ -1928,28 +1522,6 @@ struct ImagineCharactersPageView: View {
         for character: AnimationCharacter,
         wardrobe: CharacterInspirationWardrobe
     ) -> some View {
-        if loraEnabled {
-            Section("Photoreal LoRA Candidates") {
-                Button("Generate 1 Test Candidate") {
-                    preparePhotorealLORACandidatePlan(for: character, count: 1, mode: .immediate)
-                }
-                Button("Generate 50 Candidates Now") {
-                    preparePhotorealLORACandidatePlan(
-                        for: character,
-                        count: PhotorealLORACandidateCatalog.allSpecs.count,
-                        mode: .immediate
-                    )
-                }
-                Button("Submit 50-Candidate Batch + Watchdog") {
-                    preparePhotorealLORACandidatePlan(
-                        for: character,
-                        count: PhotorealLORACandidateCatalog.allSpecs.count,
-                        mode: .batch
-                    )
-                }
-            }
-        }
-
         Section(wardrobe.displayName) {
             Button("Generate 1 Test Image") {
                 prepareInspirationGenerationPlan(for: character, count: 1, wardrobe: wardrobe, mode: .immediate)
@@ -1999,7 +1571,7 @@ struct ImagineCharactersPageView: View {
         inspirationPendingBatchTitleOverride = nil
         inspirationPendingBatchFolderSlugOverride = nil
         inspirationPendingBatchKind = .inspiration
-        inspirationAutoSelectForLoRA = false
+
         inspirationPendingCharacterID = character.id
         // Use the yellow-selected images as reference images for a 27-image
         // set. `yellowSelection` is the transient cmd/shift-click selection
@@ -2084,7 +1656,7 @@ struct ImagineCharactersPageView: View {
         inspirationPendingBatchTitleOverride = nil
         inspirationPendingBatchFolderSlugOverride = nil
         inspirationPendingBatchKind = .inspiration
-        inspirationAutoSelectForLoRA = false
+
         // Track character so the preflight sheet's pose-refresh button can
         // cycle to the next catalog spec. Clears on sheet dismiss.
         inspirationPendingCharacterID = character.id
@@ -2127,7 +1699,7 @@ struct ImagineCharactersPageView: View {
         inspirationPendingBatchTitleOverride = CharacterActionPromptCatalog.batchTitle
         inspirationPendingBatchFolderSlugOverride = CharacterActionPromptCatalog.batchFolderSlug
         inspirationPendingBatchKind = .inspiration
-        inspirationAutoSelectForLoRA = false
+
         inspirationPendingCharacterID = character.id
 
         let specs = Array(CharacterActionPromptCatalog.allSpecs.prefix(count))
@@ -2161,62 +1733,16 @@ struct ImagineCharactersPageView: View {
         )
     }
 
-    private func preparePhotorealLORACandidatePlan(
-        for character: AnimationCharacter,
-        count: Int,
-        mode: CharacterInspirationGenerationMode
-    ) {
-        let referenceDrafts = photorealLORACandidateReferenceDrafts(for: character)
-        guard !referenceDrafts.isEmpty else {
-            inspirationGenerationErrorMessage = "Choose or curate at least one real lifestyle reference image before generating photoreal LoRA candidates."
-            return
-        }
-
-        let specs = Array(PhotorealLORACandidateCatalog.allSpecs.prefix(count))
-        inspirationDrafts = specs.map { spec in
-            GeminiGenerationDraft(
-                title: spec.title,
-                destinationDescription: "Photoreal LoRA candidate image",
-                prompt: PhotorealLORACandidateCatalog.prompt(for: spec, character: character),
-                recommendedLORACaption: PhotorealLORACandidateCatalog.recommendedLORACaption(for: spec),
-                contextNote: "Photoreal LoRA candidate",
-                model: store.selectedGeminiModel,
-                aspectRatio: PhotorealLORACandidateCatalog.defaultAspectRatio,
-                imageSize: PhotorealLORACandidateCatalog.defaultImageSize,
-                referenceItems: referenceDrafts,
-                pricingMode: mode == .batch ? .batch : .standard
-            )
-        }
-
-        inspirationActiveWardrobe = .soldier
-        inspirationPendingBatchTitleOverride = PhotorealLORACandidateCatalog.batchTitle
-        inspirationPendingBatchFolderSlugOverride = PhotorealLORACandidateCatalog.batchFolderSlug
-        inspirationPendingBatchKind = .loraCandidate
-        inspirationAutoSelectForLoRA = true
-
-        let usingSelectedRefs = !yellowSelection.isEmpty
-        inspirationPendingPlan = PendingInspirationGenerationPlan(
-            title: "\(character.name) • Photoreal LoRA Candidates\(usingSelectedRefs ? " (selected refs)" : "")",
-            confirmTitle: mode == .batch
-                ? "Submit \(count)-Candidate Batch"
-                : (count == 1 ? "Generate 1 Candidate" : "Generate \(count) Candidates"),
-            mode: mode,
-            wardrobe: .soldier
-        )
-    }
-
     // MARK: - Generation Execution
 
     struct QueuedInspirationRun {
         let drafts: [GeminiGenerationDraft]
-        let autoSelectForLoRA: Bool
         let characterID: UUID
         let characterName: String
     }
 
     private func runInspirationGeneration(
-        _ drafts: [GeminiGenerationDraft],
-        autoSelectForLoRA: Bool = false
+        _ drafts: [GeminiGenerationDraft]
     ) {
         guard let character = store.selectedCharacter else { return }
         guard store.isGeminiAllowed() else {
@@ -2230,7 +1756,6 @@ struct ImagineCharactersPageView: View {
         inspirationGenerationQueue.append(
             QueuedInspirationRun(
                 drafts: drafts,
-                autoSelectForLoRA: autoSelectForLoRA,
                 characterID: character.id,
                 characterName: character.name
             )
@@ -2312,13 +1837,8 @@ struct ImagineCharactersPageView: View {
                             filenameStem: sanitizedFilenameStem(for: draft.title),
                             for: run.characterID,
                             aspectRatio: draft.aspectRatio,
-                            imageSize: draft.imageSize,
-                            recommendedLORACaption: draft.recommendedLORACaption,
-                            autoSelectForLoRA: run.autoSelectForLoRA
+                            imageSize: draft.imageSize
                         )
-                        if run.autoSelectForLoRA, !storedPath.isEmpty {
-                            galleryState.loraSelectedPaths.insert(storedPath)
-                        }
                         store.updateGeminiActivity(
                             activityID,
                             status: .completed,
@@ -2417,8 +1937,7 @@ struct ImagineCharactersPageView: View {
                         id: sanitizedFilenameStem(for: draft.title),
                         title: draft.title,
                         prompt: draft.prompt,
-                        referencePaths: try resolvedBatchReferencePaths(from: draft.includedReferenceItems),
-                        recommendedLORACaption: draft.recommendedLORACaption
+                        referencePaths: try resolvedBatchReferencePaths(from: draft.includedReferenceItems)
                     )
                 }
 
@@ -2472,27 +1991,6 @@ struct ImagineCharactersPageView: View {
         }
     }
 
-    private func photorealLORACandidateReferenceDrafts(for character: AnimationCharacter) -> [GeminiGenerationReferenceDraft] {
-        // Photoreal LoRA candidate refs follow the same yellow-selection
-        // rule as the rest of the Imagine gallery: if the user has actively
-        // multi-selected images in the grid, use those; otherwise fall back
-        // to the store-preferred ordering. Previously keyed off the
-        // persistent `galleryState.selectedPaths` which was retired on
-        // 2026-04-16.
-        let selectedLifestylePaths = yellowSelection
-        if !selectedLifestylePaths.isEmpty {
-            return selectedLifestylePaths.sorted().map { path in
-                GeminiGenerationReferenceDraft(
-                    label: URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent,
-                    path: path,
-                    isIncluded: true
-                )
-            }
-        }
-
-        return inspirationReferenceDrafts(for: character)
-    }
-
     /// Hard cap on Gemini reference images. Too many references push the model
     /// into "multi-image fusion / copy" mode instead of identity-locked new
     /// generation. 3 gives the model enough identity signal (front/left/right)
@@ -2537,149 +2035,6 @@ struct ImagineCharactersPageView: View {
         return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 
-    private func availableLoRAURLs(for character: AnimationCharacter) -> [URL] {
-        guard let animateURL = store.animateURL else { return [] }
-        let loraDirectory = ProjectPaths(root: animateURL.deletingLastPathComponent())
-            .characterLora(slug: character.assetFolderSlug)
-        let urls = (try? FileManager.default.contentsOfDirectory(
-            at: loraDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        )) ?? []
-        return urls
-            .filter { $0.pathExtension.lowercased() == "safetensors" }
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-    }
-
-    private func activeLoRAProjectURL(for character: AnimationCharacter) -> URL? {
-        guard let filename = character.activeLORAFilename?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !filename.isEmpty,
-              let animateURL = store.animateURL else {
-            return nil
-        }
-        let url = ProjectPaths(root: animateURL.deletingLastPathComponent())
-            .characterLora(slug: character.assetFolderSlug)
-            .appendingPathComponent(URL(fileURLWithPath: filename).lastPathComponent)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
-    }
-
-    private func characterPromptNameTokens(for character: AnimationCharacter) -> [String] {
-        let firstName = character.name
-            .split(separator: " ")
-            .first
-            .map(String.init) ?? character.name
-        return Array(NSOrderedSet(array: [firstName, character.name])).compactMap { $0 as? String }
-    }
-
-    private func importLoRA(for character: AnimationCharacter) {
-        let panel = NSOpenPanel()
-        panel.title = "Import Character LoRA"
-        panel.message = "Choose a .safetensors LoRA file to store inside this character’s project folder."
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [UTType(filenameExtension: "safetensors") ?? .data]
-
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            Task { @MainActor in
-                do {
-                    let storedURL = try store.importCharacterLoRA(from: url, for: character.id)
-                    activateLoRA(
-                        filename: storedURL.lastPathComponent,
-                        for: character
-                    )
-                    store.statusMessage = "Imported LoRA: \(storedURL.lastPathComponent)"
-                } catch {
-                    store.statusMessage = "Failed to import LoRA: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    private func revealLoRAFolder(for character: AnimationCharacter) {
-        guard let directory = store.characterLoRADirectoryURL(
-            for: character.id,
-            createIfNeeded: true
-        ) else {
-            return
-        }
-        NSWorkspace.shared.open(directory)
-    }
-
-    private func activateLoRA(
-        filename: String?,
-        for character: AnimationCharacter
-    ) {
-        let triggerWord = filename.map(Self.defaultTriggerWord(forLoRAFilename:))
-        let weight = store.characters.first(where: { $0.id == character.id })?.activeLORAWeight ?? 1.0
-        store.setCharacterActiveLORA(
-            filename: filename,
-            triggerWord: triggerWord,
-            weight: weight,
-            for: character.id
-        )
-
-        guard filename != nil else { return }
-        syncSelectedLoRA(for: character.id)
-    }
-
-    private func syncSelectedLoRA(for characterID: UUID) {
-        guard let syncedCharacter = store.characters.first(where: { $0.id == characterID }),
-              let animateURL = store.animateURL else {
-            return
-        }
-
-        Task { @MainActor in
-            do {
-                _ = try await DrawThingsLoRAService().syncActiveLoRA(
-                    for: syncedCharacter,
-                    animateURL: animateURL,
-                    config: store.drawThingsPlaceConfig
-                )
-            } catch {
-                store.statusMessage = "LoRA selected but Draw Things sync failed: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func activeLoRASelectionBinding(for character: AnimationCharacter) -> Binding<String> {
-        Binding(
-            get: { character.activeLORAFilename ?? "__none__" },
-            set: { newValue in
-                let filename = newValue == "__none__" ? nil : newValue
-                activateLoRA(filename: filename, for: character)
-            }
-        )
-    }
-
-    private func activeLORATriggerBinding(for character: AnimationCharacter) -> Binding<String> {
-        Binding(
-            get: {
-                character.activeLORATriggerWord
-                    ?? character.activeLORAFilename.map(Self.defaultTriggerWord(forLoRAFilename:))
-                    ?? ""
-            },
-            set: { newValue in
-                store.updateCharacterActiveLORATriggerWord(newValue, for: character.id)
-            }
-        )
-    }
-
-    private func activeLORAWeightBinding(for character: AnimationCharacter) -> Binding<Double> {
-        Binding(
-            get: { max(0.05, character.activeLORAWeight) },
-            set: { newValue in
-                store.updateCharacterActiveLORAWeight(newValue, for: character.id)
-            }
-        )
-    }
-
-    private static func defaultTriggerWord(forLoRAFilename filename: String) -> String {
-        URL(fileURLWithPath: filename)
-            .deletingPathExtension()
-            .lastPathComponent
-    }
 }
 
 // MARK: - displayedPaths invalidator
@@ -2696,7 +2051,6 @@ struct ImagineGalleryVisibilitySignature: Hashable {
     let reviewed: Set<String>
     let ratings: [String: Int]?
     let selected: Set<String>
-    let lora: Set<String>
 }
 
 private struct DisplayedPathsInvalidator: ViewModifier {

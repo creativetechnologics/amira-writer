@@ -8,7 +8,6 @@ import Foundation
 @MainActor
 final class ImagineScenePromptService {
     enum SubjectStyle: Sendable {
-        case loraTokens
         case neutralSubjects
     }
 
@@ -22,7 +21,7 @@ final class ImagineScenePromptService {
         scene: AnimationScene,
         shotIndex: Int,
         moment: ImagineShotMoment,
-        subjectStyle: SubjectStyle = .loraTokens
+        subjectStyle: SubjectStyle = .neutralSubjects
     ) async throws -> String {
         guard shotIndex >= 0, shotIndex < scene.shots.count else {
             throw PromptError.invalidShot
@@ -36,16 +35,8 @@ final class ImagineScenePromptService {
             moment: moment,
             subjectStyle: subjectStyle
         )
-        let workflowMode: String
-        let goodStyleExample: String
-        switch subjectStyle {
-        case .loraTokens:
-            workflowMode = "using character LoRA trigger tokens"
-            goodStyleExample = "\"lkhr27 on screen-left reaches left arm toward mrnza5 on screen-right. slight frown, looking away, medium shot, clinic courtyard at dusk, photoreal documentary still.\""
-        case .neutralSubjects:
-            workflowMode = "for reference-image scene editing with neutral subject labels"
-            goodStyleExample = "\"subject_1 on screen-left reaches left arm toward subject_2 on screen-right. slight frown, looking away, medium shot, clinic courtyard at dusk, photoreal documentary still.\""
-        }
+        let workflowMode = "for reference-image scene editing with neutral subject labels"
+        let goodStyleExample = "\"subject_1 on screen-left reaches left arm toward subject_2 on screen-right. slight frown, looking away, medium shot, clinic courtyard at dusk, photoreal documentary still.\""
 
         let instruction = """
         You are writing production prompts for FLUX.2 [klein] in Draw Things \(workflowMode).
@@ -279,7 +270,7 @@ final class ImagineScenePromptService {
         scene: AnimationScene,
         shotIndex: Int,
         moment: ImagineShotMoment,
-        subjectStyle: SubjectStyle = .loraTokens
+        subjectStyle: SubjectStyle = .neutralSubjects
     ) -> String {
         guard shotIndex >= 0, shotIndex < scene.shots.count else { return "" }
         let shot = scene.shots[shotIndex]
@@ -456,23 +447,28 @@ final class ImagineScenePromptService {
         in text: String
     ) -> Bool {
         promptTokens(for: character).contains {
-            DrawThingsPromptIdentityInjector.containsPromptToken($0, in: text)
+            Self.containsPromptToken($0, in: text)
         }
+    }
+
+    private static func containsPromptToken(_ token: String, in text: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: token)
+        let pattern = "(?<![\\p{L}\\p{N}])\(escaped)(?![\\p{L}\\p{N}])"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+            return text.localizedCaseInsensitiveContains(token)
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.firstMatch(in: text, options: [], range: range) != nil
     }
 
     private func promptTokens(
         for character: AnimationCharacter
     ) -> [String] {
         var seen: Set<String> = []
-        let filenameStem = character.activeLORAFilename.map {
-            URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent
-        } ?? ""
         let tokens = [
             character.name,
             character.name.split(separator: " ").first.map(String.init) ?? "",
-            character.owpSlug,
-            character.activeLORATriggerWord ?? "",
-            filenameStem
+            character.owpSlug
         ]
         return tokens
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -508,39 +504,9 @@ final class ImagineScenePromptService {
         ordinal: Int,
         subjectStyle: SubjectStyle
     ) -> String {
-        if subjectStyle == .neutralSubjects {
-            return "subject_\(ordinal)"
-        }
-
-        if let trigger = character.activeLORATriggerWord?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !trigger.isEmpty {
-            return trigger
-        }
-
-        if let filename = character.activeLORAFilename?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !filename.isEmpty {
-            return URL(fileURLWithPath: filename)
-                .deletingPathExtension()
-                .lastPathComponent
-        }
-
-        let base: String
-        if character.defaultWardrobeType == .soldier {
-            base = character.genderType == .female ? "female-soldier" : "male-soldier"
-        } else {
-            switch character.genderType {
-            case .female:
-                base = "woman"
-            case .male:
-                base = "man"
-            default:
-                base = "person"
-            }
-        }
-        return "\(base)-\(ordinal)"
+        return "subject_\(ordinal)"
     }
+
 
     private func sanitizedPromptText(
         _ text: String,
@@ -600,7 +566,7 @@ final class ImagineScenePromptService {
 
         if !stageDirections.isEmpty {
             let alreadyNamesCharacters = identifiers.contains {
-                DrawThingsPromptIdentityInjector.containsPromptToken($0, in: stageDirections)
+                Self.containsPromptToken($0, in: stageDirections)
             }
             if alreadyNamesCharacters || identifiers.isEmpty {
                 return sentenceNormalized(stageDirections)

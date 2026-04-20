@@ -2851,9 +2851,6 @@ final class AnimateStore {
             if !job.outputRootPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 updated.outputRootPath = job.outputRootPath
             }
-            if job.kind == .loraCandidate {
-                updated.kind = .loraCandidate
-            }
             updated.state = job.state
             if updated.promptCount == 0, job.promptCount > 0 {
                 updated.promptCount = job.promptCount
@@ -2943,9 +2940,7 @@ final class AnimateStore {
             )
             let kind: CharacterInspirationBatchJob.Kind = {
                 let haystacks = [folderName, title, batchName].map { $0.lowercased() }
-                return haystacks.contains(where: { $0.contains("lora-candidate") || $0.contains("lora_candidate") })
-                    ? .loraCandidate
-                    : .inspiration
+                return .inspiration
             }()
             let remoteSuccessfulCount = ((latestStatus?["completion_stats"] as? [String: Any])?["successful_count"] as? Int)
             let lastErrorMessage: String? = {
@@ -3115,9 +3110,6 @@ final class AnimateStore {
             backstory: character.backstory,
             personality: character.personality,
             notes: character.notes,
-            activeLORAFilename: trimmedOrNil(character.activeLORAFilename),
-            activeLORATriggerWord: trimmedOrNil(character.activeLORATriggerWord),
-            activeLORAWeight: character.activeLORAWeight > 0 ? character.activeLORAWeight : 1.0,
             defaultWardrobeType: character.defaultWardrobeType,
             genderType: character.genderType,
             age: character.age,
@@ -3190,14 +3182,6 @@ final class AnimateStore {
             ? fallbackSlug
             : updated.owpSlug
         updated.storageSlug = normalizedStorageSlug(forName: resolvedName, fallback: updated.storageSlug ?? fallbackSlug)
-        updated.activeLORAFilename = trimmedOrNil(updated.activeLORAFilename)
-        updated.activeLORATriggerWord = trimmedOrNil(updated.activeLORATriggerWord)
-        if updated.activeLORAFilename == nil {
-            updated.activeLORATriggerWord = nil
-        }
-        if updated.activeLORAWeight <= 0 {
-            updated.activeLORAWeight = 1.0
-        }
         updated.masterReferenceSheetPrompt = updated.masterReferenceSheetPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? CharacterReferenceWorkflowCatalog.defaultMasterSheetPrompt(for: resolvedName, gender: updated.genderType)
             : updated.masterReferenceSheetPrompt
@@ -6263,97 +6247,6 @@ final class AnimateStore {
         save()
     }
 
-    func setCharacterActiveLORA(
-        filename: String?,
-        triggerWord: String?,
-        weight: Double? = nil,
-        for characterID: UUID
-    ) {
-        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
-        let normalizedFilename = trimmedOrNil(filename)
-        characters[index].activeLORAFilename = normalizedFilename
-        characters[index].activeLORATriggerWord = normalizedFilename == nil
-            ? nil
-            : trimmedOrNil(triggerWord)
-        if let weight {
-            characters[index].activeLORAWeight = max(0.05, weight)
-        } else if characters[index].activeLORAWeight <= 0 {
-            characters[index].activeLORAWeight = 1.0
-        }
-        save()
-    }
-
-    func updateCharacterActiveLORATriggerWord(_ triggerWord: String, for characterID: UUID) {
-        guard let index = characters.firstIndex(where: { $0.id == characterID }),
-              characters[index].activeLORAFilename != nil else { return }
-        characters[index].activeLORATriggerWord = trimmedOrNil(triggerWord)
-        save()
-    }
-
-    func updateCharacterActiveLORAWeight(_ weight: Double, for characterID: UUID) {
-        guard let index = characters.firstIndex(where: { $0.id == characterID }),
-              characters[index].activeLORAFilename != nil else { return }
-        characters[index].activeLORAWeight = max(0.05, weight)
-        save()
-    }
-
-    func characterLoRADirectoryURL(
-        for characterID: UUID,
-        createIfNeeded: Bool = false
-    ) -> URL? {
-        guard let index = characters.firstIndex(where: { $0.id == characterID }),
-              let animateURL else {
-            return nil
-        }
-
-        let directory = ProjectPaths(root: animateURL.deletingLastPathComponent())
-            .characterLora(slug: characters[index].assetFolderSlug)
-
-        if createIfNeeded {
-            do {
-                try FileManager.default.createDirectory(
-                    at: directory,
-                    withIntermediateDirectories: true
-                )
-            } catch {
-                statusMessage = "Failed to create LoRA folder"
-                return nil
-            }
-        }
-
-        return directory
-    }
-
-    func importCharacterLoRA(
-        from sourceURL: URL,
-        for characterID: UUID
-    ) throws -> URL {
-        guard let destinationDirectory = characterLoRADirectoryURL(
-            for: characterID,
-            createIfNeeded: true
-        ) else {
-            throw CocoaError(.fileNoSuchFile)
-        }
-
-        let ext = sourceURL.pathExtension.lowercased()
-        guard ext == "safetensors" else {
-            throw CocoaError(.fileReadUnknown)
-        }
-
-        let destinationURL = destinationDirectory.appendingPathComponent(sourceURL.lastPathComponent)
-        let fileManager = FileManager.default
-
-        if sourceURL.standardizedFileURL == destinationURL.standardizedFileURL {
-            return destinationURL
-        }
-
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            try fileManager.removeItem(at: destinationURL)
-        }
-        try fileManager.copyItem(at: sourceURL, to: destinationURL)
-        return destinationURL
-    }
-
     // MARK: - Inspiration Images
 
     func addInspirationImage(_ imagePath: String, for characterID: UUID) {
@@ -6618,9 +6511,7 @@ final class AnimateStore {
         filenameStem: String,
         for characterID: UUID,
         aspectRatio: String,
-        imageSize: String,
-        recommendedLORACaption: String? = nil,
-        autoSelectForLoRA: Bool = false
+        imageSize: String
     ) throws -> String {
         let animateURL = try requireAnimateURL()
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return "" }
@@ -6641,7 +6532,6 @@ final class AnimateStore {
             model: model,
             aspectRatio: aspectRatio,
             imageSize: imageSize,
-            recommendedLORACaption: recommendedLORACaption,
             to: storedURL
         )
         let storedPath = projectRelativeCharacterAssetPath(from: storedURL.path)
@@ -6652,9 +6542,6 @@ final class AnimateStore {
         updatedCharacter.inspirationImagePaths.append(storedPath)
         characters[charIndex] = updatedCharacter
         save()
-        if autoSelectForLoRA {
-            markInspirationImagesForLORATraining([storedPath], for: characterID)
-        }
         return storedPath
     }
 
@@ -7004,9 +6891,6 @@ final class AnimateStore {
                     if !characters[charIndex].inspirationImagePaths.contains(path) {
                         characters[charIndex].inspirationImagePaths.append(path)
                     }
-                    if jobs[jobIndex].kind.autoSelectForLoRA {
-                        markInspirationImagesForLORATraining([path], for: characters[charIndex].id)
-                    }
                 }
             }
 
@@ -7049,33 +6933,6 @@ final class AnimateStore {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[index].inspirationReferenceImagePath = normalizedCharacterAssetPath(imagePath)
         save()
-    }
-
-    func markInspirationImagesForLORATraining(_ paths: [String], for characterID: UUID) {
-        guard let animateURL,
-              let character = characters.first(where: { $0.id == characterID }) else { return }
-
-        let normalizedPaths = normalizedCharacterAssetPaths(paths)
-        guard !normalizedPaths.isEmpty else { return }
-
-        var state = ImagineGallerySelectionState.load(
-            animateURL: animateURL,
-            characterSlug: character.assetFolderSlug
-        )
-
-        var changed = false
-        for path in normalizedPaths {
-            if state.loraSelectedPaths.insert(path).inserted {
-                changed = true
-            }
-            if state.hiddenPaths.remove(path) != nil {
-                changed = true
-            }
-        }
-
-        if changed {
-            state.save(animateURL: animateURL, characterSlug: character.assetFolderSlug)
-        }
     }
 
     func setInspirationReferenceImageFromPicker(for characterID: UUID) {
@@ -8282,7 +8139,6 @@ final class AnimateStore {
         model: GeminiModel,
         aspectRatio: String,
         imageSize: String,
-        recommendedLORACaption: String? = nil,
         placeID: UUID? = nil,
         routeID: UUID? = nil,
         worldNodeID: UUID? = nil,
@@ -8300,10 +8156,6 @@ final class AnimateStore {
             "image_size": imageSize,
             "aspect_ratio": aspectRatio,
         ]
-        if let recommendedLORACaption,
-           !recommendedLORACaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            requestPayload["recommended_lora_caption"] = recommendedLORACaption
-        }
         if let placeID {
             requestPayload["place_id"] = placeID.uuidString
         }
@@ -11587,10 +11439,10 @@ final class AnimateStore {
     var vertexCreditBudgetUSD: Double { AnimateStore.vertexCreditBudgetUSD }
 
     /// Add the estimated cost of a successful generation to the rolling tally.
-    /// Called from inspiration / action / photoreal LoRA generation pipelines
-    /// after the API returns success. Vertex doesn't expose a client-reachable
-    /// "trial remaining" endpoint, so this is the pragmatic estimator Gary
-    /// signed off on.
+    /// Called from inspiration / action generation pipelines after the API
+    /// returns success. Vertex doesn't expose a client-reachable "trial
+    /// remaining" endpoint, so this is the pragmatic estimator Gary signed
+    /// off on.
     func recordVertexCreditUsage(_ usd: Double) {
         guard usd > 0 else { return }
         vertexCreditUsedUSD = vertexCreditUsedUSD + usd
@@ -14787,9 +14639,6 @@ final class AnimateStore {
                     backstory: persistedCharacter?.backstory ?? "",
                     personality: persistedCharacter?.personality ?? "",
                     notes: persistedCharacter?.notes ?? "",
-                    activeLORAFilename: persistedCharacter?.activeLORAFilename,
-                    activeLORATriggerWord: persistedCharacter?.activeLORATriggerWord,
-                    activeLORAWeight: persistedCharacter?.activeLORAWeight ?? 1.0,
                     defaultWardrobeType: persistedCharacter?.defaultWardrobeType ?? .soldier,
                     genderType: persistedCharacter?.genderType ?? .person,
                     age: persistedCharacter?.age,
@@ -14817,9 +14666,6 @@ final class AnimateStore {
                             backstory: persistedCharacter?.backstory ?? "",
                             personality: persistedCharacter?.personality ?? "",
                             notes: persistedCharacter?.notes ?? "",
-                            activeLORAFilename: persistedCharacter?.activeLORAFilename,
-                            activeLORATriggerWord: persistedCharacter?.activeLORATriggerWord,
-                            activeLORAWeight: persistedCharacter?.activeLORAWeight ?? 1.0,
                             defaultWardrobeType: persistedCharacter?.defaultWardrobeType ?? .soldier,
                             genderType: persistedCharacter?.genderType ?? .person,
                             age: persistedCharacter?.age,
