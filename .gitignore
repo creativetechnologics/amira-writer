@@ -12,8 +12,12 @@ tmp/
 
 # Xcode build output (previously tracked by accident)
 build/
+build2/
 build.out
 build.err
+
+# Claude Code per-machine session state
+.claude/
 
 # Heavy research / demo outputs — kept on disk, not in git
 3D\ Research/
