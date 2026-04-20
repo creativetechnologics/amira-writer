@@ -15,6 +15,7 @@ struct SunoInspectorView: View {
     }
 
     @State private var activeTab: Tab = .cover
+    @State private var newPresetName: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -35,6 +36,7 @@ struct SunoInspectorView: View {
                                     ? Color.accentColor.opacity(0.15)
                                     : Color.clear
                             )
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -331,6 +333,86 @@ struct SunoInspectorView: View {
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            // MARK: Source selector
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Source")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Picker("Source", selection: Binding(
+                    get: { store.sunoCoverSourceMode },
+                    set: { store.sunoCoverSourceMode = $0 }
+                )) {
+                    ForEach(SunoCoverSourceMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+
+                if store.sunoCoverSourceMode == .currentSong {
+                    if let asset = store.selectedMidiAsset {
+                        Text(asset.displayName)
+                            .font(.caption2)
+                            .foregroundStyle(.primary)
+                        let exportInfo = store.sunoMixExportInfo(for: asset.relativePath)
+                        if let info = exportInfo {
+                            Text("Mix WAV: \(info.modifiedAt.formatted(.dateTime.month(.abbreviated).day().year().hour().minute()))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("No mix export — use Export to Mix first")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+                    } else {
+                        Text("No song selected")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                } else {
+                    let available = store.sunoAvailableSongPaths()
+                    if available.isEmpty {
+                        Text("No songs in project")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 3) {
+                                ForEach(available, id: \.relativePath) { song in
+                                    HStack(spacing: 6) {
+                                        Toggle(song.displayName, isOn: Binding(
+                                            get: { store.sunoCoverSelectedSongPaths.contains(song.relativePath) },
+                                            set: { isOn in
+                                                if isOn {
+                                                    store.sunoCoverSelectedSongPaths.insert(song.relativePath)
+                                                } else {
+                                                    store.sunoCoverSelectedSongPaths.remove(song.relativePath)
+                                                }
+                                            }
+                                        ))
+                                        .toggleStyle(.checkbox)
+                                        .font(.caption2)
+                                        Spacer()
+                                        let exportInfo = store.sunoMixExportInfo(for: song.relativePath)
+                                        if let info = exportInfo {
+                                            Text(info.modifiedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        } else {
+                                            Text("no mix export")
+                                                .font(.caption2)
+                                                .foregroundStyle(.orange)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 180)
+                    }
+                }
+            }
+
+            // MARK: Canonical Cover Preset
             VStack(alignment: .leading, spacing: 4) {
                 Text("Canonical Cover Preset")
                     .font(.caption2.weight(.medium))
@@ -347,19 +429,69 @@ struct SunoInspectorView: View {
                 .controlSize(.small)
             }
 
+            // MARK: Saved Preset
             VStack(alignment: .leading, spacing: 4) {
-                Text("Resolved Prompt")
+                Text("Saved Preset")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
-                Text(store.sunoResolvedCoverPrompt)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .textSelection(.enabled)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.03)))
+                HStack(spacing: 6) {
+                    Picker("Preset", selection: Binding(
+                        get: { store.sunoSelectedPromptPresetID },
+                        set: { newID in
+                            store.sunoSelectedPromptPresetID = newID
+                            if let id = newID {
+                                store.sunoApplyPromptPreset(id: id)
+                            }
+                        }
+                    )) {
+                        Text("— None —").tag(UUID?.none)
+                        ForEach(store.sunoCoverPromptPresets) { preset in
+                            Text(preset.name).tag(Optional(preset.id))
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
+                    TextField("new preset name", text: $newPresetName)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.small)
+                    Button("Save") {
+                        store.sunoSavePromptPreset(name: newPresetName)
+                        newPresetName = ""
+                    }
+                    .controlSize(.small)
+                    .disabled(newPresetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button {
+                        if let id = store.sunoSelectedPromptPresetID {
+                            store.sunoDeletePromptPreset(id: id)
+                        }
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .controlSize(.small)
+                    .disabled(store.sunoSelectedPromptPresetID == nil)
+                }
             }
 
+            // MARK: Prompt override (replaces read-only Resolved Prompt)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Prompt")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                TextField("(leave blank to use preset prompt)", text: Binding(
+                    get: { store.sunoCoverPromptOverride },
+                    set: { store.sunoCoverPromptOverride = $0 }
+                ), axis: .vertical)
+                .lineLimit(3...8)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                if store.sunoCoverPromptOverride.isEmpty {
+                    Text("Effective: \(store.sunoResolvedCoverPrompt)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            // MARK: Lyrics diagnostic (unchanged)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Lyrics")
                     .font(.caption2.weight(.medium))
@@ -389,6 +521,24 @@ struct SunoInspectorView: View {
                 }
             }
 
+            // MARK: Lyrics override
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Lyrics Override")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                TextField("(leave blank to use Lyrics tab)", text: Binding(
+                    get: { store.sunoCoverLyricsOverride },
+                    set: { store.sunoCoverLyricsOverride = $0 }
+                ), axis: .vertical)
+                .lineLimit(3...12)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                Text("When blank, the Lyrics tab's formatted libretto is used.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            // MARK: Negative Prompt
             VStack(alignment: .leading, spacing: 4) {
                 Text("Negative Prompt")
                     .font(.caption2.weight(.medium))

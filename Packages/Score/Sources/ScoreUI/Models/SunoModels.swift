@@ -208,3 +208,35 @@ struct SunoGeneration: Identifiable {
     }
 }
 
+/// A user-saved bundle of Suno Cover controls (everything the Cover tab configures).
+/// When applied, it overrides the resolved-prompt (from SunoCoverPreset), the lyrics
+/// (normally computed from the Lyrics tab), the negative prompt, and all three sliders.
+struct SunoCoverPromptPreset: Codable, Identifiable, Hashable {
+    var id: UUID = UUID()
+    var name: String
+    /// Override for the resolved prompt. `nil` or "" → fall back to SunoCoverPreset.prompt at run time.
+    var promptOverride: String?
+    /// Override for the lyrics block. `nil` or "" → use Lyrics-tab formatted lyrics at run time.
+    var lyricsOverride: String?
+    var excludeStyles: String
+    var weirdness: Int
+    var styleInfluence: Int
+    var audioInfluence: Int
+}
+
+/// Whether Suno cover generation operates on the currently-selected song
+/// or an explicit multi-song checklist.
+enum SunoCoverSourceMode: String, CaseIterable, Identifiable, Codable {
+    case currentSong
+    case selectedSongs
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .currentSong: return "Current Song"
+        case .selectedSongs: return "Selected Songs"
+        }
+    }
+}
+

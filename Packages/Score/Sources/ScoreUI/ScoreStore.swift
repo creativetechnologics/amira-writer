@@ -1291,6 +1291,50 @@ final class ScoreStore {
     }() {
         didSet { UserDefaults.standard.set(sunoCoverAudioInfluence, forKey: "sunoCoverAudioInfluence") }
     }
+    /// Whether cover generation targets the current song or a multi-song checklist.
+    var sunoCoverSourceMode: SunoCoverSourceMode = {
+        let raw = UserDefaults.standard.string(forKey: "sunoCoverSourceMode") ?? SunoCoverSourceMode.currentSong.rawValue
+        return SunoCoverSourceMode(rawValue: raw) ?? .currentSong
+    }() {
+        didSet { UserDefaults.standard.set(sunoCoverSourceMode.rawValue, forKey: "sunoCoverSourceMode") }
+    }
+    /// Transient set of song relative paths selected for multi-song cover generation.
+    var sunoCoverSelectedSongPaths: Set<String> = []
+    /// Optional prompt override for Cover mode (empty string = use preset prompt).
+    var sunoCoverPromptOverride: String = UserDefaults.standard.string(forKey: "sunoCoverPromptOverride") ?? "" {
+        didSet { UserDefaults.standard.set(sunoCoverPromptOverride, forKey: "sunoCoverPromptOverride") }
+    }
+    /// Optional lyrics override for Cover mode (empty string = use Lyrics tab).
+    var sunoCoverLyricsOverride: String = UserDefaults.standard.string(forKey: "sunoCoverLyricsOverride") ?? "" {
+        didSet { UserDefaults.standard.set(sunoCoverLyricsOverride, forKey: "sunoCoverLyricsOverride") }
+    }
+    /// User-saved cover prompt presets.
+    var sunoCoverPromptPresets: [SunoCoverPromptPreset] = {
+        guard let data = UserDefaults.standard.data(forKey: "sunoCoverPromptPresets"),
+              let decoded = try? JSONDecoder().decode([SunoCoverPromptPreset].self, from: data) else {
+            return []
+        }
+        return decoded
+    }() {
+        didSet {
+            if let data = try? JSONEncoder().encode(sunoCoverPromptPresets) {
+                UserDefaults.standard.set(data, forKey: "sunoCoverPromptPresets")
+            }
+        }
+    }
+    /// ID of the currently-selected cover prompt preset (nil = none selected).
+    var sunoSelectedPromptPresetID: UUID? = {
+        guard let raw = UserDefaults.standard.string(forKey: "sunoSelectedPromptPresetID") else { return nil }
+        return UUID(uuidString: raw)
+    }() {
+        didSet {
+            if let id = sunoSelectedPromptPresetID {
+                UserDefaults.standard.set(id.uuidString, forKey: "sunoSelectedPromptPresetID")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "sunoSelectedPromptPresetID")
+            }
+        }
+    }
 
     var formattedSunoLyrics: String {
         SunoLyricsFormatter.format(
@@ -1334,6 +1378,89 @@ final class ScoreStore {
     var selectedSunoBaseTitle: String? {
         guard let relativePath = selectedMidiAsset?.relativePath else { return nil }
         return Self.sunoBaseTitle(from: relativePath)
+    }
+
+    // MARK: - Cover Prompt Preset Management
+
+    /// Snapshot current cover-pane state into a new preset with the given name.
+    func sunoSavePromptPreset(name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let preset = SunoCoverPromptPreset(
+            name: trimmed,
+            promptOverride: sunoCoverPromptOverride.isEmpty ? nil : sunoCoverPromptOverride,
+            lyricsOverride: sunoCoverLyricsOverride.isEmpty ? nil : sunoCoverLyricsOverride,
+            excludeStyles: sunoExcludeStyles,
+            weirdness: sunoCoverWeirdness,
+            styleInfluence: sunoCoverStyleInfluence,
+            audioInfluence: sunoCoverAudioInfluence
+        )
+        var presets = sunoCoverPromptPresets
+        // Replace existing preset with the same name, else append.
+        if let idx = presets.firstIndex(where: { $0.name == trimmed }) {
+            var replacement = preset
+            replacement.id = presets[idx].id
+            presets[idx] = replacement
+            sunoSelectedPromptPresetID = replacement.id
+        } else {
+            presets.append(preset)
+            sunoSelectedPromptPresetID = preset.id
+        }
+        sunoCoverPromptPresets = presets
+    }
+
+    func sunoDeletePromptPreset(id: UUID) {
+        sunoCoverPromptPresets.removeAll { $0.id == id }
+        if sunoSelectedPromptPresetID == id {
+            sunoSelectedPromptPresetID = nil
+        }
+    }
+
+    func sunoApplyPromptPreset(id: UUID) {
+        guard let preset = sunoCoverPromptPresets.first(where: { $0.id == id }) else { return }
+        sunoCoverPromptOverride = preset.promptOverride ?? ""
+        sunoCoverLyricsOverride = preset.lyricsOverride ?? ""
+        sunoExcludeStyles = preset.excludeStyles
+        sunoCoverWeirdness = preset.weirdness
+        sunoCoverStyleInfluence = preset.styleInfluence
+        sunoCoverAudioInfluence = preset.audioInfluence
+        sunoSelectedPromptPresetID = preset.id
+    }
+
+    /// Returns the Mix flat-export WAV URL and modification date for a song, or nil if it doesn't exist.
+    func sunoMixExportInfo(for relativePath: String) -> (url: URL, modifiedAt: Date)? {
+        let sourceURL = workingProjectURL ?? projectURL
+        guard let sourceURL else { return nil }
+        let projectRoot: URL = {
+            if sourceURL.pathExtension.lowercased() == "ows" {
+                let songsDirectory = sourceURL.deletingLastPathComponent()
+                if songsDirectory.lastPathComponent == "Songs" {
+                    return songsDirectory.deletingLastPathComponent()
+                }
+                return songsDirectory
+            }
+            return sourceURL
+        }()
+        let slug = relativePath
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ".json", with: "")
+        let wavURL = projectRoot.appendingPathComponent("Animate/audio", isDirectory: true)
+            .appendingPathComponent("\(slug)-flat.wav")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: wavURL.path),
+              let attrs = try? fm.attributesOfItem(atPath: wavURL.path),
+              let modDate = attrs[.modificationDate] as? Date else {
+            return nil
+        }
+        return (wavURL, modDate)
+    }
+
+    /// Returns (relativePath, displayName) tuples for every song in the current project.
+    /// Used by the multi-song picker in the Cover tab.
+    func sunoAvailableSongPaths() -> [(relativePath: String, displayName: String)] {
+        return songAssets.map { asset in
+            (relativePath: asset.relativePath, displayName: asset.displayName)
+        }
     }
 
     private var sunoSpeakerGenderHints: [String: SunoLyricsFormatter.SpeakerGender] {
