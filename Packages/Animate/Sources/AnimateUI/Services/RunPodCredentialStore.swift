@@ -1,6 +1,6 @@
 import Foundation
 
-/// RunPod API key — stored in `<project>/config/api-credentials.json`
+/// RunPod API key — stored in `<project>/Settings/api-credentials.json`
 /// (via ProjectCredentialStore) and synced between machines by Syncthing.
 ///
 /// Two read-only fallbacks remain for scripted / legacy setups:

@@ -590,6 +590,9 @@ actor ProjectMirrorSession {
             "Characters/",
             "Synopsis/",
             "Animate/",
+            "Scenes/",    // Wave D
+            "Places/",    // Wave D
+            "Settings/",  // Wave D
         ]
         return managedPrefixes.contains { relativePath.hasPrefix($0) }
     }

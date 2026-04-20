@@ -335,6 +335,9 @@ public actor ProjectConnection {
             "Characters/",
             "Synopsis/",
             "Animate/",
+            "Scenes/",    // Wave D
+            "Places/",    // Wave D
+            "Settings/",  // Wave D
         ]
         return prefixes.contains { path.hasPrefix($0) }
     }

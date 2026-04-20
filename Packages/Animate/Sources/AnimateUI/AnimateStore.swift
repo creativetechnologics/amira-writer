@@ -4999,7 +4999,7 @@ final class AnimateStore {
             owpInstrumentMappings = result.instrumentMappings
 
             // 1b. Activate the project-local credential store so API keys
-            //     are read from / written to <project>/config/api-credentials.json.
+            //     are read from / written to <project>/Settings/api-credentials.json.
             //     Syncthing replicates the file between machines.
             ProjectCredentialStore.shared.setActiveProject(effectiveProjectURL)
             AppLog.log("STARTUP", "Credentials: project store active at \(ProjectPaths(root: effectiveProjectURL).apiCredentialsJSON.path)")
@@ -6196,10 +6196,15 @@ final class AnimateStore {
         toSlug newSlug: String
     ) -> String? {
         guard let path else { return nil }
-        let relativePrefix = "Animate/characters/\(oldSlug)/"
-        let relativeReplacement = "Animate/characters/\(newSlug)/"
+        // Wave D: characters live at Characters/<slug>/. Keep Animate/characters/<slug>/ fallback for any pre-migration relative paths still floating around.
+        let relativePrefix = "Characters/\(oldSlug)/"
+        let relativeReplacement = "Characters/\(newSlug)/"
         if path.hasPrefix(relativePrefix) {
             return relativeReplacement + path.dropFirst(relativePrefix.count)
+        }
+        let legacyRelativePrefix = "Animate/characters/\(oldSlug)/"
+        if path.hasPrefix(legacyRelativePrefix) {
+            return relativeReplacement + path.dropFirst(legacyRelativePrefix.count)
         }
 
         if let animateDir = animateURL {

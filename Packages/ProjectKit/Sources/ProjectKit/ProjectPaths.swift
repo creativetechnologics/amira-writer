@@ -1,14 +1,16 @@
 /// ProjectPaths — single source of truth for project-relative URLs.
 ///
-/// All accessors reflect the **current** on-disk layout.
-/// Accessors annotated `/// Wave E target:` will be re-pointed after the
-/// corresponding directory migration is complete.
+/// Post–Wave D/E layout. Accessors named with historical `animate*` or legacy
+/// prefixes are retained for API stability but repointed to the canonical
+/// post-migration locations (Characters/, Scenes/, Places/, Canvas/, Settings/,
+/// _Archive/). Prefer the short-form accessors (`characters`, `scenes`,
+/// `places`, `canvas`, `settings`, `archive`) for new call sites.
 ///
 /// Usage:
 /// ```swift
 /// let paths = ProjectPaths(root: projectURL)
 /// let dir = paths.mixExports          // <project>/Mix/exports/
-/// let rig = paths.characterRigJSON(slug: "luke")  // <project>/Animate/characters/luke/rig.json
+/// let rig = paths.characterRigJSON(slug: "luke")  // <project>/Characters/luke/rig.json
 /// ```
 public struct ProjectPaths: Sendable {
 
@@ -57,15 +59,50 @@ public struct ProjectPaths: Sendable {
         root.appendingPathComponent("Mixes", isDirectory: true)
     }
 
-    /// `<project>/Suno/`
-    /// Wave E target: keep as-is (canonical Suno generation output)
+    /// `<project>/Suno/`  (canonical Suno generation output)
     public var suno: URL {
         root.appendingPathComponent("Suno", isDirectory: true)
     }
 
-    /// `<project>/SunoRenders/`
+    /// `<project>/Suno/covers/`  (Wave E target for cover WAV routing)
+    public var sunoCovers: URL {
+        suno.appendingPathComponent("covers", isDirectory: true)
+    }
+
+    /// `<project>/Suno/logs/`  (Wave E target for Suno CLI log output)
+    public var sunoLogs: URL {
+        suno.appendingPathComponent("logs", isDirectory: true)
+    }
+
+    /// `<project>/SunoRenders/`  (legacy; dead after Wave D — use `sunoCovers` for new work)
+    @available(*, deprecated, message: "Use sunoCovers. SunoRenders/ was unused on disk at Wave D.")
     public var sunoRenders: URL {
         root.appendingPathComponent("SunoRenders", isDirectory: true)
+    }
+
+    /// `<project>/Scenes/`  (scenes.json + imagine/ — Wave D target)
+    public var scenes: URL {
+        root.appendingPathComponent("Scenes", isDirectory: true)
+    }
+
+    /// `<project>/Places/`  (places-*.json family — Wave D target)
+    public var places: URL {
+        root.appendingPathComponent("Places", isDirectory: true)
+    }
+
+    /// `<project>/Canvas/`  (free-form image generation canvas — Wave E target)
+    public var canvas: URL {
+        root.appendingPathComponent("Canvas", isDirectory: true)
+    }
+
+    /// `<project>/Settings/`  (project-settings.json + instruments.json + api-credentials.json)
+    public var settings: URL {
+        root.appendingPathComponent("Settings", isDirectory: true)
+    }
+
+    /// `<project>/_Archive/`  (retired/archived data)
+    public var archive: URL {
+        root.appendingPathComponent("_Archive", isDirectory: true)
     }
 
     /// `<project>/SoundFonts/`
@@ -78,7 +115,8 @@ public struct ProjectPaths: Sendable {
         root.appendingPathComponent("ChatHistory", isDirectory: true)
     }
 
-    /// `<project>/config/`
+    /// `<project>/config/`  (Wave D: directory removed — api-credentials.json now in `settings`)
+    @available(*, deprecated, message: "config/ was removed in Wave D; credentials moved to Settings/.")
     public var config: URL {
         root.appendingPathComponent("config", isDirectory: true)
     }
@@ -105,9 +143,9 @@ public struct ProjectPaths: Sendable {
         root.appendingPathComponent("project.json")
     }
 
-    /// `<project>/Instruments.json`
+    /// `<project>/Settings/instruments.json`  (Wave D: moved from root Instruments.json)
     public var instrumentsJSON: URL {
-        root.appendingPathComponent("Instruments.json")
+        settings.appendingPathComponent("instruments.json")
     }
 
     /// `<project>/index.json`
@@ -135,9 +173,9 @@ public struct ProjectPaths: Sendable {
         write.appendingPathComponent("libretto-scratchpad.txt")
     }
 
-    /// `<project>/config/api-credentials.json`
+    /// `<project>/Settings/api-credentials.json`  (Wave D: moved from config/)
     public var apiCredentialsJSON: URL {
-        config.appendingPathComponent("api-credentials.json")
+        settings.appendingPathComponent("api-credentials.json")
     }
 
     /// `<project>/.novotro/project.sqlite`
@@ -177,34 +215,54 @@ public struct ProjectPaths: Sendable {
         animate.appendingPathComponent("animate.json")
     }
 
-    /// `<project>/Animate/scenes.json`
+    /// `<project>/Scenes/scenes.json`  (Wave D: moved from Animate/)
     public var animateScenesJSON: URL {
-        animate.appendingPathComponent("scenes.json")
+        scenes.appendingPathComponent("scenes.json")
     }
 
-    /// `<project>/Animate/places.json`
+    /// `<project>/Places/places.json`  (Wave D: moved from Animate/)
     public var animatePlacesJSON: URL {
-        animate.appendingPathComponent("places.json")
+        places.appendingPathComponent("places.json")
     }
 
-    /// `<project>/Animate/places-workflow.json`
+    /// `<project>/Places/places-workflow.json`  (Wave D: moved from Animate/)
     public var animatePlacesWorkflowJSON: URL {
-        animate.appendingPathComponent("places-workflow.json")
+        places.appendingPathComponent("places-workflow.json")
     }
 
-    /// `<project>/Animate/places-generated-review-state.json`
+    /// `<project>/Places/places-generated-review-state.json`  (Wave D: moved from Animate/)
     public var animatePlacesGeneratedReviewStateJSON: URL {
-        animate.appendingPathComponent("places-generated-review-state.json")
+        places.appendingPathComponent("places-generated-review-state.json")
     }
 
-    /// `<project>/Animate/places-generated-review-events.jsonl`
+    /// `<project>/Places/places-generated-review-events.jsonl`  (Wave D: moved from Animate/)
     public var animatePlacesGeneratedReviewEventsJSONL: URL {
-        animate.appendingPathComponent("places-generated-review-events.jsonl")
+        places.appendingPathComponent("places-generated-review-events.jsonl")
     }
 
-    /// `<project>/Animate/places-world-map-canon.json`
+    /// `<project>/Places/places-world-map-canon.json`  (Wave D: moved from Animate/)
     public var animatePlacesWorldMapCanonJSON: URL {
-        animate.appendingPathComponent("places-world-map-canon.json")
+        places.appendingPathComponent("places-world-map-canon.json")
+    }
+
+    /// `<project>/Places/places-world-context.json`  (Wave D: moved from Animate/)
+    public var placesWorldContextJSON: URL {
+        places.appendingPathComponent("places-world-context.json")
+    }
+
+    /// `<project>/Places/places-master-map-layers.json`  (Wave D: moved from Animate/)
+    public var placesMasterMapLayersJSON: URL {
+        places.appendingPathComponent("places-master-map-layers.json")
+    }
+
+    /// `<project>/Places/places.people_briefs.json`  (Wave D: moved from Animate/)
+    public var placesPeopleBriefsJSON: URL {
+        places.appendingPathComponent("places.people_briefs.json")
+    }
+
+    /// `<project>/Places/draw-things-places.json`  (Wave D: moved from Animate/)
+    public var drawThingsPlacesJSON: URL {
+        places.appendingPathComponent("draw-things-places.json")
     }
 
     /// `<project>/Animate/character-package-selections.json`
@@ -217,21 +275,21 @@ public struct ProjectPaths: Sendable {
         animate.appendingPathComponent("shot-presets.json")
     }
 
-    /// `<project>/Animate/imagine/gemini-switch.json`
+    /// `<project>/Scenes/imagine/gemini-switch.json`  (auto-follows `animateImagine` repoint)
     public var animateGeminiSwitchJSON: URL {
         animateImagine.appendingPathComponent("gemini-switch.json")
     }
 
-    /// `<project>/animate/drawThingsPlacesConfig.json`  (lowercase animate — legacy 3D stub path)
+    /// `<project>/Places/drawThingsPlacesConfig.json`  (Wave D: moved from Animate/)
     public var animateDrawThingsPlacesConfigJSON: URL {
-        root.appendingPathComponent("animate/drawThingsPlacesConfig.json")
+        places.appendingPathComponent("drawThingsPlacesConfig.json")
     }
 
     // MARK: - Animate subdirectories
 
-    /// `<project>/Animate/characters/`
+    /// `<project>/Characters/`  (Wave D: moved from Animate/characters/ — alias to `characters`)
     public var animateCharacters: URL {
-        animate.appendingPathComponent("characters", isDirectory: true)
+        characters
     }
 
     /// `<project>/Animate/backgrounds/`
@@ -249,9 +307,9 @@ public struct ProjectPaths: Sendable {
         animateBackgrounds.appendingPathComponent("library-edits", isDirectory: true)
     }
 
-    /// `<project>/Animate/imagine/`
+    /// `<project>/Scenes/imagine/`  (Wave D: moved from Animate/imagine/)
     public var animateImagine: URL {
-        animate.appendingPathComponent("imagine", isDirectory: true)
+        scenes.appendingPathComponent("imagine", isDirectory: true)
     }
 
     /// `<project>/Animate/props/`
@@ -274,21 +332,19 @@ public struct ProjectPaths: Sendable {
         animate.appendingPathComponent("motion-clips", isDirectory: true)
     }
 
-    /// `<project>/Animate/debug/canvas/`
-    /// Wave E target: `<project>/Canvas/`
+    /// `<project>/Canvas/`  (Wave E: promoted to top-level from Animate/debug/canvas)
     public var animateCanvasDir: URL {
-        animate.appendingPathComponent("debug/canvas", isDirectory: true)
+        canvas
     }
 
-    /// `<project>/Animate/debug/canvas/_index.json`
-    /// Wave E target: move with canvasDir
+    /// `<project>/Canvas/_index.json`  (auto-follows `animateCanvasDir` repoint)
     public var animateCanvasIndexJSON: URL {
         animateCanvasDir.appendingPathComponent("_index.json")
     }
 
-    /// `<project>/Animate/audio/`  (archived)
+    /// `<project>/_Archive/Animate-audio/`  (Wave D: archived from Animate/audio/)
     public var animateAudio: URL {
-        animate.appendingPathComponent("audio", isDirectory: true)
+        archive.appendingPathComponent("Animate-audio", isDirectory: true)
     }
 
     /// `<project>/Animate/motions/`  (archived)
@@ -298,9 +354,9 @@ public struct ProjectPaths: Sendable {
 
     // MARK: - Animate/3d  (archived)
 
-    /// `<project>/Animate/3d/`  (archived)
+    /// `<project>/_Archive/Animate-3d/`  (Wave D: archived from Animate/3d/)
     public var animate3d: URL {
-        animate.appendingPathComponent("3d", isDirectory: true)
+        archive.appendingPathComponent("Animate-3d", isDirectory: true)
     }
 
     /// `<project>/Animate/3d/registry-index.json`  (archived)
@@ -313,84 +369,84 @@ public struct ProjectPaths: Sendable {
         animate3d.appendingPathComponent("world-catalog/world-catalog.json")
     }
 
-    // MARK: - Per-character paths (parameterized)
+    // MARK: - Per-character paths (parameterized) — all under `<project>/Characters/<slug>/` post-Wave-D
 
-    /// `<project>/Animate/characters/<slug>/`
+    /// `<project>/Characters/<slug>/`
     public func characterFolder(slug: String) -> URL {
-        animateCharacters.appendingPathComponent(slug, isDirectory: true)
+        characters.appendingPathComponent(slug, isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/rig.json`
+    /// `<project>/Characters/<slug>/rig.json`
     public func characterRigJSON(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("rig.json")
     }
 
-    /// `<project>/Animate/characters/<slug>/parts/`
+    /// `<project>/Characters/<slug>/parts/`
     public func characterParts(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("parts", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/inspiration/`
+    /// `<project>/Characters/<slug>/inspiration/`
     public func characterInspiration(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("inspiration", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/inspiration-batches/`
+    /// `<project>/Characters/<slug>/inspiration-batches/`
     public func characterInspirationBatches(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("inspiration-batches", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/reference/`
+    /// `<project>/Characters/<slug>/reference/`
     public func characterReference(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("reference", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/reference-workflow/`
+    /// `<project>/Characters/<slug>/reference-workflow/`
     public func characterReferenceWorkflow(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("reference-workflow", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/reference-workflow-batches/`
+    /// `<project>/Characters/<slug>/reference-workflow-batches/`
     public func characterReferenceWorkflowBatches(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("reference-workflow-batches", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/profile-staging/`
+    /// `<project>/Characters/<slug>/profile-staging/`
     public func characterProfileStaging(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("profile-staging", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/profile/`
+    /// `<project>/Characters/<slug>/profile/`
     public func characterProfile(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("profile", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/motions/`
+    /// `<project>/Characters/<slug>/motions/`
     public func characterMotions(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("motions", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/packages/`
+    /// `<project>/Characters/<slug>/packages/`
     public func characterPackages(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("packages", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/backups/`
+    /// `<project>/Characters/<slug>/backups/`
     public func characterBackups(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("backups", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/action-images/`
+    /// `<project>/Characters/<slug>/action-images/`
     public func characterActionImages(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("action-images", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/animated/`
+    /// `<project>/Characters/<slug>/animated/`
     public func characterAnimated(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("animated", isDirectory: true)
     }
 
-    /// `<project>/Animate/characters/<slug>/inspiration-gallery-state.json`
+    /// `<project>/Characters/<slug>/inspiration-gallery-state.json`
     public func characterInspirationGalleryStateJSON(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("inspiration-gallery-state.json")
     }

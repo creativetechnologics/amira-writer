@@ -1,6 +1,6 @@
 import Foundation
 
-/// MiniMax API key — stored in `<project>/config/api-credentials.json`
+/// MiniMax API key — stored in `<project>/Settings/api-credentials.json`
 /// (via ProjectCredentialStore) and synced between machines by Syncthing.
 @available(macOS 26.0, *)
 struct MiniMaxCredentialStore: Sendable {

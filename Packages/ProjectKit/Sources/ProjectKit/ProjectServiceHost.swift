@@ -595,6 +595,7 @@ public final class ProjectServiceHost: @unchecked Sendable {
     }
 
     private static func isClientVisibleProjectFile(_ path: String) -> Bool {
+        // "Instruments.json" kept for back-compat; canonical post-Wave-D is Settings/instruments.json.
         if path == "index.json" || path == "Instruments.json" || path == "project.json" || path == "characters.json" {
             return true
         }
@@ -603,6 +604,9 @@ public final class ProjectServiceHost: @unchecked Sendable {
             "Characters/",
             "Synopsis/",
             "Animate/",
+            "Scenes/",    // Wave D
+            "Places/",    // Wave D
+            "Settings/",  // Wave D
         ]
         return prefixes.contains { path.hasPrefix($0) }
     }
@@ -647,7 +651,8 @@ public final class ProjectServiceHost: @unchecked Sendable {
             actorID: "project-service"
         )
         try await database.upsertProjectFile(
-            path: "Instruments.json",
+            // Wave D: seeded at Settings/instruments.json (was root Instruments.json).
+            path: "Settings/instruments.json",
             jsonData: Data(instruments.utf8),
             actorID: "project-service"
         )
@@ -657,7 +662,8 @@ public final class ProjectServiceHost: @unchecked Sendable {
             actorID: "project-service"
         )
         try await database.upsertProjectFile(
-            path: "Animate/scenes.json",
+            // Wave D: seeded at Scenes/scenes.json (was Animate/scenes.json).
+            path: "Scenes/scenes.json",
             jsonData: Data(emptyScenes.utf8),
             actorID: "project-service"
         )
@@ -781,6 +787,9 @@ public final class ProjectServiceHost: @unchecked Sendable {
             "Characters/",
             "Synopsis/",
             "Animate/",
+            "Scenes/",    // Wave D
+            "Places/",    // Wave D
+            "Settings/",  // Wave D
         ]
         return prefixes.contains { relativePath.hasPrefix($0) }
     }

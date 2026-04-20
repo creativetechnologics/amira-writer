@@ -1051,7 +1051,7 @@ public actor ProjectDatabase {
 
     private func exportProject(_ project: NPProjectRecord) throws {
         let fm = FileManager.default
-        for file in project.projectFiles where file.path != "Animate/scenes.json" {
+        for file in project.projectFiles where file.path != "Scenes/scenes.json" && file.path != "Animate/scenes.json" {
             let destination = project.projectURL.appendingPathComponent(file.path)
             try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             try file.jsonData.write(to: destination, options: .atomic)
@@ -1084,7 +1084,7 @@ public actor ProjectDatabase {
             try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             let data = try JSONSerialization.data(withJSONObject: animatedSceneData, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: destination, options: .atomic)
-        } else if let animateScenesFile = project.projectFile(at: "Animate/scenes.json") {
+        } else if let animateScenesFile = project.projectFile(at: "Scenes/scenes.json") ?? project.projectFile(at: "Animate/scenes.json") {
             let destination = project.projectURL.appendingPathComponent(animateScenesFile.path)
             try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             try animateScenesFile.jsonData.write(to: destination, options: .atomic)
@@ -1418,6 +1418,7 @@ public actor ProjectDatabase {
     }
 
     private func isCanonicalProjectFile(_ relativePath: String) -> Bool {
+        // Legacy root-level Instruments.json kept for back-compat; canonical post-Wave-D is Settings/instruments.json.
         if relativePath == "index.json" || relativePath == "Instruments.json" {
             return true
         }
@@ -1429,6 +1430,9 @@ public actor ProjectDatabase {
             "Characters/",
             "Synopsis/",
             "Animate/",
+            "Scenes/",    // Wave D
+            "Places/",    // Wave D
+            "Settings/",  // Wave D (includes instruments.json, api-credentials.json, project-settings.json)
         ]
         return managedPrefixes.contains { relativePath.hasPrefix($0) }
     }
@@ -1441,7 +1445,8 @@ public actor ProjectDatabase {
         relativePath == "Characters/characters.json" || relativePath == "characters.json"
     }
 
-    private static let animateScenesPath = "Animate/scenes.json"
+    /// Wave D: canonical scenes.json moved from Animate/ to Scenes/.
+    private static let animateScenesPath = "Scenes/scenes.json"
 
     private func pruneLegacyIndexCache() throws {
         let legacyDirectory = projectURL.appendingPathComponent(".novtro", isDirectory: true)

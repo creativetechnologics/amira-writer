@@ -2,8 +2,8 @@ import Foundation
 import ProjectKit
 
 /// Project-local credential store. Keeps API keys inside the OWP project
-/// folder (at `<project>/config/api-credentials.json`) so they automatically
-/// sync between Gary's machines via the Syncthing replica of that folder.
+/// folder (at `<project>/Settings/api-credentials.json`, post-Wave-D) so they
+/// automatically sync between Gary's machines via the Syncthing replica.
 ///
 /// File permissions are forced to owner-only (0600) on every write. The JSON
 /// itself is plaintext — Gary's threat model treats his own machines as

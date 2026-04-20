@@ -3,13 +3,17 @@ import ProjectKit
 
 enum ProjectDatabaseBridge {
     static let animateMetadataPath = "Animate/animate.json"
-    static let animateScenesPath = "Animate/scenes.json"
-    static let animatePlacesPath = "Animate/places.json"
-    static let animatePlacesWorkflowPath = "Animate/places-workflow.json"
+    /// Wave D: moved from Animate/scenes.json to Scenes/scenes.json.
+    static let animateScenesPath = "Scenes/scenes.json"
+    /// Wave D: moved from Animate/places.json to Places/places.json.
+    static let animatePlacesPath = "Places/places.json"
+    /// Wave D: moved from Animate/places-workflow.json to Places/places-workflow.json.
+    static let animatePlacesWorkflowPath = "Places/places-workflow.json"
     static let characterPackageSelectionsPath = "Animate/character-package-selections.json"
     static let shotPresetsPath = "Animate/shot-presets.json"
-    static let animate3DRegistryRootPath = "Animate/3d"
-    static let animate3DRegistryIndexPath = "Animate/3d/registry-index.json"
+    /// Wave D: archived — Animate/3d/ moved to _Archive/Animate-3d/.
+    static let animate3DRegistryRootPath = "_Archive/Animate-3d"
+    static let animate3DRegistryIndexPath = "_Archive/Animate-3d/registry-index.json"
 
     private static let charactersCandidatePaths = ["Characters/characters.json", "characters.json"]
 

@@ -455,7 +455,7 @@ struct ImagineCanvasPageView: View {
         imageSize: String,
         referenceCount: Int
     ) throws -> AnimateStore.CanvasGeneration {
-        // Resolve canvas dir from animateURL or fallback to ~/Amira - A Modern Opera/Animate/debug/canvas/
+        // Resolve canvas dir from animateURL or fallback to ~/Amira - A Modern Opera/Canvas/ (Wave E top-level).
         let canvasDir: URL
         if let animateURL = store.animateURL {
             canvasDir = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateCanvasDir
@@ -463,7 +463,7 @@ struct ImagineCanvasPageView: View {
             let home = FileManager.default.homeDirectoryForCurrentUser
             canvasDir = home
                 .appendingPathComponent("Amira - A Modern Opera")
-                .appendingPathComponent("Animate/debug/canvas")
+                .appendingPathComponent("Canvas")
         }
 
         let fm = FileManager.default
