@@ -12,10 +12,10 @@ enum OperaMode: String, CaseIterable, Identifiable {
     case write
     case score
     case mix
-    case imagine
     case characters
     case places
     case props
+    case scenes
     case animate
     case allImages
     case canvas
@@ -27,10 +27,10 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .write: return "Write"
         case .score: return "Score"
         case .mix: return "Mix"
-        case .imagine: return "Imagine"
         case .characters: return "Characters"
         case .places: return "Places"
         case .props: return "Props"
+        case .scenes: return "Scenes"
         case .animate: return "Animate"
         case .allImages: return "All Images"
         case .canvas: return "Canvas"
@@ -42,10 +42,10 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .write: return "Libretto and scene drafting"
         case .score: return "Playback, orchestration, and export"
         case .mix: return "DAW timeline, Suno comping, and polish"
-        case .imagine: return "Character and scene image generation"
         case .characters: return "Character design, reference workflow, and asset generation"
         case .places: return "Background plates, locations, and set imagery"
         case .props: return "Scene objects, vehicles, and interactive props"
+        case .scenes: return "Scene image generation"
         case .animate: return "Staging, scenes, and timeline animation"
         case .allImages: return "Every generated image across the project"
         case .canvas: return "Free-form image generation canvas"
@@ -57,10 +57,10 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .write: return "text.book.closed"
         case .score: return "music.note.list"
         case .mix: return "slider.horizontal.3"
-        case .imagine: return "sparkles"
         case .characters: return "person.2"
         case .places: return "map"
         case .props: return "shippingbox"
+        case .scenes: return "film.stack"
         case .animate: return "sparkles.tv"
         case .allImages: return "photo.on.rectangle.angled"
         case .canvas: return "paintpalette"
@@ -329,7 +329,7 @@ struct OperaShellView: View {
                     case "write":  selectedMode = .write
                     case "score":  selectedMode = .score
                     case "mix": selectedMode = .mix
-                    case "imagine": selectedMode = .imagine
+                    case "scenes": selectedMode = .scenes
                     case "characters": selectedMode = .characters
                     case "places": selectedMode = .places
                     case "props": selectedMode = .props
@@ -374,7 +374,7 @@ struct OperaShellView: View {
         }
         .onChange(of: animateController.selectedScenePath) { _, newPath in
             // Characters, Places, Props, and Animate share animateController; route to whichever is active.
-            let effectiveMode: OperaMode = (renderedMode == .characters || renderedMode == .places || renderedMode == .props) ? renderedMode : .animate
+            let effectiveMode: OperaMode = (renderedMode == .characters || renderedMode == .places || renderedMode == .props || renderedMode == .scenes) ? renderedMode : .animate
             captureSceneSelectionChange(
                 newPath,
                 from: effectiveMode,
@@ -434,7 +434,7 @@ struct OperaShellView: View {
         case .write: return writeController.saveIndicator
         case .score: return scoreController.saveIndicator
         case .mix: return mixController.saveIndicator
-        case .imagine: return animateController.saveIndicator
+        case .scenes: return animateController.saveIndicator
         case .characters: return animateController.saveIndicator
         case .places: return animateController.saveIndicator
         case .props: return animateController.saveIndicator
@@ -449,7 +449,7 @@ struct OperaShellView: View {
         case .write: return writeSidebarVisible
         case .score: return scoreSidebarVisible
         case .mix: return mixSidebarVisible
-        case .imagine: return imagineSidebarVisible
+        case .scenes: return imagineSidebarVisible
         case .characters: return charactersSidebarVisible
         case .places: return placesSidebarVisible
         case .props: return propsSidebarVisible
@@ -518,7 +518,7 @@ struct OperaShellView: View {
             case .write: writeSidebarVisible.toggle()
             case .score: scoreSidebarVisible.toggle()
             case .mix: mixSidebarVisible.toggle()
-            case .imagine: imagineSidebarVisible.toggle()
+            case .scenes: imagineSidebarVisible.toggle()
             case .characters: charactersSidebarVisible.toggle()
             case .places: placesSidebarVisible.toggle()
             case .props: propsSidebarVisible.toggle()
@@ -534,7 +534,7 @@ struct OperaShellView: View {
         case .write: return writeInspectorVisible
         case .score: return scoreInspectorVisible
         case .mix: return mixInspectorVisible
-        case .imagine: return imagineInspectorVisible
+        case .scenes: return imagineInspectorVisible
         case .characters: return charactersInspectorVisible
         case .places: return placesInspectorVisible
         case .props: return propsInspectorVisible
@@ -550,7 +550,7 @@ struct OperaShellView: View {
             case .write: writeInspectorVisible.toggle()
             case .score: scoreInspectorVisible.toggle()
             case .mix: mixInspectorVisible.toggle()
-            case .imagine: imagineInspectorVisible.toggle()
+            case .scenes: imagineInspectorVisible.toggle()
             case .characters: charactersInspectorVisible.toggle()
             case .places: placesInspectorVisible.toggle()
             case .props: propsInspectorVisible.toggle()
@@ -647,8 +647,8 @@ struct OperaShellView: View {
             ScoreWorkspace(controller: scoreController)
         case .mix:
             MixWorkspace(controller: mixController)
-        case .imagine:
-            ImagineWorkspace(controller: animateController)
+        case .scenes:
+            ScenesWorkspace(controller: animateController)
         case .characters:
             CharactersWorkspace(controller: animateController)
         case .places:
@@ -921,7 +921,7 @@ struct OperaShellView: View {
         case .write: writeController.suspendBackgroundWork()
         case .score: scoreController.suspendBackgroundWork()
         case .mix: mixController.suspendBackgroundWork()
-        case .imagine: animateController.suspendBackgroundWork()
+        case .scenes: animateController.suspendBackgroundWork()
         case .characters: animateController.suspendBackgroundWork()
         case .places: animateController.suspendBackgroundWork()
         case .props: animateController.suspendBackgroundWork()
@@ -998,7 +998,7 @@ struct OperaShellView: View {
             return await scoreController.ensureProjectLoaded(projectURL)
         case .mix:
             return await mixController.ensureProjectLoaded(projectURL)
-        case .imagine:
+        case .scenes:
             return await animateController.ensureProjectLoaded(projectURL)
         case .characters:
             return await animateController.ensureProjectLoaded(projectURL)
@@ -1021,7 +1021,7 @@ struct OperaShellView: View {
         projectURL: URL,
         onBackgroundCompletion: (@MainActor (String?) -> Void)? = nil
     ) async -> OperaModeLoadResult {
-        guard mode == .score || mode == .animate || mode == .characters || mode == .places || mode == .props || mode == .mix || mode == .imagine || mode == .allImages || mode == .canvas else {
+        guard mode == .score || mode == .animate || mode == .characters || mode == .places || mode == .props || mode == .mix || mode == .scenes || mode == .allImages || mode == .canvas else {
             if let error = await load(mode: mode, projectURL: projectURL) {
                 return .failure(error)
             }
@@ -1147,7 +1147,7 @@ struct OperaShellView: View {
             return scoreController.activeProjectPath
         case .mix:
             return mixController.activeProjectPath
-        case .imagine:
+        case .scenes:
             return animateController.activeProjectPath
         case .characters:
             return animateController.activeProjectPath
@@ -1172,7 +1172,7 @@ struct OperaShellView: View {
             return scoreController.currentSelectionPath()
         case .mix:
             return mixController.currentSelectionPath()
-        case .imagine:
+        case .scenes:
             return animateController.currentSelectionPath()
         case .characters:
             return animateController.currentSelectionPath()
@@ -1198,7 +1198,7 @@ struct OperaShellView: View {
             return scoreController.applySelectionPath(relativePath)
         case .mix:
             return mixController.applySelectionPath(relativePath)
-        case .imagine:
+        case .scenes:
             return animateController.applySelectionPath(relativePath)
         case .characters:
             return animateController.applySelectionPath(relativePath)
@@ -1221,7 +1221,7 @@ struct OperaShellView: View {
             return
         case .mix:
             mixController.setSelectionRestorePending(isPending)
-        case .imagine:
+        case .scenes:
             animateController.setSelectionRestorePending(isPending)
         case .characters:
             animateController.setSelectionRestorePending(isPending)
@@ -1324,8 +1324,8 @@ struct OperaShellView: View {
             return "Loading playback and orchestration data from local files."
         case .mix:
             return "Loading mix sessions, Suno file browser, and arrangement lanes from local files."
-        case .imagine:
-            return "Loading character and scene image generation data."
+        case .scenes:
+            return "Loading scene image generation data."
         case .characters:
             return "Loading character data, inspiration images, and reference workflow assets."
         case .places:
@@ -1349,7 +1349,7 @@ struct OperaShellView: View {
             return scoreController.loadStatusMessage
         case .mix:
             return mixController.loadStatusMessage
-        case .imagine:
+        case .scenes:
             return animateController.loadStatusMessage
         case .characters:
             return animateController.loadStatusMessage
@@ -1374,7 +1374,7 @@ struct OperaShellView: View {
             return Color(red: 0.72, green: 0.78, blue: 0.46)
         case .mix:
             return Color(red: 0.77, green: 0.49, blue: 0.26)
-        case .imagine:
+        case .scenes:
             return Color(red: 0.72, green: 0.58, blue: 0.82)
         case .characters:
             return Color(red: 0.55, green: 0.72, blue: 0.82)
@@ -1401,7 +1401,7 @@ struct OperaShellView: View {
             scoreController.save()
         case .mix:
             mixController.save()
-        case .imagine:
+        case .scenes:
             animateController.save()
         case .characters:
             animateController.save()

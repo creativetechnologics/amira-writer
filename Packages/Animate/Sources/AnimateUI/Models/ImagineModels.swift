@@ -1,23 +1,5 @@
 import Foundation
 
-// MARK: - Imagine Sub-Pages
-
-enum ImaginePage: String, CaseIterable, Identifiable, Codable {
-    case characters = "Characters"
-    case scenes = "Scenes"
-    case canvas = "Canvas"
-
-    var id: String { rawValue }
-
-    var systemImage: String {
-        switch self {
-        case .characters: "person.2.fill"
-        case .scenes: "film.stack"
-        case .canvas: "paintpalette"
-        }
-    }
-}
-
 // MARK: - Scene Shot Gallery (Beginning / Middle / End)
 
 enum ImagineShotMoment: String, CaseIterable, Identifiable, Codable {

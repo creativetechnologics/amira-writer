@@ -217,7 +217,6 @@ final class AnimateStore {
 
     // MARK: - Imagine State
 
-    var selectedImaginePage: ImaginePage = .characters
     var imagineSceneGalleries: [UUID: [ImagineSceneShotGallery]] = [:]
     private var imagineGalleryRefreshGenerationByScene: [UUID: Int] = [:]
     var imagineBulkRunConfig: ImagineBulkRunConfig = .init()
