@@ -5378,6 +5378,14 @@ final class ScoreStore {
             interleaved: false
         ) else { throw ChunkExportError.bufferCreationFailed }
 
+        // Throttle speed control: set AMIRA_EXPORT_THROTTLE_SPEED=5.0 to run at ~5x realtime.
+        // Unset = no throttle (default fast path).
+        let throttleSpeed: Double? = ProcessInfo.processInfo.environment["AMIRA_EXPORT_THROTTLE_SPEED"]
+            .flatMap(Double.init)
+        if let ts = throttleSpeed {
+            NSLog("[ExportThrottle] target=%.2fx realtime", ts)
+        }
+
         // Compute total duration
         let startSeconds = ticksToSec(startTick)
         let endSeconds = ticksToSec(endTick)
@@ -6042,6 +6050,12 @@ final class ScoreStore {
                 try outputFile!.write(from: outputBuffer)
                 currentFrame += AVAudioFramePosition(outputBuffer.frameLength)
                 retryCount = 0
+
+                // Throttle: sleep to approximate targetSpeed x realtime.
+                if let ts = throttleSpeed, ts > 0 {
+                    let targetWallTimePerBlock = Double(framesToRender) / sampleRate / ts
+                    try await Task.sleep(nanoseconds: UInt64(targetWallTimePerBlock * 1_000_000_000))
+                }
 
                 if containsHostedAudioUnits && currentFrame >= contentFrames {
                     let bufferRMS = Self.rmsLevel(of: outputBuffer)
