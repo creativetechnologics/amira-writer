@@ -153,14 +153,7 @@ private struct CharactersWorkspaceContent: View {
                 case .reference:
                     CharactersPageView(store: store, showSidebar: false)
                 case .imagine:
-                    VStack {
-                        Spacer()
-                        Text("Imagine content wiring in next wave.")
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ImagineCharactersPageView(store: store)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
