@@ -8367,13 +8367,6 @@ extension ScoreStore {
         return sourceURL
     }
 
-    private func resolvedSunoLyricsForCurrentPreset() -> String? {
-        if !sunoCoverPreset.requiresLyrics {
-            return "[Instrumental]"
-        }
-        let lyrics = formattedSunoLyrics.trimmingCharacters(in: .whitespacesAndNewlines)
-        return lyrics.isEmpty ? nil : lyrics
-    }
 
     private func normalizedSunoExcludeStyles() -> String {
         let trimmed = sunoExcludeStyles.trimmingCharacters(in: .whitespacesAndNewlines)
