@@ -143,80 +143,58 @@ actor SunoRenderOrchestrator {
     }
 
     private func generateTakes(for chunk: SunoChunkSpec) async throws -> [SunoTake] {
-        var takes: [SunoTake] = []
-        let takesCount = session.plan.config.takesPerChunk
-        for _ in 0..<takesCount {
-            var retries = 0
-            let maxRetries = 3
-            var localRetryDelay: UInt64 = 30
+        guard let wavPath = chunk.renderedWAVPath else { return [] }
+        let cli = await MainActor.run { store.sunoCLI }
 
-            while retries < maxRetries {
-                do {
-                    // Try cover path if WAV was exported, otherwise text-only
-                    let result: String
-                    if let wavPath = chunk.renderedWAVPath {
-                        result = try await store.sunoClient.generateWithCoverFallback(
-                            audioPath: wavPath,
-                            prompt: chunk.generatedPrompt,
-                            style: session.plan.styleTemplate
-                        )
-                    } else {
-                        result = try await store.sunoClient.generateTrack(
-                            prompt: chunk.generatedPrompt,
-                            style: session.plan.styleTemplate
-                        )
-                    }
+        var retries = 0
+        let maxRetries = 3
+        var localRetryDelay: UInt64 = 30
 
+        while retries < maxRetries {
+            do {
+                let gen = try await cli.generateCover(
+                    source: wavPath,
+                    style: session.plan.styleTemplate,
+                    title: nil,
+                    lyrics: nil,
+                    excludeStyles: nil,
+                    wait: true
+                )
+                let capturedIDs = Array(gen.songIDs.prefix(session.plan.config.takesPerChunk))
+                guard !capturedIDs.isEmpty else {
+                    throw SunoCLIError.runtime(message: "Suno generate cover returned no song IDs.")
+                }
+
+                let downloadDir = FileManager.default.temporaryDirectory.appendingPathComponent("suno-takes")
+                try? FileManager.default.createDirectory(at: downloadDir, withIntermediateDirectories: true)
+
+                var takes: [SunoTake] = []
+                for songID in capturedIDs {
                     var take = SunoTake()
-                    // parseTrackID handles raw UUIDs, JSON payloads, and status text that embeds an ID.
-                    take.sunoTrackID = parseTrackID(from: result)
-                    guard let trackID = take.sunoTrackID else {
-                        throw SunoAPIError.toolFailed(
-                            "Suno generation did not return a real track ID. Automated take capture cannot continue safely."
-                        )
-                    }
-
-                    let downloadDir = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("suno-takes")
-                    try? FileManager.default.createDirectory(
-                        at: downloadDir, withIntermediateDirectories: true
-                    )
-                    let destPath = downloadDir
-                        .appendingPathComponent("\(trackID).mp3").path
-                    _ = try await store.sunoClient.downloadTrack(
-                        trackID: trackID,
-                        downloadPath: destPath
-                    )
-                    take.downloadedFilePath = destPath
-                    // Compute MFCC similarity
-                    if let sourcePath = chunk.renderedWAVPath,
-                       let takePath = take.downloadedFilePath {
-                        take.similarityScore = try? MFCCSimilarity.compareFiles(
-                            fileA: sourcePath, fileB: takePath
-                        )
+                    take.sunoTrackID = songID
+                    let dl = try await cli.downloadSong(songID: songID, format: "mp3", out: downloadDir.path)
+                    take.downloadedFilePath = dl.path
+                    if let sourcePath = chunk.renderedWAVPath, let takePath = take.downloadedFilePath {
+                        take.similarityScore = try? MFCCSimilarity.compareFiles(fileA: sourcePath, fileB: takePath)
                     }
                     takes.append(take)
-                    break
-
-                } catch let error where isRateLimitError(error) {
-                    retries += 1
-                    if retries >= maxRetries { throw error }
-                    NSLog(
-                        "[SunoOrchestrator] Rate limited, backing off %ds (retry %d/%d)",
-                        localRetryDelay, retries, maxRetries
-                    )
-                    try await Task.sleep(for: .seconds(localRetryDelay))
-                    localRetryDelay = min(localRetryDelay * 2, 300)
                 }
+                return takes
+            } catch let error where isRateLimitError(error) {
+                retries += 1
+                if retries >= maxRetries { throw error }
+                NSLog("[SunoOrchestrator] Rate limited, backing off %ds (retry %d/%d)", localRetryDelay, retries, maxRetries)
+                try await Task.sleep(for: .seconds(localRetryDelay))
+                localRetryDelay = min(localRetryDelay * 2, 300)
             }
         }
-        return takes
+        return []
     }
 
     private func isRateLimitError(_ error: Error) -> Bool {
-        if case SunoAPIError.toolFailed(let msg) = error {
-            return msg.contains("429") || msg.lowercased().contains("rate")
-                || msg.lowercased().contains("too many")
+        if case SunoCLIError.runtime(let msg) = error {
+            let l = msg.lowercased()
+            return l.contains("429") || l.contains("rate") || l.contains("too many")
         }
         return false
     }
@@ -231,27 +209,6 @@ actor SunoRenderOrchestrator {
             .filter { $0.1 >= 0.1 }
             .sorted { $0.1 > $1.1 }
         return scored.first?.0
-    }
-
-    private func parseTrackID(from result: String) -> String? {
-        // Try JSON first (from generateTrack)
-        if let data = result.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let trackID = json["track_id"] as? String {
-            return trackID
-        }
-        if let match = result.range(
-            of: #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"#,
-            options: .regularExpression
-        ) {
-            return String(result[match])
-        }
-        // Fall back to bare string (from older workflows)
-        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty && !trimmed.contains("{") {
-            return trimmed
-        }
-        return nil
     }
 
     // MARK: - Assembly

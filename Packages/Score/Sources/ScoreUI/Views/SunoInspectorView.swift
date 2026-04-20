@@ -758,176 +758,85 @@ struct SunoInspectorView: View {
     @ViewBuilder
     private var settingsTabContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            serverSetupSection
-
-            Divider()
-
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(store.sunoClient.isConfigured ? Color.green : Color.orange)
-                    .frame(width: 6, height: 6)
-                Text(store.sunoClient.isConfigured ? "API configured" : "Not configured")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                if store.sunoLoggedIn {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Suno CLI").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(store.sunoCLIIsInstalled ? Color.green : Color.orange)
+                        .frame(width: 6, height: 6)
+                    Text(store.sunoCLIIsInstalled ? "CLI installed" : "CLI not found")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                HStack(spacing: 4) {
+                    Text(store.sunoCLI.cliPath)
+                        .font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle)
+                        .foregroundStyle(.tertiary)
                     Spacer()
-                    Label("Logged in", systemImage: "checkmark.circle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.green)
+                    Button("Change…") { selectSunoCLIPath() }
+                        .font(.caption2).controlSize(.mini)
+                }
+                if !store.sunoCLIIsInstalled {
+                    Text("Install: `cd /Volumes/Storage VIII/Programming/SunoSkill/suno_cli && python3 -m venv .venv && .venv/bin/pip install -e .`")
+                        .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Canonical MCP Defaults")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            Divider()
 
-                Text("- Server URL: `http://127.0.0.1:3001`\n- Browser automation stays headless\n- Covers use `suno_create_cover` and capture both A/B song IDs\n- Uploads and downloads land in the current opera project's `Suno/` folder")
-                    .font(.caption2)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Login Check").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                if let result = store.sunoCLILastSelftest {
+                    HStack(spacing: 6) {
+                        Image(systemName: result.loggedIn ? "checkmark.circle.fill" : "xmark.octagon")
+                            .foregroundStyle(result.loggedIn ? .green : .orange)
+                        Text(result.loggedIn ? "Logged in to Suno" : "Not logged in")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("Run a selftest to verify the CLI can log in.")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                Button {
+                    Task { await store.runSunoSelftest() }
+                } label: {
+                    Label("Run Selftest", systemImage: "stethoscope")
+                }
+                .font(.caption2).controlSize(.mini).buttonStyle(.bordered)
+                .disabled(!store.sunoCLIIsInstalled)
+
+                if let err = store.sunoCLIErrorMessage, !err.isEmpty {
+                    Text(err).font(.caption2).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Browser Profile").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text(store.sunoCLI.profileDir)
+                    .font(.caption2.monospaced()).lineLimit(2).truncationMode(.middle)
                     .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("If you're not logged in, open Suno in Chrome using this profile dir and log in, then re-run selftest.")
+                    .font(.caption2).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    @ViewBuilder
-    private var serverSetupSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Suno Server")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            if store.sunoServerIsBootstrapping {
-                // State: Bootstrapping in progress
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(store.sunoBootstrapStep?.rawValue ?? "Setting up...")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            } else if store.sunoServerState == .running {
-                // State: Server running
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 8, height: 8)
-                    Text("Server running on \(store.sunoServerManager.serverAddressDisplay)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Stop") {
-                        store.sunoServerManager.stop()
-                    }
-                    .font(.caption2)
-                    .controlSize(.mini)
-                }
-            } else if store.sunoServerIsBootstrapped {
-                // State: Bootstrapped, server stopped
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(store.sunoServerState == .error ? Color.red : Color.gray)
-                        .frame(width: 8, height: 8)
-                    Text(store.sunoServerState == .error
-                         ? (store.sunoServerErrorMessage ?? "Server error")
-                         : "Server stopped")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                    Spacer()
-                    Button("Start") {
-                        store.sunoServerManager.start()
-                    }
-                    .font(.caption2)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.mini)
-                }
-            } else {
-                // State: Not bootstrapped
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Validates the installed local Suno MCP checkout, prepares its environment, and starts the canonical headless server on 127.0.0.1:3001")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button {
-                        Task {
-                            do {
-                                try await store.sunoServerManager.bootstrap { step in
-                                    // Progress tracked via onStateChange callback → bridging properties
-                                }
-                            } catch {
-                                store.appendSunoLog("Bootstrap failed: \(error.localizedDescription)", level: .error)
-                                store.statusMessage = "Suno setup failed: \(error.localizedDescription)"
-                            }
-                        }
-                    } label: {
-                        Label("Prepare Suno MCP", systemImage: "checkmark.circle")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                }
-            }
-
-            // Login section — always visible
-            Divider()
-            sunoLoginSection
+    private func selectSunoCLIPath() {
+        #if canImport(AppKit)
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = true
+        panel.message = "Select the `suno` CLI executable"
+        if panel.runModal() == .OK, let url = panel.url {
+            store.sunoCLI.cliPath = url.path
         }
-    }
-
-    @ViewBuilder
-    private var sunoLoginSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Suno Account")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            switch store.sunoLoginState {
-            case .loggedIn:
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 8, height: 8)
-                    Text("Logged in to Suno")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Re-import") {
-                        store.sunoServerManager.importLoginFromChrome()
-                    }
-                    .font(.caption2)
-                    .controlSize(.mini)
-                }
-            case .loggingIn:
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Importing login from Chrome...")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            case .notLoggedIn:
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Log into suno.com in Chrome first, then import that session here so the headless MCP flow can reuse it")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button {
-                        store.sunoServerManager.importLoginFromChrome()
-                    } label: {
-                        Label("Import from Chrome", systemImage: "globe")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-
-                    if let error = store.sunoServerErrorMessage, !error.isEmpty {
-                        Text(error)
-                            .font(.caption2)
-                            .foregroundStyle(.red)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-        }
+        #endif
     }
 }

@@ -208,36 +208,3 @@ struct SunoGeneration: Identifiable {
     }
 }
 
-// MARK: - Suno API Errors
-
-enum SunoAPIError: LocalizedError {
-    case notConfigured
-    case invalidURL
-    case invalidResponse(statusCode: Int)
-    case serverError(String)
-    case networkError(Error)
-    case browserNotOpen
-    case loginRequired
-    case toolFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .notConfigured:
-            return "Suno not configured. Set server URL and account in settings."
-        case .invalidURL:
-            return "Invalid server URL."
-        case .invalidResponse(let code):
-            return "Server returned status \(code)."
-        case .serverError(let msg):
-            return "Server error: \(msg)"
-        case .networkError(let err):
-            return "Network error: \(err.localizedDescription)"
-        case .browserNotOpen:
-            return "Browser not open. Click Login in settings first."
-        case .loginRequired:
-            return "Not logged in to Suno. Click Login in settings."
-        case .toolFailed(let msg):
-            return "Tool failed: \(msg)"
-        }
-    }
-}
