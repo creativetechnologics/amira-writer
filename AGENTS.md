@@ -57,3 +57,21 @@
   - `history/HANDOFF-2026-03-21.md`
   - `history/OPERA-CONSOLIDATION-2026-03-21.md`
   - `history/OPERA-DEVELOPMENT-HISTORY-2026-03-21.md`
+
+## Programmatic Interfaces (API)
+
+**Canonical doc:** `docs/API.md`. Two interfaces: (1) HTTP JSON API on `localhost:19847` (only reachable once the app is on the Score page); (2) headless full-mix WAV export via env vars on the app bundle. Do **not** use `Scripts/export-headless-wav.sh` or the `Score` package binary — it produces sine tones, not real audio.
+
+## Headless Full-Mix WAV Export (BBC SO)
+
+**Canonical doc:** `docs/HOW-TO-EXPORT-WAV.md`. Every agent must follow it exactly — do not improvise. The constraints listed there exist because every alternative has already been tried and rejected.
+
+TL;DR:
+
+- Launch the built app bundle with `open -W -n --env AMIRA_HEADLESS_FULLMIX_EXPORT=... --env AMIRA_HEADLESS_FULLMIX_SONG=...`. The shipping path is realtime capture with a 4096-frame export buffer (commit `ca679fcf`); it is click-free on BBC SO.
+- Do **not** set `AMIRA_HEADLESS_FORCE_OFFLINE` — the offline path produces audible click artifacts.
+- Do **not** patch BBC SO, fall back to SF2, or post-process the WAV. BBC SO stays stock; any fix must be in-render.
+- Use a specific song hint (e.g. `"Johnny's Goodbye"`) — bare `"Finale"` resolves to Act I Finale, not Johnny's Goodbye Finale.
+- Validate end-to-end (`resolved song`, WAV duration, `done status=success`) before asking Gary to listen. Gary is not the tester.
+
+See `docs/HOW-TO-EXPORT-WAV.md` for the full command template, env var reference, verification checklist, flaky-XPC-cold-start remedy, and hard constraints.

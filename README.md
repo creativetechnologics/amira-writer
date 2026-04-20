@@ -74,6 +74,14 @@ You can also point it at a specific project folder:
 rtk Scripts/cleanup-opera-cache.sh --project "$HOME/Documents/Amira - A Modern Opera"
 ```
 
+## Programmatic Interfaces
+
+Agents and external tools that need to drive the app should read [`docs/API.md`](docs/API.md). It documents:
+
+- The HTTP JSON API on `localhost:19847` (activates once the Score page is loaded) — ~60 endpoints for songs, notes, tempo, playback, export, mixer, versions.
+- The headless full-mix WAV export via env vars on the app bundle (see also [`docs/HOW-TO-EXPORT-WAV.md`](docs/HOW-TO-EXPORT-WAV.md)).
+- Forbidden paths (e.g. the `Score` package binary, which only produces sine tones).
+
 ## Important Note
 
 This workspace is intended to be self-contained for future agents. The legacy sibling repos remain on disk as historical source locations, but new Opera work should happen here.
