@@ -8191,10 +8191,26 @@ extension ScoreStore {
 @available(macOS 26.0, *)
 extension ScoreStore {
 
+    /// The prompt actually sent to the CLI: user override wins, else the enum preset's prompt.
+    func effectiveSunoCoverPrompt() -> String {
+        let override = sunoCoverPromptOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !override.isEmpty { return override }
+        return sunoResolvedCoverPrompt
+    }
+
+    /// The lyrics actually sent to the CLI. Returns nil if the preset needs vocals
+    /// but no lyrics are available (caller should refuse to run).
+    func effectiveSunoCoverLyrics() -> String? {
+        let override = sunoCoverLyricsOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !override.isEmpty { return override }
+        if !sunoCoverPreset.requiresLyrics { return "[Instrumental]" }
+        let fromTab = formattedSunoLyrics.trimmingCharacters(in: .whitespacesAndNewlines)
+        return fromTab.isEmpty ? nil : fromTab
+    }
+
     func sunoRunCanonicalCover() async {
-        guard let selectedSong = selectedMidiAsset else {
-            sunoGenerateStatus = "Select a song before running Suno."
-            appendSunoLog("No song selected for Suno cover generation", level: .warning)
+        guard !sunoIsGenerating else {
+            sunoGenerateStatus = "Already running."
             return
         }
         guard let projectRoot = resolvedSunoProjectRoot() else {
@@ -8203,101 +8219,130 @@ extension ScoreStore {
             return
         }
 
-        let relativePath = selectedSong.relativePath
-        let baseTitle = Self.sunoBaseTitle(from: relativePath)
-        let outputRoot = projectRoot.appendingPathComponent("Suno", isDirectory: true)
-        let version = nextSunoVersion(for: baseTitle, outputRoot: outputRoot)
-        let songDir = outputRoot.appendingPathComponent(baseTitle, isDirectory: true)
-        let uploadURL = songDir.appendingPathComponent(String(format: "%@ v%03d-Upload.wav", baseTitle, version))
-        let lyrics = resolvedSunoLyricsForCurrentPreset()
+        // Determine target song relative paths based on source mode
+        let targets: [String]
+        switch sunoCoverSourceMode {
+        case .currentSong:
+            guard let selectedSong = selectedMidiAsset else {
+                sunoGenerateStatus = "Select a song before running Suno."
+                appendSunoLog("No song selected for Suno cover generation", level: .warning)
+                return
+            }
+            targets = [selectedSong.relativePath]
+        case .selectedSongs:
+            guard !sunoCoverSelectedSongPaths.isEmpty else {
+                sunoGenerateStatus = "Check at least one song before running Suno."
+                appendSunoLog("No songs checked for Suno cover batch", level: .warning)
+                return
+            }
+            targets = songAssets.map { $0.relativePath }.filter { sunoCoverSelectedSongPaths.contains($0) }
+        }
 
-        guard lyrics != nil else {
-            sunoGenerateStatus = "This preset needs real lyrics from the Lyrics tab."
+        // Resolve lyrics once up front — same for all songs in the batch
+        let lyrics = effectiveSunoCoverLyrics()
+        guard lyrics != nil || !sunoCoverPreset.requiresLyrics else {
+            sunoGenerateStatus = "This preset needs real lyrics (Lyrics tab or Lyrics Override)."
             appendSunoLog("Preset \(sunoCoverPreset.title) requires real lyrics", level: .warning)
             return
         }
 
         sunoStopPreview()
         sunoIsGenerating = true
-        sunoGenerateStatus = "Preparing canonical Suno cover run..."
-
-        let generation = SunoGeneration(
-            songPath: relativePath,
-            baseTitle: baseTitle,
-            version: version,
-            prompt: sunoResolvedCoverPrompt,
-            style: sunoResolvedCoverPrompt,
-            excludeStyles: sunoExcludeStyles,
-            lyrics: lyrics,
-            status: .exporting
-        )
-        sunoGenerations.insert(generation, at: 0)
-        let generationID = generation.id
-
         defer { sunoIsGenerating = false }
 
-        do {
-            guard sunoCLI.isInstalled else {
-                throw SunoCLIError.notInstalled(path: sunoCLI.cliPath)
-            }
-            appendSunoLog("Exporting fresh upload WAV to \(uploadURL.path)")
-            updateSunoGeneration(generationID, status: .exporting)
-            sunoGenerateStatus = "Exporting fresh upload WAV..."
-            try await exportCurrentSongForSuno(projectRoot: projectRoot, relativePath: relativePath, uploadURL: uploadURL)
+        var successCount = 0
+        var totalWAVs = 0
 
-            updateSunoGeneration(generationID, status: .submitting)
-            sunoGenerateStatus = "Submitting cover request..."
-            appendSunoLog("Submitting canonical cover request for \(baseTitle)")
+        for (index, path) in targets.enumerated() {
+            let baseTitle = Self.sunoBaseTitle(from: path)
+            let outputRoot = projectRoot.appendingPathComponent("Suno", isDirectory: true)
+            let version = nextSunoVersion(for: baseTitle, outputRoot: outputRoot)
 
-            let result = try await sunoCLI.generateCover(
-                source: uploadURL.path,
-                style: sunoResolvedCoverPrompt,
-                title: baseTitle,
-                lyrics: lyrics ?? "[Instrumental]",
-                excludeStyles: normalizedSunoExcludeStyles(),
-                weirdness: sunoCoverWeirdness,
-                styleInfluence: sunoCoverStyleInfluence,
-                audioInfluence: sunoCoverAudioInfluence,
-                wait: true
-            )
-
-            let finalSongIDs = Array(result.songIDs.prefix(2))
-            guard finalSongIDs.count >= 2 else {
-                throw SunoCLIError.runtime(message: "Suno did not return two cover song IDs for \(baseTitle).")
-            }
-            let resolvedTitle = result.title ?? baseTitle
-
-            updateSunoGeneration(
-                generationID, status: .downloading,
-                songIDs: finalSongIDs, coverTitle: resolvedTitle,
-                resultMessage: result.message, trackID: finalSongIDs.first
-            )
-            appendSunoLog("Cover generated as \(resolvedTitle) with song IDs \(finalSongIDs.joined(separator: ", "))", level: .success)
-
-            sunoGenerateStatus = "Downloading WAV outputs..."
-            appendSunoLog("Downloading both Suno WAV outputs into \(outputRoot.path)")
-
-            var downloadedPaths: [String] = []
-            for songID in finalSongIDs {
-                let dl = try await sunoCLI.downloadSong(songID: songID, format: "wav", out: outputRoot.path)
-                downloadedPaths.append(dl.path)
+            guard let mixInfo = sunoMixExportInfo(for: path) else {
+                appendSunoLog("[\(baseTitle)] No Mix flat WAV found — skipping (export song to Mix first)", level: .error)
+                sunoGenerateStatus = "[\(baseTitle)] No Mix export found — skipped."
+                continue
             }
 
-            updateSunoGeneration(
-                generationID, status: .downloaded,
-                songIDs: finalSongIDs, coverTitle: resolvedTitle,
-                downloadedFilePaths: downloadedPaths, downloadedFilePath: downloadedPaths.first,
-                trackID: finalSongIDs.first
+            let generation = SunoGeneration(
+                songPath: path,
+                baseTitle: baseTitle,
+                version: version,
+                prompt: effectiveSunoCoverPrompt(),
+                style: effectiveSunoCoverPrompt(),
+                excludeStyles: sunoExcludeStyles,
+                lyrics: lyrics,
+                status: .submitting
             )
-            sunoGenerateStatus = downloadedPaths.isEmpty
-                ? "Cover finished; verify downloads in the project Suno folder."
-                : "Downloaded \(downloadedPaths.count) Suno cover WAVs"
-            appendSunoLog("Canonical Suno cover run finished for \(resolvedTitle)", level: .success)
-        } catch {
-            updateSunoGeneration(generationID, status: .error, errorMessage: error.localizedDescription)
-            sunoGenerateStatus = "Suno cover failed: \(error.localizedDescription)"
-            appendSunoLog("Canonical Suno cover failed: \(error.localizedDescription)", level: .error)
+            sunoGenerations.insert(generation, at: 0)
+            let generationID = generation.id
+
+            sunoGenerateStatus = "[\(baseTitle)] Submitting cover (\(index + 1)/\(targets.count))..."
+            appendSunoLog("[\(baseTitle)] Submitting cover from Mix WAV: \(mixInfo.url.lastPathComponent)")
+
+            do {
+                let result = try await sunoCLI.generateCover(
+                    source: mixInfo.url.path,
+                    style: effectiveSunoCoverPrompt(),
+                    title: baseTitle,
+                    lyrics: lyrics ?? "[Instrumental]",
+                    excludeStyles: normalizedSunoExcludeStyles(),
+                    weirdness: sunoCoverWeirdness,
+                    styleInfluence: sunoCoverStyleInfluence,
+                    audioInfluence: sunoCoverAudioInfluence,
+                    wait: true
+                )
+
+                let finalSongIDs = Array(result.songIDs.prefix(2))
+                guard finalSongIDs.count >= 2 else {
+                    throw SunoCLIError.runtime(message: "Suno did not return two cover song IDs for \(baseTitle).")
+                }
+                let resolvedTitle = result.title ?? baseTitle
+
+                updateSunoGeneration(
+                    generationID, status: .downloading,
+                    songIDs: finalSongIDs, coverTitle: resolvedTitle,
+                    resultMessage: result.message, trackID: finalSongIDs.first
+                )
+                appendSunoLog("[\(baseTitle)] Cover generated as \(resolvedTitle) with IDs \(finalSongIDs.joined(separator: ", "))", level: .success)
+
+                sunoGenerateStatus = "[\(baseTitle)] Downloading WAV outputs..."
+                appendSunoLog("[\(baseTitle)] Downloading \(finalSongIDs.count) WAVs into \(outputRoot.path)")
+
+                var downloadedPaths: [String] = []
+                for songID in finalSongIDs {
+                    let dl = try await sunoCLI.downloadSong(songID: songID, format: "wav", out: outputRoot.path)
+                    downloadedPaths.append(dl.path)
+                }
+
+                // Post Mix routing notification for each downloaded WAV
+                for wavPath in downloadedPaths {
+                    NotificationCenter.default.post(
+                        name: ScoreStore.didExportSongToMix,
+                        object: nil,
+                        userInfo: [
+                            "wavURL": URL(fileURLWithPath: wavPath),
+                            "songRelativePath": path
+                        ]
+                    )
+                }
+
+                updateSunoGeneration(
+                    generationID, status: .downloaded,
+                    songIDs: finalSongIDs, coverTitle: resolvedTitle,
+                    downloadedFilePaths: downloadedPaths, downloadedFilePath: downloadedPaths.first,
+                    trackID: finalSongIDs.first
+                )
+                appendSunoLog("[\(baseTitle)] Finished — \(downloadedPaths.count) WAVs downloaded", level: .success)
+                successCount += 1
+                totalWAVs += downloadedPaths.count
+            } catch {
+                updateSunoGeneration(generationID, status: .error, errorMessage: error.localizedDescription)
+                appendSunoLog("[\(baseTitle)] Cover failed: \(error.localizedDescription)", level: .error)
+            }
         }
+
+        sunoGenerateStatus = "Completed cover batch: \(successCount)/\(targets.count) songs, \(totalWAVs) WAVs downloaded."
     }
 
     func sunoRevealGenerationDownloads(_ generationID: UUID) {
@@ -8362,125 +8407,6 @@ extension ScoreStore {
             }
         }
         return highest + 1
-    }
-
-    private func exportCurrentSongForSuno(projectRoot: URL, relativePath: String, uploadURL: URL) async throws {
-        let fm = FileManager.default
-        let scriptURL = URL(fileURLWithPath: "/Volumes/Storage VIII/Programming/Amira Writer/Scripts/export-headless-wav.sh")
-        let scoreBinaryURL = preferredScoreExportBinaryURL()
-
-        guard fm.fileExists(atPath: scriptURL.path) else {
-            throw SunoCLIError.runtime(message: "Missing export script at \(scriptURL.path)")
-        }
-        guard fm.fileExists(atPath: scoreBinaryURL.path) else {
-            throw SunoCLIError.runtime(message: "Missing Score export binary at \(scoreBinaryURL.path)")
-        }
-
-        try fm.createDirectory(at: uploadURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-
-        for attempt in 1...3 {
-            if fm.fileExists(atPath: uploadURL.path) {
-                try? fm.removeItem(at: uploadURL)
-            }
-
-            let result = try await runSunoExportProcess(
-                scriptURL: scriptURL,
-                projectRoot: projectRoot,
-                relativePath: relativePath,
-                outputURL: uploadURL,
-                scoreBinaryURL: scoreBinaryURL
-            )
-
-            if result.exitCode == 0 {
-                return
-            }
-            if result.exitCode == 10 {
-                appendSunoLog("Export returned silent-WAV warning (rc=10); continuing", level: .warning)
-                return
-            }
-
-            let isRetryableSignal = result.exitCode == 133 || result.exitCode == 134 || result.exitCode == 139 || result.exitCode >= 128
-            if attempt < 3 && isRetryableSignal {
-                appendSunoLog("Export crashed with rc=\(result.exitCode); retrying \(attempt)/3", level: .warning)
-                try await Task.sleep(for: .seconds(5))
-                continue
-            }
-
-            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            let message = stderr.isEmpty ? "Export failed with rc=\(result.exitCode)" : stderr
-            throw SunoCLIError.runtime(message: message)
-        }
-    }
-
-    private func runSunoExportProcess(
-        scriptURL: URL,
-        projectRoot: URL,
-        relativePath: String,
-        outputURL: URL,
-        scoreBinaryURL: URL
-    ) async throws -> (exitCode: Int32, stderr: String) {
-        final class ExportState: @unchecked Sendable {
-            var stderr = ""
-            var resumed = false
-            let lock = NSLock()
-        }
-
-        let sharedState = ExportState()
-
-        return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = scriptURL
-            process.arguments = [
-                "--project", projectRoot.path,
-                "--song-path", relativePath,
-                "--output", outputURL.path,
-            ]
-            process.currentDirectoryURL = projectRoot
-
-            var env = ProcessInfo.processInfo.environment
-            env["NOVOTRO_ALLOW_BLUETOOTH_OUTPUT"] = "1"
-            env["AMIRA_SCORE_BIN"] = scoreBinaryURL.path
-            env["NOVOTRO_SCORE_BIN"] = scoreBinaryURL.path
-            process.environment = env
-
-            let stderrPipe = Pipe()
-            process.standardError = stderrPipe
-            process.standardOutput = FileHandle.nullDevice
-
-            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                sharedState.lock.withLock { sharedState.stderr += text }
-            }
-
-            process.terminationHandler = { terminated in
-                stderrPipe.fileHandleForReading.readabilityHandler = nil
-                let shouldResume = sharedState.lock.withLock {
-                    if sharedState.resumed { return false }
-                    sharedState.resumed = true
-                    return true
-                }
-                guard shouldResume else { return }
-                continuation.resume(returning: (terminated.terminationStatus, sharedState.stderr))
-            }
-
-            do {
-                try process.run()
-            } catch {
-                stderrPipe.fileHandleForReading.readabilityHandler = nil
-                _ = sharedState.lock.withLock {
-                    if sharedState.resumed { return false }
-                    sharedState.resumed = true
-                    return true
-                }
-                continuation.resume(throwing: error)
-            }
-        }
-    }
-
-    private func preferredScoreExportBinaryURL() -> URL {
-        let releaseDir = URL(fileURLWithPath: "/Volumes/Storage VIII/Programming/Amira Writer/Packages/Score/.build/arm64-apple-macosx/release")
-        return releaseDir.appendingPathComponent("Score")
     }
 
     private func locateDownloadedCover(
