@@ -14,7 +14,7 @@ enum SunoCLIError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notInstalled(let path):
-            return "Suno CLI not found at \(path). Rebuild the venv: bash \"/Volumes/Storage VIII/Programming/Amira Writer/Scripts/setup-suno-cli.sh\"."
+            return "Suno CLI not found at \(path). Rebuild and redeploy the app bundle so it includes the bundled Suno runtime, or rebuild the external dev venv with bash \"/Volumes/Programming/Amira Writer/Scripts/setup-suno-cli.sh\"."
         case .captcha(let message):
             return "Suno CAPTCHA required: \(message)"
         case .authFailure(let message):
@@ -59,25 +59,106 @@ final class SunoCLIRunner {
 
     // MARK: - Config (UserDefaults)
 
-    static let defaultCLIPath = "/Volumes/Storage VIII/Programming/SunoSkill/suno_cli/.venv/bin/suno"
+    static let bundledCLIRelativePath = "SunoCLI/suno_cli/.venv/bin/suno"
+    static let bundledPlaywrightBrowsersRelativePath = "SunoCLI/.ms-playwright"
+    static let localMountedCLIPath = "/Volumes/Programming/SunoSkill/suno_cli/.venv/bin/suno"
+    static let sharedMountedCLIPath = "/Volumes/Storage VIII/Programming/SunoSkill/suno_cli/.venv/bin/suno"
 
-    /// Shared Playwright browser cache on Storage VIII so both of Gary's Macs
-    /// use the same Chromium install. Populated by `Scripts/setup-suno-cli.sh`.
-    /// Corresponds to `PLAYWRIGHT_BROWSERS_PATH` env var consumed by the
-    /// `playwright` Python package inside the suno CLI venv.
-    static let defaultPlaywrightBrowsersPath = "/Volumes/Storage VIII/Programming/SunoSkill/.ms-playwright"
+    /// Bundled-or-mounted Playwright browser cache candidates. The app prefers
+    /// the bundle-local copy, then falls back to the device-local/shared mounts.
+    /// Corresponds to `PLAYWRIGHT_BROWSERS_PATH` consumed by Playwright.
+    static let localMountedPlaywrightBrowsersPath = "/Volumes/Programming/SunoSkill/.ms-playwright"
+    static let sharedMountedPlaywrightBrowsersPath = "/Volumes/Storage VIII/Programming/SunoSkill/.ms-playwright"
 
     static let defaultProfileDir: String = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("Novotro Score/suno-browser-data").path
     }()
 
+    private var configuredCLIPathOverride: String? {
+        let stored = (UserDefaults.standard.string(forKey: "sunoCLIPath") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return stored.isEmpty ? nil : stored
+    }
+
+    private static func bundledResourcePath(_ relativePath: String) -> String? {
+        Bundle.main.resourceURL?.appendingPathComponent(relativePath).path
+    }
+
+    private static func firstExistingExecutable(in candidates: [String?]) -> String? {
+        let fileManager = FileManager.default
+        for candidate in candidates {
+            guard let candidate, !candidate.isEmpty else { continue }
+            if fileManager.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    private static func firstExistingDirectory(in candidates: [String?]) -> String? {
+        let fileManager = FileManager.default
+        for candidate in candidates {
+            guard let candidate, !candidate.isEmpty else { continue }
+            var isDirectory: ObjCBool = false
+            if fileManager.fileExists(atPath: candidate, isDirectory: &isDirectory), isDirectory.boolValue {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    private var bundledCLIPath: String? {
+        Self.bundledResourcePath(Self.bundledCLIRelativePath)
+    }
+
+    private var bundledPlaywrightBrowsersPath: String? {
+        Self.bundledResourcePath(Self.bundledPlaywrightBrowsersRelativePath)
+    }
+
+    private var fallbackCLIPathCandidates: [String?] {
+        [
+            Self.localMountedCLIPath,
+            Self.sharedMountedCLIPath,
+        ]
+    }
+
+    private var fallbackPlaywrightPathCandidates: [String?] {
+        [
+            Self.localMountedPlaywrightBrowsersPath,
+            Self.sharedMountedPlaywrightBrowsersPath,
+        ]
+    }
+
     var cliPath: String {
         get {
-            let stored = (UserDefaults.standard.string(forKey: "sunoCLIPath") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return stored.isEmpty ? Self.defaultCLIPath : stored
+            let resolved = Self.firstExistingExecutable(
+                in: [configuredCLIPathOverride, bundledCLIPath] + fallbackCLIPathCandidates
+            )
+            return resolved
+                ?? configuredCLIPathOverride
+                ?? bundledCLIPath
+                ?? fallbackCLIPathCandidates.compactMap { $0 }.first
+                ?? Self.localMountedCLIPath
         }
-        set { UserDefaults.standard.set(newValue, forKey: "sunoCLIPath") }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                UserDefaults.standard.removeObject(forKey: "sunoCLIPath")
+            } else {
+                UserDefaults.standard.set(trimmed, forKey: "sunoCLIPath")
+            }
+        }
+    }
+
+    var playwrightBrowsersPath: String {
+        let resolved = Self.firstExistingDirectory(
+            in: [bundledPlaywrightBrowsersPath] + fallbackPlaywrightPathCandidates
+        )
+        return resolved
+            ?? bundledPlaywrightBrowsersPath
+            ?? fallbackPlaywrightPathCandidates.compactMap { $0 }.first
+            ?? Self.localMountedPlaywrightBrowsersPath
     }
 
     var profileDir: String {
@@ -255,12 +336,11 @@ final class SunoCLIRunner {
             let currentPath = env["PATH"] ?? "/usr/bin:/bin"
             env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
             env["NOVOTRO_SCORE"] = "1"
-            // Point Playwright at the shared Storage VIII Chromium cache so
-            // the CLI works on both of Gary's Macs without per-machine
-            // `playwright install` steps. Respect an existing override if
-            // Gary has set one intentionally.
+            // Point Playwright at the bundled browser cache first, then at the
+            // available mounted SunoSkill cache, so the synced app copy works
+            // on both Gary's Macs without a server-only absolute path.
             if env["PLAYWRIGHT_BROWSERS_PATH"] == nil {
-                env["PLAYWRIGHT_BROWSERS_PATH"] = Self.defaultPlaywrightBrowsersPath
+                env["PLAYWRIGHT_BROWSERS_PATH"] = playwrightBrowsersPath
             }
             process.environment = env
 
