@@ -524,6 +524,12 @@ struct OWSSongAsset: Identifiable, @unchecked Sendable {
         let name = withoutExtension.isEmpty ? url.lastPathComponent : withoutExtension
         return name.toTitleCase()
     }
+
+    /// True when the active version has playable score data loaded, not just a file stub.
+    var hasPlayableScoreData: Bool {
+        guard let playback = document.activeVersion()?.playback else { return false }
+        return !playback.notes.isEmpty || !playback.audioClips.isEmpty
+    }
 }
 
 // MARK: - OWP Project I/O
@@ -1346,6 +1352,10 @@ final class ScoreStore {
         !formattedSunoLyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    var sunoCanRunCanonicalCover: Bool {
+        effectiveSunoCoverLyrics() != nil
+    }
+
     var selectedSunoGenerations: [SunoGeneration] {
         guard let selectedPath = selectedMidiAsset?.relativePath else { return [] }
         return sunoGenerations.filter { $0.songPath == selectedPath }
@@ -1449,10 +1459,18 @@ final class ScoreStore {
         return (wavURL, modDate)
     }
 
-    /// Returns (relativePath, displayName) tuples for every song in the current project.
-    /// Used by the multi-song picker in the Cover tab.
+    /// Returns the songs eligible for Suno batch-selection: only assets with playable score data.
+    var sunoBatchSelectableSongPaths: [(relativePath: String, displayName: String)] {
+        songAssets
+            .filter(\.hasPlayableScoreData)
+            .map { asset in
+                (relativePath: asset.relativePath, displayName: asset.displayName)
+            }
+    }
+
+    /// Returns every song in the current project for the multi-song picker UI.
     func sunoAvailableSongPaths() -> [(relativePath: String, displayName: String)] {
-        return songAssets.map { asset in
+        songAssets.map { asset in
             (relativePath: asset.relativePath, displayName: asset.displayName)
         }
     }
@@ -8233,7 +8251,7 @@ extension ScoreStore {
 
         // Resolve lyrics once up front — same for all songs in the batch
         let lyrics = effectiveSunoCoverLyrics()
-        guard lyrics != nil || !sunoCoverPreset.requiresLyrics else {
+        guard sunoCanRunCanonicalCover, let lyrics else {
             sunoGenerateStatus = "This preset needs real lyrics (Lyrics tab or Lyrics Override)."
             appendSunoLog("Preset \(sunoCoverPreset.title) requires real lyrics", level: .warning)
             return

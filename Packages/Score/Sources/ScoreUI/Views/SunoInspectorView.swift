@@ -17,6 +17,15 @@ struct SunoInspectorView: View {
     @State private var activeTab: Tab = .cover
     @State private var newPresetName: String = ""
 
+    private struct SunoSongSelectionItem: Identifiable {
+        let relativePath: String
+        let displayName: String
+        let hasPlaybackData: Bool
+        let playbackSummary: String
+
+        var id: String { relativePath }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Tab bar
@@ -328,7 +337,7 @@ struct SunoInspectorView: View {
     @ViewBuilder
     private var renderTabContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("This follows the current canonical Suno workflow: fresh export, `suno_create_cover`, dual song IDs, polling, and both WAV downloads into the project's `Suno/` folder.")
+            Text("This follows the current Suno workflow: rebuild the CLI with `Scripts/setup-suno-cli.sh`, fresh export, `suno_create_cover`, dual song IDs, polling, and both WAV downloads into the project's `Suno/` folder.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -370,40 +379,38 @@ struct SunoInspectorView: View {
                             .foregroundStyle(.tertiary)
                     }
                 } else {
-                    let available = store.sunoAvailableSongPaths()
+                    let available = sunoSongSelectionItems
                     if available.isEmpty {
                         Text("No songs in project")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     } else {
+                        HStack(spacing: 8) {
+                            Button("Select All") {
+                                store.sunoCoverSelectedSongPaths = Set(sunoSelectableSongPaths)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(sunoSelectableSongPaths.isEmpty)
+
+                            Button("Clear") {
+                                store.sunoCoverSelectedSongPaths.removeAll()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(store.sunoCoverSelectedSongPaths.isEmpty)
+
+                            Spacer()
+
+                            Text("\(sunoSelectableSongPaths.count) ready / \(available.count) total")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+
                         ScrollView {
-                            VStack(alignment: .leading, spacing: 3) {
-                                ForEach(available, id: \.relativePath) { song in
-                                    HStack(spacing: 6) {
-                                        Toggle(song.displayName, isOn: Binding(
-                                            get: { store.sunoCoverSelectedSongPaths.contains(song.relativePath) },
-                                            set: { isOn in
-                                                if isOn {
-                                                    store.sunoCoverSelectedSongPaths.insert(song.relativePath)
-                                                } else {
-                                                    store.sunoCoverSelectedSongPaths.remove(song.relativePath)
-                                                }
-                                            }
-                                        ))
-                                        .toggleStyle(.checkbox)
-                                        .font(.caption2)
-                                        Spacer()
-                                        let exportInfo = store.sunoMixExportInfo(for: song.relativePath)
-                                        if let info = exportInfo {
-                                            Text(info.modifiedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                        } else {
-                                            Text("no mix export")
-                                                .font(.caption2)
-                                                .foregroundStyle(.orange)
-                                        }
-                                    }
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(available) { song in
+                                    sunoSongSelectionRow(for: song)
                                 }
                             }
                         }
@@ -610,7 +617,7 @@ struct SunoInspectorView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .disabled(store.sunoIsGenerating || (store.sunoCoverRequiresLyrics && !store.hasFormattedSunoLyrics))
+                .disabled(store.sunoIsGenerating || !store.sunoCanRunCanonicalCover)
 
                 if store.sunoIsGenerating {
                     ProgressView()
@@ -850,6 +857,100 @@ struct SunoInspectorView: View {
         }
     }
 
+    private var sunoSongSelectionItems: [SunoSongSelectionItem] {
+        store.sunoAvailableSongPaths().compactMap { song in
+            guard let asset = store.songAssets.first(where: { $0.relativePath == song.relativePath }) else {
+                return nil
+            }
+
+            let playback = asset.document.activeVersion()?.playback
+            let noteCount = playback?.notes.count ?? 0
+            let audioClipCount = playback?.audioClips.count ?? 0
+            return SunoSongSelectionItem(
+                relativePath: song.relativePath,
+                displayName: song.displayName,
+                hasPlaybackData: asset.hasPlayableScoreData,
+                playbackSummary: sunoPlaybackSummary(noteCount: noteCount, audioClipCount: audioClipCount)
+            )
+        }
+    }
+
+    private var sunoSelectableSongPaths: [String] {
+        store.sunoBatchSelectableSongPaths.map(\.relativePath)
+    }
+
+    private func sunoPlaybackSummary(noteCount: Int, audioClipCount: Int) -> String {
+        switch (noteCount, audioClipCount) {
+        case let (notes, clips) where notes > 0 && clips > 0:
+            return "\(notes) notes, \(clips) audio clips"
+        case let (notes, _) where notes > 0:
+            return "\(notes) playback notes"
+        case let (_, clips) where clips > 0:
+            return "\(clips) audio clips"
+        default:
+            return "No playback data — skipped by Select All"
+        }
+    }
+
+    @ViewBuilder
+    private func sunoSongSelectionRow(for song: SunoSongSelectionItem) -> some View {
+        let selectionBinding = Binding<Bool>(
+            get: { store.sunoCoverSelectedSongPaths.contains(song.relativePath) },
+            set: { isOn in
+                if isOn {
+                    store.sunoCoverSelectedSongPaths.insert(song.relativePath)
+                } else {
+                    store.sunoCoverSelectedSongPaths.remove(song.relativePath)
+                }
+            }
+        )
+
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Toggle(song.displayName, isOn: selectionBinding)
+                    .toggleStyle(.checkbox)
+                    .font(.caption2)
+                    .disabled(!song.hasPlaybackData)
+                    .opacity(song.hasPlaybackData ? 1 : 0.55)
+
+                Spacer()
+
+                if let info = store.sunoMixExportInfo(for: song.relativePath) {
+                    Text(info.modifiedAt.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("no mix export")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            HStack(spacing: 6) {
+                if song.hasPlaybackData {
+                    Label(song.playbackSummary, systemImage: "waveform")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Label(song.playbackSummary, systemImage: "slash.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 4).fill(
+                song.hasPlaybackData
+                    ? Color.white.opacity(0.03)
+                    : Color.orange.opacity(0.08)
+            )
+        )
+        .opacity(song.hasPlaybackData ? 1 : 0.72)
+    }
+
     // MARK: - Lyrics Tab
 
     @ViewBuilder
@@ -926,7 +1027,7 @@ struct SunoInspectorView: View {
                         .font(.caption2).controlSize(.mini)
                 }
                 if !store.sunoCLIIsInstalled {
-                    Text("Install: `cd /Volumes/Storage VIII/Programming/SunoSkill/suno_cli && python3 -m venv .venv && .venv/bin/pip install -e .`")
+                    Text("Rebuild it with `bash Scripts/setup-suno-cli.sh` (add `--force` if Chromium also needs a refresh).")
                         .font(.caption2.monospaced()).foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
