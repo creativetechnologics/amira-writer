@@ -7,10 +7,12 @@ struct APISettingsSheet: View {
     let onDismiss: () -> Void
 
     @State private var geminiKeyDraft: String = ""
+    @State private var imageAnalysisGeminiKeyDraft: String = ""
     @State private var miniMaxKeyDraft: String = ""
     @State private var viduKeyDraft: String = ""
     @State private var runPodKeyDraft: String = ""
     @State private var revealGeminiKey: Bool = false
+    @State private var revealImageAnalysisGeminiKey: Bool = false
     @State private var revealMiniMaxKey: Bool = false
     @State private var revealViduKey: Bool = false
     @State private var revealRunPodKey: Bool = false
@@ -23,9 +25,13 @@ struct APISettingsSheet: View {
     @State private var vertexProbeMessage: String = ""
     @State private var vertexProbeIsError: Bool = false
     @State private var vertexProbing: Bool = false
+    @State private var imageAnalysisBackend: ImageAnalysisBackend = .aiStudio
+    @State private var imageAnalysisVertexProjectDraft: String = ""
+    @State private var imageAnalysisVertexRegionDraft: String = "global"
 
     enum SettingsTab: String, CaseIterable {
         case gemini = "Gemini"
+        case imageAnalysis = "Image Analysis"
         case miniMax = "MiniMax"
         case vidu = "Vidu"
         case runPod = "RunPod"
@@ -46,6 +52,8 @@ struct APISettingsSheet: View {
             switch selectedTab {
             case .gemini:
                 geminiForm
+            case .imageAnalysis:
+                imageAnalysisForm
             case .miniMax:
                 miniMaxForm
             case .vidu:
@@ -61,6 +69,7 @@ struct APISettingsSheet: View {
         .frame(width: 540)
         .onAppear {
             geminiKeyDraft = store.geminiAPIKey
+            imageAnalysisGeminiKeyDraft = store.imageAnalysisGeminiAPIKey
             miniMaxKeyDraft = store.miniMaxAPIKey
             viduKeyDraft = store.viduAPIKey
             runPodKeyDraft = store.runPodAPIKey
@@ -68,6 +77,9 @@ struct APISettingsSheet: View {
             let vertex = ImageGenBackendStore.currentVertexSettings()
             vertexProjectDraft = vertex.projectID
             vertexRegionDraft = vertex.region
+            imageAnalysisBackend = ImageAnalysisBackendStore.currentBackend()
+            imageAnalysisVertexProjectDraft = ImageAnalysisBackendStore.currentVertexProjectID()
+            imageAnalysisVertexRegionDraft = ImageAnalysisBackendStore.currentVertexRegion()
             if selectedTab == .runPod {
                 Task { await store.refreshRunPodAccountSummary(using: runPodKeyDraft) }
             }
@@ -125,6 +137,141 @@ struct APISettingsSheet: View {
                     .font(.caption)
                     .foregroundStyle(OperaChromeTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: - Image Analysis
+
+    private var imageAnalysisForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Backend")
+                    .font(.body.bold())
+                    .foregroundStyle(OperaChromeTheme.textPrimary)
+
+                Picker("Image Analysis Backend", selection: $imageAnalysisBackend) {
+                    ForEach(ImageAnalysisBackend.allCases, id: \.self) { backend in
+                        Text(backend.displayName).tag(backend)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .onChange(of: imageAnalysisBackend) { _, newValue in
+                    ImageAnalysisBackendStore.setBackend(newValue)
+                    store.refreshImageAnalysisConfiguration()
+                }
+
+                Text(imageAnalysisBackend.description)
+                    .font(.caption)
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if imageAnalysisBackend == .aiStudio {
+                apiKeyField(
+                    label: "Image Analysis Gemini API Key",
+                    draft: $imageAnalysisGeminiKeyDraft,
+                    reveal: $revealImageAnalysisGeminiKey,
+                    placeholder: "Paste Gemini API key for image analysis...",
+                    isSaved: !store.imageAnalysisGeminiAPIKey.isEmpty,
+                    savedLabel: "Image analysis key saved.",
+                    unsavedLabel: "No image analysis key saved yet."
+                )
+
+                Text("Used for visual analysis and embedding of images. Must be a Google AI Studio key for generativelanguage.googleapis.com. Kept separate from the image generation key above.")
+                    .font(.caption)
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Vertex Project ID")
+                            .font(.body.bold())
+                            .foregroundStyle(OperaChromeTheme.textPrimary)
+                        TextField("e.g. vertex-493406", text: $imageAnalysisVertexProjectDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .onChange(of: imageAnalysisVertexProjectDraft) { _, newValue in
+                                ImageAnalysisBackendStore.setVertexSettings(
+                                    projectID: newValue.trimmingCharacters(in: .whitespacesAndNewlines),
+                                    region: imageAnalysisVertexRegionDraft
+                                )
+                                store.refreshImageAnalysisConfiguration()
+                            }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Vertex Region")
+                            .font(.body.bold())
+                            .foregroundStyle(OperaChromeTheme.textPrimary)
+                        Picker("Image Analysis Vertex Region", selection: $imageAnalysisVertexRegionDraft) {
+                            ForEach(["global", "us-central1", "us-east4", "us-west1", "europe-west4", "asia-southeast1"], id: \.self) { r in
+                                Text(r).tag(r)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .onChange(of: imageAnalysisVertexRegionDraft) { _, newValue in
+                            ImageAnalysisBackendStore.setVertexSettings(
+                                projectID: imageAnalysisVertexProjectDraft.trimmingCharacters(in: .whitespacesAndNewlines),
+                                region: newValue
+                            )
+                            store.refreshImageAnalysisConfiguration()
+                        }
+                    }
+
+                    Text("Uses your existing gcloud application-default login for auth. Run `gcloud auth application-default login` if needed.")
+                        .font(.caption)
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Divider()
+
+            // Image Intelligence Status
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Image Intelligence Status")
+                    .font(.body.bold())
+                    .foregroundStyle(OperaChromeTheme.textPrimary)
+
+                HStack {
+                    Image(systemName: "brain.head.profile")
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                    Text("Backfill and analysis status will appear here")
+                        .font(.caption)
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                }
+
+                HStack(spacing: 12) {
+                    Button("Run Backfill") {
+                        store.runImageIntelligenceBackfill(dryRun: false) { report in
+                            print("[ImageIntelligence] Backfill complete: \(report.summary)")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Dry Run") {
+                        store.runImageIntelligenceBackfill(dryRun: true) { report in
+                            print("[ImageIntelligence] Dry run complete: \(report.summary)")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Start Worker") {
+                        store.startImageAnalysisWorker()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Stop Worker") {
+                        store.stopImageAnalysisWorker()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
             }
         }
     }
@@ -409,6 +556,10 @@ struct APISettingsSheet: View {
                 case .gemini:
                     geminiKeyDraft = ""
                     store.clearGeminiAPIKey()
+                case .imageAnalysis:
+                    imageAnalysisGeminiKeyDraft = ""
+                    store.clearImageAnalysisGeminiAPIKey()
+                    store.refreshImageAnalysisConfiguration()
                 case .miniMax:
                     miniMaxKeyDraft = ""
                     store.clearMiniMaxAPIKey()
@@ -432,9 +583,14 @@ struct APISettingsSheet: View {
 
             Button("Save") {
                 store.setGeminiAPIKey(geminiKeyDraft)
+                store.setImageAnalysisGeminiAPIKey(imageAnalysisGeminiKeyDraft)
+                store.refreshImageAnalysisConfiguration()
                 store.setMiniMaxAPIKey(miniMaxKeyDraft)
                 store.setViduAPIKey(viduKeyDraft)
                 store.runPodAPIKey = runPodKeyDraft
+                // User saved fresh credentials — clear any auth-halt so a
+                // subsequent call doesn't still refuse.
+                GeminiImageService.acknowledgeAuthFailureResolved()
                 onDismiss()
             }
             .buttonStyle(.borderedProminent)
@@ -443,10 +599,16 @@ struct APISettingsSheet: View {
 
     private var currentKeyIsEmpty: Bool {
         switch selectedTab {
-        case .gemini: store.geminiAPIKey.isEmpty && geminiKeyDraft.isEmpty
-        case .miniMax: store.miniMaxAPIKey.isEmpty && miniMaxKeyDraft.isEmpty
-        case .vidu: store.viduAPIKey.isEmpty && viduKeyDraft.isEmpty
-        case .runPod: store.runPodAPIKey.isEmpty && runPodKeyDraft.isEmpty
+        case .gemini:
+            return store.geminiAPIKey.isEmpty && geminiKeyDraft.isEmpty
+        case .imageAnalysis:
+            return store.imageAnalysisGeminiAPIKey.isEmpty && imageAnalysisGeminiKeyDraft.isEmpty
+        case .miniMax:
+            return store.miniMaxAPIKey.isEmpty && miniMaxKeyDraft.isEmpty
+        case .vidu:
+            return store.viduAPIKey.isEmpty && viduKeyDraft.isEmpty
+        case .runPod:
+            return store.runPodAPIKey.isEmpty && runPodKeyDraft.isEmpty
         }
     }
 

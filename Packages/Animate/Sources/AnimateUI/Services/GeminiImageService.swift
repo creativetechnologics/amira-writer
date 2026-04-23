@@ -21,6 +21,7 @@ final class GeminiImageService {
         case resourceExhausted(String)
         case masterSwitchOff
         case vertexNotConfigured(String)
+        case authFailureHalt(String)
 
         var errorDescription: String? {
             switch self {
@@ -48,6 +49,8 @@ final class GeminiImageService {
                 return "Gemini API calls are disabled. Enable them in Settings (gear icon in the title bar)."
             case .vertexNotConfigured(let msg):
                 return "Vertex AI backend is selected but not configured: \(msg)"
+            case .authFailureHalt(let msg):
+                return "Gemini halted after 2 consecutive auth failures. Re-check the API key or Vertex credentials before retrying. (\(msg))"
             }
         }
     }
@@ -108,6 +111,13 @@ final class GeminiImageService {
     private static var consecutiveFailures: Int = 0
     private static var circuitBreakerTripped: Bool = false
     private static var lastFailureAt: Date?
+    /// Honors the global CLAUDE.md "2 consecutive auth failures → halt" rule
+    /// for automated API use. Incremented on 401/403, reset on any 200.
+    /// At 2, `authFailureHalted` trips and blocks all calls until the user
+    /// explicitly re-authenticates (see `acknowledgeAuthFailure()`).
+    private static var consecutiveAuthFailures: Int = 0
+    private static var authFailureHalted: Bool = false
+    private static let authFailureHaltThreshold: Int = 2
 
     // MARK: - Properties
 
@@ -149,6 +159,14 @@ final class GeminiImageService {
         let backend = ImageGenBackendStore.currentBackend()
         if backend == .aiStudio {
             guard !apiKey.isEmpty else { throw ServiceError.noAPIKey }
+        }
+
+        // Global CLAUDE.md rule: stop after 2 consecutive auth failures so a
+        // bad key can't fan out into a blacklist incident. Only the user
+        // clears this — it does NOT auto-reset on a cooldown.
+        if Self.authFailureHalted {
+            print("[GeminiImageService] 🚨 AUTH HALT — 2 consecutive 401/403. Blocking until user re-auth.")
+            throw ServiceError.authFailureHalt("re-enter API key in Settings")
         }
 
         // Circuit breaker: if too many consecutive failures, refuse calls until
@@ -408,7 +426,29 @@ final class GeminiImageService {
                 }
 
                 if httpResponse.statusCode == 200 {
+                    // Any success clears both fault counters. A good call erases
+                    // recent transient 429/503 history AND resets the auth-halt
+                    // counter so a later 401 starts a fresh streak.
+                    Self.consecutiveAuthFailures = 0
                     return (data, httpResponse)
+                }
+
+                // 401/403 feed the global 2-strike auth halt separately from the
+                // general circuit breaker so one bad key is stopped in two
+                // calls, not ten.
+                if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                    Self.consecutiveAuthFailures += 1
+                    print(
+                        "[GeminiImageService] HTTP \(httpResponse.statusCode) auth failure " +
+                        "(\(Self.consecutiveAuthFailures)/\(Self.authFailureHaltThreshold) consecutive)"
+                    )
+                    if Self.consecutiveAuthFailures >= Self.authFailureHaltThreshold {
+                        Self.authFailureHalted = true
+                        let msg = Self.serverMessage(from: data)
+                        throw ServiceError.authFailureHalt(
+                            msg.isEmpty ? "HTTP \(httpResponse.statusCode)" : msg
+                        )
+                    }
                 }
 
                 let serverMessage = Self.serverMessage(from: data)
@@ -493,6 +533,17 @@ final class GeminiImageService {
         default:
             return false
         }
+    }
+
+    /// Call after the user saves a new Gemini API key / re-signs into Vertex
+    /// so the service can issue calls again. Also clears the general breaker
+    /// so a fresh auth probe isn't gated by old 429 history.
+    static func acknowledgeAuthFailureResolved() {
+        consecutiveAuthFailures = 0
+        authFailureHalted = false
+        circuitBreakerTripped = false
+        consecutiveFailures = 0
+        lastFailureAt = nil
     }
 
     private static func retryDelaySeconds(attempt: Int, retryAfterHeader: String?) -> Double {
