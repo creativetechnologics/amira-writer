@@ -67,31 +67,31 @@ private struct CanvasWorkspaceContent: View {
                 )
             } else {
                 workspaceBody
-                    .sheet(item: $libraryState.editPendingPreflight) { _ in
+                    .sheet(item: $libraryState.edit.pendingPreflight) { _ in
                         GeminiGenerationPreflightSheet(
                             store: store,
-                            drafts: $libraryState.editPendingDrafts,
+                            drafts: $libraryState.edit.pendingDrafts,
                             title: "Edit with Gemini",
                             confirmTitle: "Generate",
                             onConfirm: { finalDrafts, _ in
                                 let sourceRecord = libraryState.selectedRecord
-                                libraryState.editPendingPreflight = nil
+                                libraryState.edit.pendingPreflight = nil
                                 runLibraryEditGeneration(finalDrafts, sourceRecord: sourceRecord)
                             },
                             onCancel: {
-                                libraryState.editPendingPreflight = nil
-                                libraryState.editPendingDrafts = []
+                                libraryState.edit.pendingPreflight = nil
+                                libraryState.edit.pendingDrafts = []
                             }
                         )
                     }
                     .alert(
                         "Generation Error",
                         isPresented: Binding(
-                            get: { libraryState.editErrorMessage != nil },
-                            set: { if !$0 { libraryState.editErrorMessage = nil } }
+                            get: { libraryState.edit.errorMessage != nil },
+                            set: { if !$0 { libraryState.edit.errorMessage = nil } }
                         ),
-                        actions: { Button("OK") { libraryState.editErrorMessage = nil } },
-                        message: { Text(libraryState.editErrorMessage ?? "") }
+                        actions: { Button("OK") { libraryState.edit.errorMessage = nil } },
+                        message: { Text(libraryState.edit.errorMessage ?? "") }
                     )
             }
         }
@@ -242,7 +242,7 @@ private struct CanvasWorkspaceContent: View {
         sourceRecord: ProjectImageRecord?
     ) {
         if let error = store.geminiImageGenerationAvailabilityError {
-            libraryState.editErrorMessage = error.localizedDescription
+            libraryState.edit.errorMessage = error.localizedDescription
             return
         }
         Task { @MainActor in
@@ -294,16 +294,16 @@ private struct CanvasWorkspaceContent: View {
                         status: .failed,
                         errorMessage: error.localizedDescription
                     )
-                    libraryState.editErrorMessage = error.localizedDescription
+                    libraryState.edit.errorMessage = error.localizedDescription
                     break
                 }
             }
             if finishedCount > 0 {
                 store.statusMessage = "Generated \(finishedCount) edited image\(finishedCount == 1 ? "" : "s")"
-                libraryState.editAdjustments = ""
+                libraryState.edit.adjustments = ""
             }
             _ = sourceRecord
-            libraryState.editPendingDrafts = []
+            libraryState.edit.pendingDrafts = []
         }
     }
 }

@@ -879,7 +879,7 @@ struct AllProjectImagesPageView: View {
     // MARK: - Inline edit (right-click → Edit with Gemini)
 
     /// Builds a single-draft preflight for "Edit with Gemini…" and pushes it
-    /// to `state.editPendingPreflight`. The workspace-root `.sheet(item:)`
+    /// to `state.edit.pendingPreflight`. The workspace-root `.sheet(item:)`
     /// presents the preflight regardless of whether the inspector is open,
     /// so this works from anywhere in the grid.
     private func beginEdit(for record: ProjectImageRecord) {
@@ -894,14 +894,14 @@ struct AllProjectImagesPageView: View {
             title: "Edit: \(record.originLabel)",
             destinationDescription: "Places → Unattached library",
             prompt: "",
-            model: state.editModel,
-            aspectRatio: state.editAspectRatio,
-            imageSize: state.editImageSize,
+            model: state.edit.model,
+            aspectRatio: state.edit.aspectRatio,
+            imageSize: state.edit.imageSize,
             referenceItems: [reference],
-            editInstructions: state.editAdjustments.trimmingCharacters(in: .whitespacesAndNewlines)
+            editInstructions: state.edit.adjustments.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        state.editPendingDrafts = [draft]
-        state.editPendingPreflight = draft
+        state.edit.pendingDrafts = [draft]
+        state.edit.pendingPreflight = draft
     }
 
     // MARK: - Inline generate (right-click → Generate with Gemini)
@@ -920,14 +920,14 @@ struct AllProjectImagesPageView: View {
                     : "Batch \(i + 1) from \(filename)",
                 destinationDescription: "Places → Unattached library",
                 prompt: "",
-                model: state.editModel,
-                aspectRatio: state.editAspectRatio,
-                imageSize: state.editImageSize,
+                model: state.edit.model,
+                aspectRatio: state.edit.aspectRatio,
+                imageSize: state.edit.imageSize,
                 referenceItems: [reference]
             )
         }
-        state.editPendingDrafts = drafts
-        state.editPendingPreflight = drafts.first
+        state.edit.pendingDrafts = drafts
+        state.edit.pendingPreflight = drafts.first
     }
 
     // MARK: - Prefetch key

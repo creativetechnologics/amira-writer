@@ -109,6 +109,23 @@ enum ImageLibraryMetadataSidecarService {
 
 // MARK: - Shared State (observable across the 3 panes)
 
+/// Dedicated observable container for the Gemini "Edit Image" binding surface.
+/// Split out from `AllProjectImagesState` (Phase 4.1 of the perf plan) so that
+/// typing in the adjustments TextEditor — or toggling aspect-ratio / model —
+/// can't invalidate observers that only care about records, filter, or
+/// selection state.
+@available(macOS 26.0, *)
+@Observable @MainActor
+final class AllProjectImagesEditState {
+    var adjustments: String = ""
+    var model: GeminiModel = .flash
+    var aspectRatio: String = "1:1"
+    var imageSize: String = "1K"
+    var pendingDrafts: [GeminiGenerationDraft] = []
+    var pendingPreflight: GeminiGenerationDraft? = nil
+    var errorMessage: String? = nil
+}
+
 /// Single source of truth for the All Project Images workspace.
 /// Owned by the workspace content view and shared into the sidebar, page,
 /// and inspector so every pane stays in sync without binding boilerplate.
@@ -166,14 +183,12 @@ final class AllProjectImagesState {
     var flagFilter: AllProjectImagesFlagFilter = .all
     var minimumRating: Int? = nil
 
-    // Edit-with-Gemini state
-    var editAdjustments: String = ""
-    var editModel: GeminiModel = .flash
-    var editAspectRatio: String = "1:1"
-    var editImageSize: String = "1K"
-    var editPendingDrafts: [GeminiGenerationDraft] = []
-    var editPendingPreflight: GeminiGenerationDraft? = nil
-    var editErrorMessage: String? = nil
+    // Edit-with-Gemini state — extracted into its own @Observable holder so
+    // keystrokes in the adjustments editor don't trip observers that only care
+    // about records / filter / selection.
+    // Declared `var` so SwiftUI dynamic-member bindings like `$state.edit.adjustments`
+    // resolve (bindings need a writable path even though the instance itself is stable).
+    var edit = AllProjectImagesEditState()
 
     // Memoized record set (rebuilt only when the path signature changes).
     var cachedAllRecords: [ProjectImageRecord] = []
@@ -850,31 +865,31 @@ private struct AllProjectImagesWorkspaceContent: View {
                 )
             } else {
                 workspaceBody
-                    .sheet(item: $state.editPendingPreflight) { _ in
+                    .sheet(item: $state.edit.pendingPreflight) { _ in
                         GeminiGenerationPreflightSheet(
                             store: store,
-                            drafts: $state.editPendingDrafts,
+                            drafts: $state.edit.pendingDrafts,
                             title: "Edit with Gemini",
                             confirmTitle: "Generate",
                             onConfirm: { finalDrafts, _ in
                                 let sourceRecord = state.selectedRecord
-                                state.editPendingPreflight = nil
+                                state.edit.pendingPreflight = nil
                                 runEditGeneration(finalDrafts, sourceRecord: sourceRecord)
                             },
                             onCancel: {
-                                state.editPendingPreflight = nil
-                                state.editPendingDrafts = []
+                                state.edit.pendingPreflight = nil
+                                state.edit.pendingDrafts = []
                             }
                         )
                     }
                     .alert(
                         "Generation Error",
                         isPresented: Binding(
-                            get: { state.editErrorMessage != nil },
-                            set: { if !$0 { state.editErrorMessage = nil } }
+                            get: { state.edit.errorMessage != nil },
+                            set: { if !$0 { state.edit.errorMessage = nil } }
                         ),
-                        actions: { Button("OK") { state.editErrorMessage = nil } },
-                        message: { Text(state.editErrorMessage ?? "") }
+                        actions: { Button("OK") { state.edit.errorMessage = nil } },
+                        message: { Text(state.edit.errorMessage ?? "") }
                     )
             }
         }
@@ -1029,7 +1044,7 @@ private struct AllProjectImagesWorkspaceContent: View {
         sourceRecord: ProjectImageRecord?
     ) {
         if let error = store.geminiImageGenerationAvailabilityError {
-            state.editErrorMessage = error.localizedDescription
+            state.edit.errorMessage = error.localizedDescription
             return
         }
         Task { @MainActor in
@@ -1081,16 +1096,16 @@ private struct AllProjectImagesWorkspaceContent: View {
                         status: .failed,
                         errorMessage: error.localizedDescription
                     )
-                    state.editErrorMessage = error.localizedDescription
+                    state.edit.errorMessage = error.localizedDescription
                     break
                 }
             }
             if finishedCount > 0 {
                 store.statusMessage = "Generated \(finishedCount) edited image\(finishedCount == 1 ? "" : "s")"
-                state.editAdjustments = ""
+                state.edit.adjustments = ""
             }
             _ = sourceRecord // reserved for future routing (filing back to origin place)
-            state.editPendingDrafts = []
+            state.edit.pendingDrafts = []
         }
     }
 }
@@ -1274,7 +1289,7 @@ private struct AllProjectImagesInspectorView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Adjustments")
                         .font(.system(size: 11, weight: .medium))
-                    TextEditor(text: $state.editAdjustments)
+                    TextEditor(text: $state.edit.adjustments)
                         .font(.system(size: 11))
                         .frame(minHeight: 80, maxHeight: 140)
                         .overlay(
@@ -1286,7 +1301,7 @@ private struct AllProjectImagesInspectorView: View {
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Model").font(.system(size: 10, weight: .medium))
-                        Picker("", selection: $state.editModel) {
+                        Picker("", selection: $state.edit.model) {
                             ForEach(GeminiModel.allCases, id: \.self) { model in
                                 Text(model.displayName).tag(model)
                             }
@@ -1295,7 +1310,7 @@ private struct AllProjectImagesInspectorView: View {
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Aspect").font(.system(size: 10, weight: .medium))
-                        Picker("", selection: $state.editAspectRatio) {
+                        Picker("", selection: $state.edit.aspectRatio) {
                             ForEach(["1:1", "2:3", "3:4", "4:5", "4:3", "16:9", "21:9"], id: \.self) {
                                 Text($0).tag($0)
                             }
@@ -1304,7 +1319,7 @@ private struct AllProjectImagesInspectorView: View {
                     }
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Size").font(.system(size: 10, weight: .medium))
-                        Picker("", selection: $state.editImageSize) {
+                        Picker("", selection: $state.edit.imageSize) {
                             ForEach(["1K", "2K", "4K"], id: \.self) {
                                 Text($0).tag($0)
                             }
@@ -1320,7 +1335,7 @@ private struct AllProjectImagesInspectorView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(state.editAdjustments.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(state.edit.adjustments.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(14)
         }
@@ -1372,7 +1387,7 @@ private struct AllProjectImagesInspectorView: View {
     // MARK: Preflight trigger (Edit-with-Gemini tab button)
 
     private func openPreflight(for record: ProjectImageRecord) {
-        let adjustments = state.editAdjustments.trimmingCharacters(in: .whitespacesAndNewlines)
+        let adjustments = state.edit.adjustments.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !adjustments.isEmpty else { return }
         let reference = GeminiGenerationReferenceDraft(
             label: URL(fileURLWithPath: record.resolvedPath)
@@ -1385,14 +1400,14 @@ private struct AllProjectImagesInspectorView: View {
             title: "Edit: \(record.originLabel)",
             destinationDescription: "Places → Unattached library",
             prompt: "",
-            model: state.editModel,
-            aspectRatio: state.editAspectRatio,
-            imageSize: state.editImageSize,
+            model: state.edit.model,
+            aspectRatio: state.edit.aspectRatio,
+            imageSize: state.edit.imageSize,
             referenceItems: [reference],
             editInstructions: adjustments
         )
-        state.editPendingDrafts = [draft]
-        state.editPendingPreflight = draft
+        state.edit.pendingDrafts = [draft]
+        state.edit.pendingPreflight = draft
     }
 
 }
