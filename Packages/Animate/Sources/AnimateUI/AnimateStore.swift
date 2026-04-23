@@ -656,11 +656,7 @@ final class AnimateStore {
         didSet {
             guard !isHydratingImageAnalysisSettings else { return }
             ProjectCredentialStore.shared.setImageAnalysisGeminiAPIKey(imageAnalysisGeminiAPIKey)
-            let apiKey = imageAnalysisGeminiAPIKey
-            Task {
-                guard let imageAnalysisCoordinator else { return }
-                await imageAnalysisCoordinator.configure(apiKey: apiKey)
-            }
+            refreshImageAnalysisConfiguration()
         }
     }
 
@@ -670,6 +666,14 @@ final class AnimateStore {
 
     func clearImageAnalysisGeminiAPIKey() {
         imageAnalysisGeminiAPIKey = ""
+    }
+
+    func refreshImageAnalysisConfiguration() {
+        let apiKey = imageAnalysisGeminiAPIKey
+        Task {
+            guard let imageAnalysisCoordinator else { return }
+            await imageAnalysisCoordinator.configure(apiKey: apiKey)
+        }
     }
 
     private func hydrateImageAnalysisSettings() {
@@ -846,9 +850,7 @@ final class AnimateStore {
         Task {
             do {
                 try await store.open()
-                if !imageAnalysisGeminiAPIKey.isEmpty {
-                    await coordinator.configure(apiKey: imageAnalysisGeminiAPIKey)
-                }
+                await coordinator.configure(apiKey: imageAnalysisGeminiAPIKey)
             } catch {
                 AppLog.log("IMAGE_INTELLIGENCE", "Failed to open image intelligence store: \(error.localizedDescription)")
             }
@@ -942,6 +944,26 @@ final class AnimateStore {
         guard let store = imageIntelligenceStore,
               let record = try? await store.assetByPath(URL(fileURLWithPath: path).standardizedFileURL.path) else { return [] }
         return (try? await imageAnalysisCoordinator?.jobsForAsset(record.id)) ?? []
+    }
+
+    public func imageIntelligenceRuns(for path: String) async -> [ImageAnalysisRunRecord] {
+        guard let store = imageIntelligenceStore,
+              let record = try? await store.assetByPath(URL(fileURLWithPath: path).standardizedFileURL.path) else { return [] }
+        return (try? await store.runsForAsset(record.id)) ?? []
+    }
+
+    public func imageIntelligenceLatestMetadata(for path: String) async -> ImageVisualMetadataRecord? {
+        guard let store = imageIntelligenceStore,
+              let record = try? await store.assetByPath(URL(fileURLWithPath: path).standardizedFileURL.path) else { return nil }
+        return try? await store.latestVisualMetadataForAsset(record.id)
+    }
+
+    public func imageIntelligenceQueueSnapshot(limit: Int = 100) async -> [ImageAnalysisCoordinator.JobRecord] {
+        (try? await imageAnalysisCoordinator?.queueSnapshot(limit: limit)) ?? []
+    }
+
+    public func imageIntelligenceRecentLogs(limit: Int = 100) async -> [ImageAnalysisCoordinator.LogEntry] {
+        await imageAnalysisCoordinator?.recentLogs(limit: limit) ?? []
     }
 
     public func imageIntelligenceSearchService() -> ImageSearchService? {
@@ -5317,6 +5339,8 @@ final class AnimateStore {
     func openOWP(url: URL, skipBackgroundRefresh: Bool = false) async {
         guard !isLoadingProject else { return }
 
+        let signpostToken = PerfSignposts.begin(.projectOpen, url.lastPathComponent)
+
         let previousOWPURL = owpURL
         isLoadingProject = true
         isReconcilingPersistenceState = true
@@ -5346,6 +5370,7 @@ final class AnimateStore {
             isLoadingProject = false
             isReconcilingPersistenceState = false
             reevaluatePersistedSaveState()
+            PerfSignposts.end(.projectOpen, token: signpostToken)
         }
 
         do {

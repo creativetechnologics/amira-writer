@@ -43,15 +43,10 @@ struct CachedThumbnailView: View {
     }
 
     var body: some View {
-        Group {
-            if let image = image {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: size, height: size)
-                    .clipped()
-            } else if let cached = ImagineThumbnailCache.shared.cached(for: path, maxPixelSize: maxPixelSize) {
-                Image(nsImage: cached)
+        let resolved = image ?? ImagineThumbnailCache.shared.cached(for: path, maxPixelSize: maxPixelSize)
+        return Group {
+            if let resolved {
+                Image(nsImage: resolved)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: size, height: size)
@@ -121,16 +116,15 @@ struct AsyncResolvedImageView: View {
     }
 
     var body: some View {
-        Group {
-            if let image {
-                render(image)
-            } else if let cached = ImagineThumbnailCache.shared.cached(for: path, maxPixelSize: maxPixelSize) {
-                render(cached)
-            } else if let cached = ImagineThumbnailCache.shared.bestCached(
+        let resolved = image
+            ?? ImagineThumbnailCache.shared.cached(for: path, maxPixelSize: maxPixelSize)
+            ?? ImagineThumbnailCache.shared.bestCached(
                 for: path,
                 minimumPixelSize: immediatePreviewMinimumPixelSize
-            ) {
-                render(cached)
+            )
+        return Group {
+            if let resolved {
+                render(resolved)
             } else {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color.secondary.opacity(0.1))

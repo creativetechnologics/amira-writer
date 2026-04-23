@@ -270,8 +270,34 @@ final class GeminiImageService {
         )
     }
 
+    /// NSCache of base64-encoded reference payloads keyed by path|mtime|size,
+    /// so reusing the same reference across 10 generations costs one read+encode.
+    private final class CachedReference {
+        let data: String
+        let mimeType: String
+        init(data: String, mimeType: String) {
+            self.data = data
+            self.mimeType = mimeType
+        }
+    }
+
+    nonisolated(unsafe) private static let referenceCache: NSCache<NSString, CachedReference> = {
+        let cache = NSCache<NSString, CachedReference>()
+        cache.totalCostLimit = 50 * 1024 * 1024  // ~50 MB
+        return cache
+    }()
+
     /// Create a ReferenceImage from a file URL.
     static func referenceImage(from url: URL) -> ReferenceImage? {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+        let cacheKey = NSString(string: "\(url.path)|\(mtime)|\(size)")
+
+        if let hit = referenceCache.object(forKey: cacheKey) {
+            return ReferenceImage(data: hit.data, mimeType: hit.mimeType)
+        }
+
         guard let data = try? Data(contentsOf: url) else { return nil }
 
         let ext = url.pathExtension.lowercased()
@@ -283,10 +309,14 @@ final class GeminiImageService {
         default: mimeType = "image/png"
         }
 
-        return ReferenceImage(
-            data: data.base64EncodedString(),
-            mimeType: mimeType
+        let encoded = data.base64EncodedString()
+        referenceCache.setObject(
+            CachedReference(data: encoded, mimeType: mimeType),
+            forKey: cacheKey,
+            cost: encoded.utf8.count
         )
+
+        return ReferenceImage(data: encoded, mimeType: mimeType)
     }
 
     /// Save a generated image to disk as PNG.

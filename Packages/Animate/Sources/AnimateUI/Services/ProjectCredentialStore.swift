@@ -19,6 +19,7 @@ final class ProjectCredentialStore: @unchecked Sendable {
 
     struct Payload: Codable, Equatable {
         var geminiAPIKey: String = ""
+        var imageAnalysisGeminiAPIKey: String = ""
         var miniMaxAPIKey: String = ""
         var viduAPIKey: String = ""
         var runPodAPIKey: String = ""
@@ -62,13 +63,14 @@ final class ProjectCredentialStore: @unchecked Sendable {
 
             cachedPayload = fresh
             isPayloadLoaded = true
-            writeFileLocked(payload: fresh, to: file)
+            Self.writeFileLocked(payload: fresh, to: file)
         }
     }
 
     // MARK: - Accessors
 
     func geminiAPIKey() -> String { ioQueue.sync { cachedPayload.geminiAPIKey } }
+    func imageAnalysisGeminiAPIKey() -> String { ioQueue.sync { cachedPayload.imageAnalysisGeminiAPIKey } }
     func miniMaxAPIKey() -> String { ioQueue.sync { cachedPayload.miniMaxAPIKey } }
     func viduAPIKey() -> String { ioQueue.sync { cachedPayload.viduAPIKey } }
     func runPodAPIKey() -> String { ioQueue.sync { cachedPayload.runPodAPIKey } }
@@ -76,6 +78,7 @@ final class ProjectCredentialStore: @unchecked Sendable {
     func vertexRegion() -> String { ioQueue.sync { cachedPayload.vertexRegion } }
 
     func setGeminiAPIKey(_ value: String) { update { $0.geminiAPIKey = value } }
+    func setImageAnalysisGeminiAPIKey(_ value: String) { update { $0.imageAnalysisGeminiAPIKey = value } }
     func setMiniMaxAPIKey(_ value: String) { update { $0.miniMaxAPIKey = value } }
     func setViduAPIKey(_ value: String) { update { $0.viduAPIKey = value } }
     func setRunPodAPIKey(_ value: String) { update { $0.runPodAPIKey = value } }
@@ -88,24 +91,30 @@ final class ProjectCredentialStore: @unchecked Sendable {
     // MARK: - Internals
 
     private func update(_ mutate: (inout Payload) -> Void) {
-        ioQueue.sync {
-            mutate(&cachedPayload)
-            if let url = cachedFileURL {
-                writeFileLocked(payload: cachedPayload, to: url)
+        // Apply the mutation synchronously so subsequent reads see it, but
+        // fan the disk write to the ioQueue so callers aren't blocked on I/O.
+        ioQueue.sync { mutate(&cachedPayload) }
+        let snapshot = ioQueue.sync { (cachedPayload, cachedFileURL) }
+        if let url = snapshot.1 {
+            ioQueue.async { [payload = snapshot.0] in
+                Self.writeFileLocked(payload: payload, to: url)
             }
         }
     }
 
-    /// Assumes ioQueue is held.
-    private func writeFileLocked(payload: Payload, to url: URL) {
+    nonisolated(unsafe) private static let sharedEncoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }()
+
+    /// Safe from any thread (JSONEncoder is Sendable, FileManager is thread-safe).
+    private static func writeFileLocked(payload: Payload, to url: URL) {
         let dir = url.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(payload)
+            let data = try sharedEncoder.encode(payload)
             try data.write(to: url, options: .atomic)
-            // Force owner-read-write-only on the file.
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch {
             print("[ProjectCredentialStore] write failed: \(error)")

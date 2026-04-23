@@ -16,15 +16,25 @@ struct OWPProjectLoader: Sendable {
         try await Task.detached(priority: .utility) { @Sendable in
             let fm = FileManager.default
 
-            // Load characters.json
-            let characters = try loadCharacters(from: url, fm: fm)
+            if #available(macOS 26.0, *) {
+                PerfSignposts.event(.projectOpen, "OWPLoader.start")
+            }
 
-            // Load index.json
+            let characters = try loadCharacters(from: url, fm: fm)
+            if #available(macOS 26.0, *) {
+                PerfSignposts.event(.projectOpen, "OWPLoader.characters=\(characters.count)")
+            }
+
             let indexFile = try loadIndex(from: url, fm: fm)
             let instrumentMappings = indexFile?.instrumentMappings ?? []
+            if #available(macOS 26.0, *) {
+                PerfSignposts.event(.projectOpen, "OWPLoader.index=\(instrumentMappings.count)")
+            }
 
-            // Discover .ows song files
             let songs = try discoverSongs(in: url, fm: fm)
+            if #available(macOS 26.0, *) {
+                PerfSignposts.event(.projectOpen, "OWPLoader.songs=\(songs.count)")
+            }
 
             return LoadResult(
                 characters: characters,

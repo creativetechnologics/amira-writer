@@ -5,10 +5,10 @@ import SwiftUI
 
 @available(macOS 26.0, *)
 public struct CanvasWorkspace: View {
-    @ObservedObject private var controller: AnimateWorkspaceController
+    private let controller: AnimateWorkspaceController
 
     public init(controller: AnimateWorkspaceController) {
-        _controller = ObservedObject(wrappedValue: controller)
+        self.controller = controller
     }
 
     public var body: some View {
@@ -17,15 +17,28 @@ public struct CanvasWorkspace: View {
                 store: controller.store,
                 libraryState: controller.canvasLibraryState
             )
-                .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
-            if controller.isLoadingProject || controller.isSelectionRestorePending {
+            CanvasWorkspaceLoadingOverlay(controller: controller)
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct CanvasWorkspaceLoadingOverlay: View {
+    @ObservedObject var controller: AnimateWorkspaceController
+
+    var body: some View {
+        let isBusy = controller.isLoadingProject || controller.isSelectionRestorePending
+        Group {
+            if isBusy {
                 AnimateWorkspaceLoadOverlay(
                     title: controller.store.owpURL == nil ? "Opening Canvas" : "Refreshing Canvas",
                     message: controller.loadStatusMessage
                 )
+                .background(Color.black.opacity(0.001))
             }
         }
+        .allowsHitTesting(isBusy)
     }
 }
 
