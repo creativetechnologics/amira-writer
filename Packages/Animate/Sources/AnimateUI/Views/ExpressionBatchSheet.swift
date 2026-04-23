@@ -138,7 +138,7 @@ struct ExpressionBatchSheet: View {
                         Label("Generate \(batchItems.filter(\.isQueued).count) Expressions", systemImage: "sparkles")
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(batchItems.filter(\.isQueued).isEmpty || store.geminiAPIKey.isEmpty || !store.geminiMasterSwitch)
+                    .disabled(batchItems.filter(\.isQueued).isEmpty || !store.canGenerateGeminiImagesImmediately)
                     .keyboardShortcut(.defaultAction)
                 }
             }

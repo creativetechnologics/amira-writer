@@ -299,6 +299,7 @@ final class PianoRollChromeState {
     var tool: PianoRollToolChoice = .select
     var snap: PianoRollSnapChoice = .sixteenth
     var selectedNoteCount: Int = 0
+    var isAllTracksView = false
     var showGhostNotes = true
     var scaleRoot: ScaleRoot = .c
     var scaleType: ScaleType = .none
@@ -568,6 +569,7 @@ struct PianoRollToolbarView: View {
             HStack(spacing: 1) {
                 ForEach(Array(PianoRollToolChoice.allCases), id: \.self) { item in
                     let isSelected = chrome.tool == item
+                    let isDisabled = chrome.isAllTracksView && item != .select
                     Button {
                         controller.tool = item
                     } label: {
@@ -575,9 +577,11 @@ struct PianoRollToolbarView: View {
                             .font(.system(size: 13))
                             .frame(width: 26, height: 24)
                             .foregroundStyle(isSelected ? Color.white : .secondary)
+                            .opacity(isDisabled ? 0.35 : 1)
                     }
                     .buttonStyle(ToolSelectorStyle(isSelected: isSelected))
-                    .help(item.rawValue)
+                    .disabled(isDisabled)
+                    .help(isDisabled ? "All Tracks uses Select only" : item.rawValue)
                 }
             }
         }

@@ -39,7 +39,8 @@ public struct ProjectPaths: Sendable {
         root.appendingPathComponent("Characters", isDirectory: true)
     }
 
-    /// `<project>/Synopsis/`
+    /// `<project>/Synopsis/` (legacy retired folder; synopsis now lives in embedded OWS blocks)
+    @available(*, deprecated, message: "Synopsis/ is retired; synopsis now lives in embedded {{{SYNOPSIS}}} blocks in Songs/*.ows.")
     public var synopsis: URL {
         root.appendingPathComponent("Synopsis", isDirectory: true)
     }
@@ -163,7 +164,8 @@ public struct ProjectPaths: Sendable {
         characters.appendingPathComponent("characters.json")
     }
 
-    /// `<project>/Synopsis/synopsis.txt`
+    /// `<project>/Synopsis/synopsis.txt` (legacy retired file; synopsis now lives in embedded OWS blocks)
+    @available(*, deprecated, message: "Synopsis/synopsis.txt is retired; synopsis now lives in embedded {{{SYNOPSIS}}} blocks in Songs/*.ows.")
     public var synopsisTxt: URL {
         synopsis.appendingPathComponent("synopsis.txt")
     }
@@ -176,6 +178,11 @@ public struct ProjectPaths: Sendable {
     /// `<project>/Settings/api-credentials.json`  (Wave D: moved from config/)
     public var apiCredentialsJSON: URL {
         settings.appendingPathComponent("api-credentials.json")
+    }
+
+    /// `<project>/Settings/animated-look-prompt.json`
+    public var animatedLookPromptJSON: URL {
+        settings.appendingPathComponent("animated-look-prompt.json")
     }
 
     /// `<project>/.novotro/project.sqlite`

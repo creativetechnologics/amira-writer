@@ -534,8 +534,8 @@ struct CharacterRigEditor: View {
                 }
                 .buttonStyle(.bordered)
 
-                if store.geminiAPIKey.isEmpty {
-                    Text("Set Gemini API key to generate")
+                if let error = store.geminiImageGenerationAvailabilityError {
+                    Text(error.localizedDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {

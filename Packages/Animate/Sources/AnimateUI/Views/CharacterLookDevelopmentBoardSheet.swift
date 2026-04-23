@@ -258,7 +258,7 @@ struct CharacterLookDevelopmentBoardSheet: View {
                             Label(slot.variants.isEmpty ? "Generate First Variant" : "Generate New Variant", systemImage: "sparkles")
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(isGenerating || store.geminiAPIKey.isEmpty)
+                        .disabled(isGenerating || !store.canGenerateGeminiImagesImmediately)
 
                         if isGenerating {
                             ProgressView()
@@ -266,8 +266,8 @@ struct CharacterLookDevelopmentBoardSheet: View {
                             Text("Generating…")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                        } else if store.geminiAPIKey.isEmpty {
-                            Text("Add a Gemini API key in Animate before generating.")
+                        } else if let error = store.geminiImageGenerationAvailabilityError {
+                            Text(error.localizedDescription)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -377,8 +377,8 @@ struct CharacterLookDevelopmentBoardSheet: View {
 
     private func generateSelectedSlot() {
         guard let character, let slot = selectedSlot else { return }
-        guard !store.geminiAPIKey.isEmpty else {
-            generationError = "Set a Gemini API key before generating look-development variants."
+        if let error = store.geminiImageGenerationAvailabilityError {
+            generationError = error.localizedDescription
             return
         }
 

@@ -2153,6 +2153,7 @@ struct PlacesWorldMapBrowserView: View {
     let onSelectRoute: (PlacesWorldbuildingSnapshot.Route) -> Void
     let onSelectNode: (PlacesWorldbuildingSnapshot.Node) -> Void
     let onSelectCapture: (PlacesWorldbuildingSnapshot.Capture) -> Void
+    let onDropMasterMapCandidate: ([URL]) -> Bool
 
     @StateObject private var autoPlacementModel = PlacesWorldAutoPlacementModel()
     @State private var cachedMapPath: String?
@@ -2196,6 +2197,9 @@ struct PlacesWorldMapBrowserView: View {
             )
             .frame(maxWidth: .infinity)
             .frame(minHeight: 420)
+            .dropDestination(for: URL.self) { urls, _ in
+                return onDropMasterMapCandidate(urls)
+            }
         }
         .onAppear {
             autoPlacementModel.refresh(store: store, snapshot: snapshot, workflowMode: workflowMode)

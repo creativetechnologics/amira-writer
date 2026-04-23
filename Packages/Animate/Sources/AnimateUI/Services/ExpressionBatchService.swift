@@ -125,13 +125,10 @@ final class ExpressionBatchService {
         store: AnimateStore,
         onProgress: @MainActor (Int, Int, String?) -> Void
     ) async throws -> [ExpressionBatchResult] {
+        if let error = store.geminiImageGenerationAvailabilityError {
+            throw error
+        }
         let apiKey = store.geminiAPIKey
-        guard !apiKey.isEmpty else {
-            throw ExpressionBatchError.noAPIKey
-        }
-        guard store.isGeminiAllowed() else {
-            throw ExpressionBatchError.geminiBlocked
-        }
         guard let animateURL = store.animateURL else {
             throw ExpressionBatchError.noProject
         }

@@ -227,6 +227,12 @@ final class AnimateStore {
             UserDefaults.standard.set(geminiMasterSwitch, forKey: Self.geminiMasterSwitchDefaultsKey)
         }
     }
+    static let geminiBatchJobsEnabledDefaultsKey = "animate.geminiBatchJobsEnabled"
+    var geminiBatchJobsEnabled: Bool = (UserDefaults.standard.object(forKey: "animate.geminiBatchJobsEnabled") as? Bool) ?? true {
+        didSet {
+            UserDefaults.standard.set(geminiBatchJobsEnabled, forKey: Self.geminiBatchJobsEnabledDefaultsKey)
+        }
+    }
     var imagineSelectedShotIndex: Int? = nil
     var imagineSelectedMoment: ImagineShotMoment = .beginning
     var imaginePreviewImagePath: String? = nil
@@ -381,6 +387,7 @@ final class AnimateStore {
             invalidatePlacesMasterMapCache()
         }
     }
+    var pendingMasterPlaceMapCandidatePath: String?
     var placesWorldContextBlocks: PlacesWorldContextBlocks = .init()
     var placesWorldMapCanonLibrary: PlacesWorldMapCanonLibrary = .init()
     private var placesWorldMapCanonRawPayload: [String: Any] = [:]
@@ -414,69 +421,163 @@ final class AnimateStore {
     @ObservationIgnored private var inferredPlacesMasterMapRecordCache: GeneratedBackgroundLibraryRecord?
     @ObservationIgnored private var inferredPlacesMasterMapRecordCacheIsValid = false
 
+    private static let curatedPrimaryPlaceOverrideBySceneKey: [String: String] = {
+        let pairs: [(String, String)] = [
+            ("1.01.0 - Overture", "Mountain Valley Approach Road"),
+            ("1.02.0 - Prologue", "Ridge / Overlook / Convoy Unload Zone"),
+            ("1.06.0 - The Shortcut", "Valley Road / Clinic Approach"),
+            ("1.07.0 - Lay Down Your Burdens", "Gathering Space Interior"),
+            ("1.10.0 - Scene - The Mysterious Man", "Village Clinic Main Room / Doorway"),
+            ("1.11.0 - Lament", "Lower Town Market / Main Streets"),
+            ("1.23.0 - Reason", "Rooftop Above Amira District"),
+            ("1.28.0 - Something More (Act I Finale)", "Back Alleys / Escape Corridor"),
+            ("2.01.0 - Entracte (Act II Opening)", "Base Sleeping Tent / Matt's Bunk"),
+        ]
+        return Dictionary(
+            uniqueKeysWithValues: pairs.map {
+                (
+                    PlacesScriptIndexService.normalizedKey(for: $0.0),
+                    PlacesScriptIndexService.normalizedKey(for: $0.1)
+                )
+            }
+        )
+    }()
+
+    private func normalizedSceneLookupKeys(sceneName: String, songPath: String?) -> [String] {
+        var ordered: [String] = []
+        var seen: Set<String> = []
+
+        func append(_ raw: String) {
+            let key = PlacesScriptIndexService.normalizedKey(for: raw)
+            guard !key.isEmpty, seen.insert(key).inserted else { return }
+            ordered.append(key)
+        }
+
+        append(sceneName)
+        if let songPath, !songPath.isEmpty {
+            let stem = URL(fileURLWithPath: songPath).deletingPathExtension().lastPathComponent
+            append(stem)
+        }
+
+        return ordered
+    }
+
+    private func placeHasCuratedWorldbuilding(_ place: BackgroundPlate) -> Bool {
+        [
+            place.coreIdentity,
+            place.geographicPlacement,
+            place.physicalLayoutAndTopography,
+            place.wartimeAndHistoricalContext,
+            place.visualContinuityAnchors,
+            place.sceneStateVariations,
+            place.humanActivityAndSocialUse,
+            place.nearbyConnections,
+            place.imageGenerationGuardrails,
+            place.formerTimeSpecificRecordsFoldedIntoLocation,
+        ].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private func preferredCuratedPlaceID(sceneName: String, songPath: String?) -> UUID? {
+        let sceneKeys = normalizedSceneLookupKeys(sceneName: sceneName, songPath: songPath)
+        guard !sceneKeys.isEmpty else { return nil }
+
+        let overridePlaceKey = sceneKeys.compactMap { Self.curatedPrimaryPlaceOverrideBySceneKey[$0] }.first
+        let sceneKeySet = Set(sceneKeys)
+
+        var best: (id: UUID, score: Int, order: Int)?
+        for (order, place) in backgrounds.enumerated() {
+            let usageKeys = Set(
+                place.sceneUsage.flatMap { normalizedSceneLookupKeys(sceneName: $0, songPath: nil) }
+            )
+            guard !usageKeys.isEmpty, !usageKeys.isDisjoint(with: sceneKeySet) else { continue }
+
+            var score = 0
+            if placeHasCuratedWorldbuilding(place) {
+                score += 1_000
+            }
+            let placeKey = PlacesScriptIndexService.normalizedKey(for: place.name)
+            if overridePlaceKey == placeKey {
+                score += 10_000
+            }
+
+            if let best, (score < best.score || (score == best.score && order > best.order)) {
+                continue
+            }
+            best = (place.id, score, order)
+        }
+
+        return best?.id
+    }
+
+    private func resolvedPlaceID(for requirement: PlacesScriptSceneRequirement) -> UUID? {
+        if let curated = preferredCuratedPlaceID(sceneName: requirement.sceneName, songPath: requirement.songPath) {
+            return curated
+        }
+
+        guard let primary = requirement.primaryLocation else { return nil }
+        if let matched = backgrounds.first(where: {
+            PlacesScriptIndexService.normalizedKey(for: $0.name) == primary.normalizedKey
+        })?.id {
+            return matched
+        }
+
+        return primary.isFallback ? nil : nil
+    }
+
     var indexedPlaces: [PlacesIndexedEntry] {
         if let cached = indexedPlacesCache {
             return cached
         }
 
-        let orderByKey = scriptPlaceRequirements
-            .flatMap(\.locations)
-            .enumerated()
-            .reduce(into: [String: Int]()) { partialResult, entry in
-                partialResult[entry.element.normalizedKey] = min(
-                    partialResult[entry.element.normalizedKey] ?? .max,
-                    entry.offset
-                )
-            }
+        let backgroundsByID = Dictionary(uniqueKeysWithValues: backgrounds.map { ($0.id, $0) })
+        var orderByPlaceID: [UUID: Int] = [:]
+        var grouped: [UUID: (
+            references: Set<PlacesScriptSceneReference>,
+            sourceLines: Set<String>,
+            inferredCategory: String
+        )] = [:]
 
-        let backgroundsByKey = Dictionary(
-            uniqueKeysWithValues: backgrounds.map {
-                (PlacesScriptIndexService.normalizedKey(for: $0.name), $0)
-            }
-        )
+        for (offset, requirement) in scriptPlaceRequirements.enumerated() {
+            guard let placeID = resolvedPlaceID(for: requirement) else { continue }
 
-        let grouped = Dictionary(grouping: scriptPlaceRequirements.flatMap { requirement in
-            requirement.locations.map { location in
-                (
-                    key: location.normalizedKey,
-                    reference: PlacesScriptSceneReference(
-                        sceneID: requirement.sceneID,
-                        sceneName: requirement.sceneName,
-                        songPath: requirement.songPath
-                    ),
-                    inferredCategory: location.inferredCategory,
-                    sourceLine: location.sourceLine
-                )
-            }
-        }, by: \.key)
-
-        let result: [PlacesIndexedEntry] = grouped.compactMap { entry in
-            let key = entry.key
-            let values = entry.value
-            guard let place = backgroundsByKey[key] else { return nil }
-
-            let references = Array(Set(values.map(\.reference)))
-                .sorted { lhs, rhs in
-                    lhs.songPath.localizedStandardCompare(rhs.songPath) == .orderedAscending
-                }
-            let sourceLines = Array(Set(values.compactMap(\.sourceLine)))
-                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-            let inferredCategory = values
+            orderByPlaceID[placeID] = min(orderByPlaceID[placeID] ?? .max, offset)
+            let reference = PlacesScriptSceneReference(
+                sceneID: requirement.sceneID,
+                sceneName: requirement.sceneName,
+                songPath: requirement.songPath
+            )
+            let sourceLines = Set(requirement.locations.compactMap(\.sourceLine))
+            let inferredCategory = requirement.locations
                 .map(\.inferredCategory)
                 .first(where: { !$0.isEmpty }) ?? ""
 
+            var bucket = grouped[placeID] ?? (references: [], sourceLines: [], inferredCategory: "")
+            bucket.references.insert(reference)
+            bucket.sourceLines.formUnion(sourceLines)
+            if bucket.inferredCategory.isEmpty {
+                bucket.inferredCategory = inferredCategory
+            }
+            grouped[placeID] = bucket
+        }
+
+        let result: [PlacesIndexedEntry] = grouped.compactMap { placeID, value in
+            guard let place = backgroundsByID[placeID] else { return nil }
+
             return PlacesIndexedEntry(
-                placeID: place.id,
+                placeID: placeID,
                 displayName: place.name,
-                normalizedKey: key,
-                inferredCategory: inferredCategory,
-                sceneReferences: references,
-                sourceLines: sourceLines
+                normalizedKey: PlacesScriptIndexService.normalizedKey(for: place.name),
+                inferredCategory: value.inferredCategory,
+                sceneReferences: Array(value.references).sorted { lhs, rhs in
+                    lhs.songPath.localizedStandardCompare(rhs.songPath) == .orderedAscending
+                },
+                sourceLines: Array(value.sourceLines)
+                    .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             )
         }
         .sorted { lhs, rhs in
-            let lhsOrder = orderByKey[lhs.normalizedKey] ?? .max
-            let rhsOrder = orderByKey[rhs.normalizedKey] ?? .max
+            let lhsOrder = orderByPlaceID[lhs.placeID] ?? .max
+            let rhsOrder = orderByPlaceID[rhs.placeID] ?? .max
             if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
             return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
         }
@@ -501,6 +602,7 @@ final class AnimateStore {
     var nlaBlendedPose: BlendedPose?
     /// Cache of loaded motion clip data, keyed by MotionClip UUID.
     @ObservationIgnored private var motionClipDataCache: [UUID: NLAEvaluator.MotionClipData] = [:]
+    @ObservationIgnored private var nlaTimelineLoadRequestID: UInt64 = 0
 
     /// In-memory resolution cache for `resolvedCharacterAssetURL(for:)`.
     ///
@@ -514,6 +616,8 @@ final class AnimateStore {
     /// `invalidateAssetURLCache()`).
     @ObservationIgnored private var resolvedAssetURLCache: [String: URL] = [:]
     @ObservationIgnored private var resolvedAssetURLMisses: Set<String> = []
+    @ObservationIgnored private var generationMetadataCache: [String: (snapshot: AnimateExternalFileSnapshot, metadata: StoredImageGenerationMetadata?)] = [:]
+    @ObservationIgnored private var imageResolutionDescriptionCache: [String: (snapshot: AnimateExternalFileSnapshot, value: String?)] = [:]
 
     // MARK: - Gemini
 
@@ -682,7 +786,10 @@ final class AnimateStore {
     let audioPlayer = AnimationAudioPlayer()
     private var backgroundIndexRefreshTask: Task<Void, Never>?
     private var deferredStartupRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var deferredProjectHydrationTask: Task<Void, Never>?
+    @ObservationIgnored private var deferredProjectHydrationRequestID: UInt64 = 0
     private var fileWatchTask: Task<Void, Never>?
+    @ObservationIgnored private var persistedSaveStateTask: Task<Void, Never>?
     private var lastKnownExternalSnapshots: [String: AnimateExternalFileSnapshot] = [:]
     @ObservationIgnored private var lastSavedPersistenceFingerprint: String?
     @ObservationIgnored private var isReconcilingPersistenceState = false
@@ -713,11 +820,13 @@ final class AnimateStore {
     }
 
     private static let geminiModelDefaultsKey = "novotro.animate.gemini.model"
+    @ObservationIgnored private var vertexCreditDefaultsObserver: NSObjectProtocol?
 
     init() {
         AppLog.rollIfLarge()
         AppLog.log("STARTUP", "AnimateStore init — log file at \(AppLog.logFileURL.path)")
         observePersistedSaveState()
+        observeVertexCreditTracking()
         hydrateGeminiSettings()
         hydrateMiniMaxSettings()
         hydrateViduSettings()
@@ -894,11 +1003,10 @@ final class AnimateStore {
 
     func selectPlacesScene(_ sceneID: UUID) {
         selectedSceneID = sceneID
-        if let primaryKey = sceneRequirement(for: sceneID)?.primaryLocation?.normalizedKey,
-           let place = backgrounds.first(where: {
-               PlacesScriptIndexService.normalizedKey(for: $0.name) == primaryKey
-           }) {
-            selectedBackgroundID = place.id
+        if let scene = scenes.first(where: { $0.id == sceneID }),
+           let placeID = scene.backgroundID ?? sceneRequirement(for: sceneID).flatMap(resolvedPlaceID(for:)),
+           backgrounds.contains(where: { $0.id == placeID }) {
+            selectedBackgroundID = placeID
         }
         if let scene = scenes.first(where: { $0.id == sceneID }) {
             Task { await loadSongData(for: scene) }
@@ -2513,6 +2621,7 @@ final class AnimateStore {
 
     private func syncSelectedSceneTimeline() {
         guard let scene = selectedScene else {
+            nlaTimelineLoadRequestID &+= 1
             sceneTracks = [:]
             cameraTrack = nil
             nlaTimeline = nil
@@ -2524,21 +2633,43 @@ final class AnimateStore {
         cameraTrack = tracks.removeValue(forKey: Self.cameraTrackName)
             .map { normalizeTimelineTrack($0, scene: scene) }
         sceneTracks = tracks
+        nlaBlendedPose = nil
 
-        // Load NLA timeline for the newly selected scene
-        if let sceneID = selectedSceneID, let animateDir = animateURL {
+        // Load the newly selected scene's NLA timeline off the main actor so
+        // scene changes don't block the workspace while disk I/O + JSON decode
+        // runs.
+        guard let sceneID = selectedSceneID,
+              let animateDir = animateURL else {
+            nlaTimeline = nil
+            nlaTimelineLoadRequestID &+= 1
+            return
+        }
+
+        nlaTimeline = nil
+        nlaTimelineLoadRequestID &+= 1
+        let requestID = nlaTimelineLoadRequestID
+        let animateDirPath = animateDir.path
+
+        Task { [weak self, sceneID, animateDir, animateDirPath, requestID] in
+            let loadedTimeline: NLATimeline?
             do {
-                nlaTimeline = try NLATimelinePersistence.load(
-                    animateDir: animateDir, sceneID: sceneID
-                )
+                loadedTimeline = try await Task.detached(priority: .utility) {
+                    try NLATimelinePersistence.load(animateDir: animateDir, sceneID: sceneID)
+                }.value
             } catch {
                 print("[AnimateStore] Failed to load NLA timeline for scene \(sceneID): \(error)")
-                nlaTimeline = nil
+                return
             }
-        } else {
-            nlaTimeline = nil
+
+            guard let self else { return }
+            guard self.nlaTimelineLoadRequestID == requestID,
+                  self.selectedSceneID == sceneID,
+                  self.animateURL?.path == animateDirPath else {
+                return
+            }
+
+            self.nlaTimeline = loadedTimeline
         }
-        nlaBlendedPose = nil
     }
 
     private func matchingShotPresets(named name: String) -> [SceneShotPreset] {
@@ -2642,6 +2773,8 @@ final class AnimateStore {
     func invalidateAssetURLCache() {
         resolvedAssetURLCache.removeAll(keepingCapacity: true)
         resolvedAssetURLMisses.removeAll(keepingCapacity: true)
+        generationMetadataCache.removeAll(keepingCapacity: true)
+        imageResolutionDescriptionCache.removeAll(keepingCapacity: true)
     }
 
     func thumbnailImage(
@@ -2974,10 +3107,16 @@ final class AnimateStore {
 
     private func characterSlugForRigRelativePath(_ path: String) -> String? {
         let components = path.split(separator: "/").map(String.init)
-        guard components.count >= 4 else { return nil }
-        guard components[0] == "Animate",
-              components[1] == "characters",
-              components.last == "rig.json" else {
+        guard components.last == "rig.json" else { return nil }
+        if components.count >= 3, components[0] == "Characters" {
+            return components[1]
+        }
+        if components.count >= 3, components[0] == "characters" {
+            return components[1]
+        }
+        guard components.count >= 4,
+              components[0] == "Animate",
+              components[1] == "characters" else {
             return nil
         }
         return components[2]
@@ -3055,10 +3194,19 @@ final class AnimateStore {
         guard !normalizedPath.isEmpty else { return nil }
 
         if !normalizedPath.hasPrefix("/") {
-            if normalizedPath.hasPrefix("Animate/") {
+            if normalizedPath.hasPrefix("Characters/") {
                 return normalizedPath
             }
-            if normalizedPath.hasPrefix("characters/") || normalizedPath.hasPrefix("backgrounds/") {
+            if normalizedPath.hasPrefix("Animate/") {
+                if normalizedPath.hasPrefix("Animate/characters/") {
+                    return "Characters/" + normalizedPath.dropFirst("Animate/characters/".count)
+                }
+                return normalizedPath
+            }
+            if normalizedPath.hasPrefix("characters/") {
+                return "Characters/" + normalizedPath.dropFirst("characters/".count)
+            }
+            if normalizedPath.hasPrefix("backgrounds/") {
                 return "Animate/" + normalizedPath
             }
             return normalizedPath
@@ -3841,6 +3989,7 @@ final class AnimateStore {
             ProjectDatabaseBridge.animateMetadataPath,
             ProjectDatabaseBridge.animateScenesPath,
             ProjectDatabaseBridge.animatePlacesPath,
+            ProjectDatabaseBridge.animatedLookPromptPath,
             ProjectDatabaseBridge.characterPackageSelectionsPath,
             ProjectDatabaseBridge.shotPresetsPath
         ] {
@@ -4031,6 +4180,12 @@ final class AnimateStore {
                     self.markAgentUpdated()
                     self.statusMessage = "Reloaded external project changes"
                 }
+            case ProjectDatabaseBridge.animatedLookPromptPath:
+                await MainActor.run {
+                    self.syncMasterAnimatedLookPromptFromProject(projectURL)
+                    self.markAgentUpdated(paths: [path])
+                    self.statusMessage = "Reloaded animated look prompt"
+                }
             case ProjectDatabaseBridge.characterPackageSelectionsPath:
                 let manifest = characterPackageSelectionStore
                     .load(from: ProjectPaths(root: projectURL).animate)
@@ -4052,6 +4207,7 @@ final class AnimateStore {
                     if let loaded {
                         self.owpCharacters = loaded.characters
                         self.syncCharactersFromOWP(loaded.characters)
+                        self.recoverMissingPersistedCharactersIfNeeded()
                         if self.migrateAllCharacterStorageSlugsIfNeeded() {
                             self.save()
                         }
@@ -4073,11 +4229,18 @@ final class AnimateStore {
             default:
                 await MainActor.run {
                     if let slug = self.characterSlugForRigRelativePath(path),
-                       let persisted = self.loadPersistedCharacterState(for: slug),
-                       let index = self.characters.firstIndex(where: {
-                           $0.assetFolderSlug == slug || $0.storageSlug == slug || $0.owpSlug == slug
-                       }) {
-                        self.characters[index] = persisted
+                       let persisted = self.loadPersistedCharacterState(for: slug) {
+                        if let index = self.characters.firstIndex(where: {
+                            $0.assetFolderSlug == slug || $0.storageSlug == slug || $0.owpSlug == slug
+                        }) {
+                            self.characters[index] = persisted
+                        } else {
+                            self.characters.append(persisted)
+                            self.characters.sort {
+                                ($0.sortOrder ?? .max, $0.name) < ($1.sortOrder ?? .max, $1.name)
+                            }
+                            self.updateCharacterSortOrders()
+                        }
                         self.refreshInspirationBatchJobs()
                         self.markAgentUpdated(paths: [path])
                         self.statusMessage = "Reloaded character rig changes"
@@ -4363,12 +4526,22 @@ final class AnimateStore {
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.reevaluatePersistedSaveState()
+                self.schedulePersistedSaveStateReevaluation()
                 self.observePersistedSaveState()
             }
         }
 
         reevaluatePersistedSaveState()
+    }
+
+    private func schedulePersistedSaveStateReevaluation() {
+        persistedSaveStateTask?.cancel()
+        persistedSaveStateTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard let self, !Task.isCancelled else { return }
+            self.reevaluatePersistedSaveState()
+            self.persistedSaveStateTask = nil
+        }
     }
 
     private func reevaluatePersistedSaveState() {
@@ -4391,6 +4564,8 @@ final class AnimateStore {
     }
 
     private func markCurrentStateAsSaved() {
+        persistedSaveStateTask?.cancel()
+        persistedSaveStateTask = nil
         lastSavedPersistenceFingerprint = persistenceFingerprint()
         saveIndicator = animateURL == nil ? .idle : .saved
     }
@@ -4968,6 +5143,7 @@ final class AnimateStore {
         saveIndicator = .idle
         backgroundIndexRefreshTask?.cancel()
         deferredStartupRefreshTask?.cancel()
+        deferredProjectHydrationTask?.cancel()
         stopExternalFileWatch()
         externalChangeTimes.removeAll()
         isAgentSyncInProgress = false
@@ -5095,6 +5271,7 @@ final class AnimateStore {
 
             // 6. Sync characters with OWP characters.json
             syncCharactersFromOWP(result.characters)
+            recoverMissingPersistedCharactersIfNeeded()
             let didMigrateCharacterStorage = migrateAllCharacterStorageSlugsIfNeeded()
             scheduleDeferredStartupRefreshes()
 
@@ -5143,30 +5320,16 @@ final class AnimateStore {
             }
             placesWorkflowLibrary = hydratedPlacesWorkflowLibrary(loadPlacesWorkflowLibrary(from: animateDir))
             placesWorldContextBlocks = loadPlacesWorldContextBlocks(from: animateDir)
-            if let cachedBackgroundScan = loadPersistedGeneratedBackgroundLibraryScan(from: animateDir) {
-                applyGeneratedBackgroundLibraryScan(cachedBackgroundScan)
-                generatedBackgroundLibraryNeedsRefresh = false
-            } else {
-                generatedBackgroundLibraryNeedsRefresh = !skipBackgroundRefresh
-            }
-
-            if let cachedRequirements = loadPersistedPlacesScriptRequirements(
+            syncMasterAnimatedLookPromptFromProject(effectiveProjectURL)
+            generatedBackgroundLibraryNeedsRefresh = !skipBackgroundRefresh
+            scriptPlaceRequirements = []
+            motionClips = []
+            scheduleDeferredProjectHydration(
                 projectURL: effectiveProjectURL,
                 animateDir: animateDir,
-                scenes: scenes
-            ) {
-                scriptPlaceRequirements = cachedRequirements
-                _ = applyScriptPlaceRequirements(cachedRequirements, persistChanges: false)
-            } else {
-                scriptPlaceRequirements = []
-                Task { [weak self] in
-                    guard let self else { return }
-                    _ = await self.refreshPlacesFromScript(persistChanges: true)
-                }
-            }
-
-            // 8. Load motion clips
-            motionClips = (try? MotionClipPersistence.loadAll(animateURL: animateDir)) ?? []
+                scenes: scenes,
+                skipBackgroundRefresh: skipBackgroundRefresh
+            )
 
             let projectName = url.deletingPathExtension().lastPathComponent
             if didMigrateCharacterStorage {
@@ -5196,6 +5359,63 @@ final class AnimateStore {
         let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         Task { await openOWP(url: url) }
+    }
+
+    private func scheduleDeferredProjectHydration(
+        projectURL: URL,
+        animateDir: URL,
+        scenes: [AnimationScene],
+        skipBackgroundRefresh: Bool
+    ) {
+        deferredProjectHydrationTask?.cancel()
+        deferredProjectHydrationRequestID &+= 1
+        let requestID = deferredProjectHydrationRequestID
+        let projectPath = projectURL.standardizedFileURL.path
+
+        deferredProjectHydrationTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard let self,
+                  !Task.isCancelled,
+                  self.deferredProjectHydrationRequestID == requestID,
+                  self.fileOWPURL?.standardizedFileURL.path == projectPath else {
+                return
+            }
+
+            if let cachedBackgroundScan = self.loadPersistedGeneratedBackgroundLibraryScan(from: animateDir) {
+                self.applyGeneratedBackgroundLibraryScan(cachedBackgroundScan)
+                self.generatedBackgroundLibraryNeedsRefresh = false
+            } else {
+                self.generatedBackgroundLibraryNeedsRefresh = !skipBackgroundRefresh
+            }
+
+            if let cachedRequirements = self.loadPersistedPlacesScriptRequirements(
+                projectURL: projectURL,
+                animateDir: animateDir,
+                scenes: scenes
+            ) {
+                self.scriptPlaceRequirements = cachedRequirements
+                _ = self.applyScriptPlaceRequirements(cachedRequirements, persistChanges: false)
+            } else {
+                self.scriptPlaceRequirements = []
+                Task { [weak self] in
+                    guard let self else { return }
+                    _ = await self.refreshPlacesFromScript(persistChanges: true)
+                }
+            }
+
+            let loadedMotionClips = (try? await Task.detached(priority: .utility) {
+                try MotionClipPersistence.loadAll(animateURL: animateDir)
+            }.value) ?? []
+
+            guard !Task.isCancelled,
+                  self.deferredProjectHydrationRequestID == requestID,
+                  self.fileOWPURL?.standardizedFileURL.path == projectPath else {
+                return
+            }
+
+            self.motionClips = loadedMotionClips
+            self.deferredProjectHydrationTask = nil
+        }
     }
 
     // MARK: - Debounced Save (for text editing — avoids cursor jump from per-keystroke save)
@@ -8428,14 +8648,26 @@ final class AnimateStore {
             ?? (imagePath.hasPrefix("/") ? URL(fileURLWithPath: imagePath) : nil)
         guard let imageURL = resolvedURL else { return nil }
         let metadataURL = imageURL.deletingPathExtension().appendingPathExtension("json")
+        guard let snapshot = fileSnapshot(for: metadataURL) else {
+            generationMetadataCache.removeValue(forKey: metadataURL.path)
+            return nil
+        }
+
+        if let cached = generationMetadataCache[metadataURL.path],
+           Self.snapshotsMatch(cached.snapshot, snapshot) {
+            return cached.metadata
+        }
+
         guard let data = try? Data(contentsOf: metadataURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            generationMetadataCache[metadataURL.path] = (snapshot, nil)
             return nil
         }
 
         let request = (json["request"] as? [String: Any]) ?? json
         guard let prompt = request["prompt"] as? String,
               !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            generationMetadataCache[metadataURL.path] = (snapshot, nil)
             return nil
         }
 
@@ -8482,7 +8714,7 @@ final class AnimateStore {
         let orientationState = (request["orientation_state"] as? String)
             .flatMap(GeneratedBackgroundOrientationState.init(rawValue:))
 
-        return StoredImageGenerationMetadata(
+        let metadata = StoredImageGenerationMetadata(
             prompt: prompt,
             model: model,
             aspectRatio: aspectRatio,
@@ -8496,6 +8728,8 @@ final class AnimateStore {
             buildingAnchorNodeID: buildingAnchorNodeID,
             orientationState: orientationState
         )
+        generationMetadataCache[metadataURL.path] = (snapshot, metadata)
+        return metadata
     }
 
     func imageResolutionDescription(for imagePath: String) -> String? {
@@ -8503,27 +8737,40 @@ final class AnimateStore {
             ?? (imagePath.hasPrefix("/") ? URL(fileURLWithPath: imagePath) : nil)
         guard let imageURL = resolvedURL else { return nil }
 
+        guard let snapshot = fileSnapshot(for: imageURL) else {
+            imageResolutionDescriptionCache.removeValue(forKey: imageURL.path)
+            return nil
+        }
+
+        if let cached = imageResolutionDescriptionCache[imageURL.path],
+           Self.snapshotsMatch(cached.snapshot, snapshot) {
+            return cached.value
+        }
+
+        let description: String?
         if let source = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
            let pixelWidth = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
            let pixelHeight = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
            pixelWidth > 0,
            pixelHeight > 0 {
-            return "\(pixelWidth) × \(pixelHeight) px"
+            description = "\(pixelWidth) × \(pixelHeight) px"
+        } else if let image = NSImage(contentsOf: imageURL) {
+            if let bitmapRep = image.representations
+                .compactMap({ $0 as? NSBitmapImageRep })
+                .max(by: { ($0.pixelsWide * $0.pixelsHigh) < ($1.pixelsWide * $1.pixelsHigh) }) {
+                description = "\(bitmapRep.pixelsWide) × \(bitmapRep.pixelsHigh) px"
+            } else if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                description = "\(cgImage.width) × \(cgImage.height) px"
+            } else {
+                description = nil
+            }
+        } else {
+            description = nil
         }
 
-        guard let image = NSImage(contentsOf: imageURL) else { return nil }
-        if let bitmapRep = image.representations
-            .compactMap({ $0 as? NSBitmapImageRep })
-            .max(by: { ($0.pixelsWide * $0.pixelsHigh) < ($1.pixelsWide * $1.pixelsHigh) }) {
-            return "\(bitmapRep.pixelsWide) × \(bitmapRep.pixelsHigh) px"
-        }
-
-        if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-            return "\(cgImage.width) × \(cgImage.height) px"
-        }
-
-        return nil
+        imageResolutionDescriptionCache[imageURL.path] = (snapshot, description)
+        return description
     }
 
     // MARK: - Look Development Board
@@ -8771,15 +9018,15 @@ final class AnimateStore {
             }
         }
 
+        let orderByResolvedPlaceID = requirements.enumerated().reduce(into: [UUID: Int]()) { partialResult, entry in
+            guard let placeID = resolvedPlaceID(for: entry.element) else { return }
+            partialResult[placeID] = min(partialResult[placeID] ?? .max, entry.offset)
+        }
+
         for requirement in requirements {
-            guard let sceneIndex = scenes.firstIndex(where: { $0.id == requirement.sceneID }),
-                  let primary = requirement.primaryLocation else { continue }
+            guard let sceneIndex = scenes.firstIndex(where: { $0.id == requirement.sceneID }) else { continue }
 
-            let matchingPlaceID = backgrounds.first(where: {
-                PlacesScriptIndexService.normalizedKey(for: $0.name) == primary.normalizedKey
-            })?.id
-
-            if let matchingPlaceID {
+            if let matchingPlaceID = resolvedPlaceID(for: requirement) {
                 if scenes[sceneIndex].backgroundID != matchingPlaceID {
                     scenes[sceneIndex].backgroundID = matchingPlaceID
                     didMutate = true
@@ -8787,6 +9034,7 @@ final class AnimateStore {
                 continue
             }
 
+            guard let primary = requirement.primaryLocation, !primary.isFallback else { continue }
             let inferredCategory = primary.inferredCategory
             let newPlace = BackgroundPlate(
                 name: primary.displayName,
@@ -8805,20 +9053,17 @@ final class AnimateStore {
         }
 
         backgrounds.sort { lhs, rhs in
-            let lhsKey = PlacesScriptIndexService.normalizedKey(for: lhs.name)
-            let rhsKey = PlacesScriptIndexService.normalizedKey(for: rhs.name)
-            let lhsIndex = requiredLocations.firstIndex(where: { $0.normalizedKey == lhsKey }) ?? .max
-            let rhsIndex = requiredLocations.firstIndex(where: { $0.normalizedKey == rhsKey }) ?? .max
-            if lhsIndex != rhsIndex { return lhsIndex < rhsIndex }
+            let lhsOrder = orderByResolvedPlaceID[lhs.id] ?? .max
+            let rhsOrder = orderByResolvedPlaceID[rhs.id] ?? .max
+            if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
             return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
 
         if let selectedSceneID,
-           let primaryKey = sceneRequirement(for: selectedSceneID)?.primaryLocation?.normalizedKey,
-           let selectedPlace = backgrounds.first(where: {
-               PlacesScriptIndexService.normalizedKey(for: $0.name) == primaryKey
-           }) {
-            selectedBackgroundID = selectedPlace.id
+           let scene = scenes.first(where: { $0.id == selectedSceneID }),
+           let selectedPlaceID = scene.backgroundID,
+           backgrounds.contains(where: { $0.id == selectedPlaceID }) {
+            selectedBackgroundID = selectedPlaceID
         } else if selectedBackgroundID == nil || !backgrounds.contains(where: { $0.id == selectedBackgroundID }) {
             selectedBackgroundID = backgrounds.first?.id
         }
@@ -8884,10 +9129,189 @@ final class AnimateStore {
         save(writePlaces: true)
     }
 
+    func updatePlaceCoreIdentity(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].coreIdentity != value else { return }
+        backgrounds[index].coreIdentity = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceGeographicPlacement(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].geographicPlacement != value else { return }
+        backgrounds[index].geographicPlacement = value
+        save(writePlaces: true)
+    }
+
+    func updatePlacePhysicalLayoutAndTopography(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].physicalLayoutAndTopography != value else { return }
+        backgrounds[index].physicalLayoutAndTopography = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceWartimeAndHistoricalContext(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].wartimeAndHistoricalContext != value else { return }
+        backgrounds[index].wartimeAndHistoricalContext = value
+        save(writePlaces: true)
+    }
+
     func updatePlaceWorkflowPromptNotes(_ notes: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].workflowPromptNotes != notes else { return }
         backgrounds[index].workflowPromptNotes = notes
+        save(writePlaces: true)
+    }
+
+    func updatePlaceSideOfRiver(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].sideOfRiver != value else { return }
+        backgrounds[index].sideOfRiver = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceTimeOfDay(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].timeOfDay != value else { return }
+        backgrounds[index].timeOfDay = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceDayLabel(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].dayLabel != value else { return }
+        backgrounds[index].dayLabel = value
+        save(writePlaces: true)
+    }
+
+    func updatePlacePositionInValley(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].positionInValley != value else { return }
+        backgrounds[index].positionInValley = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceGeographicPosition(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].geographicPosition != value else { return }
+        backgrounds[index].geographicPosition = value
+        save(writePlaces: true)
+    }
+
+    func updatePlacePhysicalDescription(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].physicalDescription != value else { return }
+        backgrounds[index].physicalDescription = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceSensoryWorld(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].sensoryWorld != value else { return }
+        backgrounds[index].sensoryWorld = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceCulturalHistoricalContext(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].culturalHistoricalContext != value else { return }
+        backgrounds[index].culturalHistoricalContext = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceInhabitantsActivity(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].inhabitantsActivity != value else { return }
+        backgrounds[index].inhabitantsActivity = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceKeyPropsSetDressing(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].keyPropsSetDressing != value else { return }
+        backgrounds[index].keyPropsSetDressing = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceDramaticFunction(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].dramaticFunction != value else { return }
+        backgrounds[index].dramaticFunction = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceVisualContinuityAnchors(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].visualContinuityAnchors != value else { return }
+        backgrounds[index].visualContinuityAnchors = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceSceneStateVariations(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].sceneStateVariations != value else { return }
+        backgrounds[index].sceneStateVariations = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceHumanActivityAndSocialUse(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].humanActivityAndSocialUse != value else { return }
+        backgrounds[index].humanActivityAndSocialUse = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceNearbyConnections(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].nearbyConnections != value else { return }
+        backgrounds[index].nearbyConnections = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceVisualPaletteLighting(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].visualPaletteLighting != value else { return }
+        backgrounds[index].visualPaletteLighting = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceCameraFramingNotes(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].cameraFramingNotes != value else { return }
+        backgrounds[index].cameraFramingNotes = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceImageGenerationGuardrails(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].imageGenerationGuardrails != value else { return }
+        backgrounds[index].imageGenerationGuardrails = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceFormerTimeSpecificRecordsFoldedIntoLocation(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].formerTimeSpecificRecordsFoldedIntoLocation != value else { return }
+        backgrounds[index].formerTimeSpecificRecordsFoldedIntoLocation = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceAdditionalGuidance(_ value: String, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
+              backgrounds[index].additionalGuidance != value else { return }
+        backgrounds[index].additionalGuidance = value
+        save(writePlaces: true)
+    }
+
+    func updatePlaceImageGenerationPrompt(_ value: String, promptIndex: Int, placeID: UUID) {
+        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
+        guard promptIndex >= 0, promptIndex < 5 else { return }
+
+        var prompts = Array((backgrounds[index].imageGenerationPrompts + Array(repeating: "", count: 5)).prefix(5))
+        guard prompts[promptIndex] != value else { return }
+        prompts[promptIndex] = value
+        backgrounds[index].imageGenerationPrompts = prompts
         save(writePlaces: true)
     }
 
@@ -8931,6 +9355,99 @@ final class AnimateStore {
         } catch {
             statusMessage = "Failed to add place image: \(error.localizedDescription)"
         }
+    }
+
+    nonisolated private static let projectImportableImageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "tif", "tiff", "webp", "heic", "heif", "gif"
+    ]
+
+    nonisolated static func filterImportableImageURLs(_ urls: [URL]) -> [URL] {
+        urls.filter { url in
+            guard url.isFileURL else { return false }
+            let ext = url.pathExtension.lowercased()
+            if Self.projectImportableImageExtensions.contains(ext) {
+                return true
+            }
+            return UTType(filenameExtension: ext)?.conforms(to: .image) == true
+        }
+    }
+
+    @discardableResult
+    func importDroppedImagesToUnattachedLibrary(urls: [URL]) -> Bool {
+        let validURLs = Self.filterImportableImageURLs(urls)
+        guard !validURLs.isEmpty,
+              let animateDir = animateURL else { return false }
+
+        let destinationDir = ProjectPaths(root: animateDir.deletingLastPathComponent())
+            .animateBackgrounds
+            .appendingPathComponent("_map3d-captures", isDirectory: true)
+        var importedCount = 0
+
+        for sourceURL in validURLs {
+            let standardized = sourceURL.standardizedFileURL
+            if let normalized = normalizedCharacterAssetPath(standardized.path)
+                ?? projectRelativeCharacterAssetPath(from: standardized.path),
+               resolvedCharacterAssetURL(for: normalized) != nil {
+                if ensureUnattachedLibraryRecord(forExistingPath: normalized) {
+                    importedCount += 1
+                }
+                continue
+            }
+
+            do {
+                let storedURL = try ImagineProjectStorage.importImage(from: standardized, to: destinationDir)
+                let storedPath = projectRelativeCharacterAssetPath(from: storedURL.path)
+                    ?? normalizedCharacterAssetPath(storedURL.path)
+                    ?? storedURL.path
+                if ensureUnattachedLibraryRecord(forExistingPath: storedPath) {
+                    importedCount += 1
+                }
+            } catch {
+                statusMessage = "Failed to import image: \(error.localizedDescription)"
+            }
+        }
+
+        guard importedCount > 0 else { return false }
+        save(writePlaces: true)
+        statusMessage = importedCount == 1
+            ? "Imported 1 image into All Images"
+            : "Imported \(importedCount) images into All Images"
+        return true
+    }
+
+    @discardableResult
+    private func ensureUnattachedLibraryRecord(forExistingPath path: String) -> Bool {
+        let normalizedPath = normalizedCharacterAssetPath(path)
+            ?? projectRelativeCharacterAssetPath(from: path)
+            ?? path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedPath.isEmpty else { return false }
+
+        if generatedBackgroundRecord(for: normalizedPath) != nil {
+            return true
+        }
+
+        let resolvedURL = resolvedCharacterAssetURL(for: normalizedPath)
+            ?? (normalizedPath.hasPrefix("/") ? URL(fileURLWithPath: normalizedPath) : nil)
+        let createdAt: Date = {
+            guard let resolvedURL,
+                  let values = try? resolvedURL.resourceValues(forKeys: [.contentModificationDateKey]),
+                  let date = values.contentModificationDate else {
+                return Date()
+            }
+            return date
+        }()
+        var record = GeneratedBackgroundLibraryRecord(
+            activePath: normalizedPath,
+            workflow: inferredGeneratedBackgroundWorkflow(for: normalizedPath),
+            keywords: ["imported"],
+            linkedPlaceID: nil,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        record.summary = URL(fileURLWithPath: normalizedPath).deletingPathExtension().lastPathComponent
+        record.contentFingerprint = generatedBackgroundFingerprint(for: normalizedPath)
+        placesWorkflowLibrary.generatedImageRecords.append(record)
+        return true
     }
 
     func allBackgroundHierarchyImagePaths() -> [String] {
@@ -10334,8 +10851,8 @@ final class AnimateStore {
     func submitQueuedGeneratedBackgroundEditBatch(
         workflow: PlaceWorkflowMode
     ) async throws -> PlaceImageEditBatchJob {
-        guard isGeminiAllowed() else {
-            throw GeminiImageService.ServiceError.masterSwitchOff
+        if let error = geminiBatchGenerationAvailabilityError {
+            throw GeminiBatchService.BatchError.processFailed(error)
         }
 
         let items = placesWorkflowLibrary.pendingEditQueue
@@ -11137,8 +11654,7 @@ final class AnimateStore {
         var rawValues = [
             place.name,
             place.filename,
-            place.notes,
-            place.workflowPromptNotes,
+            place.promptSupportText,
             place.locationCategory
         ]
         rawValues.append(contentsOf: place.referenceImages.map(\.title))
@@ -11422,40 +11938,98 @@ final class AnimateStore {
     // MARK: - Vertex AI free-trial credit tracking
 
     private static let vertexCreditUsedKey = "animate.vertex.creditUsedUSD"
+    private static let vertexCreditRemainingKey = "animate.vertex.creditRemainingUSD"
     private static let vertexCreditBudgetUSD: Double = 300.0
+    private static let vertexCreditDidChangeNotification = Notification.Name("animate.vertex.creditDidChange")
 
-    /// Running tally of estimated Vertex AI / Gemini image-generation spend
-    /// since the user last reset the counter. Persisted in UserDefaults so it
-    /// survives relaunches and is shared across projects (the $300 trial is
-    /// per-Google-account, not per-project).
-    var vertexCreditUsedUSD: Double = UserDefaults.standard.double(forKey: AnimateStore.vertexCreditUsedKey) {
+    private static func loadPersistedVertexCreditRemainingUSD() -> Double {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: vertexCreditRemainingKey) != nil {
+            return max(0, defaults.double(forKey: vertexCreditRemainingKey))
+        }
+
+        let legacyUsed = max(0, defaults.double(forKey: vertexCreditUsedKey))
+        return max(0, vertexCreditBudgetUSD - legacyUsed)
+    }
+
+    private static func derivedVertexCreditUsedUSD(from remainingUSD: Double) -> Double {
+        max(0, vertexCreditBudgetUSD - min(max(remainingUSD, 0), vertexCreditBudgetUSD))
+    }
+
+    private static func persistVertexCreditRemainingUSD(_ remainingUSD: Double) {
+        let defaults = UserDefaults.standard
+        let sanitized = max(0, remainingUSD)
+        defaults.set(sanitized, forKey: vertexCreditRemainingKey)
+        defaults.set(derivedVertexCreditUsedUSD(from: sanitized), forKey: vertexCreditUsedKey)
+        NotificationCenter.default.post(
+            name: vertexCreditDidChangeNotification,
+            object: nil,
+            userInfo: ["remainingUSD": sanitized]
+        )
+    }
+
+    /// Current estimated Vertex AI free-trial balance. Persisted in
+    /// UserDefaults so it survives relaunches and is shared across projects.
+    /// This stays editable so Gary can manually re-sync against the real
+    /// Google Cloud Console balance if the local estimate drifts.
+    var vertexCreditRemainingUSD: Double = AnimateStore.loadPersistedVertexCreditRemainingUSD() {
         didSet {
-            UserDefaults.standard.set(vertexCreditUsedUSD, forKey: AnimateStore.vertexCreditUsedKey)
+            AnimateStore.persistVertexCreditRemainingUSD(vertexCreditRemainingUSD)
         }
     }
 
-    /// Total trial budget minus what we've tallied. Clamped to zero.
-    var vertexCreditRemainingUSD: Double {
-        max(0, AnimateStore.vertexCreditBudgetUSD - vertexCreditUsedUSD)
+    /// Derived spend total against the nominal $300 starting trial budget.
+    var vertexCreditUsedUSD: Double {
+        AnimateStore.derivedVertexCreditUsedUSD(from: vertexCreditRemainingUSD)
     }
 
     /// Full trial budget constant ($300 as of the current Google promotion).
     var vertexCreditBudgetUSD: Double { AnimateStore.vertexCreditBudgetUSD }
 
     /// Add the estimated cost of a successful generation to the rolling tally.
-    /// Called from inspiration / action generation pipelines after the API
-    /// returns success. Vertex doesn't expose a client-reachable "trial
-    /// remaining" endpoint, so this is the pragmatic estimator Gary signed
-    /// off on.
     func recordVertexCreditUsage(_ usd: Double) {
         guard usd > 0 else { return }
-        vertexCreditUsedUSD = vertexCreditUsedUSD + usd
+        vertexCreditRemainingUSD = max(0, vertexCreditRemainingUSD - usd)
     }
 
-    /// Resets the running tally to zero. Surfaced in Global Settings so the
-    /// user can re-sync against the real Google Cloud Console figure.
+    /// Manual override used when the local estimate drifts from the real
+    /// Google Cloud Console figure.
+    func setVertexCreditRemainingUSD(_ usd: Double) {
+        vertexCreditRemainingUSD = max(0, usd)
+    }
+
+    /// Resets the estimator back to the nominal starting balance.
     func resetVertexCreditTracking() {
-        vertexCreditUsedUSD = 0
+        vertexCreditRemainingUSD = AnimateStore.vertexCreditBudgetUSD
+    }
+
+    /// Centralized hook used by GeminiImageService so every successful Vertex
+    /// image generation deducts exactly once, regardless of which page kicked
+    /// off the request.
+    static func recordVertexCreditUsageForSuccessfulImageGeneration(
+        model: GeminiModel,
+        imageSize: String
+    ) {
+        let cost = model.estimatedCost(for: imageSize)
+        guard cost > 0 else { return }
+        let updatedRemaining = loadPersistedVertexCreditRemainingUSD() - cost
+        persistVertexCreditRemainingUSD(updatedRemaining)
+    }
+
+    private func observeVertexCreditTracking() {
+        guard vertexCreditDefaultsObserver == nil else { return }
+        vertexCreditDefaultsObserver = NotificationCenter.default.addObserver(
+            forName: Self.vertexCreditDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let latestRemaining = Self.loadPersistedVertexCreditRemainingUSD()
+                guard abs(latestRemaining - self.vertexCreditRemainingUSD) > 0.000_1 else { return }
+                self.vertexCreditRemainingUSD = latestRemaining
+            }
+        }
     }
 
     /// Get the star rating (0-5) for a specific place image. 0 = unrated.
@@ -11696,6 +12270,7 @@ final class AnimateStore {
         do {
             let storedURL = try assetManager.importBackgroundImage(from: url, animateURL: animateDir)
             placesWorkflowLibrary.masterMapImagePath = normalizedCharacterAssetPath(storedURL.path) ?? storedURL.path
+            pendingMasterPlaceMapCandidatePath = nil
             save(writePlaces: true)
         } catch {
             statusMessage = "Failed to set master map: \(error.localizedDescription)"
@@ -11765,7 +12340,48 @@ final class AnimateStore {
         let normalized = normalizedCharacterAssetPath(path) ?? path
         guard !normalized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         placesWorkflowLibrary.masterMapImagePath = normalized
+        pendingMasterPlaceMapCandidatePath = nil
         save(writePlaces: true)
+    }
+
+    @MainActor
+    @discardableResult
+    func stageMasterPlaceMapCandidate(from url: URL) -> Bool {
+        let resolvedPath: String
+        if let normalized = normalizedCharacterAssetPath(url.path) ?? projectRelativeCharacterAssetPath(from: url.path) {
+            resolvedPath = normalized
+        } else {
+            guard let animateDir = animateURL else { return false }
+            do {
+                let storedURL = try assetManager.importBackgroundImage(from: url, animateURL: animateDir)
+                resolvedPath = normalizedCharacterAssetPath(storedURL.path) ?? storedURL.path
+            } catch {
+                statusMessage = "Failed to stage master map candidate: \(error.localizedDescription)"
+                return false
+            }
+        }
+
+        pendingMasterPlaceMapCandidatePath = resolvedPath
+        statusMessage = "Staged master map candidate"
+        return true
+    }
+
+    @MainActor
+    @discardableResult
+    func stageMasterPlaceMapCandidate(from urls: [URL]) -> Bool {
+        guard let first = urls.first else { return false }
+        return stageMasterPlaceMapCandidate(from: first)
+    }
+
+    @MainActor
+    func commitPendingMasterPlaceMapCandidate() {
+        guard let pendingMasterPlaceMapCandidatePath else { return }
+        useGeneratedImageAsMasterPlaceMap(pendingMasterPlaceMapCandidatePath)
+    }
+
+    @MainActor
+    func clearPendingMasterPlaceMapCandidate() {
+        pendingMasterPlaceMapCandidatePath = nil
     }
 
     @MainActor
@@ -12496,7 +13112,7 @@ final class AnimateStore {
         // the brief actually describes. No "environment plate", no "not
         // concept art / not a matte painting" negatives — those were causing
         // paradoxical AI-looking outputs. The visual brief leads.
-        let visualBrief = place.visualBrief.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visualBrief = place.effectiveVisualBrief
         let workflowLead: String = switch workflow {
         case .photorealistic:
             "A wide-angle photograph of the scene described below, shot on location with natural light and documentary framing."
@@ -12704,10 +13320,10 @@ final class AnimateStore {
     }
 
     private func drawThingsPlacePrompt(for place: BackgroundPlate, sceneNames: [String]) -> String {
-        let cueText = ([place.name, place.locationCategory, place.notes] + sceneNames)
+        let cueText = ([place.promptSupportText, place.locationCategory] + sceneNames)
             .joined(separator: " ")
             .lowercased()
-        let visualNotes = sanitizedPlaceVisualNotes(place.notes)
+        let visualNotes = sanitizedPlaceVisualNotes(place.promptSupportText)
 
         return [
             drawThingsPlaceConfig.promptPrefix.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -12959,6 +13575,27 @@ final class AnimateStore {
             return .init()
         }
         return decoded
+    }
+
+    func persistProjectAnimatedLookPrompt(_ prompt: String) {
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let projectURL = fileOWPURL ?? workingOWPURL ?? animateURL?.deletingLastPathComponent() else {
+            UserDefaults.standard.set(trimmedPrompt, forKey: AnimatedLookPromptSettings.masterPromptDefaultsKey)
+            return
+        }
+
+        do {
+            try ProjectDatabaseBridge.saveAnimatedLookPromptToDisk(trimmedPrompt, projectURL: projectURL)
+            UserDefaults.standard.set(trimmedPrompt, forKey: AnimatedLookPromptSettings.masterPromptDefaultsKey)
+            recordExternalFileSnapshots()
+        } catch {
+            statusMessage = "Could not save animated look prompt: \(error.localizedDescription)"
+        }
+    }
+
+    private func syncMasterAnimatedLookPromptFromProject(_ projectURL: URL) {
+        let prompt = ProjectDatabaseBridge.loadAnimatedLookPromptFromDisk(projectURL: projectURL) ?? ""
+        UserDefaults.standard.set(prompt, forKey: AnimatedLookPromptSettings.masterPromptDefaultsKey)
     }
 
     private func startupCacheDirectory(in animateDir: URL) -> URL {
@@ -14443,8 +15080,7 @@ final class AnimateStore {
         try data.write(to: rigURL, options: .atomic)
     }
 
-    private func loadPersistedCharacterState(for slug: String) -> AnimationCharacter? {
-        guard let rigURL = characterRigURL(for: slug) else { return nil }
+    private func decodePersistedCharacterState(at rigURL: URL, fallbackSlug: String) -> AnimationCharacter? {
         guard FileManager.default.fileExists(atPath: rigURL.path) else {
             return nil
         }
@@ -14455,7 +15091,7 @@ final class AnimateStore {
 
         do {
             let decoded = try JSONDecoder().decode(AnimationCharacter.self, from: rigData)
-            let normalized = normalizedPersistedCharacterState(decoded, fallbackSlug: slug)
+            let normalized = normalizedPersistedCharacterState(decoded, fallbackSlug: fallbackSlug)
             let originalSchemaVersion = schemaVersionForCharacterRigData(rigData)
 
             if originalSchemaVersion < AnimationCharacter.currentSchemaVersion {
@@ -14479,23 +15115,68 @@ final class AnimateStore {
         }
     }
 
-    private func persistedCharacterSlugsOnDisk() -> [String] {
-        let slugs = persistedCharacterRigURLsOnDisk().compactMap { rigURL in
-            guard let data = try? Data(contentsOf: rigURL),
-                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else {
-                return rigURL.deletingLastPathComponent().lastPathComponent
-            }
+    private func loadPersistedCharacterState(for slug: String) -> AnimationCharacter? {
+        guard let rigURL = characterRigURL(for: slug) else { return nil }
+        let fallback = rigURL.deletingLastPathComponent().lastPathComponent.isEmpty
+            ? slug
+            : rigURL.deletingLastPathComponent().lastPathComponent
+        return decodePersistedCharacterState(at: rigURL, fallbackSlug: fallback)
+    }
 
-            let owpSlug = (payload["owpSlug"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !owpSlug.isEmpty {
-                return owpSlug
-            }
-
-            return rigURL.deletingLastPathComponent().lastPathComponent
+    private func persistedCharactersOnDisk() -> [AnimationCharacter] {
+        persistedCharacterRigURLsOnDisk().compactMap { rigURL in
+            decodePersistedCharacterState(
+                at: rigURL,
+                fallbackSlug: rigURL.deletingLastPathComponent().lastPathComponent
+            )
         }
-        return Array(Set(slugs)).sorted()
+    }
+
+    @MainActor
+    func recoverMissingPersistedCharactersIfNeeded() {
+        let persistedCharacters = persistedCharactersOnDisk()
+        guard !persistedCharacters.isEmpty else { return }
+
+        func matchesPersistedCharacter(_ candidate: AnimationCharacter, persisted: AnimationCharacter) -> Bool {
+            if candidate.id == persisted.id {
+                return true
+            }
+
+            let candidateStorageSlug = candidate.assetFolderSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+            let persistedStorageSlug = persisted.assetFolderSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !candidateStorageSlug.isEmpty,
+               !persistedStorageSlug.isEmpty,
+               candidateStorageSlug.caseInsensitiveCompare(persistedStorageSlug) == .orderedSame {
+                return true
+            }
+
+            let candidateOWPSlug = candidate.owpSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+            let persistedOWPSlug = persisted.owpSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !candidateOWPSlug.isEmpty,
+               !persistedOWPSlug.isEmpty,
+               candidateOWPSlug.caseInsensitiveCompare(persistedOWPSlug) == .orderedSame {
+                return true
+            }
+
+            return false
+        }
+
+        var updatedCharacters = characters
+        var didChange = false
+
+        for persistedCharacter in persistedCharacters {
+            guard !updatedCharacters.contains(where: { matchesPersistedCharacter($0, persisted: persistedCharacter) }) else {
+                continue
+            }
+            updatedCharacters.append(persistedCharacter)
+            didChange = true
+        }
+
+        guard didChange else { return }
+        characters = updatedCharacters.sorted {
+            ($0.sortOrder ?? .max, $0.name) < ($1.sortOrder ?? .max, $1.name)
+        }
+        updateCharacterSortOrders()
     }
 
     @discardableResult
@@ -14540,9 +15221,22 @@ final class AnimateStore {
     private func syncCharactersFromOWP(_ sourceCharacters: [OPWCharacter]) {
         owpCharacters = sourceCharacters
 
+        let persistedCharacters = persistedCharactersOnDisk()
+        let persistedByOWPSlug = persistedCharacters.reduce(into: [String: AnimationCharacter]()) { partialResult, character in
+            let key = character.owpSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, partialResult[key] == nil else { return }
+            partialResult[key] = character
+        }
+        let persistedByStorageSlug = persistedCharacters.reduce(into: [String: AnimationCharacter]()) { partialResult, character in
+            let key = character.assetFolderSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, partialResult[key] == nil else { return }
+            partialResult[key] = character
+        }
+
         let existingBySlug = Dictionary(uniqueKeysWithValues: characters.map { ($0.owpSlug, $0) })
         var updatedCharacters: [AnimationCharacter] = []
         var seenSlugs: Set<String> = []
+        var consumedPersistedCharacterIDs: Set<UUID> = []
 
         for sourceCharacter in sourceCharacters {
             let slug = sourceCharacter.directoryName
@@ -14617,7 +15311,10 @@ final class AnimateStore {
                 continue
             }
 
-            let persistedCharacter = loadPersistedCharacterState(for: slug)
+            let persistedCharacter = persistedByOWPSlug[slug] ?? persistedByStorageSlug[slug]
+            if let persistedCharacter {
+                consumedPersistedCharacterIDs.insert(persistedCharacter.id)
+            }
             let persistedName = persistedCharacter?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let resolvedName = persistedName.isEmpty ? sourceName : persistedName
             let defaultCostumeSetsByName = Dictionary(
@@ -14731,12 +15428,17 @@ final class AnimateStore {
             )
         }
 
-        for slug in persistedCharacterSlugsOnDisk() where !seenSlugs.contains(slug) {
-            guard var persistedCharacter = loadPersistedCharacterState(for: slug) else { continue }
-            seenSlugs.insert(slug)
+        for var persistedCharacter in persistedCharacters {
+            let persistedSlug = persistedCharacter.owpSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? persistedCharacter.assetFolderSlug
+                : persistedCharacter.owpSlug
+            guard !seenSlugs.contains(persistedSlug),
+                  !consumedPersistedCharacterIDs.contains(persistedCharacter.id) else { continue }
+            seenSlugs.insert(persistedSlug)
+            consumedPersistedCharacterIDs.insert(persistedCharacter.id)
 
             let resolvedName = persistedCharacter.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? slug.replacingOccurrences(of: "-", with: " ").capitalized
+                ? persistedSlug.replacingOccurrences(of: "-", with: " ").capitalized
                 : persistedCharacter.name
             let defaultCostumeSetsByName = Dictionary(
                 uniqueKeysWithValues: CharacterReferenceWorkflowCatalog
@@ -15718,12 +16420,22 @@ extension AnimateStore {
 
     func loadImagineGalleries() {
         guard let owpURL = fileOWPURL else { return }
-        let stored = ImagineProjectStorage.loadGalleries(owpURL: owpURL)
-        var byScene: [UUID: [ImagineSceneShotGallery]] = [:]
-        for gallery in stored {
-            byScene[gallery.sceneID, default: []].append(gallery)
+        let projectPath = owpURL.path
+        imagineSceneGalleries = [:]
+        Task { [weak self, owpURL, projectPath] in
+            let byScene = await Task.detached(priority: .utility) { () -> [UUID: [ImagineSceneShotGallery]] in
+                let stored = ImagineProjectStorage.loadGalleries(owpURL: owpURL)
+                var grouped: [UUID: [ImagineSceneShotGallery]] = [:]
+                for gallery in stored {
+                    grouped[gallery.sceneID, default: []].append(gallery)
+                }
+                return grouped
+            }.value
+
+            guard let self else { return }
+            guard self.fileOWPURL?.path == projectPath else { return }
+            self.imagineSceneGalleries = byScene
         }
-        imagineSceneGalleries = byScene
     }
 
     func saveImagineGalleries() {
@@ -15737,6 +16449,9 @@ extension AnimateStore {
               let scene = scenes.first(where: { $0.id == sceneID }) else { return }
         let sceneSlug = scene.name.lowercased().replacingOccurrences(of: " ", with: "-")
             .replacingOccurrences(of: "/", with: "-")
+        let existingByShotID = Dictionary(
+            uniqueKeysWithValues: (imagineSceneGalleries[sceneID] ?? []).map { ($0.shotID, $0) }
+        )
         let shotDescriptors = scene.shots.enumerated().map { (index, shot) in
             (index: index, shotID: shot.id)
         }
@@ -15744,16 +16459,18 @@ extension AnimateStore {
         let generation = (imagineGalleryRefreshGenerationByScene[sceneID] ?? 0) + 1
         imagineGalleryRefreshGenerationByScene[sceneID] = generation
 
-        Task { [sceneID, sceneSlug, shotDescriptors, projectPath, generation] in
+        Task { [sceneID, sceneSlug, shotDescriptors, projectPath, generation, existingByShotID] in
             let galleries = await Task.detached(priority: .utility) { () -> [ImagineSceneShotGallery] in
                 shotDescriptors.map { descriptor in
-                    ImagineProjectStorage.scanShotGallery(
+                    var gallery = ImagineProjectStorage.scanShotGallery(
                         owpURL: owpURL,
                         sceneSlug: sceneSlug,
                         shotIndex: descriptor.index,
                         shotID: descriptor.shotID,
                         sceneID: sceneID
                     )
+                    gallery.absorbStoredState(from: existingByShotID[descriptor.shotID])
+                    return gallery
                 }
             }.value
 
@@ -15769,13 +16486,80 @@ extension AnimateStore {
               let scene = scenes.first(where: { $0.id == sceneID }) else { return }
         let sceneSlug = scene.name.lowercased().replacingOccurrences(of: " ", with: "-")
             .replacingOccurrences(of: "/", with: "-")
-        try? ImagineProjectStorage.ensureDirectories(owpURL: owpURL, sceneSlug: sceneSlug, shotCount: scene.shots.count)
+        let shotCount = scene.shots.count
+        Task.detached(priority: .utility) {
+            try? ImagineProjectStorage.ensureDirectories(
+                owpURL: owpURL,
+                sceneSlug: sceneSlug,
+                shotCount: shotCount
+            )
+        }
     }
 
     func imagineGallery(for sceneID: UUID, shotIndex: Int) -> ImagineSceneShotGallery? {
         guard let galleries = imagineSceneGalleries[sceneID],
               shotIndex < galleries.count else { return nil }
         return galleries[shotIndex]
+    }
+
+    func imaginePrompt(for sceneID: UUID, shotIndex: Int, moment: ImagineShotMoment) -> String {
+        imagineGallery(for: sceneID, shotIndex: shotIndex)?.prompt(for: moment) ?? ""
+    }
+
+    func setImaginePrompt(_ prompt: String, sceneID: UUID, shotIndex: Int, moment: ImagineShotMoment) {
+        guard var galleries = imagineSceneGalleries[sceneID],
+              shotIndex >= 0,
+              shotIndex < galleries.count else { return }
+        galleries[shotIndex].setPrompt(prompt, for: moment)
+        imagineSceneGalleries[sceneID] = galleries
+    }
+
+    var geminiImageGenerationConfigurationError: GeminiImageService.ServiceError? {
+        switch ImageGenBackendStore.currentBackend() {
+        case .aiStudio:
+            let trimmedKey = geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmedKey.isEmpty ? .noAPIKey : nil
+        case .vertex:
+            let settings = ImageGenBackendStore.currentVertexSettings()
+            let trimmedProjectID = settings.projectID.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmedProjectID.isEmpty ? .vertexNotConfigured("missing project ID") : nil
+        }
+    }
+
+    var hasGeminiImageGenerationConfiguration: Bool {
+        geminiImageGenerationConfigurationError == nil
+    }
+
+    var geminiImageGenerationAvailabilityError: GeminiImageService.ServiceError? {
+        if !geminiMasterSwitch {
+            return .masterSwitchOff
+        }
+        return geminiImageGenerationConfigurationError
+    }
+
+    var canGenerateGeminiImagesImmediately: Bool {
+        geminiImageGenerationAvailabilityError == nil
+    }
+
+    var geminiBatchGenerationAvailabilityError: String? {
+        if !geminiMasterSwitch {
+            return GeminiImageService.ServiceError.masterSwitchOff.localizedDescription
+        }
+        if !geminiBatchJobsEnabled {
+            return "Gemini batch API jobs are disabled in Settings."
+        }
+        if ImageGenBackendStore.currentBackend() == .vertex {
+            return "Gemini batch API jobs currently require the Google AI Studio backend."
+        }
+        let trimmedKey = geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedKey.isEmpty {
+            return GeminiImageService.ServiceError.noAPIKey.localizedDescription
+        }
+        return nil
+    }
+
+    var canSubmitGeminiBatchJobs: Bool {
+        geminiBatchGenerationAvailabilityError == nil
     }
 
     func isGeminiAllowed() -> Bool {
@@ -15795,13 +16579,25 @@ extension AnimateStore {
     /// Reads `_index.json` from the canvas directory and populates `canvasGenerations`.
     /// Called during project load. Silently skips if the file does not exist yet.
     func loadCanvasGenerations() {
-        guard let indexURL = canvasIndexURL,
-              FileManager.default.fileExists(atPath: indexURL.path),
-              let data = try? Data(contentsOf: indexURL) else {
+        guard let indexURL = canvasIndexURL else {
             canvasGenerations = []
             return
         }
-        canvasGenerations = (try? JSONDecoder().decode([CanvasGeneration].self, from: data)) ?? []
+        let projectPath = fileOWPURL?.path
+        canvasGenerations = []
+        Task { [weak self, indexURL, projectPath] in
+            let generations = await Task.detached(priority: .utility) { () -> [CanvasGeneration] in
+                guard FileManager.default.fileExists(atPath: indexURL.path),
+                      let data = try? Data(contentsOf: indexURL) else {
+                    return []
+                }
+                return (try? JSONDecoder().decode([CanvasGeneration].self, from: data)) ?? []
+            }.value
+
+            guard let self else { return }
+            guard self.fileOWPURL?.path == projectPath else { return }
+            self.canvasGenerations = generations
+        }
     }
 
     /// Appends a new generation record and rewrites `_index.json`.

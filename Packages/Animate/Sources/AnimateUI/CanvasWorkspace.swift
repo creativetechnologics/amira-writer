@@ -1,5 +1,7 @@
-import SwiftUI
+import AppKit
+import Observation
 import ProjectKit
+import SwiftUI
 
 @available(macOS 26.0, *)
 public struct CanvasWorkspace: View {
@@ -11,7 +13,10 @@ public struct CanvasWorkspace: View {
 
     public var body: some View {
         ZStack {
-            CanvasWorkspaceContent(store: controller.store)
+            CanvasWorkspaceContent(
+                store: controller.store,
+                libraryState: controller.canvasLibraryState
+            )
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
             if controller.isLoadingProject || controller.isSelectionRestorePending {
@@ -27,9 +32,13 @@ public struct CanvasWorkspace: View {
 @available(macOS 26.0, *)
 private struct CanvasWorkspaceContent: View {
     @Bindable var store: AnimateStore
+    @Bindable var libraryState: AllProjectImagesState
+    @State private var selectedGenerationID: UUID? = nil
 
     @AppStorage("novotro.canvas.sidebarVisible") private var sidebarVisible = true
-    @AppStorage("novotro.canvas.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("novotro.canvas.sidebar.width") private var sidebarWidth: Double = 420
+    @AppStorage("novotro.canvas.showInspector") private var inspectorVisible = true
+    @AppStorage("novotro.canvas.inspector.width") private var inspectorWidth: Double = 340
 
     private var projectTitle: String {
         store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
@@ -45,7 +54,40 @@ private struct CanvasWorkspaceContent: View {
                 )
             } else {
                 workspaceBody
+                    .sheet(item: $libraryState.editPendingPreflight) { _ in
+                        GeminiGenerationPreflightSheet(
+                            store: store,
+                            drafts: $libraryState.editPendingDrafts,
+                            title: "Edit with Gemini",
+                            confirmTitle: "Generate",
+                            onConfirm: { finalDrafts, _ in
+                                let sourceRecord = libraryState.selectedRecord
+                                libraryState.editPendingPreflight = nil
+                                runLibraryEditGeneration(finalDrafts, sourceRecord: sourceRecord)
+                            },
+                            onCancel: {
+                                libraryState.editPendingPreflight = nil
+                                libraryState.editPendingDrafts = []
+                            }
+                        )
+                    }
+                    .alert(
+                        "Generation Error",
+                        isPresented: Binding(
+                            get: { libraryState.editErrorMessage != nil },
+                            set: { if !$0 { libraryState.editErrorMessage = nil } }
+                        ),
+                        actions: { Button("OK") { libraryState.editErrorMessage = nil } },
+                        message: { Text(libraryState.editErrorMessage ?? "") }
+                    )
             }
+        }
+        .onAppear {
+            store.refreshGeneratedBackgroundLibraryIfNeededInBackground()
+            ensureValidCanvasSelection()
+        }
+        .onChange(of: store.canvasGenerations.map(\.id)) { _, _ in
+            ensureValidCanvasSelection()
         }
     }
 
@@ -56,14 +98,26 @@ private struct CanvasWorkspaceContent: View {
                     headerPadding: OperaChromeSidebarMetrics.headerPadding
                 ) {
                     OperaChromePaneHeader(
-                        eyebrow: "CANVAS",
-                        title: "Canvas",
-                        subtitle: "\(store.canvasGenerations.count) generations"
-                    ) { EmptyView() }
+                        eyebrow: "ALL IMAGES",
+                        title: "Library",
+                        subtitle: libraryState.cachedAllRecords.isEmpty
+                            ? "No images yet"
+                            : "\(libraryState.cachedAllRecords.count) total"
+                    ) {
+                        OperaChromeActionButton(systemImage: "sidebar.left") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                sidebarVisible = false
+                            }
+                        }
+                    }
                 } content: {
-                    CanvasSidebarView(store: store)
+                    AllProjectImagesPageView(
+                        store: store,
+                        state: libraryState,
+                        layout: .canvasSidebar
+                    )
                 }
-                .frame(width: sidebarWidth)
+                .frame(width: max(sidebarWidth, 320))
 
                 OperaChromeSplitHandle(
                     onDragChanged: resizeSidebar,
@@ -73,6 +127,14 @@ private struct CanvasWorkspaceContent: View {
 
             OperaChromeFlatPane {
                 HStack(alignment: .center, spacing: 12) {
+                    if !sidebarVisible {
+                        OperaChromeActionButton(systemImage: "sidebar.left") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                sidebarVisible = true
+                            }
+                        }
+                    }
+
                     VStack(alignment: .leading, spacing: 2) {
                         Text("CANVAS")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -82,7 +144,7 @@ private struct CanvasWorkspaceContent: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(OperaChromeTheme.textPrimary)
                             .lineLimit(1)
-                        Text("Free-form image generation")
+                        Text("Free-form image generation with shared references")
                             .font(.system(size: 11))
                             .foregroundStyle(OperaChromeTheme.textSecondary)
                             .lineLimit(1)
@@ -90,27 +152,337 @@ private struct CanvasWorkspaceContent: View {
 
                     Spacer(minLength: 10)
 
-                    OperaChromeActionButton(
-                        systemImage: sidebarVisible ? "sidebar.left" : "rectangle.split.2x1",
-                        isSelected: sidebarVisible
-                    ) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            sidebarVisible.toggle()
+                    if !inspectorVisible {
+                        OperaChromeActionButton(systemImage: "sidebar.right") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                inspectorVisible = true
+                            }
                         }
                     }
                 }
             } content: {
-                ImagineCanvasPageView(store: store)
+                ImagineCanvasPageView(
+                    store: store,
+                    selectedGenerationID: $selectedGenerationID
+                )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if inspectorVisible {
+                OperaChromeSplitHandle(
+                    onDragChanged: resizeInspector,
+                    onDragEnded: { }
+                )
+                .zIndex(2)
+
+                OperaChromeFlatPane {
+                    OperaChromePaneHeader(
+                        eyebrow: "CANVAS",
+                        title: "Inspector",
+                        subtitle: "Generations"
+                    ) {
+                        OperaChromeActionButton(systemImage: "xmark") {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                inspectorVisible = false
+                            }
+                        }
+                    }
+                } content: {
+                    CanvasInspectorView(
+                        store: store,
+                        selectedGenerationID: $selectedGenerationID
+                    )
+                }
+                .frame(width: max(inspectorWidth, 280))
+            }
         }
         .background(OperaChromeTheme.workspaceBackground)
     }
 
     private func resizeSidebar(_ delta: CGFloat) {
         sidebarWidth = min(
-            max(sidebarWidth + Double(delta), OperaChromeSidebarMetrics.minWidth),
-            OperaChromeSidebarMetrics.maxWidth
+            max(sidebarWidth + Double(delta), 320),
+            760
         )
+    }
+
+    private func resizeInspector(_ delta: CGFloat) {
+        let anchor = max(inspectorWidth, 280.0)
+        inspectorWidth = min(max(anchor - Double(delta), 280.0), 600.0)
+    }
+
+    private func ensureValidCanvasSelection() {
+        let sorted = store.canvasGenerations.sorted { $0.createdAt > $1.createdAt }
+        guard !sorted.isEmpty else {
+            selectedGenerationID = nil
+            return
+        }
+        if let selectedGenerationID,
+           sorted.contains(where: { $0.id == selectedGenerationID }) {
+            return
+        }
+        self.selectedGenerationID = sorted.first?.id
+    }
+
+    private func runLibraryEditGeneration(
+        _ drafts: [GeminiGenerationDraft],
+        sourceRecord: ProjectImageRecord?
+    ) {
+        if let error = store.geminiImageGenerationAvailabilityError {
+            libraryState.editErrorMessage = error.localizedDescription
+            return
+        }
+        Task { @MainActor in
+            let service = GeminiImageService()
+            var finishedCount = 0
+            for draft in drafts {
+                let activityID = store.registerGeminiActivity(
+                    kind: .immediate,
+                    title: draft.title,
+                    source: "Canvas • All Images • Edit with Gemini"
+                )
+                let refs: [GeminiImageService.ReferenceImage] = draft.referenceItems
+                    .filter(\.isIncluded)
+                    .compactMap { ref in
+                        let url = store.resolvedCharacterAssetURL(for: ref.path)
+                            ?? (ref.path.hasPrefix("/") ? URL(fileURLWithPath: ref.path) : nil)
+                        guard let url else { return nil }
+                        return GeminiImageService.referenceImage(from: url)
+                    }
+                let request = GeminiImageService.GenerationRequest(
+                    prompt: draft.effectivePrompt,
+                    referenceImages: refs,
+                    model: draft.model,
+                    aspectRatio: draft.aspectRatio,
+                    imageSize: draft.imageSize
+                )
+                store.logGeminiAPICall(
+                    endpoint: "image-generation",
+                    source: "CanvasWorkspace.runLibraryEditGeneration()"
+                )
+                do {
+                    let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
+                    let storedPath = try store.storeUnattachedGeneratedImage(
+                        imageData: result.imageData,
+                        prompt: draft.effectivePrompt,
+                        model: draft.model,
+                        aspectRatio: draft.aspectRatio,
+                        imageSize: draft.imageSize
+                    )
+                    store.updateGeminiActivity(
+                        activityID,
+                        status: .completed,
+                        outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent
+                    )
+                    finishedCount += 1
+                } catch {
+                    store.updateGeminiActivity(
+                        activityID,
+                        status: .failed,
+                        errorMessage: error.localizedDescription
+                    )
+                    libraryState.editErrorMessage = error.localizedDescription
+                    break
+                }
+            }
+            if finishedCount > 0 {
+                store.statusMessage = "Generated \(finishedCount) edited image\(finishedCount == 1 ? "" : "s")"
+                libraryState.editAdjustments = ""
+            }
+            _ = sourceRecord
+            libraryState.editPendingDrafts = []
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct CanvasInspectorView: View {
+    @Bindable var store: AnimateStore
+    @Binding var selectedGenerationID: UUID?
+    @FocusState private var recentGenerationsKeyboardFocused: Bool
+
+    private func sortedGenerations() -> [AnimateStore.CanvasGeneration] {
+        store.canvasGenerations.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func selectedGeneration(
+        from generations: [AnimateStore.CanvasGeneration]
+    ) -> AnimateStore.CanvasGeneration? {
+        guard let selectedGenerationID else { return generations.first }
+        return generations.first(where: { $0.id == selectedGenerationID }) ?? generations.first
+    }
+
+    var body: some View {
+        let generations = sortedGenerations()
+        let selectedGeneration = selectedGeneration(from: generations)
+
+        VStack(spacing: 0) {
+            if generations.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "paintpalette")
+                        .font(.system(size: 28))
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                    Text("No generations yet")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                    Text("Generate on the canvas and the history will appear here.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Recent Generations")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(OperaChromeTheme.textSecondary)
+
+                            ForEach(generations) { generation in
+                                CanvasInspectorRow(
+                                    generation: generation,
+                                    isSelected: selectedGeneration?.id == generation.id
+                                ) {
+                                    selectedGenerationID = generation.id
+                                    recentGenerationsKeyboardFocused = true
+                                }
+                            }
+                        }
+
+                        if let generation = selectedGeneration {
+                            Divider()
+
+                            VStack(alignment: .leading, spacing: 10) {
+                                AsyncResolvedImageView(
+                                    path: generation.imagePath,
+                                    maxPixelSize: 1200,
+                                    contentMode: .fit
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 220)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(.black.opacity(0.12))
+                                )
+
+                                detailRow("Prompt", generation.prompt)
+                                detailRow("Model", generation.model.displayName)
+                                detailRow("Aspect", generation.aspectRatio)
+                                detailRow("Size", generation.imageSize)
+                                detailRow("References", "\(generation.referenceCount)")
+                                detailRow("Created", generation.createdAt.formatted(date: .abbreviated, time: .shortened))
+
+                                HStack(spacing: 8) {
+                                    Button("Reveal in Finder") {
+                                        NSWorkspace.shared.activateFileViewerSelecting([
+                                            URL(fileURLWithPath: generation.imagePath)
+                                        ])
+                                    }
+                                    .buttonStyle(.bordered)
+
+                                    Button("Copy Prompt") {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(generation.prompt, forType: .string)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                        }
+                    }
+                    .padding(14)
+                }
+                .focusable()
+                .focused($recentGenerationsKeyboardFocused)
+                .focusEffectDisabled()
+                .onTapGesture {
+                    recentGenerationsKeyboardFocused = true
+                }
+                .onKeyPress(.space) {
+                    guard let generation = selectedGeneration else {
+                        return .ignored
+                    }
+                    ImagineQuickLook.preview(url: URL(fileURLWithPath: generation.imagePath))
+                    return .handled
+                }
+            }
+        }
+        .onAppear {
+            ensureSelection(in: generations)
+            recentGenerationsKeyboardFocused = true
+        }
+        .onChange(of: generations.map(\.id)) { _, _ in
+            ensureSelection(in: generations)
+        }
+    }
+
+    @ViewBuilder
+    private func detailRow(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(OperaChromeTheme.textTertiary)
+            Text(value)
+                .font(.system(size: 11))
+                .foregroundStyle(OperaChromeTheme.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func ensureSelection(in generations: [AnimateStore.CanvasGeneration]) {
+        guard !generations.isEmpty else {
+            selectedGenerationID = nil
+            return
+        }
+        if let selectedGenerationID,
+           generations.contains(where: { $0.id == selectedGenerationID }) {
+            return
+        }
+        self.selectedGenerationID = generations.first?.id
+    }
+}
+
+@available(macOS 26.0, *)
+private struct CanvasInspectorRow: View {
+    let generation: AnimateStore.CanvasGeneration
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(alignment: .top, spacing: 8) {
+                CachedThumbnailView(path: generation.imagePath, size: 72)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .frame(width: 72, height: 72)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(generation.prompt)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(OperaChromeTheme.textPrimary)
+                        .lineLimit(3)
+                    Text("\(generation.model.displayName) · \(generation.aspectRatio) · \(generation.imageSize)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                    Text(generation.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.system(size: 10))
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isSelected ? Color.accentColor.opacity(0.14) : Color.white.opacity(0.02))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isSelected ? Color.accentColor : Color.white.opacity(0.06), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .draggable(URL(fileURLWithPath: generation.imagePath))
     }
 }

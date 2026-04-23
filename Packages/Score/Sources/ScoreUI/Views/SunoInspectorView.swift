@@ -550,7 +550,7 @@ struct SunoInspectorView: View {
                 Text("Negative Prompt")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
-                TextField("-drums, -percussion, -cymbals, -snare, -kick", text: Binding(
+                TextField("drums, percussion, cymbals, snare, kick", text: Binding(
                     get: { store.sunoExcludeStyles },
                     set: { store.sunoExcludeStyles = $0 }
                 ))
@@ -609,11 +609,41 @@ struct SunoInspectorView: View {
                 }
             }
 
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Cover Queue")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Text("Iterations")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                    Stepper(value: Binding(
+                        get: { store.sunoCoverIterations },
+                        set: { store.sunoCoverIterations = min(12, max(1, $0)) }
+                    ), in: 1...12, step: 1) {
+                        Text("\(max(1, store.sunoCoverIterations))×")
+                            .font(.caption2.monospacedDigit())
+                    }
+                    .controlSize(.mini)
+                }
+
+                Text(store.sunoCoverQueueSummary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Text(store.sunoCoverQueueDelaySummary)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(spacing: 8) {
                 Button {
                     Task { await store.sunoRunCanonicalCover() }
                 } label: {
-                    Label("Run Canonical Cover", systemImage: "sparkles")
+                    Label(store.sunoRunCanonicalCoverButtonTitle, systemImage: "sparkles")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -703,6 +733,11 @@ struct SunoInspectorView: View {
                             .font(.system(size: 9, design: .monospaced))
                             .foregroundStyle(.tertiary)
                     }
+                    if let submissionIndex = generation.submissionIndex, let submissionCount = generation.submissionCount {
+                        Text("Submission \(submissionIndex)/\(submissionCount)")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                     Text(generation.createdAt, style: .time)
                         .font(.system(size: 9))
                         .foregroundStyle(.tertiary)
@@ -714,7 +749,7 @@ struct SunoInspectorView: View {
             }
 
             if !generation.resolvedSongIDs.isEmpty {
-                Text("Song IDs: \(generation.resolvedSongIDs.joined(separator: ", "))")
+                Text("Captured IDs: \(generation.resolvedSongIDs.joined(separator: ", "))")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)
@@ -723,16 +758,17 @@ struct SunoInspectorView: View {
             HStack(spacing: 8) {
                 if generation.resolvedDownloadedFilePaths.isEmpty {
                     if generation.status == .polling || generation.status == .downloading {
-                        Label("Waiting for both A/B WAVs", systemImage: "hourglass")
+                        Label("Waiting for generated WAVs", systemImage: "hourglass")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                 } else {
                     ForEach(Array(generation.resolvedDownloadedFilePaths.enumerated()), id: \.offset) { index, path in
+                        let previewLabel = index == 0 ? "Preview A" : index == 1 ? "Preview B" : "Preview \(index + 1)"
                         Button {
                             store.sunoPreviewDownloadedFile(path, generationID: generation.id)
                         } label: {
-                            Label(index == 0 ? "Preview A" : "Preview B", systemImage: "play.circle")
+                            Label(previewLabel, systemImage: "play.circle")
                         }
                         .controlSize(.mini)
                     }
@@ -1048,13 +1084,34 @@ struct SunoInspectorView: View {
                     Text("Run a selftest to verify the CLI can log in.")
                         .font(.caption2).foregroundStyle(.tertiary)
                 }
-                Button {
-                    Task { await store.runSunoSelftest() }
-                } label: {
-                    Label("Run Selftest", systemImage: "stethoscope")
+                HStack(spacing: 6) {
+                    Button {
+                        Task { await store.openSunoLoginBrowser() }
+                    } label: {
+                        Label("Open Suno Login", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    .font(.caption2)
+                    .controlSize(.mini)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!store.sunoCLIIsInstalled)
+
+                    Button {
+                        Task { await store.runSunoSelftest() }
+                    } label: {
+                        Label("Run Selftest", systemImage: "stethoscope")
+                    }
+                    .font(.caption2)
+                    .controlSize(.mini)
+                    .buttonStyle(.bordered)
+                    .disabled(!store.sunoCLIIsInstalled)
                 }
-                .font(.caption2).controlSize(.mini).buttonStyle(.bordered)
-                .disabled(!store.sunoCLIIsInstalled)
+
+                if let message = store.sunoCLIStatusMessage, !message.isEmpty {
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 if let err = store.sunoCLIErrorMessage, !err.isEmpty {
                     Text(err).font(.caption2).foregroundStyle(.red)
@@ -1070,7 +1127,15 @@ struct SunoInspectorView: View {
                     .font(.caption2.monospaced()).lineLimit(2).truncationMode(.middle)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("If you're not logged in, open Suno in Chrome using this profile dir and log in, then re-run selftest.")
+                Button {
+                    store.revealSunoProfileDirectory()
+                } label: {
+                    Label("Reveal Profile Folder", systemImage: "folder")
+                }
+                .font(.caption2)
+                .controlSize(.mini)
+                .buttonStyle(.bordered)
+                Text("This folder stores the persistent cookies/session that the Suno CLI reuses. You should only need to sign in once unless Suno expires the session.")
                     .font(.caption2).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }

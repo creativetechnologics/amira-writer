@@ -55,7 +55,7 @@ struct ProjectDatabaseBridgeTests {
         #expect(loaded.projectInstrumentMappings["disk-track"] == nil)
     }
 
-    @Test func upsertProjectStateSynchronizesProjectFilesInDatabase() async throws {
+    @Test func projectFileUpsertsSynchronizeCanonicalMetadataAndInstrumentPaths() async throws {
         let projectURL = try makeProjectPackage()
         defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
 
@@ -78,20 +78,29 @@ struct ProjectDatabaseBridgeTests {
             )
         ]
 
-        try await ProjectDatabaseBridge.upsertProjectState(
-            database: connection,
-            metadata: metadata,
-            instrumentMappings: mappings,
+        try await connection.upsertProjectFile(
+            path: ProjectDatabaseBridge.metadataPath,
+            jsonData: try metadataData(metadata),
+            actorID: "test"
+        )
+        try await connection.upsertProjectFile(
+            path: ProjectDatabaseBridge.projectInstrumentsPath,
+            jsonData: try metadataEncoder().encode(mappings),
             actorID: "test"
         )
 
-        let loadedMetadata = try await ProjectDatabaseBridge.loadProjectMetadata(database: connection)
-        let loadedMappings = try await ProjectDatabaseBridge.loadProjectInstrumentMappings(database: connection)
+        let loadedMetadataFile = try await connection.loadProjectFile(path: ProjectDatabaseBridge.metadataPath)
+        let loadedMappingsFile = try await connection.loadProjectFile(path: ProjectDatabaseBridge.projectInstrumentsPath)
         let changes = try await database.listChanges(since: 0)
 
-        #expect(loadedMetadata?.name == "Synced Name")
-        #expect(loadedMetadata?.notes == "Synced Notes")
-        #expect(loadedMappings?["strings"]?.displayName == "Strings")
+        let loadedMetadata = try #require(loadedMetadataFile).jsonData
+        let loadedMappings = try #require(loadedMappingsFile).jsonData
+        let decodedMetadata = try ProjectDatabaseBridge.configuredDecoder().decode(ProjectMetadata.self, from: loadedMetadata)
+        let decodedMappings = try ProjectDatabaseBridge.configuredDecoder().decode([String: InstrumentMapping].self, from: loadedMappings)
+
+        #expect(decodedMetadata.name == "Synced Name")
+        #expect(decodedMetadata.notes == "Synced Notes")
+        #expect(decodedMappings["strings"]?.displayName == "Strings")
         #expect(changes.contains(where: { $0.entityType == "project_file" && $0.entityKey == ProjectDatabaseBridge.metadataPath }))
         #expect(changes.contains(where: { $0.entityType == "project_file" && $0.entityKey == ProjectDatabaseBridge.projectInstrumentsPath }))
     }
@@ -159,8 +168,10 @@ private func makeProjectPackage() throws -> URL {
     let projectURL = root.appendingPathComponent("BridgeTest.owp", isDirectory: true)
     let songsURL = projectURL.appendingPathComponent("Songs", isDirectory: true)
     let metadataURL = projectURL.appendingPathComponent("Metadata", isDirectory: true)
+    let settingsURL = projectURL.appendingPathComponent("Settings", isDirectory: true)
     try fm.createDirectory(at: songsURL, withIntermediateDirectories: true)
     try fm.createDirectory(at: metadataURL, withIntermediateDirectories: true)
+    try fm.createDirectory(at: settingsURL, withIntermediateDirectories: true)
 
     let diskMetadata = ProjectMetadata(
         name: "Disk Metadata",

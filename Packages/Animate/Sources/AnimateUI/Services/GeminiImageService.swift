@@ -66,9 +66,14 @@ final class GeminiImageService {
     }
 
     struct GenerationResult {
-        var image: NSImage
+        var image: NSImage?
         var imageData: Data
         var textResponse: String?
+    }
+
+    private struct DecodedResponsePayload: Sendable {
+        let imageData: Data
+        let textResponse: String?
     }
 
     /// Summary of what a generation batch will cost.
@@ -129,7 +134,11 @@ final class GeminiImageService {
     /// - `.aiStudio` (default) — uses the provided `apiKey` as `x-goog-api-key`
     /// - `.vertex` — shells out to gcloud for an OAuth token and hits Vertex AI;
     ///   the `apiKey` argument is ignored in this mode.
-    func generate(request: GenerationRequest, apiKey: String) async throws -> GenerationResult {
+    func generate(
+        request: GenerationRequest,
+        apiKey: String,
+        includePreviewImage: Bool = false
+    ) async throws -> GenerationResult {
         let backend = ImageGenBackendStore.currentBackend()
         if backend == .aiStudio {
             guard !apiKey.isEmpty else { throw ServiceError.noAPIKey }
@@ -185,42 +194,11 @@ final class GeminiImageService {
             }
         }
 
-        var parts: [[String: Any]] = []
-
-        // Add text prompt
-        parts.append(["text": request.prompt])
-
-        // Add reference images
-        for ref in request.referenceImages {
-            parts.append([
-                "inlineData": [
-                    "mimeType": ref.mimeType,
-                    "data": ref.data,
-                ]
-            ])
-        }
-
-        let requestBody: [String: Any] = [
-            "contents": [
-                // Vertex AI requires an explicit role on each content item;
-                // AI Studio accepts it as optional. Always set it so the same
-                // request body works on both backends.
-                ["role": "user", "parts": parts]
-            ],
-            "generationConfig": [
-                "responseModalities": ["TEXT", "IMAGE"],
-                "imageConfig": [
-                    "aspectRatio": request.aspectRatio,
-                    "imageSize": request.imageSize,
-                ],
-            ],
-        ]
-
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue(authHeaderValue, forHTTPHeaderField: authHeaderName)
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        urlRequest.httpBody = try await Self.serializedRequestBody(for: request)
 
         do {
             let (data, httpResponse) = try await performRequestWithRetry(urlRequest, backend: backend)
@@ -228,41 +206,30 @@ final class GeminiImageService {
             // Success — reset the failure counter
             Self.consecutiveFailures = 0
 
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let candidates = json["candidates"] as? [[String: Any]],
-                  let firstCandidate = candidates.first,
-                  let content = firstCandidate["content"] as? [String: Any],
-                  let responseParts = content["parts"] as? [[String: Any]]
-            else {
-                throw ServiceError.invalidResponse
-            }
-
-            var resultImage: NSImage?
-            var resultData: Data?
-            var textResponse: String?
-
-            for part in responseParts {
-                if let text = part["text"] as? String {
-                    textResponse = text
-                } else if let inlineData = part["inlineData"] as? [String: Any],
-                          let base64String = inlineData["data"] as? String {
-                    guard let imageData = Data(base64Encoded: base64String) else {
-                        throw ServiceError.imageDecodingFailed
-                    }
-                    guard let image = NSImage(data: imageData) else {
-                        throw ServiceError.imageDecodingFailed
-                    }
-                    resultImage = image
-                    resultData = imageData
+            let payload = try await Self.decodeResponsePayload(from: data)
+            let previewImage: NSImage?
+            if includePreviewImage {
+                guard let image = NSImage(data: payload.imageData) else {
+                    throw ServiceError.imageDecodingFailed
                 }
+                previewImage = image
+            } else {
+                previewImage = nil
             }
 
-            guard let image = resultImage, let imageData = resultData else {
-                throw ServiceError.noImageInResponse
+            if backend == .vertex {
+                AnimateStore.recordVertexCreditUsageForSuccessfulImageGeneration(
+                    model: request.model,
+                    imageSize: request.imageSize
+                )
             }
 
             _ = httpResponse
-            return GenerationResult(image: image, imageData: imageData, textResponse: textResponse)
+            return GenerationResult(
+                image: previewImage,
+                imageData: payload.imageData,
+                textResponse: payload.textResponse
+            )
         } catch {
             if case ServiceError.cancelled = error {
                 throw error
@@ -312,6 +279,70 @@ final class GeminiImageService {
         let fileURL = directory.appendingPathComponent(filename)
         try data.write(to: fileURL)
         return fileURL
+    }
+
+    private static func serializedRequestBody(for request: GenerationRequest) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) {
+            var parts: [[String: Any]] = []
+            parts.append(["text": request.prompt])
+            for ref in request.referenceImages {
+                parts.append([
+                    "inlineData": [
+                        "mimeType": ref.mimeType,
+                        "data": ref.data,
+                    ]
+                ])
+            }
+
+            let requestBody: [String: Any] = [
+                "contents": [
+                    ["role": "user", "parts": parts]
+                ],
+                "generationConfig": [
+                    "responseModalities": ["TEXT", "IMAGE"],
+                    "imageConfig": [
+                        "aspectRatio": request.aspectRatio,
+                        "imageSize": request.imageSize,
+                    ],
+                ],
+            ]
+
+            return try JSONSerialization.data(withJSONObject: requestBody)
+        }.value
+    }
+
+    private static func decodeResponsePayload(from data: Data) async throws -> DecodedResponsePayload {
+        try await Task.detached(priority: .userInitiated) {
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let candidates = json["candidates"] as? [[String: Any]],
+                  let firstCandidate = candidates.first,
+                  let content = firstCandidate["content"] as? [String: Any],
+                  let responseParts = content["parts"] as? [[String: Any]]
+            else {
+                throw ServiceError.invalidResponse
+            }
+
+            var imageData: Data?
+            var textResponse: String?
+
+            for part in responseParts {
+                if let text = part["text"] as? String {
+                    textResponse = text
+                } else if let inlineData = part["inlineData"] as? [String: Any],
+                          let base64String = inlineData["data"] as? String {
+                    guard let decoded = Data(base64Encoded: base64String) else {
+                        throw ServiceError.imageDecodingFailed
+                    }
+                    imageData = decoded
+                }
+            }
+
+            guard let imageData else {
+                throw ServiceError.noImageInResponse
+            }
+
+            return DecodedResponsePayload(imageData: imageData, textResponse: textResponse)
+        }.value
     }
 
     // MARK: - Retry helpers

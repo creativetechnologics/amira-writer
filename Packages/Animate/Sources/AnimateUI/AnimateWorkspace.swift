@@ -6,6 +6,12 @@ import ProjectKit
 @MainActor
 public final class AnimateWorkspaceController: ObservableObject {
     let store = AnimateStore()
+    let allProjectImagesState = AllProjectImagesState()
+    let canvasLibraryState: AllProjectImagesState = {
+        let state = AllProjectImagesState()
+        state.thumbnailSize = 84
+        return state
+    }()
     private var loadedProjectPath: String?
     private var loadRequestID: UInt64 = 0
     /// Most recent project URL the host has selected. Written from Opera's
@@ -82,6 +88,11 @@ public final class AnimateWorkspaceController: ObservableObject {
     /// direct access to the internal AnimateStore type.
     public func geminiStatusBadgeView() -> some View {
         GeminiStatusBadge(store: store)
+    }
+
+    /// Returns the faint Vertex remaining-credit text for the title bar.
+    public func vertexCreditTitleBarView() -> some View {
+        VertexCreditTitleBarLabel(store: store)
     }
 
     /// Returns the global-settings gear button bound to this workspace's store.
@@ -178,6 +189,19 @@ public final class AnimateWorkspaceController: ObservableObject {
 
     public func songPath(for sceneID: UUID) -> String? {
         store.scenes.first(where: { $0.id == sceneID })?.owpSongPath
+    }
+
+    /// Lightweight CLI/debug snapshot of the currently loaded characters.
+    /// Kept intentionally string-based so diagnostics can use it without
+    /// exposing internal AnimateUI model types across module boundaries.
+    public func debugCharacterRows() -> [(name: String, owpSlug: String, storageSlug: String)] {
+        store.characters.map { character in
+            (
+                name: character.name,
+                owpSlug: character.owpSlug,
+                storageSlug: character.assetFolderSlug
+            )
+        }
     }
 
     /// Explicitly reload Animate/scenes.json from disk, refreshing authored shot data.

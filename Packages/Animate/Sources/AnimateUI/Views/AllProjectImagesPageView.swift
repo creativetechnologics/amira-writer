@@ -36,12 +36,25 @@ enum AllProjectImagesSource: String, CaseIterable, Identifiable, Hashable, Senda
 }
 
 @available(macOS 26.0, *)
+private extension View {
+    @ViewBuilder
+    func applyOptionalFrame(width: CGFloat?) -> some View {
+        if let width {
+            frame(width: width)
+        } else {
+            frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+@available(macOS 26.0, *)
 struct ProjectImageRecord: Identifiable, Hashable, Sendable {
     let id: String
     let path: String
     let resolvedPath: String
     let source: AllProjectImagesSource
     let originLabel: String
+    let groupLabel: String
     let createdAt: Date?
     let sizeBytes: Int64?
     let rating: Int?
@@ -101,6 +114,29 @@ enum AllProjectImagesDisplayMode: String, CaseIterable, Identifiable, Hashable {
     var id: String { rawValue }
 }
 
+@available(macOS 26.0, *)
+struct AllProjectImagesPageLayout: Sendable {
+    var forcedDisplayMode: AllProjectImagesDisplayMode? = nil
+    var showsDisplayModeControl: Bool = true
+    var compactControls: Bool = false
+    var thumbnailMin: CGFloat = 80
+    var thumbnailMax: CGFloat = 260
+    var gridSpacing: CGFloat = 10
+    var gridPadding: CGFloat = 12
+
+    static let standard = AllProjectImagesPageLayout()
+
+    static let canvasSidebar = AllProjectImagesPageLayout(
+        forcedDisplayMode: .grid,
+        showsDisplayModeControl: false,
+        compactControls: true,
+        thumbnailMin: 68,
+        thumbnailMax: 150,
+        gridSpacing: 10,
+        gridPadding: 14
+    )
+}
+
 // MARK: - Center Pane (search / sort / size slider + grid)
 
 /// Renders the center content of the All Images workspace — the filter bar
@@ -111,14 +147,45 @@ enum AllProjectImagesDisplayMode: String, CaseIterable, Identifiable, Hashable {
 struct AllProjectImagesPageView: View {
     @Bindable var store: AnimateStore
     @Bindable var state: AllProjectImagesState
+    let layout: AllProjectImagesPageLayout
     @AppStorage("novotro.allImages.displayMode") private var displayModeRaw = AllProjectImagesDisplayMode.grid.rawValue
     @FocusState private var filmstripKeyboardFocused: Bool
+    @State private var isImportDropTarget = false
+    @State private var gridColumnCount: Int = 1
+
+    init(
+        store: AnimateStore,
+        state: AllProjectImagesState,
+        layout: AllProjectImagesPageLayout = .standard
+    ) {
+        _store = Bindable(store)
+        _state = Bindable(state)
+        self.layout = layout
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             filterBar
             Divider()
             contentSection
+        }
+        .task(id: layoutSignature) {
+            state.thumbnailSize = min(max(state.thumbnailSize, layout.thumbnailMin), layout.thumbnailMax)
+        }
+        .task(id: store.owpURL?.path) {
+            store.recoverMissingPersistedCharactersIfNeeded()
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            store.importDroppedImagesToUnattachedLibrary(urls: urls)
+        } isTargeted: { isTargeted in
+            isImportDropTarget = isTargeted
+        }
+        .overlay {
+            if isImportDropTarget {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [7, 4]))
+                    .padding(8)
+            }
         }
         .task(id: state.recordsSignature(store: store)) {
             state.requestRebuildIfNeeded(store: store)
@@ -144,33 +211,51 @@ struct AllProjectImagesPageView: View {
                 maxPixelSize: 2200
             )
         }
+        .onChange(of: state.selectedSource) { _, _ in
+            if let selectedGroupLabel = state.selectedGroupLabel,
+               !state.availableGroupLabels.contains(selectedGroupLabel) {
+                state.selectedGroupLabel = nil
+            }
+        }
     }
 
     // MARK: - Filter Bar
 
     private var filterBar: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 6) {
-                libraryFilterButton(
-                    systemImage: "square.grid.2x2",
-                    isSelected: displayMode == .grid
-                ) {
-                    displayMode = .grid
-                }
-                .help("Grid view")
-
-                libraryFilterButton(
-                    systemImage: "rectangle.bottomthird.inset.filled",
-                    isSelected: displayMode == .filmstrip
-                ) {
-                    displayMode = .filmstrip
-                }
-                .help("Filmstrip view")
+        Group {
+            if layout.compactControls {
+                compactFilterBar
+            } else {
+                standardFilterBar
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.quaternary.opacity(0.12), in: Capsule())
-            .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private var standardFilterBar: some View {
+        HStack(spacing: 12) {
+            if layout.showsDisplayModeControl {
+                HStack(spacing: 6) {
+                    libraryFilterButton(
+                        systemImage: "square.grid.2x2",
+                        isSelected: displayMode == .grid
+                    ) {
+                        displayMode = .grid
+                    }
+                    .help("Grid view")
+
+                    libraryFilterButton(
+                        systemImage: "rectangle.bottomthird.inset.filled",
+                        isSelected: displayMode == .filmstrip
+                    ) {
+                        displayMode = .filmstrip
+                    }
+                    .help("Filmstrip view")
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(.quaternary.opacity(0.12), in: Capsule())
+                .fixedSize(horizontal: true, vertical: false)
+            }
 
             Picker("Sort", selection: $state.sortMode) {
                 ForEach(AllProjectImagesSortMode.allCases) { mode in
@@ -181,71 +266,24 @@ struct AllProjectImagesPageView: View {
             .frame(width: 140)
             .fixedSize(horizontal: true, vertical: false)
 
-            HStack(spacing: 8) {
-                libraryFilterButton(
-                    systemImage: "square.grid.2x2",
-                    isSelected: state.flagFilter == .all
-                ) {
-                    state.flagFilter = .all
-                }
-                .help("Show all images")
+            sourceFilterPicker(width: 132)
 
-                libraryFilterButton(
-                    systemImage: "flag.slash",
-                    isSelected: state.flagFilter == .unflagged
-                ) {
-                    state.flagFilter = .unflagged
-                }
-                .help("Show only unflagged images")
+            groupFilterPicker(width: 156)
 
-                libraryFilterButton(
-                    systemImage: "xmark.circle.fill",
-                    isSelected: state.flagFilter == .rejected
-                ) {
-                    state.flagFilter = .rejected
-                }
-                .help("Show only rejected images")
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.quaternary.opacity(0.12), in: Capsule())
-            .fixedSize(horizontal: true, vertical: false)
+            flagFilterCapsule()
 
-            HStack(spacing: 4) {
-                ForEach(1...5, id: \.self) { rating in
-                    libraryFilterButton(
-                        systemImage: state.minimumRating != nil && rating <= (state.minimumRating ?? 0) ? "star.fill" : "star",
-                        tint: .yellow,
-                        isSelected: state.minimumRating == rating
-                    ) {
-                        state.minimumRating = state.minimumRating == rating ? nil : rating
-                    }
-                    .help("Show \(rating)-star and higher images")
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.quaternary.opacity(0.12), in: Capsule())
-            .fixedSize(horizontal: true, vertical: false)
+            ratingFilterCapsule()
 
             TextField("Filter by filename, source, path, or note", text: $state.searchText)
                 .textFieldStyle(.roundedBorder)
 
             Spacer()
 
-            HStack(spacing: 4) {
-                Image(systemName: "photo")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-                Slider(value: $state.thumbnailSize, in: 80...260)
-                    .frame(width: 110)
-            }
+            thumbnailSizeControl
 
-            if !state.searchText.isEmpty || state.flagFilter != .all || state.minimumRating != nil {
+            if hasActiveFilters {
                 Button("Clear") {
-                    state.searchText = ""
-                    state.flagFilter = .all
-                    state.minimumRating = nil
+                    clearFilters()
                 }
                 .buttonStyle(.bordered)
             }
@@ -254,23 +292,230 @@ struct AllProjectImagesPageView: View {
         .padding(.vertical, 10)
     }
 
+    private var compactFilterBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                TextField("Filter images", text: $state.searchText)
+                    .textFieldStyle(.roundedBorder)
+
+                if hasActiveFilters {
+                    Button("Clear") {
+                        clearFilters()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(alignment: .top, spacing: 8) {
+                compactControlBlock(title: "Sort") {
+                    Picker("Sort", selection: $state.sortMode) {
+                        ForEach(AllProjectImagesSortMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(width: 74)
+                }
+
+                compactControlBlock(title: "Page") {
+                    sourceFilterPicker(width: 82)
+                        .labelsHidden()
+                }
+
+                Spacer(minLength: 0)
+
+                compactControlBlock(title: "Rating") {
+                    ratingFilterCapsule(compact: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(alignment: .top, spacing: 8) {
+                compactControlBlock(title: groupPickerTitle) {
+                    groupFilterPicker(width: 118)
+                        .labelsHidden()
+                }
+
+                compactControlBlock(title: "Flags") {
+                    flagFilterCapsule(compact: true)
+                }
+
+                Spacer(minLength: 0)
+
+                compactControlBlock(title: "Thumbs") {
+                    thumbnailSizeControl
+                        .controlSize(.small)
+                        .frame(width: 68, alignment: .leading)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func flagFilterCapsule(compact: Bool = false) -> some View {
+        HStack(spacing: compact ? 4 : 8) {
+            libraryFilterButton(
+                systemImage: "square.grid.2x2",
+                isSelected: state.flagFilter == .all
+                ,
+                size: compact ? 18 : 24
+            ) {
+                state.flagFilter = .all
+            }
+            .help("Show all images")
+
+            libraryFilterButton(
+                systemImage: "flag.slash",
+                isSelected: state.flagFilter == .unflagged
+                ,
+                size: compact ? 18 : 24
+            ) {
+                state.flagFilter = .unflagged
+            }
+            .help("Show only unflagged images")
+
+            libraryFilterButton(
+                systemImage: "xmark.circle.fill",
+                isSelected: state.flagFilter == .rejected
+                ,
+                size: compact ? 18 : 24
+            ) {
+                state.flagFilter = .rejected
+            }
+            .help("Show only rejected images")
+        }
+        .padding(.horizontal, compact ? 6 : 10)
+        .padding(.vertical, compact ? 5 : 6)
+        .background(.quaternary.opacity(0.12), in: Capsule())
+    }
+
+    private func ratingFilterCapsule(compact: Bool = false) -> some View {
+        HStack(spacing: compact ? 2 : 4) {
+            ForEach(1...5, id: \.self) { rating in
+                libraryFilterButton(
+                    systemImage: state.minimumRating != nil && rating <= (state.minimumRating ?? 0) ? "star.fill" : "star",
+                    tint: .yellow,
+                    isSelected: state.minimumRating == rating,
+                    size: compact ? 18 : 24
+                ) {
+                    state.minimumRating = state.minimumRating == rating ? nil : rating
+                }
+                .help("Show \(rating)-star and higher images")
+            }
+        }
+        .padding(.horizontal, compact ? 6 : 10)
+        .padding(.vertical, compact ? 5 : 6)
+        .background(.quaternary.opacity(0.12), in: Capsule())
+    }
+
+    private var thumbnailSizeControl: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "photo")
+                .font(.system(size: layout.compactControls ? 8 : 9))
+                .foregroundStyle(.secondary)
+            Slider(value: $state.thumbnailSize, in: layout.thumbnailMin...layout.thumbnailMax)
+                .frame(width: layout.compactControls ? 70 : 110)
+        }
+    }
+
+    private var hasActiveFilters: Bool {
+        !state.searchText.isEmpty
+            || state.flagFilter != .all
+            || state.minimumRating != nil
+            || state.selectedSource != nil
+            || state.selectedGroupLabel != nil
+    }
+
+    private func clearFilters() {
+        state.searchText = ""
+        state.flagFilter = .all
+        state.minimumRating = nil
+        state.selectedSource = nil
+        state.selectedGroupLabel = nil
+    }
+
+    @ViewBuilder
+    private func sourceFilterPicker(width: CGFloat?) -> some View {
+        Picker("Page", selection: $state.selectedSource) {
+            Text("All Pages").tag(nil as AllProjectImagesSource?)
+            ForEach(AllProjectImagesSource.allCases) { source in
+                Text(source.displayName).tag(Optional(source))
+            }
+        }
+        .pickerStyle(.menu)
+        .applyOptionalFrame(width: width)
+    }
+
+    @ViewBuilder
+    private func groupFilterPicker(width: CGFloat?) -> some View {
+        Picker(groupPickerTitle, selection: $state.selectedGroupLabel) {
+            Text("All \(groupPickerTitlePlural)").tag(nil as String?)
+            ForEach(state.availableGroupLabels, id: \.self) { label in
+                Text(label).tag(Optional(label))
+            }
+        }
+        .pickerStyle(.menu)
+        .disabled(state.availableGroupLabels.isEmpty)
+        .applyOptionalFrame(width: width)
+    }
+
+    private var groupPickerTitle: String {
+        switch state.selectedSource {
+        case .places: return "Place"
+        case .characters: return "Character"
+        case .canvas: return "Canvas"
+        case .sceneShots: return "Shot"
+        case .map3dCaptures: return "Capture"
+        case nil: return "Group"
+        }
+    }
+
+    private var groupPickerTitlePlural: String {
+        switch state.selectedSource {
+        case .places: return "Places"
+        case .characters: return "Characters"
+        case .canvas: return "Canvas Items"
+        case .sceneShots: return "Shots"
+        case .map3dCaptures: return "Captures"
+        case nil: return "Groups"
+        }
+    }
+
     private func libraryFilterButton(
         systemImage: String,
         tint: Color = .secondary,
         isSelected: Bool,
+        size: CGFloat = 24,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: size <= 18 ? 10 : 12, weight: .semibold))
                 .foregroundStyle(isSelected ? .primary : tint)
-                .frame(width: 24, height: 24)
+                .frame(width: size, height: size)
                 .background(
                     Circle()
                         .fill(isSelected ? Color.secondary.opacity(0.18) : Color.clear)
                 )
         }
         .buttonStyle(.plain)
+    }
+
+    private func compactControlBlock<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            content()
+        }
     }
 
     // MARK: - Content
@@ -293,14 +538,51 @@ struct AllProjectImagesPageView: View {
         } else {
             ScrollView {
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: state.thumbnailSize), spacing: 10)],
-                    spacing: 10
+                    columns: [GridItem(.adaptive(minimum: state.thumbnailSize), spacing: layout.gridSpacing)],
+                    spacing: layout.gridSpacing
                 ) {
                     ForEach(records) { record in
                         thumbnailCell(for: record)
                     }
                 }
-                .padding(12)
+                .trackGridColumnCount($gridColumnCount, tileMinWidth: state.thumbnailSize, spacing: layout.gridSpacing)
+                .padding(layout.gridPadding)
+            }
+            .focusable()
+            .focused($filmstripKeyboardFocused)
+            .focusEffectDisabled()
+            .onTapGesture {
+                filmstripKeyboardFocused = true
+            }
+            .onKeyPress(.space) {
+                toggleGridQuickLook()
+            }
+            .onKeyPress(.leftArrow) { navigateGrid(.left) }
+            .onKeyPress(.rightArrow) { navigateGrid(.right) }
+            .onKeyPress(.upArrow) { navigateGrid(.up) }
+            .onKeyPress(.downArrow) { navigateGrid(.down) }
+            .onKeyPress(.init("1")) { applyGridRating(1) }
+            .onKeyPress(.init("2")) { applyGridRating(2) }
+            .onKeyPress(.init("3")) { applyGridRating(3) }
+            .onKeyPress(.init("4")) { applyGridRating(4) }
+            .onKeyPress(.init("5")) { applyGridRating(5) }
+            .onKeyPress(.init(".")) { applyGridRating(5) }
+            .onKeyPress(.init("0")) { applyGridRating(nil) }
+            .onKeyPress(.init("x")) { toggleGridRejected() }
+            .onKeyPress(.init("X")) { toggleGridRejected() }
+            .onKeyPress(phases: .down) { press in
+                handleGridRatingKeyPress(press)
+            }
+            .onKeyPress(.escape) {
+                if QuickLookPreviewController.shared.isVisible {
+                    QuickLookPreviewController.shared.dismiss()
+                    return .handled
+                }
+                if state.selectedRecordID != nil {
+                    state.selectedRecordID = nil
+                    return .handled
+                }
+                return .ignored
             }
         }
     }
@@ -436,6 +718,7 @@ struct AllProjectImagesPageView: View {
                                     filmstripKeyboardFocused = true
                                 }
                             )
+                            .draggable(URL(fileURLWithPath: record.resolvedPath))
                             .id(record.id)
                         }
                     }
@@ -458,11 +741,31 @@ struct AllProjectImagesPageView: View {
                     state.selectAdjacentRecord(in: records, delta: 1)
                     return .handled
                 }
-                .onChange(of: state.selectedRecordID) { _, newValue in
-                    guard let newValue else { return }
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        proxy.scrollTo(newValue, anchor: .center)
+                .onKeyPress(.space) {
+                    toggleGridQuickLook()
+                }
+                .onKeyPress(.init("1")) { applyGridRating(1) }
+                .onKeyPress(.init("2")) { applyGridRating(2) }
+                .onKeyPress(.init("3")) { applyGridRating(3) }
+                .onKeyPress(.init("4")) { applyGridRating(4) }
+                .onKeyPress(.init("5")) { applyGridRating(5) }
+                .onKeyPress(.init(".")) { applyGridRating(5) }
+                .onKeyPress(.init("0")) { applyGridRating(nil) }
+                .onKeyPress(.init("x")) { toggleGridRejected() }
+                .onKeyPress(.init("X")) { toggleGridRejected() }
+                .onKeyPress(phases: .down) { press in
+                    handleGridRatingKeyPress(press)
+                }
+                .onKeyPress(.escape) {
+                    if QuickLookPreviewController.shared.isVisible {
+                        QuickLookPreviewController.shared.dismiss()
+                        return .handled
                     }
+                    if state.selectedRecordID != nil {
+                        state.selectedRecordID = nil
+                        return .handled
+                    }
+                    return .ignored
                 }
                 .task(id: state.selectedRecordID) {
                     guard let selectedID = state.selectedRecordID else { return }
@@ -523,8 +826,16 @@ struct AllProjectImagesPageView: View {
                 },
                 isRejected: record.isRejected
             ),
-            onTap: { state.selectedRecordID = record.id }
+            onTap: {
+                filmstripKeyboardFocused = true
+                state.selectedRecordID = record.id
+                if QuickLookPreviewController.shared.isVisible,
+                   let index = state.filteredRecords.firstIndex(where: { $0.id == record.id }) {
+                    QuickLookPreviewController.shared.navigateTo(index: index)
+                }
+            }
         )
+        .draggable(URL(fileURLWithPath: record.resolvedPath))
     }
 
     private func updateRating(_ rating: Int?, for record: ProjectImageRecord) {
@@ -610,8 +921,12 @@ struct AllProjectImagesPageView: View {
     }
 
     private var displayMode: AllProjectImagesDisplayMode {
-        get { AllProjectImagesDisplayMode(rawValue: displayModeRaw) ?? .grid }
+        get { layout.forcedDisplayMode ?? (AllProjectImagesDisplayMode(rawValue: displayModeRaw) ?? .grid) }
         nonmutating set { displayModeRaw = newValue.rawValue }
+    }
+
+    private var layoutSignature: String {
+        "\(layout.compactControls)#\(layout.thumbnailMin)#\(layout.thumbnailMax)#\(layout.forcedDisplayMode?.rawValue ?? "none")"
     }
 
     private var filmstripSelectionKey: String {
@@ -649,5 +964,89 @@ struct AllProjectImagesPageView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(.ultraThinMaterial, in: Capsule())
+    }
+
+    private func navigateGrid(_ direction: UnifiedGridNavigation.Direction) -> KeyPress.Result {
+        let records = state.filteredRecords
+        guard !records.isEmpty else { return .ignored }
+        guard let selectedRecordID = state.selectedRecordID,
+              let currentIndex = records.firstIndex(where: { $0.id == selectedRecordID }) else {
+            state.selectedRecordID = records.first?.id
+            filmstripKeyboardFocused = true
+            return .handled
+        }
+        guard let newIndex = UnifiedGridNavigation.nextIndex(
+            currentIndex: currentIndex,
+            totalCount: records.count,
+            columnCount: gridColumnCount,
+            direction: direction
+        ) else { return .ignored }
+        state.selectedRecordID = records[newIndex].id
+        if QuickLookPreviewController.shared.isVisible {
+            QuickLookPreviewController.shared.navigateTo(index: newIndex)
+        }
+        return .handled
+    }
+
+    private func applyGridRating(_ rating: Int?) -> KeyPress.Result {
+        guard let record = state.selectedRecord else { return .ignored }
+        updateRating(rating, for: record)
+        return .handled
+    }
+
+    private func toggleGridRejected() -> KeyPress.Result {
+        guard let record = state.selectedRecord else { return .ignored }
+        toggleRejected(for: record)
+        return .handled
+    }
+
+    private func handleGridRatingKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case "1":
+            return applyGridRating(1)
+        case "2":
+            return applyGridRating(2)
+        case "3":
+            return applyGridRating(3)
+        case "4":
+            return applyGridRating(4)
+        case "5", ".":
+            return applyGridRating(5)
+        case "0":
+            return applyGridRating(nil)
+        case "x", "X":
+            return toggleGridRejected()
+        default:
+            return .ignored
+        }
+    }
+
+    private func toggleGridQuickLook() -> KeyPress.Result {
+        let records = state.filteredRecords
+        guard !records.isEmpty else {
+            if QuickLookPreviewController.shared.isVisible {
+                QuickLookPreviewController.shared.dismiss()
+                return .handled
+            }
+            return .ignored
+        }
+        guard let selectedRecordID = state.selectedRecordID,
+              let recordIndex = records.firstIndex(where: { $0.id == selectedRecordID }) else {
+            state.selectedRecordID = records.first?.id
+            return .handled
+        }
+        let resolvedItems = records.enumerated().compactMap { index, record -> (Int, URL)? in
+            let url = store.resolvedCharacterAssetURL(for: record.path) ?? URL(fileURLWithPath: record.resolvedPath)
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return (index, url)
+        }
+        guard !resolvedItems.isEmpty else { return .ignored }
+        let quickLookIndex = resolvedItems.firstIndex(where: { $0.0 == recordIndex }) ?? 0
+        QuickLookPreviewController.shared.toggle(
+            urls: resolvedItems.map(\.1),
+            startAt: quickLookIndex
+        )
+        filmstripKeyboardFocused = true
+        return .handled
     }
 }

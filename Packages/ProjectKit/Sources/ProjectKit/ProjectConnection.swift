@@ -333,7 +333,6 @@ public actor ProjectConnection {
         let prefixes = [
             "Metadata/",
             "Characters/",
-            "Synopsis/",
             "Animate/",
             "Scenes/",    // Wave D
             "Places/",    // Wave D

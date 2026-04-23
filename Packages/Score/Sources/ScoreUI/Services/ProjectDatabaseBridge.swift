@@ -8,8 +8,9 @@ enum ProjectDatabaseBridge {
     static let metadataPath = OWPProjectIO.projectMetadataFile
     static let legacyMetadataPath = "project.json"
     static let projectInstrumentsPath = OWPProjectIO.projectInstrumentsFile
+    static let legacyProjectInstrumentsPath = OWPProjectIO.legacyProjectInstrumentsFile
 
-    struct ScoreProjectLoad {
+    struct ScoreProjectLoad: @unchecked Sendable {
         var workingProjectURL: URL
         var metadata: ProjectMetadata
         var projectInstrumentMappings: [String: InstrumentMapping]
@@ -20,27 +21,29 @@ enum ProjectDatabaseBridge {
     }
 
     static func loadScoreProject(url: URL) async throws -> ScoreProjectLoad {
-        let (metadata, stubs, _) = try await OWPProjectIO.loadPhase1(from: url)
-        let songAssets = stubs.map(placeholderSongAsset(for:))
-        let librettoFiles = stubs.map { ProjectTextFile(id: UUID(), relativePath: $0.relativePath, content: "") }
-        let hydratedPaths = Set<String>()
+        try await Task.detached(priority: .userInitiated) {
+            let (metadata, stubs, _) = try await OWPProjectIO.loadPhase1(from: url)
+            let songAssets = stubs.map(placeholderSongAsset(for:))
+            let librettoFiles = stubs.map { ProjectTextFile(id: UUID(), relativePath: $0.relativePath, content: "") }
+            let hydratedPaths = Set<String>()
 
-        let projectInstrumentMappings: [String: InstrumentMapping]
-        if url.pathExtension.lowercased() != "ows" {
-            projectInstrumentMappings = OWPProjectIO.loadProjectInstrumentMappings(from: url)
-        } else {
-            projectInstrumentMappings = [:]
-        }
+            let projectInstrumentMappings: [String: InstrumentMapping]
+            if url.pathExtension.lowercased() != "ows" {
+                projectInstrumentMappings = OWPProjectIO.loadProjectInstrumentMappings(from: url)
+            } else {
+                projectInstrumentMappings = [:]
+            }
 
-        return ScoreProjectLoad(
-            workingProjectURL: url,
-            metadata: metadata,
-            projectInstrumentMappings: projectInstrumentMappings,
-            stubs: stubs,
-            songAssets: songAssets,
-            librettoFiles: librettoFiles,
-            hydratedSongPaths: hydratedPaths
-        )
+            return ScoreProjectLoad(
+                workingProjectURL: url,
+                metadata: metadata,
+                projectInstrumentMappings: projectInstrumentMappings,
+                stubs: stubs,
+                songAssets: songAssets,
+                librettoFiles: librettoFiles,
+                hydratedSongPaths: hydratedPaths
+            )
+        }.value
     }
 
     private static func placeholderSongAsset(for stub: SongStub) -> OWSSongAsset {

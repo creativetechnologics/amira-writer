@@ -10,6 +10,9 @@ struct AnimateMain {
         if await handleSnapshotCommand() {
             return
         }
+        if await handleDumpCharactersCommand() {
+            return
+        }
         if await handleSceneSweepCommand() {
             return
         }
@@ -59,6 +62,32 @@ struct AnimateMain {
             fputs("Snapshot export failed: \(error.localizedDescription)\n", stderr)
         }
 
+        return true
+    }
+
+    @MainActor
+    private static func handleDumpCharactersCommand() async -> Bool {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        guard arguments.contains("--dump-characters") else { return false }
+
+        guard let projectPath = argumentValue(after: "--project", in: arguments) else {
+            fputs("Missing required flags for --dump-characters.\n", stderr)
+            fputs("Required: --project <path>\n", stderr)
+            Darwin.exit(EXIT_FAILURE)
+        }
+
+        let controller = AnimateWorkspaceController()
+        let projectURL = URL(fileURLWithPath: projectPath)
+        if let error = await controller.ensureProjectLoaded(projectURL) {
+            fputs("Character dump failed: \(error)\n", stderr)
+            Darwin.exit(EXIT_FAILURE)
+        }
+
+        let rows = controller.debugCharacterRows()
+        print("character_count=\(rows.count)")
+        for row in rows {
+            print("\(row.name)\towp=\(row.owpSlug)\tstorage=\(row.storageSlug)")
+        }
         return true
     }
 

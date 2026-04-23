@@ -35,6 +35,7 @@ struct ImagineScenesPageView: View {
     @State private var bulkProgressMessage: String?
     @State private var promptPopoverText: String?
     @State private var showPromptPopover: Bool = false
+    @State private var scenePreparationTask: Task<Void, Never>?
 
     private var selectedScene: AnimationScene? { store.selectedScene }
     private var shots: [AnimationSceneShot] { selectedScene?.shots ?? [] }
@@ -50,6 +51,12 @@ struct ImagineScenesPageView: View {
 
     private var usesReferenceDrivenPromptStyle: Bool {
         useGemini || drawThingsSourceImagePath != nil
+    }
+
+    private var currentStoredPrompt: String {
+        guard let scene = selectedScene,
+              let shotIndex = store.imagineSelectedShotIndex else { return "" }
+        return store.imaginePrompt(for: scene.id, shotIndex: shotIndex, moment: selectedMoment)
     }
 
 
@@ -77,33 +84,30 @@ struct ImagineScenesPageView: View {
             }
             .onChange(of: store.selectedSceneID) { _, _ in
                 store.imagineSelectedShotIndex = shots.isEmpty ? nil : 0
-                if let sceneID = store.selectedSceneID {
-                    store.ensureImagineDirectories(for: sceneID)
-                    store.refreshImagineGalleryFromDisk(sceneID: sceneID)
-                }
-                // Prompt is scene/shot/moment-specific — wipe it so the user
-                // never accidentally generates with stale context from a
-                // previous scene. Same for preview + last error.
-                resetGenerationState()
+                scheduleSelectedScenePreparation()
+                // Prompt is scene/shot/moment-specific. Load only the stored
+                // prompt for the current context so we never carry stale text
+                // across scenes while still preserving intentional work.
+                syncGenerationStateFromCurrentContext()
             }
             .onChange(of: store.imagineSelectedShotIndex) { _, _ in
-                previewImagePath = nil
-                // New shot → fresh prompt. See comment on selectedSceneID above.
-                resetGenerationState()
+                syncGenerationStateFromCurrentContext()
             }
             .onChange(of: selectedMoment) { _, _ in
-                // New moment within the same shot → different beat of action,
-                // different prompt. Wipe so the user writes intentionally.
-                resetGenerationState()
+                syncGenerationStateFromCurrentContext()
             }
             .onAppear {
                 if store.imagineSelectedShotIndex == nil && !shots.isEmpty {
                     store.imagineSelectedShotIndex = 0
                 }
-                if let sceneID = store.selectedSceneID {
-                    store.ensureImagineDirectories(for: sceneID)
-                    store.refreshImagineGalleryFromDisk(sceneID: sceneID)
-                }
+                scheduleSelectedScenePreparation()
+                syncGenerationStateFromCurrentContext()
+            }
+            .onDisappear {
+                scenePreparationTask?.cancel()
+            }
+            .onChange(of: generationPrompt) { _, _ in
+                persistCurrentPrompt(debounced: true)
             }
             .sheet(item: $activeReferencePicker) { pickerMode in
                 UniversalImagePickerSheet(
@@ -184,7 +188,7 @@ struct ImagineScenesPageView: View {
                 }
                 .onChange(of: store.imagineSelectedShotIndex) { _, newIndex in
                     if let idx = newIndex {
-                        withAnimation { proxy.scrollTo(idx, anchor: .center) }
+                        proxy.scrollTo(idx, anchor: .center)
                     }
                 }
             }
@@ -200,6 +204,18 @@ struct ImagineScenesPageView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    private func scheduleSelectedScenePreparation() {
+        scenePreparationTask?.cancel()
+        guard let sceneID = store.selectedSceneID else { return }
+        scenePreparationTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled,
+                  store.selectedSceneID == sceneID else { return }
+            store.ensureImagineDirectories(for: sceneID)
+            store.refreshImagineGalleryFromDisk(sceneID: sceneID)
+        }
     }
 
     private func shotChip(index: Int, shot: AnimationSceneShot, sceneID: UUID) -> some View {
@@ -304,6 +320,9 @@ struct ImagineScenesPageView: View {
                     }
                 }
             }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            return importDroppedImagesToCurrentMoment(urls: urls)
         }
     }
 
@@ -540,15 +559,31 @@ struct ImagineScenesPageView: View {
 
     // MARK: - Actions
 
-    /// Wipe prompt, preview, and last error when the scene/shot/moment
-    /// context changes. Prompts are context-specific and reusing an old one
-    /// would generate the wrong image — the user made it clear this was a
-    /// dangerous UX issue. Reference images are NOT cleared because the
-    /// user has to pick those manually and may legitimately reuse them.
-    private func resetGenerationState() {
-        generationPrompt = ""
+    /// Prompts are scene/shot/moment-specific. Always load the prompt stored
+    /// for the exact current context so we preserve intentional work without
+    /// leaking stale text across shots or moments. Reference images are NOT
+    /// cleared because the user has to pick those manually and may
+    /// legitimately reuse them.
+    private func syncGenerationStateFromCurrentContext() {
+        generationPrompt = currentStoredPrompt
         generationError = nil
         previewImagePath = nil
+    }
+
+    private func persistCurrentPrompt(debounced: Bool) {
+        guard let scene = selectedScene,
+              let shotIndex = store.imagineSelectedShotIndex else { return }
+        store.setImaginePrompt(
+            generationPrompt,
+            sceneID: scene.id,
+            shotIndex: shotIndex,
+            moment: selectedMoment
+        )
+        if debounced {
+            store.scheduleDebouncedSave()
+        } else {
+            store.save()
+        }
     }
 
     private func prefillPrompt() {
@@ -562,6 +597,7 @@ struct ImagineScenesPageView: View {
             moment: selectedMoment,
             subjectStyle: .neutralSubjects
         )
+        persistCurrentPrompt(debounced: false)
     }
 
     private func autoGeneratePrompt() {
@@ -577,6 +613,7 @@ struct ImagineScenesPageView: View {
                     moment: selectedMoment,
                     subjectStyle: .neutralSubjects
                 )
+                persistCurrentPrompt(debounced: false)
             } catch {
                 generationError = error.localizedDescription
             }
@@ -585,6 +622,7 @@ struct ImagineScenesPageView: View {
 
     private func generateImage() {
         guard let scene = selectedScene, let owpURL = store.fileOWPURL, let shotIndex = store.imagineSelectedShotIndex else { return }
+        persistCurrentPrompt(debounced: false)
         isGenerating = true
         generationError = nil
         let sceneSlug = scene.name.lowercased().replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "/", with: "-")
@@ -644,6 +682,42 @@ struct ImagineScenesPageView: View {
             }
         }
         showPromptPopover = true
+    }
+
+    private func importDroppedImagesToCurrentMoment(urls: [URL]) -> Bool {
+        let valid = AnimateStore.filterImportableImageURLs(urls)
+        guard !valid.isEmpty,
+              let scene = selectedScene,
+              let owpURL = store.fileOWPURL,
+              let shotIndex = store.imagineSelectedShotIndex else {
+            return false
+        }
+
+        let sceneSlug = scene.name
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "/", with: "-")
+        let destinationDirectory = ImagineProjectStorage.momentDirectory(
+            owpURL: owpURL,
+            sceneSlug: sceneSlug,
+            shotIndex: shotIndex,
+            moment: selectedMoment
+        )
+
+        var importedAny = false
+        for url in valid {
+            do {
+                _ = try ImagineProjectStorage.importImage(from: url.standardizedFileURL, to: destinationDirectory)
+                importedAny = true
+            } catch {
+                generationError = error.localizedDescription
+            }
+        }
+
+        if importedAny {
+            store.refreshImagineGalleryFromDisk(sceneID: scene.id)
+        }
+        return importedAny
     }
 
     private func handleSelectedReferenceImages(

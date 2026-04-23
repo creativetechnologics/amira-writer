@@ -29,6 +29,7 @@ private struct PlaceAllImagesGallerySection: View {
     /// the shared library.
     var onEditWithGemini: ((GeneratedBackgroundLibraryRecord) -> Void)? = nil
     var onGenerateWithGemini: ((GeneratedBackgroundLibraryRecord, Int) -> Void)? = nil
+    var onDropURLs: (([URL]) -> Bool)? = nil
     @FocusState private var galleryKeyboardFocused: Bool
     @State private var columnCount: Int = 1
 
@@ -76,44 +77,49 @@ private struct PlaceAllImagesGallerySection: View {
                     }
                 }
                 .trackGridColumnCount($columnCount, tileMinWidth: thumbnailBaseSize, spacing: 12)
-                .focusable()
-                .focused($galleryKeyboardFocused)
-                .focusEffectDisabled()
-                .onKeyPress(.space) {
-                    guard let focusPath = lastClickedPath,
-                          let index = records.firstIndex(where: { $0.activePath == focusPath }) else {
-                        if QuickLookPreviewController.shared.isVisible {
-                            QuickLookPreviewController.shared.dismiss()
-                            return .handled
-                        }
-                        return .ignored
-                    }
-                    let urls = records.compactMap { store.resolvedCharacterAssetURL(for: $0.activePath) }
-                    let qlIndex = min(index, max(urls.count - 1, 0))
-                    QuickLookPreviewController.shared.toggle(urls: urls, startAt: qlIndex)
-                    return .handled
-                }
-                .onKeyPress(.leftArrow) { navigate(.left) }
-                .onKeyPress(.rightArrow) { navigate(.right) }
-                .onKeyPress(.upArrow) { navigate(.up) }
-                .onKeyPress(.downArrow) { navigate(.down) }
-                .onKeyPress(phases: .down) { press in
-                    handleRatingKeyPress(press)
-                }
-                .onKeyPress(.escape) {
-                    if QuickLookPreviewController.shared.isVisible {
-                        QuickLookPreviewController.shared.dismiss()
-                        return .handled
-                    }
-                    if !selectedPaths.isEmpty {
-                        selectedPaths.removeAll()
-                        lastClickedPath = nil
-                        store.selectGeneratedBackgroundRecord(for: nil)
-                        return .handled
-                    }
-                    return .ignored
-                }
             }
+        }
+        .focusable()
+        .focused($galleryKeyboardFocused)
+        .focusEffectDisabled()
+        .onTapGesture {
+            galleryKeyboardFocused = true
+        }
+        .onKeyPress(.space) {
+            toggleQuickLook()
+        }
+        .onKeyPress(.leftArrow) { navigate(.left) }
+        .onKeyPress(.rightArrow) { navigate(.right) }
+        .onKeyPress(.upArrow) { navigate(.up) }
+        .onKeyPress(.downArrow) { navigate(.down) }
+        .onKeyPress(.init("1")) { applyRating(1) }
+        .onKeyPress(.init("2")) { applyRating(2) }
+        .onKeyPress(.init("3")) { applyRating(3) }
+        .onKeyPress(.init("4")) { applyRating(4) }
+        .onKeyPress(.init("5")) { applyRating(5) }
+        .onKeyPress(.init(".")) { applyRating(5) }
+        .onKeyPress(.init("0")) { applyRating(nil) }
+        .onKeyPress(.init("x")) { toggleRejected() }
+        .onKeyPress(.init("X")) { toggleRejected() }
+        .onKeyPress(phases: .down) { press in
+            handleRatingKeyPress(press)
+        }
+        .onKeyPress(.escape) {
+            if QuickLookPreviewController.shared.isVisible {
+                QuickLookPreviewController.shared.dismiss()
+                return .handled
+            }
+            if !selectedPaths.isEmpty {
+                selectedPaths.removeAll()
+                lastClickedPath = nil
+                store.selectGeneratedBackgroundRecord(for: nil)
+                return .handled
+            }
+            return .ignored
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let onDropURLs else { return false }
+            return onDropURLs(urls)
         }
     }
 
@@ -188,9 +194,13 @@ private struct PlaceAllImagesGallerySection: View {
 
     private func openQuickLook(path: String) {
         guard let index = records.firstIndex(where: { $0.activePath == path }) else { return }
-        let urls = records.compactMap { store.resolvedCharacterAssetURL(for: $0.activePath) }
-        guard !urls.isEmpty else { return }
-        QuickLookPreviewController.shared.present(urls: urls, startAt: min(index, urls.count - 1))
+        let resolvedItems = resolvedQuickLookItems()
+        guard !resolvedItems.isEmpty else { return }
+        let quickLookIndex = resolvedItems.firstIndex(where: { $0.0 == index }) ?? 0
+        QuickLookPreviewController.shared.present(
+            urls: resolvedItems.map(\.1),
+            startAt: quickLookIndex
+        )
     }
 
     private func showInFinder(path: String) {
@@ -264,6 +274,34 @@ private struct PlaceAllImagesGallerySection: View {
             return .ignored
         }
     }
+
+    private func toggleQuickLook() -> KeyPress.Result {
+        guard let focusPath = lastClickedPath,
+              let recordIndex = records.firstIndex(where: { $0.activePath == focusPath }) else {
+            if QuickLookPreviewController.shared.isVisible {
+                QuickLookPreviewController.shared.dismiss()
+                return .handled
+            }
+            return .ignored
+        }
+
+        let resolvedItems = resolvedQuickLookItems()
+        guard !resolvedItems.isEmpty else { return .ignored }
+        let quickLookIndex = resolvedItems.firstIndex(where: { $0.0 == recordIndex }) ?? 0
+        QuickLookPreviewController.shared.toggle(
+            urls: resolvedItems.map(\.1),
+            startAt: quickLookIndex
+        )
+        galleryKeyboardFocused = true
+        return .handled
+    }
+
+    private func resolvedQuickLookItems() -> [(Int, URL)] {
+        records.enumerated().compactMap { offset, record in
+            guard let url = store.resolvedCharacterAssetURL(for: record.activePath) else { return nil }
+            return (offset, url)
+        }
+    }
 }
 
 @available(macOS 26.0, *)
@@ -330,6 +368,9 @@ private struct PlaceAllImagesThumbnail: View {
         )
         .help("Click to select. Press Space to Quick Look.")
         .draggable(resolvedURL ?? URL(fileURLWithPath: record.activePath))
+        .onTapGesture(count: 2) {
+            onQuickLook()
+        }
     }
 
     /// Builds the top-trailing badge stack (queue status + duplicate count).
@@ -377,6 +418,14 @@ private struct PlaceAllImagesThumbnail: View {
 private struct PlaceGenerationSpec: Hashable {
     var title: String
     var focus: String
+}
+
+@available(macOS 26.0, *)
+private struct QueuedPlaceGenerationItem {
+    let place: BackgroundPlate
+    let draft: GeminiGenerationDraft
+    let placeItemIndex: Int
+    let placeItemCount: Int
 }
 
 @available(macOS 26.0, *)
@@ -460,6 +509,13 @@ struct PlacesSidebarView: View {
             ) {
                 viewMode = .world
             }
+            .dropDestination(for: URL.self) { urls, _ in
+                let accepted = store.stageMasterPlaceMapCandidate(from: urls)
+                if accepted {
+                    viewMode = .world
+                }
+                return accepted
+            }
 
             sidebarButton(
                 title: "3D Map",
@@ -525,7 +581,34 @@ struct PlacesSidebarView: View {
                 )
             }
 
-            DisclosureGroup(isExpanded: $placesExpanded) {
+            VStack(spacing: 6) {
+                OperaChromeSidebarRow(isSelected: viewMode == .grid) {
+                    HStack(spacing: 8) {
+                        Button {
+                            viewMode = .grid
+                        } label: {
+                            sidebarDisclosureLabel(
+                                title: "Places",
+                                subtitle: "\(store.backgrounds.count) total",
+                                systemImage: "square.stack.3d.up"
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            placesExpanded.toggle()
+                        } label: {
+                            Image(systemName: placesExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(OperaChromeTheme.textSecondary)
+                                .frame(width: 18, height: 18)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
                 if placesExpanded {
                     VStack(spacing: 2) {
                         if store.backgrounds.isEmpty {
@@ -566,14 +649,8 @@ struct PlacesSidebarView: View {
                             }
                         }
                     }
-                    .padding(.top, 6)
+                    .padding(.top, 2)
                 }
-            } label: {
-                sidebarDisclosureLabel(
-                    title: "Places",
-                    subtitle: "\(store.backgrounds.count) total",
-                    systemImage: "square.stack.3d.up"
-                )
             }
         }
     }
@@ -803,6 +880,8 @@ struct PlacesPageView: View {
     @State private var renderPlaceDetailSecondaryAssets = false
     @State private var renderPlaceDetailNotes = false
     @State private var renderPlaceDetailGenerationStudio = false
+    @State private var selectedImageGenerationPromptSlot = 0
+    @State private var generateAllPlacesTask: Task<Void, Never>?
     @State private var worldbuildingRefreshTask: Task<Void, Never>?
     @State private var landmarkSuggestionRefreshTask: Task<Void, Never>?
     @State private var placesRenderStagingTask: Task<Void, Never>?
@@ -1071,6 +1150,7 @@ struct PlacesPageView: View {
             schedulePlacesRenderStaging(reset: true)
         }
         .onChange(of: store.selectedBackgroundID) { _, _ in
+            selectedImageGenerationPromptSlot = 0
             schedulePlaceDetailStaging(reset: true)
         }
         .onChange(of: viewMode) { _, newValue in
@@ -1586,6 +1666,27 @@ struct PlacesPageView: View {
 
     private var locationGridSection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Places")
+                        .font(.title2.weight(.semibold))
+                    Text("Browse all places as a thumbnail grid, then open any place for detail editing or queue every filled place prompt into one-at-a-time Gemini image generation.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    queueAllPlacePromptGenerations()
+                } label: {
+                    Label("Generate All Images", systemImage: "sparkles.rectangle.stack")
+                }
+                .buttonStyle(.borderedProminent)
+                .fixedSize(horizontal: true, vertical: false)
+                .disabled(generateAllPlacesTask != nil)
+            }
+
             if hasMoreStagedGridPlaces {
                 HStack {
                     Text("Loading places… showing \(stagedGridPlaces.count) of \(store.backgrounds.count)")
@@ -1784,6 +1885,9 @@ struct PlacesPageView: View {
                         return
                     }
                     beginGenerateWithGemini(for: place, imagePath: record.activePath, count: count, workflow: record.workflow)
+                },
+                onDropURLs: { urls in
+                    store.importDroppedImagesToUnattachedLibrary(urls: urls)
                 }
             )
         }
@@ -1796,30 +1900,21 @@ struct PlacesPageView: View {
         if let place = selectedPlace {
             VStack(alignment: .leading, spacing: 16) {
                 placeHeader(place)
-                shotRequirementsSection(place)
                 if renderPlaceDetailPrimaryAssets {
                     workflowOutputSection(place)
                 } else {
                     placeDetailSectionPlaceholder(
-                        title: "\(workflowMode.displayName) Output Library",
+                        title: "Gallery",
                         message: "Preparing the primary place image library…"
                     )
                 }
-                if renderPlaceDetailSecondaryAssets {
-                    placeReferencesSection(place)
-                    angleImagesSection(place)
-                } else {
-                    placeDetailSectionPlaceholder(
-                        title: "Reference Assets",
-                        message: "Preparing reference and angle image sections…"
-                    )
-                }
                 if renderPlaceDetailNotes {
-                    placeNotesSection(place)
+                    placeWorldbuildingBriefSection(place)
+                    imageGenerationPromptsSection(place)
                 } else {
                     placeDetailSectionPlaceholder(
-                        title: "Story Notes + Prompt Notes",
-                        message: "Preparing editable notes and prompt fields…"
+                        title: "Location Schema",
+                        message: "Preparing the explicit location fields…"
                     )
                 }
                 if renderPlaceDetailGenerationStudio {
@@ -1864,15 +1959,15 @@ struct PlacesPageView: View {
         placeDetailStagingTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(140))
             guard !Task.isCancelled else { return }
+            renderPlaceDetailNotes = true
+
+            try? await Task.sleep(for: .milliseconds(140))
+            guard !Task.isCancelled else { return }
             renderPlaceDetailPrimaryAssets = true
 
             try? await Task.sleep(for: .milliseconds(220))
             guard !Task.isCancelled else { return }
             renderPlaceDetailSecondaryAssets = true
-
-            try? await Task.sleep(for: .milliseconds(140))
-            guard !Task.isCancelled else { return }
-            renderPlaceDetailNotes = true
 
             try? await Task.sleep(for: .milliseconds(220))
             guard !Task.isCancelled else { return }
@@ -1919,13 +2014,81 @@ struct PlacesPageView: View {
             .labelsHidden()
 
             VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Worldbuilding Map")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    Text("Pin generated images onto the master map, inspect their inferred camera direction, and compare continuity at a glance before committing new canon.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Worldbuilding Map")
+                            .font(.title2)
+                            .fontWeight(.semibold)
+                        Text("Pin generated images onto the master map, inspect their inferred camera direction, compare continuity at a glance, and drag in a new master-map candidate from Show All Images.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    HStack(spacing: 8) {
+                        Button {
+                            store.setMasterPlaceMapFromPicker()
+                        } label: {
+                            Label("Replace Master Map…", systemImage: "photo.badge.plus")
+                        }
+                        .buttonStyle(.bordered)
+                        .fixedSize(horizontal: true, vertical: false)
+
+                        if store.pendingMasterPlaceMapCandidatePath != nil {
+                            Button {
+                                store.commitPendingMasterPlaceMapCandidate()
+                            } label: {
+                                Label("Use Dropped Image", systemImage: "checkmark.circle")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
+                }
+
+                if store.effectivePlacesMasterMapPath() != nil || store.pendingMasterPlaceMapCandidatePath != nil {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            if let masterPath = store.effectivePlacesMasterMapPath() {
+                                worldMapImageCard(
+                                    title: "Current Master Map",
+                                    subtitle: "Current world anchor",
+                                    path: masterPath,
+                                    accentColor: .accentColor,
+                                    contextMenu: {
+                                        Button("Reveal in Finder", systemImage: "folder") {
+                                            showInFinder(at: masterPath)
+                                        }
+                                        Button("Clear Master Map", systemImage: "trash", role: .destructive) {
+                                            store.clearMasterPlaceMap()
+                                        }
+                                    }
+                                )
+                            }
+
+                            if let candidatePath = store.pendingMasterPlaceMapCandidatePath {
+                                worldMapImageCard(
+                                    title: "Dropped Candidate",
+                                    subtitle: "Right-click or use the button to promote this image",
+                                    path: candidatePath,
+                                    accentColor: .orange,
+                                    contextMenu: {
+                                        Button("Set as Master Map", systemImage: "checkmark.circle") {
+                                            store.useGeneratedImageAsMasterPlaceMap(candidatePath)
+                                        }
+                                        Button("Reveal in Finder", systemImage: "folder") {
+                                            showInFinder(at: candidatePath)
+                                        }
+                                        Button("Discard Candidate", systemImage: "trash", role: .destructive) {
+                                            store.clearPendingMasterPlaceMapCandidate()
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
                 }
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -2012,6 +2175,9 @@ struct PlacesPageView: View {
                         }
                         selectedWorldNodeID = capture.worldNodeID
                         selectedWorldRouteID = capture.routeID
+                    },
+                    onDropMasterMapCandidate: { urls in
+                        store.stageMasterPlaceMapCandidate(from: urls)
                     }
                 )
                 .frame(height: worldMapViewportHeight)
@@ -2290,7 +2456,6 @@ struct PlacesPageView: View {
 
             HStack(spacing: 10) {
                 placeSummaryPill(title: "\(workflowMode.shortLabel) Images", value: "\(place.imagePaths(for: workflowMode).count)", systemImage: workflowMode == .photorealistic ? "camera" : "paintbrush.pointed")
-                placeSummaryPill(title: "Refs", value: "\(place.referenceImages.count)", systemImage: "photo.stack")
                 placeSummaryPill(title: "Scenes", value: "\(sceneUsageCount(for: place.id))", systemImage: "film.stack")
                 placeSummaryPill(title: "Approved", value: place.approvedImagePath(for: workflowMode) == nil ? "No" : "Yes", systemImage: "checkmark.seal")
                 placeSummaryPill(title: "Nodes", value: "\(worldbuildingSnapshot.placeNodeCounts[place.id] ?? 0)", systemImage: "scope")
@@ -2314,7 +2479,7 @@ struct PlacesPageView: View {
 
             HStack(spacing: 12) {
                 TextField(
-                    "Place Name",
+                    "Location Name",
                     text: Binding(
                         get: { place.name },
                         set: { store.updatePlaceName($0, placeID: place.id) }
@@ -2410,7 +2575,7 @@ struct PlacesPageView: View {
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("\(workflowMode.displayName) Output Library", systemImage: workflowMode == .photorealistic ? "camera" : "paintpalette")
+                Label("Gallery", systemImage: "photo.on.rectangle.angled")
                     .font(.headline)
                 Spacer()
                 if let status = store.placeGenerationStatus(for: place.id), !status.isEmpty {
@@ -2427,21 +2592,10 @@ struct PlacesPageView: View {
                 .buttonStyle(.bordered)
             }
 
-            if approvedPath == nil {
-                emptyCard(
-                    "No approved \(workflowMode.displayName.lowercased()) image",
-                    systemImage: workflowMode == .photorealistic ? "camera" : "paintpalette",
-                    message: workflowMode == .photorealistic
-                        ? "Import or generate a place image, then approve the strongest one for continuity."
-                        : "Import or generate an animated variant of this place once the photoreal geography is in good shape."
-                )
-                .frame(height: 120)
-            }
-
             ImageGallerySection(
                 store: store,
-                title: "\(workflowMode.displayName) Images",
-                icon: workflowMode == .photorealistic ? "camera" : "paintpalette",
+                title: "Gallery",
+                icon: "photo.on.rectangle.angled",
                 paths: galleryPaths,
                 thumbnailBaseSize: $thumbnailBaseSize,
                 onImport: { store.addImagesToPlaceFromPicker(placeID: place.id, workflow: workflowMode) },
@@ -2464,9 +2618,12 @@ struct PlacesPageView: View {
                     store.setPlaceImageRating(path: path, rating: rating, placeID: place.id)
                 },
                 showsInlineRemoveButton: true,
-                showsHeader: true,
+                showsHeader: false,
                 selectedPaths: $workflowSelectedPaths,
                 lastClickedPath: $workflowLastClickedPath,
+                onDropURLs: { urls in
+                    store.attachDroppedImagesToPlace(urls: urls, placeID: place.id, workflow: workflowMode)
+                },
                 onFocusPathChange: { path in
                     // Wire gallery selection into the right-side Details
                     // inspector so the approved-image preview panel is no
@@ -2640,49 +2797,200 @@ struct PlacesPageView: View {
         .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
-    private func placeNotesSection(_ place: BackgroundPlate) -> some View {
+    private func placeWorldbuildingBriefSection(_ place: BackgroundPlate) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Story Notes + Prompt Notes", systemImage: "text.alignleft")
+            Label("Location Schema", systemImage: "text.alignleft")
                 .font(.headline)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Story / location notes")
+            placeWorldbuildingEditor(
+                title: "1. Core Identity",
+                text: Binding(
+                    get: { place.coreIdentity },
+                    set: { store.updatePlaceCoreIdentity($0, placeID: place.id) }
+                )
+            )
+            placeWorldbuildingEditor(
+                title: "2. Geographic Placement",
+                text: Binding(
+                    get: { place.geographicPlacement },
+                    set: { store.updatePlaceGeographicPlacement($0, placeID: place.id) }
+                )
+            )
+            placeWorldbuildingEditor(
+                title: "3. Physical Layout and Topography",
+                text: Binding(
+                    get: { place.physicalLayoutAndTopography },
+                    set: { store.updatePlacePhysicalLayoutAndTopography($0, placeID: place.id) }
+                )
+            )
+            placeWorldbuildingEditor(
+                title: "4. Wartime and Historical Context",
+                text: Binding(
+                    get: { place.wartimeAndHistoricalContext },
+                    set: { store.updatePlaceWartimeAndHistoricalContext($0, placeID: place.id) }
+                )
+            )
+            placeWorldbuildingEditor(
+                title: "5. Visual Continuity Anchors",
+                text: Binding(
+                    get: { place.visualContinuityAnchors },
+                    set: { store.updatePlaceVisualContinuityAnchors($0, placeID: place.id) }
+                )
+            )
+            placeWorldbuildingEditor(
+                title: "6. Scene-State Variations",
+                text: Binding(
+                    get: { place.sceneStateVariations },
+                    set: { store.updatePlaceSceneStateVariations($0, placeID: place.id) }
+                )
+            )
+            placeWorldbuildingEditor(
+                title: "7. Human Activity and Social Use",
+                text: Binding(
+                    get: { place.humanActivityAndSocialUse },
+                    set: { store.updatePlaceHumanActivityAndSocialUse($0, placeID: place.id) }
+                )
+            )
+            placeWorldbuildingEditor(
+                title: "8. Nearby Connections",
+                text: Binding(
+                    get: { place.nearbyConnections },
+                    set: { store.updatePlaceNearbyConnections($0, placeID: place.id) }
+                )
+            )
+            placeWorldbuildingEditor(
+                title: "9. Image-Generation Guardrails",
+                text: Binding(
+                    get: { place.imageGenerationGuardrails },
+                    set: { store.updatePlaceImageGenerationGuardrails($0, placeID: place.id) }
+                )
+            )
+            placeWorldbuildingEditor(
+                title: "Additional Guidance",
+                text: Binding(
+                    get: { place.additionalGuidance },
+                    set: { store.updatePlaceAdditionalGuidance($0, placeID: place.id) }
+                )
+            )
+        }
+        .padding(18)
+        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func imageGenerationPromptsSection(_ place: BackgroundPlate) -> some View {
+        let prompts = normalizedImageGenerationPrompts(for: place)
+        let selectedIndex = min(max(selectedImageGenerationPromptSlot, 0), prompts.count - 1)
+        let selectedPrompt = prompts[selectedIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        let allPrompts = prompts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let allPromptsReady = allPrompts.allSatisfy { !$0.isEmpty }
+
+        return VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Image Generation Prompts", systemImage: "sparkles.rectangle.stack")
+                    .font(.headline)
+                Text("Pre-generated Nano Banana 2 prompts for this place. Choose a slot, edit the prompt, then open Gemini preflight with that prompt filled in.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            HStack(alignment: .center, spacing: 8) {
+                ForEach(0..<5, id: \.self) { index in
+                    promptSlotButton(index: index)
+                }
+
+                Spacer(minLength: 12)
+
+                Button {
+                    beginImageGenerationPromptFlow(for: place, promptIndex: selectedIndex)
+                } label: {
+                    Label("Generate with Nano Banana", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedPrompt.isEmpty)
+
+                Button {
+                    beginAllImageGenerationPromptFlow(for: place)
+                } label: {
+                    Label("Generate All Prompts", systemImage: "sparkles.rectangle.stack")
+                }
+                .buttonStyle(.bordered)
+                .disabled(!allPromptsReady)
+            }
+
+            ZStack(alignment: .topLeading) {
                 TextEditor(text: Binding(
-                    get: { place.notes },
-                    set: { store.updatePlaceNotes($0, placeID: place.id) }
+                    get: { normalizedImageGenerationPrompts(for: place)[selectedIndex] },
+                    set: { store.updatePlaceImageGenerationPrompt($0, promptIndex: selectedIndex, placeID: place.id) }
                 ))
                 .font(.callout)
-                .frame(minHeight: 120)
+                .frame(minHeight: 180)
                 .padding(8)
                 .background(.background.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(.quaternary.opacity(0.4))
                 }
-            }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Workflow-specific prompt notes")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextEditor(text: Binding(
-                    get: { place.workflowPromptNotes },
-                    set: { store.updatePlaceWorkflowPromptNotes($0, placeID: place.id) }
-                ))
-                .font(.callout)
-                .frame(minHeight: 120)
-                .padding(8)
-                .background(.background.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(.quaternary.opacity(0.4))
+                if selectedPrompt.isEmpty {
+                    Text("Write the pre-generated prompt for slot \(selectedIndex + 1) here. Gemini preflight will open with this prompt already filled in, and generated images will stay linked to this place.")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 20)
+                        .allowsHitTesting(false)
                 }
             }
         }
         .padding(18)
         .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func placeNotesSection(_ place: BackgroundPlate) -> some View {
+        placeWorldbuildingBriefSection(place)
+    }
+
+    private func normalizedImageGenerationPrompts(for place: BackgroundPlate) -> [String] {
+        Array((place.imageGenerationPrompts + Array(repeating: "", count: 5)).prefix(5))
+    }
+
+    @ViewBuilder
+    private func promptSlotButton(index: Int) -> some View {
+        let isSelected = selectedImageGenerationPromptSlot == index
+        if isSelected {
+            Button {
+                selectedImageGenerationPromptSlot = index
+            } label: {
+                Text("\(index + 1)")
+                    .font(.callout.weight(.semibold))
+                    .frame(minWidth: 32)
+            }
+            .buttonStyle(.borderedProminent)
+        } else {
+            Button {
+                selectedImageGenerationPromptSlot = index
+            } label: {
+                Text("\(index + 1)")
+                    .font(.callout.weight(.semibold))
+                    .frame(minWidth: 32)
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private func placeWorldbuildingEditor(title: String, text: Binding<String>, minHeight: CGFloat = 120) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+            TextEditor(text: text)
+                .font(.callout)
+                .frame(minHeight: minHeight)
+                .padding(8)
+                .background(.background.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(.quaternary.opacity(0.4))
+                }
+        }
     }
 
     private func generationStudioSection(_ place: BackgroundPlate) -> some View {
@@ -2917,6 +3225,300 @@ struct PlacesPageView: View {
         )
     }
 
+    private func beginImageGenerationPromptFlow(for place: BackgroundPlate, promptIndex: Int) {
+        let prompts = normalizedImageGenerationPrompts(for: place)
+        guard promptIndex >= 0, promptIndex < prompts.count else { return }
+
+        let promptText = prompts[promptIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !promptText.isEmpty else { return }
+
+        let config = store.workflowConfig(for: workflowMode)
+        let refs = generationReferenceDrafts(for: place, workflow: workflowMode)
+        let promptLabel = "Prompt \(promptIndex + 1)"
+
+        placeGenerationDrafts = [
+            GeminiGenerationDraft(
+                title: "\(place.name) • \(promptLabel)",
+                destinationDescription: "\(place.name) • \(workflowMode.displayName)",
+                prompt: promptText,
+                contextNote: "Image Generation Prompt \(promptIndex + 1) for \(place.name). Any images generated from this request will stay linked to this place.",
+                model: config.model,
+                aspectRatio: config.aspectRatio,
+                imageSize: config.imageSize,
+                referenceItems: refs,
+                linkedPlaceID: place.id,
+                pricingMode: .standard
+            )
+        ]
+        placePendingPlan = PendingPlaceGenerationPlan(
+            placeID: place.id,
+            sourceDescription: place.name,
+            workflow: workflowMode,
+            routeID: nil,
+            nodeIDs: [],
+            count: 1,
+            title: "\(place.name) • \(promptLabel)",
+            confirmTitle: "Generate"
+        )
+    }
+
+    private func beginAllImageGenerationPromptFlow(for place: BackgroundPlate) {
+        let prompts = normalizedImageGenerationPrompts(for: place)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard prompts.allSatisfy({ !$0.isEmpty }) else { return }
+
+        let config = store.workflowConfig(for: workflowMode)
+        let refs = generationReferenceDrafts(for: place, workflow: workflowMode)
+
+        placeGenerationDrafts = prompts.enumerated().map { index, promptText in
+            let promptLabel = "Prompt \(index + 1)"
+            return GeminiGenerationDraft(
+                title: "\(place.name) • \(promptLabel)",
+                destinationDescription: "\(place.name) • \(workflowMode.displayName)",
+                prompt: promptText,
+                contextNote: "Image Generation Prompt \(index + 1) for \(place.name). Any images generated from this request will stay linked to this place.",
+                model: config.model,
+                aspectRatio: config.aspectRatio,
+                imageSize: config.imageSize,
+                referenceItems: refs,
+                linkedPlaceID: place.id,
+                pricingMode: .standard
+            )
+        }
+        placePendingPlan = PendingPlaceGenerationPlan(
+            placeID: place.id,
+            sourceDescription: place.name,
+            workflow: workflowMode,
+            routeID: nil,
+            nodeIDs: [],
+            count: placeGenerationDrafts.count,
+            title: "\(place.name) • All Prompts",
+            confirmTitle: "Generate All"
+        )
+    }
+
+    private func queueAllPlacePromptGenerations() {
+        if let error = store.geminiImageGenerationAvailabilityError {
+            placeGenerationErrorMessage = error.localizedDescription
+            return
+        }
+        guard generateAllPlacesTask == nil else {
+            placeGenerationErrorMessage = "Generate All Images is already running."
+            return
+        }
+
+        let queuedItems: [QueuedPlaceGenerationItem] = store.backgrounds.flatMap { place in
+            let promptTexts = normalizedImageGenerationPrompts(for: place)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let config = store.workflowConfig(for: workflowMode)
+            let drafts = promptTexts.enumerated().compactMap { entry -> GeminiGenerationDraft? in
+                let (index, promptText) = entry
+                guard !promptText.isEmpty else { return nil }
+                let promptLabel = "Prompt \(index + 1)"
+                let refs = referenceDraftsForQueuedPlacePromptGeneration(
+                    place: place,
+                    workflow: workflowMode,
+                    promptText: promptText
+                )
+                return GeminiGenerationDraft(
+                    title: "\(place.name) • \(promptLabel)",
+                    destinationDescription: "\(place.name) • \(workflowMode.displayName)",
+                    prompt: promptText,
+                    contextNote: "Image Generation Prompt \(index + 1) for \(place.name). Any images generated from this request will stay linked to this place.",
+                    model: config.model,
+                    aspectRatio: config.aspectRatio,
+                    imageSize: config.imageSize,
+                    referenceItems: refs,
+                    linkedPlaceID: place.id,
+                    pricingMode: .standard
+                )
+            }
+            return drafts.enumerated().map { offset, draft in
+                QueuedPlaceGenerationItem(
+                    place: place,
+                    draft: draft,
+                    placeItemIndex: offset + 1,
+                    placeItemCount: drafts.count
+                )
+            }
+        }
+
+        guard !queuedItems.isEmpty else {
+            placeGenerationErrorMessage = "No place prompts are filled in yet."
+            return
+        }
+
+        let perPlaceCounts = queuedItems.reduce(into: [UUID: Int]()) { partialResult, item in
+            partialResult[item.place.id, default: 0] += 1
+        }
+
+        for (placeID, count) in perPlaceCounts {
+            store.placeGenerationStatusByID[placeID] = "Queued \(count) image\(count == 1 ? "" : "s")."
+        }
+        store.statusMessage = "Queued \(queuedItems.count) place image\(queuedItems.count == 1 ? "" : "s") for immediate Gemini generation."
+        placeGenerationErrorMessage = nil
+
+        generateAllPlacesTask = Task { @MainActor in
+            let service = GeminiImageService()
+            var completedCount = 0
+            var failureMessages: [String] = []
+
+            defer {
+                generateAllPlacesTask = nil
+            }
+
+            for (queueIndex, item) in queuedItems.enumerated() {
+                if Task.isCancelled { break }
+
+                let place = item.place
+                let draft = item.draft
+                store.generatingPlaceIDs.insert(place.id)
+
+                let remainingCount = max(queuedItems.count - queueIndex - 1, 0)
+                let remainingSuffix = remainingCount > 0 ? " • \(remainingCount) more queued" : ""
+                store.placeGenerationStatusByID[place.id] = "Generating \(item.placeItemIndex) of \(item.placeItemCount)\(remainingSuffix)"
+
+                let activityID = store.registerGeminiActivity(
+                    kind: .immediate,
+                    title: draft.title,
+                    source: "Places • \(place.name) • \(workflowMode.displayName)"
+                )
+                let request = GeminiImageService.GenerationRequest(
+                    prompt: draft.effectivePrompt,
+                    referenceImages: buildReferenceImages(from: draft.referenceItems),
+                    model: draft.model,
+                    aspectRatio: draft.aspectRatio,
+                    imageSize: draft.imageSize
+                )
+                let apiKey = store.geminiAPIKey
+                store.logGeminiAPICall(endpoint: "image-generation", source: "PlacesPageView.queueAllPlacePromptGenerations()")
+
+                let itemTask = Task<GeminiImageService.GenerationResult, Error> {
+                    try await service.generate(request: request, apiKey: apiKey)
+                }
+                store.attachGeminiActivityCancel(activityID) { itemTask.cancel() }
+
+                do {
+                    let result = try await withTaskCancellationHandler {
+                        try await itemTask.value
+                    } onCancel: {
+                        itemTask.cancel()
+                    }
+
+                    let storedPath = try store.storeGeneratedPlaceImage(
+                        result.imageData,
+                        prompt: draft.effectivePrompt,
+                        model: draft.model,
+                        filenameStem: sanitizedFilenameStem(for: draft.title),
+                        for: draft.linkedPlaceID ?? place.id,
+                        workflow: workflowMode,
+                        aspectRatio: draft.aspectRatio,
+                        imageSize: draft.imageSize,
+                        routeID: draft.routeID,
+                        worldNodeID: draft.worldNodeID,
+                        mapPoint: draft.mapPoint,
+                        cameraPose: draft.cameraPose
+                    )
+                    store.updateGeminiActivity(
+                        activityID,
+                        status: .completed,
+                        outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent
+                    )
+                    completedCount += 1
+                    store.placeGenerationStatusByID[place.id] = item.placeItemIndex == item.placeItemCount
+                        ? "Finished \(item.placeItemCount) queued image\(item.placeItemCount == 1 ? "" : "s")."
+                        : "Completed \(item.placeItemIndex) of \(item.placeItemCount)."
+                } catch is CancellationError {
+                    store.updateGeminiActivity(activityID, status: .failed, errorMessage: "Canceled")
+                    failureMessages.append("\(place.name): canceled")
+                    store.generatingPlaceIDs.remove(place.id)
+                    if Task.isCancelled { break }
+                    continue
+                } catch {
+                    store.updateGeminiActivity(activityID, status: .failed, errorMessage: error.localizedDescription)
+                    failureMessages.append("\(place.name): \(error.localizedDescription)")
+                    store.placeGenerationStatusByID[place.id] = "Queued generation failed."
+                    store.generatingPlaceIDs.remove(place.id)
+                    continue
+                }
+
+                store.generatingPlaceIDs.remove(place.id)
+
+                if queueIndex < queuedItems.count - 1 {
+                    await vertexImmediateCooldown(
+                        afterCompletedDraft: completedCount,
+                        totalDrafts: queuedItems.count,
+                        placeID: place.id
+                    )
+                }
+            }
+
+            if Task.isCancelled {
+                store.statusMessage = "Canceled queued place generation after \(completedCount) of \(queuedItems.count)."
+            } else {
+                store.statusMessage = "Finished \(completedCount) queued place image\(completedCount == 1 ? "" : "s")."
+            }
+
+            if !failureMessages.isEmpty {
+                placeGenerationErrorMessage = failureMessages.prefix(6).joined(separator: "\n")
+            }
+        }
+    }
+
+    private func referenceDraftsForQueuedPlacePromptGeneration(
+        place: BackgroundPlate,
+        workflow: PlaceWorkflowMode,
+        promptText: String
+    ) -> [GeminiGenerationReferenceDraft] {
+        var drafts = generationReferenceDrafts(for: place, workflow: workflow)
+        guard promptReferencesOutsideLocation(promptText, place: place),
+              let masterMapPath = store.effectivePlacesMasterMapPath(),
+              !masterMapPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !drafts.contains(where: { $0.path == masterMapPath }) else {
+            return drafts
+        }
+
+        drafts.insert(
+            GeminiGenerationReferenceDraft(
+                label: "Master Map",
+                path: masterMapPath,
+                isIncluded: true
+            ),
+            at: 0
+        )
+        return drafts
+    }
+
+    private func promptReferencesOutsideLocation(_ promptText: String, place: BackgroundPlate) -> Bool {
+        if place.isExteriorLike {
+            return true
+        }
+
+        let haystack = " " + promptText.lowercased() + " "
+        let outsideTokens = [
+            " outside ",
+            " outdoors ",
+            " outdoor ",
+            " exterior ",
+            " open sky ",
+            " street ",
+            " road ",
+            " bridge ",
+            " river ",
+            " valley ",
+            " mountain ",
+            " market ",
+            " plaza ",
+            " rooftop ",
+            " courtyard ",
+            " approach ",
+            " settlement ",
+            " village ",
+            " town "
+        ]
+        return outsideTokens.contains { haystack.contains($0) }
+    }
+
     private func prepareGenerationPlan(for place: BackgroundPlate, count: Int) {
         let specs = Array(generationSpecs(for: place).prefix(max(1, count)))
         let refs = generationReferenceDrafts(for: place, workflow: workflowMode)
@@ -2987,7 +3589,7 @@ struct PlacesPageView: View {
         let bridgeConstraint = bridgeConstraintNote(for: place)
         let placeDescription = descriptivePlaceEnvironment(for: place)
         let lightingDescription = descriptiveLightingGuidance(for: place)
-        let visualBrief = place.visualBrief.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visualBrief = place.effectiveVisualBrief
 
         let workflowLead: String
         switch workflow {
@@ -3064,7 +3666,7 @@ struct PlacesPageView: View {
             append(label: "\(reference.category.displayName): \(reference.title)", path: reference.imagePath, included: true)
         }
 
-        let emphasis = "\(place.name) \(place.notes) \(place.workflowPromptNotes)".lowercased()
+        let emphasis = place.promptSupportText.lowercased()
         for reference in store.placesWorkflowLibrary.landmarkReferences {
             let shouldInclude: Bool
             switch reference.category {
@@ -3095,9 +3697,7 @@ struct PlacesPageView: View {
 
     private func bridgeConstraintNote(for place: BackgroundPlate) -> String {
         let emphasis = [
-            place.name,
-            place.notes,
-            place.workflowPromptNotes,
+            place.promptSupportText,
             place.referenceImages.map(\.title).joined(separator: " "),
             place.referenceImages.map(\.notes).joined(separator: " "),
             store.placesWorkflowLibrary.landmarkReferences.map(\.title).joined(separator: " ")
@@ -3137,7 +3737,7 @@ struct PlacesPageView: View {
             : bridgeConstraintNote(for: place)
         let placeDescription = descriptivePlaceEnvironment(for: place)
         let lightingDescription = descriptiveLightingGuidance(for: place)
-        let visualBrief = place.visualBrief.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visualBrief = place.effectiveVisualBrief
         let unpopulated = "No people, no figures, no silhouettes in the frame."
         let militaryClause = AnimateStore.apiMilitaryClauseIfRelevant(for: visualBrief)
 
@@ -3182,7 +3782,7 @@ struct PlacesPageView: View {
     }
 
     private func descriptivePlaceEnvironment(for place: BackgroundPlate) -> String {
-        let emphasis = ([place.name, place.notes, place.workflowPromptNotes] + store.sourceLines(for: place.id))
+        let emphasis = ([place.promptSupportText] + store.sourceLines(for: place.id))
             .joined(separator: " ")
             .lowercased()
 
@@ -3651,8 +4251,8 @@ struct PlacesPageView: View {
         sourceDescription: String
     ) {
         guard let animateURL = store.animateURL else { return }
-        guard store.isGeminiAllowed() else {
-            placeGenerationErrorMessage = "Gemini API calls are blocked. Enable Gemini API Calls in Inspector > Tools."
+        if let error = store.geminiBatchGenerationAvailabilityError {
+            placeGenerationErrorMessage = error
             return
         }
 
@@ -3724,8 +4324,8 @@ struct PlacesPageView: View {
         workflow: PlaceWorkflowMode
     ) {
         guard let animateURL = store.animateURL else { return }
-        guard store.isGeminiAllowed() else {
-            placeGenerationErrorMessage = "Gemini API calls are blocked. Enable Gemini API Calls in Inspector > Tools."
+        if let error = store.geminiBatchGenerationAvailabilityError {
+            placeGenerationErrorMessage = error
             return
         }
 
@@ -3771,6 +4371,7 @@ struct PlacesPageView: View {
                 store.registerWorldGenerationBatch(
                     PlaceWorldGenerationBatch(
                         routeID: selectedDrafts.compactMap(\.routeID).first,
+                        placeID: place.id,
                         workflow: workflow,
                         title: plan.displayName,
                         state: "submitted",
@@ -4067,6 +4668,65 @@ struct PlacesPageView: View {
             return
         }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func worldMapImageCard<ContextMenu: View>(
+        title: String,
+        subtitle: String,
+        path: String,
+        accentColor: Color,
+        @ViewBuilder contextMenu: @escaping () -> ContextMenu
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.background.opacity(0.72))
+
+                if let url = resolvedAssetURL(for: path) {
+                    AsyncResolvedImageView(path: url.path, maxPixelSize: 1200, contentMode: .fill)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "photo")
+                            .font(.title3)
+                            .foregroundStyle(.tertiary)
+                        Text("Image unavailable")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(width: 240, height: 152)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(accentColor.opacity(0.35), lineWidth: 1)
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text((path as NSString).lastPathComponent)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(12)
+        .frame(width: 264, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(.quaternary.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(accentColor.opacity(0.18))
+        )
+        .contextMenu(menuItems: contextMenu)
     }
 
     private func sanitizedFilenameStem(for value: String) -> String {

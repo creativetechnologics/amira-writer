@@ -557,8 +557,6 @@ enum OWPProjectIO {
     static let songsDir = "Songs"
     static let charactersDir = "Characters"
     static let charactersFile = "Characters/characters.json"
-    static let synopsisDir = "Synopsis"
-    static let synopsisFile = "Synopsis/synopsis.txt"
 
     // MARK: - Load Phase 1 (metadata + stubs)
 
@@ -829,9 +827,8 @@ final class ScriptStore {
         showsRecentAgentUpdate ? "sparkles" : "arrow.triangle.2.circlepath"
     }
 
-    // MARK: - Synopsis State
+    // MARK: - Scratchpad / Derived Text State
 
-    var synopsisText: String = ""
     var scratchpadFiles: [ProjectTextFile] = []
     var lyricIterationFiles: [SongLyricIterationFile] = []
     private(set) var scratchpadDocumentText: String = ""
@@ -1027,6 +1024,7 @@ final class ScriptStore {
             }
 
             let eagerHydrationPaths = prioritizedHydrationPaths(
+                allPaths: stubs.map(\.relativePath),
                 primaryPath: songAssets.first?.relativePath,
                 externallyChangedPaths: externallyChangedPaths
             )
@@ -1041,18 +1039,15 @@ final class ScriptStore {
                 }
             }
 
-            loadSynopsis(from: effectiveProjectURL)
-
             await loadScratchpad(from: effectiveProjectURL)
             await loadLyricIterations(from: effectiveProjectURL)
 
-            // Ensure CLAUDE.md exists with synopsis instructions
+            // Ensure CLAUDE.md exists with embedded-synopsis instructions
             ensureClaudeMD(in: effectiveProjectURL)
 
             if !externallyChangedPaths.isEmpty {
                 let changedSongPaths = externallyChangedPaths.filter {
-                    $0 != OWPProjectIO.synopsisFile
-                        && $0 != ProjectDatabaseBridge.scratchpadPath
+                    $0 != ProjectDatabaseBridge.scratchpadPath
                         && !Self.isLyricIterationRelativePath($0)
                 }
                 for path in changedSongPaths {
@@ -1068,10 +1063,6 @@ final class ScriptStore {
 
             isDirty = false
             refreshSaveIndicator()
-
-            // Migrate legacy synopsis (Synopsis/synopsis.txt with {{{SCENE:...}}} markers)
-            // into per-scene embedded {{{SYNOPSIS}}} blocks in each libretto file.
-            migrateLegacySynopsisIfNeeded()
 
             statusMessage = "\(meta.name) - \(songAssets.count) songs loaded"
             persistProjectHistoryState()
@@ -1224,49 +1215,6 @@ final class ScriptStore {
         guard let idx = librettoFiles.firstIndex(where: { $0.relativePath == path }) else { return }
         let updated = SynopsisEmbedding.update(content: librettoFiles[idx].content, synopsis: text)
         updateLyricsForSong(atPath: path, lyrics: updated)
-    }
-
-    /// Migrate legacy Synopsis/synopsis.txt content (with {{{SCENE:path}}} markers)
-    /// into per-scene embedded {{{SYNOPSIS}}} blocks within each libretto file.
-    /// Only runs if the old synopsisText has scene markers AND no libretto files
-    /// have embedded synopsis blocks yet.
-    private func migrateLegacySynopsisIfNeeded() {
-        guard !synopsisText.isEmpty else { return }
-
-        // Check if any libretto already has embedded synopsis — skip if so
-        let alreadyMigrated = librettoFiles.contains { SynopsisEmbedding.extract(from: $0.content).isEmpty == false }
-        guard !alreadyMigrated else { return }
-
-        // Parse the legacy format
-        let sections = LegacySynopsisParser.parse(synopsisText)
-        let availablePaths = librettoFiles.map(\.relativePath)
-        var migrated = false
-
-        for section in sections {
-            guard let scenePath = section.scenePath else { continue }
-            let text = section.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { continue }
-
-            // Resolve the scene path
-            guard let resolvedPath = LegacySynopsisParser.resolvePath(
-                scenePath,
-                availablePaths: availablePaths
-            ) else { continue }
-
-            guard let idx = librettoFiles.firstIndex(where: { $0.relativePath == resolvedPath }) else { continue }
-            let updated = SynopsisEmbedding.update(content: librettoFiles[idx].content, synopsis: text)
-            librettoFiles[idx].content = updated
-            migrated = true
-        }
-
-        if migrated {
-            // Mark all migrated files dirty so they get saved
-            for file in librettoFiles {
-                if SynopsisEmbedding.extract(from: file.content).isEmpty == false {
-                    markDirty(path: file.relativePath)
-                }
-            }
-        }
     }
 
     // MARK: - Rename Song
@@ -1438,64 +1386,6 @@ final class ScriptStore {
         songAssets[idx].document.notes = notes
         songAssets[idx].document.updatedAt = Date()
         markDirty(path: path)
-    }
-
-        // MARK: - Synopsis
-
-    func loadSynopsis(from projectURL: URL) {
-        let synopsisURL = projectURL.appendingPathComponent(OWPProjectIO.synopsisFile)
-        if let data = try? Data(contentsOf: synopsisURL),
-           let text = String(data: data, encoding: .utf8) {
-            synopsisText = text
-            if let snapshot = fileSnapshot(for: synopsisURL) {
-                lastKnownModDates["__synopsis__"] = snapshot.modificationDate
-                lastKnownFileSnapshots[OWPProjectIO.synopsisFile] = snapshot
-            }
-        } else {
-            synopsisText = ""
-        }
-    }
-
-    func refreshSynopsisFromProjectFile() {
-        guard let url = fileProjectURL,
-              url.pathExtension.lowercased() != "ows" else {
-            return
-        }
-
-        let synopsisURL = url.appendingPathComponent(OWPProjectIO.synopsisFile)
-        let nextText: String
-        if let data = try? Data(contentsOf: synopsisURL),
-           let text = String(data: data, encoding: .utf8) {
-            nextText = text
-        } else {
-            nextText = ""
-        }
-
-        guard nextText != synopsisText else {
-            if let snapshot = fileSnapshot(for: synopsisURL) {
-                lastKnownModDates["__synopsis__"] = snapshot.modificationDate
-                lastKnownFileSnapshots[OWPProjectIO.synopsisFile] = snapshot
-            }
-            return
-        }
-
-        synopsisText = nextText
-        if let snapshot = fileSnapshot(for: synopsisURL) {
-            lastKnownModDates["__synopsis__"] = snapshot.modificationDate
-            lastKnownFileSnapshots[OWPProjectIO.synopsisFile] = snapshot
-        }
-    }
-
-    func saveSynopsis() {
-        guard let url = fileProjectURL else { return }
-        let synopsisURL = url.appendingPathComponent(OWPProjectIO.synopsisFile)
-        let dirURL = url.appendingPathComponent(OWPProjectIO.synopsisDir)
-        do {
-            try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
-            try synopsisText.write(to: synopsisURL, atomically: true, encoding: .utf8)
-        } catch {
-            statusMessage = "Failed to save synopsis: \(error.localizedDescription)"
-        }
     }
 
     // MARK: - Scratchpad
@@ -1766,7 +1656,7 @@ final class ScriptStore {
             cat \(owpName)/CLAUDE.md
             ```
 
-            All scene files, synopsis, metadata, and markup rules are documented there.
+            All scene files, embedded synopsis blocks, metadata, and markup rules are documented there.
             """
             try? parentContent.write(to: parentClaudeMD, atomically: true, encoding: .utf8)
         }
@@ -1787,28 +1677,26 @@ final class ScriptStore {
         ## Project Structure
 
         - `Songs/` — Scene files (.ows JSON). Each contains a libretto (script/lyrics) with version history.
-        - `Synopsis/synopsis.txt` — The project synopsis. A prose summary of the story.
         - `Metadata/project.json` — Project metadata.
 
         ## Synopsis
 
-        The synopsis file at `Synopsis/synopsis.txt` is a thorough, multi-page prose summary of the entire story.
-
-        **Scene markers:** The synopsis contains hidden navigation markers in the format:
+        Each scene's synopsis lives inside that scene's `.ows` file as a hidden block in the active lyrics:
         ```
-        {{{SCENE:Songs/filename.ows}}}
+        {{{SYNOPSIS}}}
+        Summary text here
+        {{{/SYNOPSIS}}}
         ```
-        These markers appear on their own line before the synopsis text for that scene. They are used by the Write workspace \
-        for navigation — clicking on a section of the synopsis jumps to the corresponding scene.
+        The Write workspace reads these embedded synopsis blocks directly from `Songs/*.ows` at startup. \
+        Do not create or rely on a separate `Synopsis/` folder or `Synopsis/synopsis.txt`.
 
-        **When you modify scenes:** After making changes to any scene's lyrics/libretto, you MUST update the synopsis \
-        to reflect those changes. Regenerate or edit `Synopsis/synopsis.txt` to keep it in sync with the current script.
+        **When you modify scenes:** After making changes to any scene's lyrics/libretto, update that scene's embedded \
+        `{{{SYNOPSIS}}}` block so it stays in sync with the current script.
 
-        When updating the synopsis:
-        1. Read all scene files from `Songs/` in filename order
-        2. Write a thorough prose synopsis capturing the full narrative
-        3. Include a `{{{SCENE:Songs/filename.ows}}}` marker before each scene's section
-        4. Save to `Synopsis/synopsis.txt`
+        When updating synopsis content:
+        1. Read the relevant scene file(s) from `Songs/`
+        2. Update the embedded `{{{SYNOPSIS}}}` block(s) inside the relevant `.ows` file(s)
+        3. Keep the synopsis text hidden from normal libretto display by preserving the block markup
 
         ## Scene Files (.ows)
 
@@ -1978,13 +1866,6 @@ final class ScriptStore {
         }
 
         guard let projectURL = fileProjectURL else { return }
-        if projectURL.pathExtension.lowercased() != "ows" {
-            let synopsisURL = projectURL.appendingPathComponent(OWPProjectIO.synopsisFile)
-            if let snapshot = fileSnapshot(for: synopsisURL) {
-                lastKnownModDates["__synopsis__"] = snapshot.modificationDate
-                lastKnownFileSnapshots[OWPProjectIO.synopsisFile] = snapshot
-            }
-        }
 
         let scratchpadURL = scratchpadFileURL(for: projectURL)
         if let snapshot = fileSnapshot(for: scratchpadURL) {
@@ -2113,34 +1994,6 @@ final class ScriptStore {
             }
             if snapshot != lastKnown {
                 reloadExternallyChanged(stub: stub, modDate: snapshot.modificationDate)
-            }
-        }
-
-        // Check synopsis file for external changes
-        let synopsisURL = url.appendingPathComponent(OWPProjectIO.synopsisFile)
-        if let snapshot = fileSnapshot(for: synopsisURL) {
-            let lastKnown = lastKnownFileSnapshots[OWPProjectIO.synopsisFile]
-            if lastKnown == nil {
-                lastKnownModDates["__synopsis__"] = snapshot.modificationDate
-                lastKnownFileSnapshots[OWPProjectIO.synopsisFile] = snapshot
-            } else if snapshot != lastKnown! {
-                lastKnownModDates["__synopsis__"] = snapshot.modificationDate
-                lastKnownFileSnapshots[OWPProjectIO.synopsisFile] = snapshot
-                if let data = try? Data(contentsOf: synopsisURL),
-                   let text = String(data: data, encoding: .utf8),
-                   text != synopsisText {
-                    beginAgentSync()
-                    synopsisText = text
-                    appendProjectHistory(
-                        kind: .externalReload,
-                        title: "Reloaded synopsis from disk",
-                        message: OWPProjectIO.synopsisFile,
-                        relativePaths: [OWPProjectIO.synopsisFile]
-                    )
-                    refreshGitHistory()
-                    markAgentUpdated()
-                    statusMessage = "Synopsis reloaded (external change)"
-                }
             }
         }
 
@@ -2409,13 +2262,6 @@ final class ScriptStore {
             }
         }
 
-        if projectURL.pathExtension.lowercased() != "ows" {
-            let synopsisURL = projectURL.appendingPathComponent(OWPProjectIO.synopsisFile)
-            if let snapshot = fileSnapshot(for: synopsisURL) {
-                snapshots[OWPProjectIO.synopsisFile] = snapshot
-            }
-        }
-
         let scratchpadURL = scratchpadFileURL(for: projectURL)
         if let snapshot = fileSnapshot(for: scratchpadURL) {
             snapshots[ProjectDatabaseBridge.scratchpadPath] = snapshot
@@ -2603,13 +2449,15 @@ final class ScriptStore {
     }
 
     private func prioritizedHydrationPaths(
+        allPaths: [String],
         primaryPath: String?,
         externallyChangedPaths: [String]
     ) -> [String] {
         var seen = Set<String>()
         var ordered: [String] = []
 
-        for path in [primaryPath].compactMap({ $0 }) + externallyChangedPaths where seen.insert(path).inserted {
+        for path in [primaryPath].compactMap({ $0 }) + externallyChangedPaths + allPaths
+        where seen.insert(path).inserted {
             ordered.append(path)
         }
 

@@ -40,6 +40,22 @@ struct ImagineSceneShotGallery: Identifiable, Codable, Sendable {
         }
     }
 
+    func prompt(for moment: ImagineShotMoment) -> String {
+        switch moment {
+        case .beginning: beginningPrompt
+        case .middle: middlePrompt
+        case .end: endPrompt
+        }
+    }
+
+    mutating func setPrompt(_ prompt: String, for moment: ImagineShotMoment) {
+        switch moment {
+        case .beginning: beginningPrompt = prompt
+        case .middle: middlePrompt = prompt
+        case .end: endPrompt = prompt
+        }
+    }
+
     mutating func setSelectedPath(_ path: String?, for moment: ImagineShotMoment) {
         switch moment {
         case .beginning: selectedBeginningPath = path
@@ -61,6 +77,34 @@ struct ImagineSceneShotGallery: Identifiable, Codable, Sendable {
         case .beginning: beginningImagePaths.append(path)
         case .middle: middleImagePaths.append(path)
         case .end: endImagePaths.append(path)
+        }
+    }
+
+    mutating func absorbStoredState(from stored: ImagineSceneShotGallery?) {
+        guard let stored else { return }
+        beginningPrompt = stored.beginningPrompt
+        middlePrompt = stored.middlePrompt
+        endPrompt = stored.endPrompt
+        selectedBeginningPath = matchedSelection(stored.selectedBeginningPath, candidates: beginningImagePaths)
+        selectedMiddlePath = matchedSelection(stored.selectedMiddlePath, candidates: middleImagePaths)
+        selectedEndPath = matchedSelection(stored.selectedEndPath, candidates: endImagePaths)
+    }
+
+    private func matchedSelection(_ storedPath: String?, candidates: [String]) -> String? {
+        guard let storedPath, !storedPath.isEmpty else { return nil }
+        if candidates.contains(storedPath) {
+            return storedPath
+        }
+
+        let normalizedStored = storedPath.replacingOccurrences(of: "\\", with: "/")
+        let storedLastPathComponent = URL(fileURLWithPath: storedPath).lastPathComponent
+
+        return candidates.first { candidate in
+            let normalizedCandidate = candidate.replacingOccurrences(of: "\\", with: "/")
+            return normalizedCandidate == normalizedStored ||
+                normalizedCandidate.hasSuffix(normalizedStored) ||
+                normalizedStored.hasSuffix(normalizedCandidate) ||
+                URL(fileURLWithPath: candidate).lastPathComponent == storedLastPathComponent
         }
     }
 }

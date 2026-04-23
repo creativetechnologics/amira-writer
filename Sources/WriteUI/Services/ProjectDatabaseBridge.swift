@@ -4,7 +4,6 @@ import Foundation
 enum ProjectDatabaseBridge {
     static let metadataPaths = ["Metadata/project.json", "project.json"]
     static let charactersPaths = ["Characters/characters.json", "characters.json"]
-    static let synopsisPath = "Synopsis/synopsis.txt"
     static let scratchpadPath = "Write/libretto-scratchpad.txt"
 
     static func loadWriterProject(url: URL) async throws -> ProjectLoadResult {

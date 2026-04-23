@@ -107,6 +107,8 @@ struct SunoGeneration: Identifiable {
     var baseTitle: String?
     var version: Int?
     var coverTitle: String?
+    var submissionIndex: Int?
+    var submissionCount: Int?
     var prompt: String
     var style: String?
     var excludeStyles: String?
@@ -125,6 +127,8 @@ struct SunoGeneration: Identifiable {
         baseTitle: String? = nil,
         version: Int? = nil,
         coverTitle: String? = nil,
+        submissionIndex: Int? = nil,
+        submissionCount: Int? = nil,
         prompt: String,
         style: String? = nil,
         excludeStyles: String? = nil,
@@ -142,6 +146,8 @@ struct SunoGeneration: Identifiable {
         self.baseTitle = baseTitle
         self.version = version
         self.coverTitle = coverTitle
+        self.submissionIndex = submissionIndex
+        self.submissionCount = submissionCount
         self.prompt = prompt
         self.style = style
         self.excludeStyles = excludeStyles

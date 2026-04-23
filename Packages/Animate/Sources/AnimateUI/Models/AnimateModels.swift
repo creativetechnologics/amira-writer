@@ -466,6 +466,19 @@ enum CharacterCanvasRenderMode: String, Codable, Sendable, CaseIterable, Hashabl
 struct CharacterInspirationBatchJob: Identifiable, Codable, Sendable, Hashable {
     enum Kind: String, Codable, Sendable, Hashable {
         case inspiration
+        case loraCandidate = "lora_candidate"
+        case unknown
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            let rawValue = try container.decode(String.self)
+            self = Self(rawValue: rawValue) ?? .unknown
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
     }
 
     var id: UUID
@@ -2197,6 +2210,10 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
     var name: String
     var filename: String
     var notes: String
+    var coreIdentity: String = ""
+    var geographicPlacement: String = ""
+    var physicalLayoutAndTopography: String = ""
+    var wartimeAndHistoricalContext: String = ""
     var imagePaths: [String]
     var approvedImagePath: String?
     var sourceURL: URL?
@@ -2210,6 +2227,27 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
     /// no place slugs, no scene titles, no meta-instructions. Empty string = no brief.
     /// When empty the assembler omits the segment rather than falling back to legacy fields.
     var visualBrief: String = ""
+    var sideOfRiver: String = ""
+    var timeOfDay: String = ""
+    var dayLabel: String = ""
+    var positionInValley: String = ""
+    var geographicPosition: String = ""
+    var physicalDescription: String = ""
+    var sensoryWorld: String = ""
+    var culturalHistoricalContext: String = ""
+    var inhabitantsActivity: String = ""
+    var keyPropsSetDressing: String = ""
+    var dramaticFunction: String = ""
+    var visualContinuityAnchors: String = ""
+    var sceneStateVariations: String = ""
+    var humanActivityAndSocialUse: String = ""
+    var nearbyConnections: String = ""
+    var visualPaletteLighting: String = ""
+    var cameraFramingNotes: String = ""
+    var imageGenerationGuardrails: String = ""
+    var formerTimeSpecificRecordsFoldedIntoLocation: String = ""
+    var additionalGuidance: String = ""
+    var imageGenerationPrompts: [String] = Array(repeating: "", count: 5)
     var animatedImagePaths: [String]
     var animatedApprovedImagePath: String?
     var buildingAnchorNodeID: UUID?
@@ -2219,8 +2257,15 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, filename, notes, imagePaths, approvedImagePath
+        case coreIdentity, geographicPlacement, physicalLayoutAndTopography, wartimeAndHistoricalContext
         case angleImages, locationCategory, sceneUsage
         case referenceImages, workflowPromptNotes, visualBrief, animatedImagePaths, animatedApprovedImagePath
+        case sideOfRiver, timeOfDay, dayLabel, positionInValley
+        case geographicPosition, physicalDescription, sensoryWorld, culturalHistoricalContext
+        case inhabitantsActivity, keyPropsSetDressing, dramaticFunction
+        case visualContinuityAnchors, sceneStateVariations, humanActivityAndSocialUse, nearbyConnections
+        case visualPaletteLighting, cameraFramingNotes, imageGenerationGuardrails
+        case formerTimeSpecificRecordsFoldedIntoLocation, additionalGuidance, imageGenerationPrompts
         case buildingAnchorNodeID, linkedExteriorPlaceID
         case imageRatings
     }
@@ -2230,6 +2275,10 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         name: String,
         filename: String,
         notes: String = "",
+        coreIdentity: String = "",
+        geographicPlacement: String = "",
+        physicalLayoutAndTopography: String = "",
+        wartimeAndHistoricalContext: String = "",
         imagePaths: [String] = [],
         approvedImagePath: String? = nil,
         sourceURL: URL? = nil,
@@ -2239,6 +2288,27 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         referenceImages: [PlaceReferenceImage] = [],
         workflowPromptNotes: String = "",
         visualBrief: String = "",
+        sideOfRiver: String = "",
+        timeOfDay: String = "",
+        dayLabel: String = "",
+        positionInValley: String = "",
+        geographicPosition: String = "",
+        physicalDescription: String = "",
+        sensoryWorld: String = "",
+        culturalHistoricalContext: String = "",
+        inhabitantsActivity: String = "",
+        keyPropsSetDressing: String = "",
+        dramaticFunction: String = "",
+        visualContinuityAnchors: String = "",
+        sceneStateVariations: String = "",
+        humanActivityAndSocialUse: String = "",
+        nearbyConnections: String = "",
+        visualPaletteLighting: String = "",
+        cameraFramingNotes: String = "",
+        imageGenerationGuardrails: String = "",
+        formerTimeSpecificRecordsFoldedIntoLocation: String = "",
+        additionalGuidance: String = "",
+        imageGenerationPrompts: [String] = Array(repeating: "", count: 5),
         animatedImagePaths: [String] = [],
         animatedApprovedImagePath: String? = nil,
         buildingAnchorNodeID: UUID? = nil,
@@ -2248,6 +2318,10 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         self.name = name
         self.filename = filename
         self.notes = notes
+        self.coreIdentity = coreIdentity
+        self.geographicPlacement = geographicPlacement
+        self.physicalLayoutAndTopography = physicalLayoutAndTopography
+        self.wartimeAndHistoricalContext = wartimeAndHistoricalContext
         self.imagePaths = imagePaths
         self.approvedImagePath = approvedImagePath
         self.sourceURL = sourceURL
@@ -2257,6 +2331,27 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         self.referenceImages = referenceImages
         self.workflowPromptNotes = workflowPromptNotes
         self.visualBrief = visualBrief
+        self.sideOfRiver = sideOfRiver
+        self.timeOfDay = timeOfDay
+        self.dayLabel = dayLabel
+        self.positionInValley = positionInValley
+        self.geographicPosition = geographicPosition
+        self.physicalDescription = physicalDescription
+        self.sensoryWorld = sensoryWorld
+        self.culturalHistoricalContext = culturalHistoricalContext
+        self.inhabitantsActivity = inhabitantsActivity
+        self.keyPropsSetDressing = keyPropsSetDressing
+        self.dramaticFunction = dramaticFunction
+        self.visualContinuityAnchors = visualContinuityAnchors
+        self.sceneStateVariations = sceneStateVariations
+        self.humanActivityAndSocialUse = humanActivityAndSocialUse
+        self.nearbyConnections = nearbyConnections
+        self.visualPaletteLighting = visualPaletteLighting
+        self.cameraFramingNotes = cameraFramingNotes
+        self.imageGenerationGuardrails = imageGenerationGuardrails
+        self.formerTimeSpecificRecordsFoldedIntoLocation = formerTimeSpecificRecordsFoldedIntoLocation
+        self.additionalGuidance = additionalGuidance
+        self.imageGenerationPrompts = Array((imageGenerationPrompts + Array(repeating: "", count: 5)).prefix(5))
         self.animatedImagePaths = animatedImagePaths
         self.animatedApprovedImagePath = animatedApprovedImagePath
         self.buildingAnchorNodeID = buildingAnchorNodeID
@@ -2269,6 +2364,26 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
         filename = try c.decodeIfPresent(String.self, forKey: .filename) ?? ""
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        func joinLegacy(_ fragments: [String]) -> String {
+            fragments
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+        }
+        func normalizeImageGenerationPrompts(_ prompts: [String]) -> [String] {
+            Array((prompts + Array(repeating: "", count: 5)).prefix(5))
+        }
+        coreIdentity = try c.decodeIfPresent(String.self, forKey: .coreIdentity) ?? notes
+        geographicPlacement = try c.decodeIfPresent(String.self, forKey: .geographicPlacement)
+            ?? joinLegacy([
+                try c.decodeIfPresent(String.self, forKey: .geographicPosition) ?? "",
+                try c.decodeIfPresent(String.self, forKey: .sideOfRiver) ?? "",
+                try c.decodeIfPresent(String.self, forKey: .positionInValley) ?? ""
+            ])
+        physicalLayoutAndTopography = try c.decodeIfPresent(String.self, forKey: .physicalLayoutAndTopography)
+            ?? (try c.decodeIfPresent(String.self, forKey: .physicalDescription) ?? "")
+        wartimeAndHistoricalContext = try c.decodeIfPresent(String.self, forKey: .wartimeAndHistoricalContext)
+            ?? (try c.decodeIfPresent(String.self, forKey: .culturalHistoricalContext) ?? "")
         imagePaths = try c.decodeIfPresent([String].self, forKey: .imagePaths) ?? []
         approvedImagePath = try c.decodeIfPresent(String.self, forKey: .approvedImagePath)
         sourceURL = nil
@@ -2278,6 +2393,46 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         referenceImages = try c.decodeIfPresent([PlaceReferenceImage].self, forKey: .referenceImages) ?? []
         workflowPromptNotes = try c.decodeIfPresent(String.self, forKey: .workflowPromptNotes) ?? ""
         visualBrief = try c.decodeIfPresent(String.self, forKey: .visualBrief) ?? ""
+        sideOfRiver = try c.decodeIfPresent(String.self, forKey: .sideOfRiver) ?? ""
+        timeOfDay = try c.decodeIfPresent(String.self, forKey: .timeOfDay) ?? ""
+        dayLabel = try c.decodeIfPresent(String.self, forKey: .dayLabel) ?? ""
+        positionInValley = try c.decodeIfPresent(String.self, forKey: .positionInValley) ?? ""
+        geographicPosition = try c.decodeIfPresent(String.self, forKey: .geographicPosition) ?? ""
+        physicalDescription = try c.decodeIfPresent(String.self, forKey: .physicalDescription) ?? ""
+        sensoryWorld = try c.decodeIfPresent(String.self, forKey: .sensoryWorld) ?? ""
+        culturalHistoricalContext = try c.decodeIfPresent(String.self, forKey: .culturalHistoricalContext) ?? ""
+        inhabitantsActivity = try c.decodeIfPresent(String.self, forKey: .inhabitantsActivity) ?? ""
+        keyPropsSetDressing = try c.decodeIfPresent(String.self, forKey: .keyPropsSetDressing) ?? ""
+        dramaticFunction = try c.decodeIfPresent(String.self, forKey: .dramaticFunction) ?? ""
+        visualContinuityAnchors = try c.decodeIfPresent(String.self, forKey: .visualContinuityAnchors) ?? ""
+        sceneStateVariations = try c.decodeIfPresent(String.self, forKey: .sceneStateVariations)
+            ?? joinLegacy([
+                timeOfDay,
+                dayLabel,
+                try c.decodeIfPresent(String.self, forKey: .visualPaletteLighting) ?? ""
+            ])
+        humanActivityAndSocialUse = try c.decodeIfPresent(String.self, forKey: .humanActivityAndSocialUse)
+            ?? inhabitantsActivity
+        nearbyConnections = try c.decodeIfPresent(String.self, forKey: .nearbyConnections) ?? ""
+        visualPaletteLighting = try c.decodeIfPresent(String.self, forKey: .visualPaletteLighting) ?? ""
+        cameraFramingNotes = try c.decodeIfPresent(String.self, forKey: .cameraFramingNotes) ?? ""
+        imageGenerationGuardrails = try c.decodeIfPresent(String.self, forKey: .imageGenerationGuardrails)
+            ?? joinLegacy([
+                workflowPromptNotes,
+                cameraFramingNotes
+            ])
+        formerTimeSpecificRecordsFoldedIntoLocation = try c.decodeIfPresent(
+            String.self,
+            forKey: .formerTimeSpecificRecordsFoldedIntoLocation
+        ) ?? ""
+        additionalGuidance = try c.decodeIfPresent(String.self, forKey: .additionalGuidance)
+            ?? joinLegacy([
+                try c.decodeIfPresent(String.self, forKey: .sensoryWorld) ?? "",
+                keyPropsSetDressing
+            ])
+        imageGenerationPrompts = normalizeImageGenerationPrompts(
+            try c.decodeIfPresent([String].self, forKey: .imageGenerationPrompts) ?? []
+        )
         animatedImagePaths = try c.decodeIfPresent([String].self, forKey: .animatedImagePaths) ?? []
         animatedApprovedImagePath = try c.decodeIfPresent(String.self, forKey: .animatedApprovedImagePath)
         buildingAnchorNodeID = try c.decodeIfPresent(UUID.self, forKey: .buildingAnchorNodeID)
@@ -2309,6 +2464,52 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         case .animated:
             resolvedAnimatedApprovedImagePath
         }
+    }
+
+    var effectiveVisualBrief: String {
+        let existing = visualBrief.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !existing.isEmpty {
+            return existing
+        }
+
+        return [
+            coreIdentity,
+            geographicPlacement,
+            physicalLayoutAndTopography,
+            wartimeAndHistoricalContext,
+            visualContinuityAnchors,
+            sceneStateVariations,
+            humanActivityAndSocialUse,
+            nearbyConnections,
+            imageGenerationGuardrails,
+            additionalGuidance
+        ]
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
+    }
+
+    var promptSupportText: String {
+        [
+            name,
+            locationCategory,
+            notes,
+            workflowPromptNotes,
+            coreIdentity,
+            geographicPlacement,
+            physicalLayoutAndTopography,
+            wartimeAndHistoricalContext,
+            visualContinuityAnchors,
+            sceneStateVariations,
+            humanActivityAndSocialUse,
+            nearbyConnections,
+            imageGenerationGuardrails,
+            additionalGuidance,
+            effectiveVisualBrief
+        ]
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
     }
 
     /// All unique camera shot types present in angle images.

@@ -15,11 +15,14 @@ struct GlobalSettingsSheet: View {
     let onDismiss: () -> Void
 
     @AppStorage("animate.features.map3dEnabled") private var map3dEnabled: Bool = true
+    @AppStorage(AnimatedLookPromptSettings.masterPromptDefaultsKey) private var masterAnimatedLookPrompt = ""
 
     @State private var selectedTab: Tab = .general
     @State private var showAPISettings = false
     @State private var drawThingsStatus: String?
     @State private var drawThingsStatusIcon: String = "network"
+    @State private var vertexCreditRemainingDraft = ""
+    @FocusState private var vertexCreditFieldFocused: Bool
 
     enum Tab: String, CaseIterable {
         case general = "General"
@@ -66,6 +69,17 @@ struct GlobalSettingsSheet: View {
         }
         .padding(20)
         .frame(width: 680, height: 640)
+        .onAppear {
+            syncVertexCreditRemainingDraft()
+            masterAnimatedLookPrompt = AnimatedLookPromptSettings.loadMasterPrompt()
+        }
+        .onChange(of: store.vertexCreditRemainingUSD) { _, _ in
+            guard !vertexCreditFieldFocused else { return }
+            syncVertexCreditRemainingDraft()
+        }
+        .onChange(of: masterAnimatedLookPrompt) { _, newValue in
+            store.persistProjectAnimatedLookPrompt(newValue)
+        }
     }
 
     private var header: some View {
@@ -99,6 +113,21 @@ struct GlobalSettingsSheet: View {
             }
 
             sectionCard(
+                title: "Gemini batch API jobs",
+                subtitle: "Controls the long-running Gemini batch system that submits jobs and waits for them to come back later. Immediate multi-image generation still works when this is OFF."
+            ) {
+                Toggle(isOn: $store.geminiBatchJobsEnabled) {
+                    Label("Allow Gemini batch API jobs", systemImage: "tray.full")
+                }
+                if !store.geminiBatchJobsEnabled {
+                    Text("Gemini batch submission is currently blocked across the app. Add-to-Batch, queue submission, and watchdog-backed batch jobs are disabled.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            sectionCard(
                 title: "Current Gemini activity",
                 subtitle: "Matches the status badge in the title bar."
             ) {
@@ -124,7 +153,7 @@ struct GlobalSettingsSheet: View {
                 subtitle: "Stored in the project folder (synced by Syncthing). Covers Gemini, MiniMax, Vidu, RunPod, and the Vertex AI backend."
             ) {
                 VStack(alignment: .leading, spacing: 6) {
-                    apiKeyStatusRow("Gemini", configured: !store.geminiAPIKey.isEmpty)
+                    apiKeyStatusRow("Gemini", configured: store.hasGeminiImageGenerationConfiguration)
                     apiKeyStatusRow("MiniMax", configured: !store.miniMaxAPIKey.isEmpty)
                     apiKeyStatusRow("RunPod", configured: !store.runPodAPIKey.isEmpty)
 
@@ -147,6 +176,35 @@ struct GlobalSettingsSheet: View {
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
+            }
+
+            sectionCard(
+                title: "Master Animated Look Prompt",
+                subtitle: "Stored in the project folder so it can sync between machines. This prompt is prepended whenever the Animated Look toggles are enabled from Canvas or Gemini generation flows."
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextEditor(text: $masterAnimatedLookPrompt)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 150)
+                        .padding(4)
+                        .background(Color.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(.white.opacity(0.08)))
+
+                    HStack {
+                        Text(masterAnimatedLookPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                             ? "No animated look prompt is configured yet."
+                             : "Configured — generation toggles can inject this prompt anywhere they are enabled.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if !masterAnimatedLookPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Button("Clear") {
+                                masterAnimatedLookPrompt = ""
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                }
             }
 
             vertexCreditCard
@@ -224,15 +282,60 @@ struct GlobalSettingsSheet: View {
                 Text("Budget: $\(String(format: "%.2f", budget))")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                HStack {
-                    Button("Reset tracking") {
-                        store.resetVertexCreditTracking()
+                Divider()
+                    .padding(.vertical, 2)
+                Text("If this local estimate drifts from the real Google Cloud Console balance, type the current remaining amount here and save it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .center, spacing: 8) {
+                    Text("Current remaining")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    TextField("0.00", text: $vertexCreditRemainingDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 110)
+                        .focused($vertexCreditFieldFocused)
+                    Button("Save") {
+                        saveVertexCreditRemainingDraft()
                     }
                     .controlSize(.small)
+                    .disabled(!canSaveVertexCreditRemainingDraft)
                     Spacer()
+                    Button("Reset to $300") {
+                        store.resetVertexCreditTracking()
+                        syncVertexCreditRemainingDraft()
+                    }
+                    .controlSize(.small)
                 }
             }
         }
+    }
+
+    private var parsedVertexCreditRemainingDraft: Double? {
+        let cleaned = vertexCreditRemainingDraft
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+        guard !cleaned.isEmpty, let value = Double(cleaned), value >= 0 else { return nil }
+        return value
+    }
+
+    private var canSaveVertexCreditRemainingDraft: Bool {
+        guard let parsedVertexCreditRemainingDraft else { return false }
+        return abs(parsedVertexCreditRemainingDraft - store.vertexCreditRemainingUSD) > 0.000_1
+    }
+
+    private func syncVertexCreditRemainingDraft() {
+        vertexCreditRemainingDraft = String(format: "%.2f", store.vertexCreditRemainingUSD)
+    }
+
+    private func saveVertexCreditRemainingDraft() {
+        guard let parsedVertexCreditRemainingDraft else { return }
+        store.setVertexCreditRemainingUSD(parsedVertexCreditRemainingDraft)
+        vertexCreditFieldFocused = false
+        syncVertexCreditRemainingDraft()
     }
 
     private func apiKeyStatusRow(_ name: String, configured: Bool) -> some View {

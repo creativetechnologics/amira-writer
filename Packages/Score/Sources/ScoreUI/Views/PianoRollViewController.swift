@@ -173,6 +173,11 @@ final class PianoRollViewController: NSViewController {
     var tool: PianoRollToolChoice = .select {
         didSet {
             guard tool != oldValue else { return }
+            if isAllTracksConstrainedMode, tool != .select {
+                tool = .select
+                store.statusMessage = "All Tracks uses the Select tool only"
+                return
+            }
             tempoLane?.currentTool = tool
             syncChromeState()
             editorView?.refreshCursor()
@@ -276,6 +281,7 @@ final class PianoRollViewController: NSViewController {
         chromeState.tool = tool
         chromeState.snap = snap
         chromeState.selectedNoteCount = selectedNoteIDs.count
+        chromeState.isAllTracksView = isAllTracksConstrainedMode
         chromeState.showGhostNotes = showGhostNotes
         chromeState.scaleRoot = scaleRoot
         chromeState.scaleType = scaleType
@@ -351,6 +357,7 @@ final class PianoRollViewController: NSViewController {
     private enum DragMode {
         case none
         case movingNotes         // dragging selected notes to new position
+        case movingNotesPitchOnly // all-tracks select mode: vertical transposition only
         case resizingNotes       // dragging right edge of a note to change duration
         case resizingNotesLeft   // dragging left edge of a note to change start time + duration
         case drawingNote         // draw tool: creating a new note
@@ -441,7 +448,7 @@ final class PianoRollViewController: NSViewController {
     func cutSelected() {
         copySelected()
         guard !selectedNoteIDs.isEmpty else { return }
-        guard !isAllTracksReadOnly else {
+        guard !isAllTracksConstrainedMode else {
             store.statusMessage = "Select a track to edit notes"
             return
         }
@@ -455,7 +462,7 @@ final class PianoRollViewController: NSViewController {
     func pasteNotes() {
         guard !clipboard.isEmpty else { return }
         guard let editor = editorView else { return }
-        guard !isAllTracksReadOnly else {
+        guard !isAllTracksConstrainedMode else {
             store.statusMessage = "Select a track to edit notes"
             return
         }
@@ -1038,7 +1045,7 @@ final class PianoRollViewController: NSViewController {
         editor.onCanvasRightClick = { [weak self] point, event in
             guard let self else { return nil }
             // C.1/C.2: Right-click delete in Draw and Paint tools
-            if self.tool == .draw && !self.isAllTracksReadOnly {
+            if self.tool == .draw && !self.isAllTracksConstrainedMode {
                 if let note = self.noteAtPoint(point) {
                     self.pushUndo()
                     var notes = self.store.pianoRollNotes
@@ -1053,7 +1060,7 @@ final class PianoRollViewController: NSViewController {
 
         // Right-drag: sweep-delete in Draw/Paint tools
         editor.onCanvasRightDragged = { [weak self] point, event in
-            guard let self, self.tool == .draw, !self.isAllTracksReadOnly else { return }
+            guard let self, self.tool == .draw, !self.isAllTracksConstrainedMode else { return }
             if !self.rightDragUndoPushed {
                 self.pushUndo()
                 self.rightDragUndoPushed = true
@@ -2550,8 +2557,15 @@ final class PianoRollViewController: NSViewController {
         let newFilter = store.selectedTrackFilter
         if newFilter != lastTrackFilter {
             lastTrackFilter = newFilter
+            if isAllTracksConstrainedMode, tool != .select {
+                tool = .select
+            } else {
+                syncChromeState()
+            }
             store.updatePreviewMappingForTrackFilter()
             pushDataToEditor()
+        } else {
+            syncChromeState()
         }
     }
 
@@ -2829,6 +2843,13 @@ final class PianoRollViewController: NSViewController {
 
     /// Returns the desired cursor for the current tool and canvas position.
     func cursorForCanvasPoint(_ point: NSPoint) -> NSCursor {
+        if isAllTracksConstrainedMode {
+            if tool == .select, noteAtPoint(point) != nil {
+                return .openHand
+            }
+            return .arrow
+        }
+
         switch tool {
         case .select:
             if noteForResize(at: point) != nil || noteForLeftResize(at: point) != nil {
@@ -2862,8 +2883,8 @@ final class PianoRollViewController: NSViewController {
 
     // MARK: Mouse Down
 
-    /// True when no specific track is selected — editing is blocked in this mode.
-    private var isAllTracksReadOnly: Bool {
+    /// True when no specific track is selected — only Select-tool vertical pitch edits are allowed.
+    private var isAllTracksConstrainedMode: Bool {
         store.selectedTrackFilter.isEmpty
     }
 
@@ -2877,17 +2898,17 @@ final class PianoRollViewController: NSViewController {
         resizeAnchorNoteID = nil
         rightDragUndoPushed = false
 
-        // Block editing tools in all-tracks view — selection/viewing only
-        if isAllTracksReadOnly {
+        // All-tracks view allows Select-only vertical pitch fixes.
+        if isAllTracksConstrainedMode {
             switch tool {
             case .select:
-                // Allow selection (marquee/lasso) but not move/resize — handled in handleSelectMouseDown
-                handleSelectMouseDownReadOnly(point: point, event: event)
+                handleSelectMouseDownAllTracks(point: point, event: event)
             case .draw, .erase, .mute, .slice, .stamp:
-                store.statusMessage = "Select a track to edit notes"
+                store.statusMessage = "All Tracks uses the Select tool only"
                 return
             case .paintbrush:
-                break
+                store.statusMessage = "All Tracks uses the Select tool only"
+                return
             }
             return
         }
@@ -2918,19 +2939,25 @@ final class PianoRollViewController: NSViewController {
         }
     }
 
-    /// Read-only select handler: allows marquee/lasso selection but blocks move/resize.
-    private func handleSelectMouseDownReadOnly(point: NSPoint, event: NSEvent) {
-        // Click on a note: select it (but don't prepare for move)
+    /// All-tracks select handler: allows marquee/lasso selection and vertical pitch drags only.
+    private func handleSelectMouseDownAllTracks(point: NSPoint, event: NSEvent) {
         if let hitNote = noteAtPoint(point) {
             if dragShiftHeld {
                 if selectedNoteIDs.contains(hitNote.id) {
                     selectedNoteIDs.remove(hitNote.id)
+                    return
                 } else {
                     selectedNoteIDs.insert(hitNote.id)
                 }
             } else if !selectedNoteIDs.contains(hitNote.id) {
                 selectedNoteIDs = [hitNote.id]
             }
+
+            dragMode = .movingNotesPitchOnly
+            let selected = store.pianoRollNotes.filter { selectedNoteIDs.contains($0.id) }
+            dragStartNoteSnapshot = Dictionary(uniqueKeysWithValues: selected.map { ($0.id, $0) })
+            pushUndo()
+            beginDragPreview(for: hitNote.pitch)
             return
         }
 
@@ -3139,6 +3166,11 @@ final class PianoRollViewController: NSViewController {
             moveSelectedNotes(to: point)
             updateDragPreview(for: pitchForY(point.y))
 
+        case .movingNotesPitchOnly:
+            guard distance > 3 else { return }
+            moveSelectedNotes(to: point, allowHorizontal: false)
+            updateDragPreview(for: pitchForY(point.y))
+
         case .resizingNotes:
             guard distance > 2 else { return }
             resizeSelectedNotes(to: point)
@@ -3214,7 +3246,14 @@ final class PianoRollViewController: NSViewController {
 
         switch dragMode {
         case .movingNotes:
-            if distance < 3 {
+            if distance < 3 || !didDraggedNotesChange() {
+                // Was a click, not a drag — undo the premature pushUndo
+                store.popLastUndo()
+            }
+            // Notes already moved in place during drag
+
+        case .movingNotesPitchOnly:
+            if distance < 3 || !didDraggedNotesChange() {
                 // Was a click, not a drag — undo the premature pushUndo
                 store.popLastUndo()
             }
@@ -3244,13 +3283,13 @@ final class PianoRollViewController: NSViewController {
 
     // MARK: - Move Notes
 
-    private func moveSelectedNotes(to point: NSPoint) {
+    private func moveSelectedNotes(to point: NSPoint, allowHorizontal: Bool = true) {
         guard let editor = editorView else { return }
         let ppt = editor.pixelsPerTick
         let rh = editor.rowHeight
         guard ppt > 0, rh > 0 else { return }
 
-        let deltaX = point.x - dragStartPoint.x
+        let deltaX = allowHorizontal ? point.x - dragStartPoint.x : 0
         let deltaY = point.y - dragStartPoint.y
 
         let deltaTicks = Int((deltaX / ppt).rounded())
@@ -3272,6 +3311,20 @@ final class PianoRollViewController: NSViewController {
             notes[i].pitch = min(108, max(21, original.pitch + deltaPitch))
         }
         store.setPianoRollNotesFromEditor(notes)
+    }
+
+    private func didDraggedNotesChange() -> Bool {
+        guard !dragStartNoteSnapshot.isEmpty else { return false }
+        let currentByID = Dictionary(uniqueKeysWithValues: store.pianoRollNotes.map { ($0.id, $0) })
+        for (id, original) in dragStartNoteSnapshot {
+            guard let current = currentByID[id] else { return true }
+            if current.startTick != original.startTick ||
+                current.duration != original.duration ||
+                current.pitch != original.pitch {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Resize Notes
@@ -3427,7 +3480,7 @@ final class PianoRollViewController: NSViewController {
     /// Toggle mute on all selected notes.
     func toggleMuteSelected() {
         guard !selectedNoteIDs.isEmpty else { return }
-        guard !isAllTracksReadOnly else {
+        guard !isAllTracksConstrainedMode else {
             store.statusMessage = "Select a track to edit notes"
             return
         }
@@ -3681,7 +3734,7 @@ final class PianoRollViewController: NSViewController {
     /// Iterative quantize: moves notes toward the grid by the given strength (0.0–1.0).
     /// strength=1.0 is full quantize, 0.5 is half-way (preserves groove feel), 0.0 is no change.
     func applyQuantize(strength: Double, quantizeEnd: Bool = true) {
-        guard !isAllTracksReadOnly else {
+        guard !isAllTracksConstrainedMode else {
             store.statusMessage = "Select a track to edit notes"
             return
         }
@@ -3803,7 +3856,7 @@ final class PianoRollViewController: NSViewController {
 
     func duplicateSelected() {
         guard !selectedNoteIDs.isEmpty else { return }
-        guard !isAllTracksReadOnly else {
+        guard !isAllTracksConstrainedMode else {
             store.statusMessage = "Select a track to edit notes"
             return
         }
@@ -3831,7 +3884,7 @@ final class PianoRollViewController: NSViewController {
 
     func deleteSelected() {
         guard !selectedNoteIDs.isEmpty else { return }
-        guard !isAllTracksReadOnly else {
+        guard !isAllTracksConstrainedMode else {
             store.statusMessage = "Select a track to edit notes"
             return
         }
@@ -3887,7 +3940,7 @@ final class PianoRollViewController: NSViewController {
     /// Nudge selected notes by a tick and pitch delta.
     func nudgeSelected(tickDelta: Int, pitchDelta: Int) {
         guard !selectedNoteIDs.isEmpty else { return }
-        guard !isAllTracksReadOnly else {
+        guard !isAllTracksConstrainedMode else {
             store.statusMessage = "Select a track to edit notes"
             return
         }
@@ -3907,7 +3960,7 @@ final class PianoRollViewController: NSViewController {
 
     func applyLegato() {
         guard !selectedNoteIDs.isEmpty else { return }
-        guard !isAllTracksReadOnly else {
+        guard !isAllTracksConstrainedMode else {
             store.statusMessage = "Select a track to edit notes"
             return
         }
@@ -4040,7 +4093,7 @@ final class PianoRollViewController: NSViewController {
     /// Glue: merge adjacent same-pitch selected notes into single longer notes.
     func applyGlue() {
         guard !selectedNoteIDs.isEmpty else { return }
-        guard !isAllTracksReadOnly else {
+        guard !isAllTracksConstrainedMode else {
             store.statusMessage = "Select a track to edit notes"
             return
         }
@@ -4304,6 +4357,18 @@ final class PianoRollViewController: NSViewController {
 
         // Tool shortcuts (single letter keys, no modifiers)
         if let chars = event.charactersIgnoringModifiers?.lowercased(), !hasShift {
+            if isAllTracksConstrainedMode {
+                switch chars {
+                case "e":
+                    tool = .select
+                    return true
+                case "p", "d", "t", "c":
+                    store.statusMessage = "All Tracks uses the Select tool only"
+                    return true
+                default:
+                    break
+                }
+            }
             switch chars {
             case "e": tool = .select; return true
             case "p": tool = .draw; return true

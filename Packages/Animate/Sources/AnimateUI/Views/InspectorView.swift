@@ -627,13 +627,20 @@ struct InspectorView: View {
 
                     Divider()
 
+                    if let batchError = store.geminiBatchGenerationAvailabilityError {
+                        Text(batchError)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
                     HStack(spacing: 8) {
                         Button("Submit All") {
                             submitBatchQueue()
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
-                        .disabled(store.geminiAPIKey.isEmpty)
+                        .disabled(!store.canSubmitGeminiBatchJobs)
 
                         Button("Clear Queue") {
                             store.clearGeminiQueue()
@@ -649,6 +656,10 @@ struct InspectorView: View {
     private func submitBatchQueue() {
         guard !store.geminiQueue.isEmpty,
               let animateURL = store.animateURL else { return }
+        if let batchError = store.geminiBatchGenerationAvailabilityError {
+            store.statusMessage = batchError
+            return
+        }
 
         let queueSnapshot = store.geminiQueue
 
@@ -2399,7 +2410,7 @@ struct PlaceGeneratedImageDetailsInspectorSection: View {
                     Label("Add to Batch", systemImage: "tray.and.arrow.down")
                 }
                 .buttonStyle(.bordered)
-                .disabled(record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canSubmitGeminiBatchJobs)
 
                 Button {
                     runImmediateEdit(record)

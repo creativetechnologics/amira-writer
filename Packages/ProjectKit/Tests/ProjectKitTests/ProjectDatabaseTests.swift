@@ -69,13 +69,13 @@ final class ProjectDatabaseTests: XCTestCase {
             ]
         )
 
-        let synopsisBytes = Data("Synopsis sentinel text".utf8)
+        let projectSettingsBytes = Data("{\"showDirections\":true}".utf8)
         let tsvBytes = Data("A\tB\tC\n1\t2\t3\n".utf8)
         let sf2Bytes = Data([0x53, 0x46, 0x32, 0x00, 0x01, 0xF1, 0xAA, 0x10])
         let wavBytes = Data([0x52, 0x49, 0x46, 0x46, 0x10, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45])
 
         let indexedAuxFiles: [(String, Data)] = [
-            ("Synopsis/synopsis.txt", synopsisBytes),
+            ("Settings/project-settings.json", projectSettingsBytes),
             ("Metadata/helpers.tsv", tsvBytes),
         ]
 
@@ -198,8 +198,8 @@ final class ProjectDatabaseTests: XCTestCase {
         let token = try await database.currentChangeToken()
 
         try await database.upsertProjectFile(
-            path: "Synopsis/synopsis.txt",
-            jsonData: Data("updated synopsis".utf8),
+            path: "Settings/project-settings.json",
+            jsonData: Data("{\"showDirections\":false}".utf8),
             actorID: "project-file-actor"
         )
         try await database.updateSongText(
@@ -228,7 +228,7 @@ final class ProjectDatabaseTests: XCTestCase {
         }
 
         XCTAssertEqual(changes[0].entityType, "project_file")
-        XCTAssertEqual(changes[0].entityKey, "Synopsis/synopsis.txt")
+        XCTAssertEqual(changes[0].entityKey, "Settings/project-settings.json")
         XCTAssertEqual(changes[0].eventType, "upsert")
         XCTAssertEqual(changes[0].actorID, "project-file-actor")
 

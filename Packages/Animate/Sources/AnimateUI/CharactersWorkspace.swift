@@ -67,6 +67,9 @@ private struct CharactersWorkspaceContent: View {
                 workspaceBody
             }
         }
+        .task(id: store.owpURL?.path) {
+            store.recoverMissingPersistedCharactersIfNeeded()
+        }
         .sheet(isPresented: $store.showGenerationSheet) {
             GeminiGenerationView(store: store)
         }

@@ -1494,6 +1494,7 @@ final class MixStore {
         Self.repairSelection(in: &session)
         document.sceneSessions[scene.relativePath] = session
         scheduleSave()
+        persistNow()
         refreshBrowser()
         statusMessage = "Score export registered: \(clip.name) in \(scene.displayTitle)."
         NSLog("[Mix] Registered score export: %@ in scene %@", clip.name, scene.relativePath)

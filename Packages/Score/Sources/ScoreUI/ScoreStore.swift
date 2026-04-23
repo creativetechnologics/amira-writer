@@ -537,7 +537,8 @@ struct OWSSongAsset: Identifiable, @unchecked Sendable {
 enum OWPProjectIO {
     static let metadataDir = "Metadata"
     static let projectMetadataFile = "Metadata/project.json"
-    static let projectInstrumentsFile = "Instruments.json"
+    static let projectInstrumentsFile = "Settings/instruments.json"
+    static let legacyProjectInstrumentsFile = "Instruments.json"
     static let songsDir = "Songs"
 
     static func loadPhase1(from url: URL) async throws -> (metadata: ProjectMetadata, stubs: [SongStub], isStandalone: Bool) {
@@ -597,18 +598,21 @@ enum OWPProjectIO {
     }
 
     static func loadProjectInstrumentMappings(from packageURL: URL) -> [String: InstrumentMapping] {
-        let fileURL = packageURL.appendingPathComponent(projectInstrumentsFile)
-        guard let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else { return [:] }
-
         let decoder = configuredDecoder()
-        if let decoded = try? decoder.decode([String: InstrumentMapping].self, from: data) {
-            return normalizeProjectInstrumentMappings(decoded)
-        }
-        if let decoded = try? decoder.decode([InstrumentMapping].self, from: data) {
-            return normalizedProjectInstrumentMappings(decoded)
+        for relativePath in [projectInstrumentsFile, legacyProjectInstrumentsFile] {
+            let fileURL = packageURL.appendingPathComponent(relativePath)
+            guard let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else { continue }
+
+            if let decoded = try? decoder.decode([String: InstrumentMapping].self, from: data) {
+                return normalizeProjectInstrumentMappings(decoded)
+            }
+            if let decoded = try? decoder.decode([InstrumentMapping].self, from: data) {
+                return normalizedProjectInstrumentMappings(decoded)
+            }
+
+            NSLog("[OWP] Failed to decode project instruments at %@", fileURL.path)
         }
 
-        NSLog("[OWP] Failed to decode project instruments at %@", fileURL.path)
         return [:]
     }
 
@@ -656,7 +660,13 @@ enum OWPProjectIO {
         }
         let data = try configuredEncoder().encode(sorted)
         let fileURL = packageURL.appendingPathComponent(projectInstrumentsFile)
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: fileURL, options: .atomic)
+
+        let legacyFileURL = packageURL.appendingPathComponent(legacyProjectInstrumentsFile)
+        if FileManager.default.fileExists(atPath: legacyFileURL.path) {
+            try data.write(to: legacyFileURL, options: .atomic)
+        }
     }
 
     // MARK: - SoundFont Embedding
@@ -1212,6 +1222,7 @@ final class ScoreStore {
     var sunoCLIIsInstalled: Bool { sunoCLI.isInstalled }
     var sunoCLILastSelftest: SunoSelftestResult?
     var sunoCLIErrorMessage: String?
+    var sunoCLIStatusMessage: String?
 
     var sunoRequestMode: SunoRequestMode = {
         let raw = UserDefaults.standard.string(forKey: "sunoRequestMode") ?? SunoRequestMode.cover.rawValue
@@ -1272,7 +1283,7 @@ final class ScoreStore {
     }
     /// Default exclude styles for Suno Cover mode.
     var sunoExcludeStyles: String = UserDefaults.standard.string(forKey: "sunoExcludeStyles")
-        ?? "-drums, -percussion, -cymbals, -snare, -kick" {
+        ?? "drums, percussion, cymbals, snare, kick" {
         didSet { UserDefaults.standard.set(sunoExcludeStyles, forKey: "sunoExcludeStyles") }
     }
     /// Default Suno Cover mode weirdness slider (0-100).
@@ -1305,6 +1316,13 @@ final class ScoreStore {
     }
     /// Transient set of song relative paths selected for multi-song cover generation.
     var sunoCoverSelectedSongPaths: Set<String> = []
+    /// Number of queued Suno cover submissions per target song.
+    var sunoCoverIterations: Int = {
+        let stored = UserDefaults.standard.object(forKey: "sunoCoverIterations") as? Int
+        return min(12, max(1, stored ?? 1))
+    }() {
+        didSet { UserDefaults.standard.set(sunoCoverIterations, forKey: "sunoCoverIterations") }
+    }
     /// Optional prompt override for Cover mode (empty string = use preset prompt).
     var sunoCoverPromptOverride: String = UserDefaults.standard.string(forKey: "sunoCoverPromptOverride") ?? "" {
         didSet { UserDefaults.standard.set(sunoCoverPromptOverride, forKey: "sunoCoverPromptOverride") }
@@ -1352,8 +1370,57 @@ final class ScoreStore {
         !formattedSunoLyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    var sunoResolvedCoverTargetPaths: [String] {
+        switch sunoCoverSourceMode {
+        case .currentSong:
+            guard let selectedSong = selectedMidiAsset else { return [] }
+            return [selectedSong.relativePath]
+        case .selectedSongs:
+            return songAssets.map(\.relativePath).filter { sunoCoverSelectedSongPaths.contains($0) }
+        }
+    }
+
+    var sunoCoverTargetCount: Int {
+        sunoResolvedCoverTargetPaths.count
+    }
+
+    var sunoCoverTotalSubmissionCount: Int {
+        sunoCoverTargetCount * max(1, sunoCoverIterations)
+    }
+
+    var sunoCoverExpectedOutputCount: Int {
+        sunoCoverTotalSubmissionCount * 2
+    }
+
+    var sunoRunCanonicalCoverButtonTitle: String {
+        let iterations = max(1, sunoCoverIterations)
+        return iterations == 1 ? "Run Canonical Cover" : "Run Canonical Cover ×\(iterations)"
+    }
+
+    var sunoCoverQueueSummary: String {
+        let targetCount = sunoCoverTargetCount
+        let iterations = max(1, sunoCoverIterations)
+        let submitCount = targetCount * iterations
+        let expectedOutputs = submitCount * 2
+
+        switch (targetCount, iterations) {
+        case (0, _):
+            return "No songs queued yet."
+        case (1, 1):
+            return "1 submit → about 2 outputs"
+        case (1, _):
+            return "\(iterations) submits → about \(expectedOutputs) outputs"
+        default:
+            return "\(iterations) cycles × \(targetCount) songs → \(submitCount) submits / about \(expectedOutputs) outputs"
+        }
+    }
+
+    var sunoCoverQueueDelaySummary: String {
+        "Queue spacing is humanized with randomized 5–10 minute cooldowns between submits."
+    }
+
     var sunoCanRunCanonicalCover: Bool {
-        effectiveSunoCoverLyrics() != nil
+        effectiveSunoCoverLyrics() != nil && !sunoResolvedCoverTargetPaths.isEmpty
     }
 
     var selectedSunoGenerations: [SunoGeneration] {
@@ -2327,7 +2394,12 @@ final class ScoreStore {
             }
         }
 
-        for path in [OWPProjectIO.projectMetadataFile, ProjectDatabaseBridge.legacyMetadataPath, OWPProjectIO.projectInstrumentsFile] {
+        for path in [
+            OWPProjectIO.projectMetadataFile,
+            ProjectDatabaseBridge.legacyMetadataPath,
+            OWPProjectIO.projectInstrumentsFile,
+            OWPProjectIO.legacyProjectInstrumentsFile,
+        ] {
             let fileURL = projectURL.appendingPathComponent(path)
             if let snapshot = fileSnapshot(for: fileURL) {
                 snapshots[path] = snapshot
@@ -2486,7 +2558,7 @@ final class ScoreStore {
             if let metadata = loadProjectMetadataFromDisk(projectURL: projectURL) {
                 self.metadata = metadata
             }
-        } else if path == OWPProjectIO.projectInstrumentsFile {
+        } else if [OWPProjectIO.projectInstrumentsFile, OWPProjectIO.legacyProjectInstrumentsFile].contains(path) {
             instrumentMappings = OWPProjectIO.loadProjectInstrumentMappings(from: projectURL)
             for asset in songAssets {
                 for (key, mapping) in OWPProjectIO.normalizeProjectInstrumentMappings(asset.document.instrumentMappings)
@@ -2658,6 +2730,11 @@ final class ScoreStore {
             }
         }
 
+        let selectedSongPlaybackMappings = currentChannelKeys.reduce(into: [String: InstrumentMapping]()) { result, key in
+            guard let mapping = instrumentMappings[key] else { return }
+            result[key] = mapping
+        }
+
         lastSelectedMidiID = selectedMidiID
         undoStack.removeAll()
         redoStack.removeAll()
@@ -2672,9 +2749,10 @@ final class ScoreStore {
         }
         rebuildProjectChannelRegistry()
 
-        // Preload project AU mappings while idle so continuous-play transitions do not have
-        // to instantiate plugins on the render boundary.
-        playbackEngine.prewarmAudioUnits(for: instrumentMappings)
+        // Only prewarm the current song's AU mappings, and do it as a delayed idle task so
+        // an immediate Play press can jump ahead instead of sitting behind unrelated project
+        // instrument instantiation work on the serial audio queue.
+        playbackEngine.scheduleIdleAUPrewarm(for: selectedSongPlaybackMappings)
     }
 
     func reloadSelectedSongFromSource(forceRebuildIndex: Bool = true) {
@@ -7025,6 +7103,66 @@ final class ScoreStore {
 
     // MARK: - Full Mix Export
 
+    private struct SongWavExportPlan {
+        let notes: [PianoRollNote]
+        let endTick: Int
+    }
+
+    private enum SongWavExportError: LocalizedError {
+        case noNotes
+        case zeroLength
+
+        var errorDescription: String? {
+            switch self {
+            case .noNotes:
+                "No notes to export."
+            case .zeroLength:
+                "Song has zero length."
+            }
+        }
+    }
+
+    private func makeCurrentSongWavExportPlan() throws -> SongWavExportPlan {
+        let notes = pianoRollNotes
+        guard !notes.isEmpty else {
+            throw SongWavExportError.noNotes
+        }
+
+        let endTick = notes.map { $0.startTick + $0.duration }.max() ?? pianoRollLengthTicks
+        guard endTick > 0 else {
+            throw SongWavExportError.zeroLength
+        }
+
+        return SongWavExportPlan(notes: notes, endTick: endTick)
+    }
+
+    private func performWavExport(_ plan: SongWavExportPlan, outputURL: URL) async throws {
+        // Prevent App Nap / automatic termination from killing a long export.
+        // This matters in headless mode (no visible window) and on laptops
+        // where macOS may nap inactive apps mid-render.
+        let activityOptions: ProcessInfo.ActivityOptions = [
+            .userInitiated,
+            .latencyCritical,
+            .idleSystemSleepDisabled
+        ]
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: activityOptions,
+            reason: "WAV export"
+        )
+        ProcessInfo.processInfo.disableSuddenTermination()
+        defer {
+            ProcessInfo.processInfo.enableSuddenTermination()
+            ProcessInfo.processInfo.endActivity(activity)
+        }
+
+        try await renderChunkToWav(
+            notes: plan.notes,
+            startTick: 0,
+            endTick: plan.endTick,
+            outputURL: outputURL
+        )
+    }
+
     /// Present a save panel and render the entire song to a single WAV file.
     #if canImport(AppKit)
     func exportFullMixToWavWithPanel() {
@@ -7054,27 +7192,12 @@ final class ScoreStore {
 
     /// Render the full song to a WAV file at the given URL.
     func exportFullMixToWav(outputURL: URL) async {
-        guard !pianoRollNotes.isEmpty else {
-            fullMixExportStatus = "No notes to export."
+        let plan: SongWavExportPlan
+        do {
+            plan = try makeCurrentSongWavExportPlan()
+        } catch {
+            fullMixExportStatus = error.localizedDescription
             return
-        }
-
-        // Prevent App Nap / automatic termination from killing a long export.
-        // This matters in headless mode (no visible window) and on laptops
-        // where macOS may nap inactive apps mid-render.
-        let activityOptions: ProcessInfo.ActivityOptions = [
-            .userInitiated,
-            .latencyCritical,
-            .idleSystemSleepDisabled
-        ]
-        let activity = ProcessInfo.processInfo.beginActivity(
-            options: activityOptions,
-            reason: "WAV export"
-        )
-        ProcessInfo.processInfo.disableSuddenTermination()
-        defer {
-            ProcessInfo.processInfo.enableSuddenTermination()
-            ProcessInfo.processInfo.endActivity(activity)
         }
 
         isExportingFullMix = true
@@ -7082,16 +7205,9 @@ final class ScoreStore {
         fullMixExportStatus = "Rendering full mix..."
         fullMixExportDetailStatus = ""
 
-        let endTick = pianoRollNotes.map { $0.startTick + $0.duration }.max() ?? pianoRollLengthTicks
-        guard endTick > 0 else {
-            fullMixExportStatus = "Song has zero length."
-            isExportingFullMix = false
-            return
-        }
-
         // Estimate total duration for progress tracking
         let estimatedSeconds = Self.ticksToSecondsStatic(
-            endTick,
+            plan.endTick,
             ticksPerQuarter: ticksPerQuarter,
             tempoEvents: pianoRollTempoEvents
         )
@@ -7114,12 +7230,7 @@ final class ScoreStore {
         }
 
         do {
-            try await renderChunkToWav(
-                notes: pianoRollNotes,
-                startTick: 0,
-                endTick: endTick,
-                outputURL: outputURL
-            )
+            try await performWavExport(plan, outputURL: outputURL)
             fullMixExportProgress = 1.0
             fullMixExportStatus = "Exported to \(outputURL.lastPathComponent)"
             fullMixExportDetailStatus = ""
@@ -7299,16 +7410,20 @@ final class ScoreStore {
 
     // MARK: - Send-to-Mix / Batch Export
 
-    /// Returns the output URL for a song's Mix export WAV.
-    /// Path: <projectURL>/Mix/exports/<slug>.wav
-    private func mixExportURL(for asset: MidiAsset) -> URL? {
-        guard let projectURL = fileProjectURL else { return nil }
+    private func wavExportURL(for asset: MidiAsset, in directory: URL) -> URL {
         let slug = asset.displayName
             .replacingOccurrences(of: "[^A-Za-z0-9_-]+", with: "_", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
         let safeName = slug.isEmpty ? "untitled" : slug
+        return directory.appendingPathComponent("\(safeName).wav")
+    }
+
+    /// Returns the output URL for a song's Mix export WAV.
+    /// Path: <projectURL>/Mix/exports/<slug>.wav
+    private func mixExportURL(for asset: MidiAsset) -> URL? {
+        guard let projectURL = fileProjectURL else { return nil }
         let exportsDir = ProjectPaths(root: projectURL).mixExports
-        return exportsDir.appendingPathComponent("\(safeName).wav")
+        return wavExportURL(for: asset, in: exportsDir)
     }
 
     /// Export the currently-loaded song to <projectURL>/Mix/exports/<slug>.wav
@@ -7352,6 +7467,110 @@ final class ScoreStore {
                 )
             }
         }
+    }
+
+    #if canImport(AppKit)
+    func exportAllSongsToWavsWithPanel() {
+        guard !midiAssets.isEmpty else {
+            batchExportStatus = "No songs to export."
+            return
+        }
+        guard !isBatchExporting, !isExportingFullMix else {
+            batchExportStatus = "An export is already in progress."
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "Choose Folder for WAV Exports"
+        panel.prompt = "Export"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            Task { @MainActor in
+                await self.exportAllSongsToWavs(outputDir: url)
+            }
+        }
+    }
+    #endif
+
+    func exportAllSongsToWavs(outputDir: URL) async {
+        guard !midiAssets.isEmpty else {
+            batchExportStatus = "No songs to export."
+            return
+        }
+        guard !isBatchExporting, !isExportingFullMix else {
+            batchExportStatus = "An export is already in progress."
+            return
+        }
+
+        do {
+            try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        } catch {
+            batchExportStatus = "Could not create export folder: \(error.localizedDescription)"
+            return
+        }
+
+        isBatchExporting = true
+        batchExportProgress = 0
+        batchExportStatus = "Starting WAV batch export..."
+
+        let assets = midiAssets
+        var exported = 0
+        var exportable = 0
+
+        for (index, asset) in assets.enumerated() {
+            batchExportStatus = "Hydrating \(asset.displayName)..."
+
+            _ = await hydrateSongPlaybackIfNeeded(id: asset.id)
+
+            let savedSelectedID = selectedMidiID
+            if selectedMidiID != asset.id {
+                setSelectedMidi(id: asset.id, stopPlaybackBeforeSelect: true)
+                for _ in 0..<3 { await Task.yield() }
+            }
+
+            let plan: SongWavExportPlan
+            do {
+                plan = try makeCurrentSongWavExportPlan()
+            } catch {
+                NSLog("[BatchWAV] Skipping %@ — %@", asset.displayName, error.localizedDescription)
+                batchExportProgress = Double(index + 1) / Double(assets.count)
+                if savedSelectedID != asset.id {
+                    setSelectedMidi(id: savedSelectedID, stopPlaybackBeforeSelect: false)
+                }
+                continue
+            }
+
+            exportable += 1
+            let outputURL = wavExportURL(for: asset, in: outputDir)
+            batchExportStatus = "Rendering \(asset.displayName) (\(index + 1)/\(assets.count))..."
+
+            do {
+                try await performWavExport(plan, outputURL: outputURL)
+                exported += 1
+                NSLog("[BatchWAV] Exported %@ -> %@", asset.displayName, outputURL.path)
+            } catch {
+                NSLog("[BatchWAV] Failed %@: %@", asset.displayName, error.localizedDescription)
+            }
+
+            batchExportProgress = Double(index + 1) / Double(assets.count)
+
+            if savedSelectedID != asset.id {
+                setSelectedMidi(id: savedSelectedID, stopPlaybackBeforeSelect: false)
+                for _ in 0..<2 { await Task.yield() }
+            }
+        }
+
+        batchExportProgress = 1.0
+        if exportable == 0 {
+            batchExportStatus = "No songs with note data to export."
+        } else {
+            batchExportStatus = "WAV batch export done — \(exported)/\(exportable) songs exported."
+        }
+        isBatchExporting = false
     }
 
     /// Export ALL songs that have MIDI note data to <projectURL>/Mix/exports/.
@@ -7525,12 +7744,39 @@ final class ScoreStore {
 
     func runSunoSelftest() async {
         sunoCLIErrorMessage = nil
+        sunoCLIStatusMessage = nil
         do {
             let result = try await sunoCLI.selftest()
             sunoCLILastSelftest = result
+            sunoCLIStatusMessage = result.loggedIn
+                ? "Suno login is active for the persistent CLI profile."
+                : "Suno is not logged in yet. Use Open Suno Login, sign in once, then rerun Selftest."
         } catch {
             sunoCLIErrorMessage = error.localizedDescription
         }
+    }
+
+    func openSunoLoginBrowser() async {
+        sunoCLIErrorMessage = nil
+        do {
+            let browserName = try await sunoCLI.openLoginBrowser()
+            sunoCLIStatusMessage = "Opened \(browserName) with the Suno CLI profile. Sign in once; the cookies stay in this profile until Suno expires them."
+            appendSunoLog("Opened Suno login browser using persistent profile at \(sunoCLI.profileDir)")
+        } catch {
+            sunoCLIErrorMessage = error.localizedDescription
+            sunoCLIStatusMessage = nil
+        }
+    }
+
+    func revealSunoProfileDirectory() {
+        #if canImport(AppKit)
+        let profileURL = URL(fileURLWithPath: sunoCLI.profileDir, isDirectory: true)
+        try? FileManager.default.createDirectory(at: profileURL, withIntermediateDirectories: true, attributes: nil)
+        NSWorkspace.shared.activateFileViewerSelecting([profileURL])
+        sunoCLIStatusMessage = "Revealed the persistent Suno profile folder in Finder."
+        #else
+        sunoCLIStatusMessage = "The Suno profile folder can only be revealed on macOS."
+        #endif
     }
 
     func sunoGenerateOriginalSong() async {
@@ -8202,6 +8448,8 @@ extension ScoreStore {
 @available(macOS 26.0, *)
 extension ScoreStore {
 
+    private static let sunoCoverQueueDelayRangeSeconds = 300...600
+
     /// The prompt actually sent to the CLI: user override wins, else the enum preset's prompt.
     func effectiveSunoCoverPrompt() -> String {
         let override = sunoCoverPromptOverride.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -8230,26 +8478,20 @@ extension ScoreStore {
             return
         }
 
-        // Determine target song relative paths based on source mode
-        let targets: [String]
+        let targetPaths = sunoResolvedCoverTargetPaths
         switch sunoCoverSourceMode {
-        case .currentSong:
-            guard let selectedSong = selectedMidiAsset else {
-                sunoGenerateStatus = "Select a song before running Suno."
-                appendSunoLog("No song selected for Suno cover generation", level: .warning)
-                return
-            }
-            targets = [selectedSong.relativePath]
-        case .selectedSongs:
-            guard !sunoCoverSelectedSongPaths.isEmpty else {
-                sunoGenerateStatus = "Check at least one song before running Suno."
-                appendSunoLog("No songs checked for Suno cover batch", level: .warning)
-                return
-            }
-            targets = songAssets.map { $0.relativePath }.filter { sunoCoverSelectedSongPaths.contains($0) }
+        case .currentSong where targetPaths.isEmpty:
+            sunoGenerateStatus = "Select a song before running Suno."
+            appendSunoLog("No song selected for Suno cover generation", level: .warning)
+            return
+        case .selectedSongs where targetPaths.isEmpty:
+            sunoGenerateStatus = "Check at least one song before running Suno."
+            appendSunoLog("No songs checked for Suno cover batch", level: .warning)
+            return
+        default:
+            break
         }
 
-        // Resolve lyrics once up front — same for all songs in the batch
         let lyrics = effectiveSunoCoverLyrics()
         guard sunoCanRunCanonicalCover, let lyrics else {
             sunoGenerateStatus = "This preset needs real lyrics (Lyrics tab or Lyrics Override)."
@@ -8257,103 +8499,156 @@ extension ScoreStore {
             return
         }
 
+        let prompt = effectiveSunoCoverPrompt()
+        let negativePrompt = normalizedSunoExcludeStyles()
+        let iterations = max(1, sunoCoverIterations)
+
+        var runnableTargets: [(path: String, mixInfo: (url: URL, modifiedAt: Date))] = []
+        for path in targetPaths {
+            let baseTitle = Self.sunoBaseTitle(from: path)
+            guard let mixInfo = sunoMixExportInfo(for: path) else {
+                appendSunoLog("[\(baseTitle)] No Mix flat WAV found — skipping (export song to Mix first)", level: .error)
+                continue
+            }
+            runnableTargets.append((path: path, mixInfo: mixInfo))
+        }
+
+        guard !runnableTargets.isEmpty else {
+            sunoGenerateStatus = "No Mix exports found for the queued Suno cover submissions."
+            appendSunoLog("No runnable Suno cover targets had a Mix export available", level: .error)
+            return
+        }
+
         sunoStopPreview()
         sunoIsGenerating = true
         defer { sunoIsGenerating = false }
 
-        var successCount = 0
+        let totalSubmissions = runnableTargets.count * iterations
+        var completedSubmissions = 0
+        var successfulSubmissions = 0
         var totalWAVs = 0
 
-        for (index, path) in targets.enumerated() {
+        for (targetIndex, target) in runnableTargets.enumerated() {
+            let path = target.path
+            let mixInfo = target.mixInfo
             let baseTitle = Self.sunoBaseTitle(from: path)
             let outputRoot = ProjectPaths(root: projectRoot).suno
-            let version = nextSunoVersion(for: baseTitle, outputRoot: outputRoot)
 
-            guard let mixInfo = sunoMixExportInfo(for: path) else {
-                appendSunoLog("[\(baseTitle)] No Mix flat WAV found — skipping (export song to Mix first)", level: .error)
-                sunoGenerateStatus = "[\(baseTitle)] No Mix export found — skipped."
-                continue
-            }
-
-            let generation = SunoGeneration(
-                songPath: path,
-                baseTitle: baseTitle,
-                version: version,
-                prompt: effectiveSunoCoverPrompt(),
-                style: effectiveSunoCoverPrompt(),
-                excludeStyles: sunoExcludeStyles,
-                lyrics: lyrics,
-                status: .submitting
-            )
-            sunoGenerations.insert(generation, at: 0)
-            let generationID = generation.id
-
-            sunoGenerateStatus = "[\(baseTitle)] Submitting cover (\(index + 1)/\(targets.count))..."
-            appendSunoLog("[\(baseTitle)] Submitting cover from Mix WAV: \(mixInfo.url.lastPathComponent)")
-
-            do {
-                let result = try await sunoCLI.generateCover(
-                    source: mixInfo.url.path,
-                    style: effectiveSunoCoverPrompt(),
-                    title: baseTitle,
-                    lyrics: lyrics ?? "[Instrumental]",
-                    excludeStyles: normalizedSunoExcludeStyles(),
-                    weirdness: sunoCoverWeirdness,
-                    styleInfluence: sunoCoverStyleInfluence,
-                    audioInfluence: sunoCoverAudioInfluence,
-                    wait: true
+            for iteration in 1...iterations {
+                completedSubmissions += 1
+                let version = nextSunoVersion(
+                    for: baseTitle,
+                    mixExportURL: mixInfo.url,
+                    outputRoot: outputRoot
                 )
+                let submissionTitle = String(format: "%@ v%03d", baseTitle, version)
 
-                let finalSongIDs = Array(result.songIDs.prefix(2))
-                guard finalSongIDs.count >= 2 else {
-                    throw SunoCLIError.runtime(message: "Suno did not return two cover song IDs for \(baseTitle).")
-                }
-                let resolvedTitle = result.title ?? baseTitle
-
-                updateSunoGeneration(
-                    generationID, status: .downloading,
-                    songIDs: finalSongIDs, coverTitle: resolvedTitle,
-                    resultMessage: result.message, trackID: finalSongIDs.first
+                let generation = SunoGeneration(
+                    songPath: path,
+                    baseTitle: baseTitle,
+                    version: version,
+                    coverTitle: submissionTitle,
+                    submissionIndex: iteration,
+                    submissionCount: iterations,
+                    prompt: prompt,
+                    style: prompt,
+                    excludeStyles: negativePrompt,
+                    lyrics: lyrics,
+                    status: .submitting
                 )
-                appendSunoLog("[\(baseTitle)] Cover generated as \(resolvedTitle) with IDs \(finalSongIDs.joined(separator: ", "))", level: .success)
+                sunoGenerations.insert(generation, at: 0)
+                let generationID = generation.id
 
-                sunoGenerateStatus = "[\(baseTitle)] Downloading WAV outputs..."
-                appendSunoLog("[\(baseTitle)] Downloading \(finalSongIDs.count) WAVs into \(outputRoot.path)")
+                sunoGenerateStatus = "[\(baseTitle)] Submitting cover \(completedSubmissions)/\(totalSubmissions) (song \(targetIndex + 1)/\(runnableTargets.count), iteration \(iteration)/\(iterations))..."
+                appendSunoLog("[\(baseTitle)] Iteration \(iteration)/\(iterations) submitting from Mix WAV: \(mixInfo.url.lastPathComponent)")
 
-                var downloadedPaths: [String] = []
-                for songID in finalSongIDs {
-                    let dl = try await sunoCLI.downloadSong(songID: songID, format: "wav", out: outputRoot.path)
-                    downloadedPaths.append(dl.path)
-                }
-
-                // Post Mix routing notification for each downloaded WAV
-                for wavPath in downloadedPaths {
-                    NotificationCenter.default.post(
-                        name: ScoreStore.didExportSongToMix,
-                        object: nil,
-                        userInfo: [
-                            "wavURL": URL(fileURLWithPath: wavPath),
-                            "songRelativePath": path
-                        ]
+                do {
+                    let result = try await sunoCLI.generateCover(
+                        source: mixInfo.url.path,
+                        style: prompt,
+                        title: submissionTitle,
+                        lyrics: lyrics,
+                        excludeStyles: negativePrompt,
+                        weirdness: sunoCoverWeirdness,
+                        styleInfluence: sunoCoverStyleInfluence,
+                        audioInfluence: sunoCoverAudioInfluence,
+                        headless: false,
+                        wait: true
                     )
+
+                    let primarySongIDs = sunoDeduplicateSongIDs(result.songIDs)
+                    let fallbackSongIDs = sunoDeduplicateSongIDs(result.allCapturedSongIDs)
+                    let capturedSongIDs = primarySongIDs.count >= 2 ? primarySongIDs : fallbackSongIDs
+                    guard capturedSongIDs.count >= 2 else {
+                        throw SunoCLIError.runtime(message: "Suno returned \(capturedSongIDs.count) cover song ID(s) for \(submissionTitle); expected 2.")
+                    }
+                    let resolvedTitle = result.title ?? submissionTitle
+
+                    updateSunoGeneration(
+                        generationID,
+                        status: .downloading,
+                        songIDs: capturedSongIDs,
+                        coverTitle: resolvedTitle,
+                        resultMessage: result.message,
+                        trackID: capturedSongIDs.first
+                    )
+                    appendSunoLog("[\(baseTitle)] Captured \(capturedSongIDs.count) output IDs for \(resolvedTitle): \(capturedSongIDs.joined(separator: ", "))", level: .success)
+
+                    sunoGenerateStatus = "[\(baseTitle)] Downloading \(capturedSongIDs.count) WAV output(s)..."
+                    appendSunoLog("[\(baseTitle)] Downloading \(capturedSongIDs.count) WAV(s) into \(outputRoot.path)")
+
+                    var downloadedPaths: [String] = []
+                    for songID in capturedSongIDs {
+                        let download = try await sunoCLI.downloadSong(songID: songID, format: "wav", out: outputRoot.path)
+                        downloadedPaths.append(download.path)
+                    }
+
+                    for wavPath in downloadedPaths {
+                        NotificationCenter.default.post(
+                            name: ScoreStore.didExportSongToMix,
+                            object: nil,
+                            userInfo: [
+                                "wavURL": URL(fileURLWithPath: wavPath),
+                                "songRelativePath": path
+                            ]
+                        )
+                    }
+
+                    updateSunoGeneration(
+                        generationID,
+                        status: .downloaded,
+                        songIDs: capturedSongIDs,
+                        coverTitle: resolvedTitle,
+                        downloadedFilePaths: downloadedPaths,
+                        downloadedFilePath: downloadedPaths.first,
+                        trackID: capturedSongIDs.first
+                    )
+                    appendSunoLog("[\(baseTitle)] Finished iteration \(iteration)/\(iterations) — \(downloadedPaths.count) WAV(s) downloaded", level: .success)
+                    successfulSubmissions += 1
+                    totalWAVs += downloadedPaths.count
+                } catch {
+                    updateSunoGeneration(generationID, status: .error, errorMessage: error.localizedDescription)
+                    appendSunoLog("[\(baseTitle)] Iteration \(iteration)/\(iterations) failed: \(error.localizedDescription)", level: .error)
                 }
 
-                updateSunoGeneration(
-                    generationID, status: .downloaded,
-                    songIDs: finalSongIDs, coverTitle: resolvedTitle,
-                    downloadedFilePaths: downloadedPaths, downloadedFilePath: downloadedPaths.first,
-                    trackID: finalSongIDs.first
-                )
-                appendSunoLog("[\(baseTitle)] Finished — \(downloadedPaths.count) WAVs downloaded", level: .success)
-                successCount += 1
-                totalWAVs += downloadedPaths.count
-            } catch {
-                updateSunoGeneration(generationID, status: .error, errorMessage: error.localizedDescription)
-                appendSunoLog("[\(baseTitle)] Cover failed: \(error.localizedDescription)", level: .error)
+                let remainingSubmissions = totalSubmissions - completedSubmissions
+                guard remainingSubmissions > 0 else { continue }
+
+                let delaySeconds = nextSunoQueueDelaySeconds()
+                let delayDescription = formattedSunoQueueDelay(seconds: delaySeconds)
+                sunoGenerateStatus = "Queue cooldown: waiting \(delayDescription) before the next Suno submit (\(remainingSubmissions) remaining)."
+                appendSunoLog("Queue cooldown: waiting \(delayDescription) before the next submit", level: .info)
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(delaySeconds) * 1_000_000_000)
+                } catch {
+                    appendSunoLog("Queue cooldown interrupted: \(error.localizedDescription)", level: .warning)
+                    sunoGenerateStatus = "Queue interrupted: \(error.localizedDescription)"
+                    return
+                }
             }
         }
 
-        sunoGenerateStatus = "Completed cover batch: \(successCount)/\(targets.count) songs, \(totalWAVs) WAVs downloaded."
+        sunoGenerateStatus = "Completed Suno cover queue: \(successfulSubmissions)/\(totalSubmissions) submits succeeded, \(totalWAVs) WAV(s) downloaded."
     }
 
     func sunoRevealGenerationDownloads(_ generationID: UUID) {
@@ -8378,65 +8673,72 @@ extension ScoreStore {
         return sourceURL
     }
 
-
     private func normalizedSunoExcludeStyles() -> String {
         let trimmed = sunoExcludeStyles.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return "-drums, -percussion, -cymbals, -snare, -kick"
+            return "drums, percussion, cymbals, snare, kick"
         }
         let parts = trimmed.split(separator: ",").map {
-            let token = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !token.isEmpty else { return token }
-            return token.hasPrefix("-") ? token : "-\(token)"
+            var token = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            while token.hasPrefix("-") {
+                token.removeFirst()
+                token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return token
         }
-        return parts.joined(separator: ", ")
+        return parts.filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
-    private func nextSunoVersion(for baseTitle: String, outputRoot: URL) -> Int {
-        let songDirectory = outputRoot.appendingPathComponent(baseTitle, isDirectory: true)
-        let files = (try? FileManager.default.contentsOfDirectory(at: songDirectory, includingPropertiesForKeys: nil)) ?? []
+    private func nextSunoVersion(for baseTitle: String, mixExportURL: URL, outputRoot: URL) -> Int {
+        let candidateDirectoryNames = Set([
+            baseTitle,
+            mixExportURL.deletingPathExtension().lastPathComponent
+        ]).filter { !$0.isEmpty }
+
         var highest = 0
-        for file in files {
-            let name = file.lastPathComponent
-            guard let match = name.range(of: #" v(\d{3})(?:-[A-Za-z]+)?\.wav$"#, options: .regularExpression) else {
-                continue
-            }
-            let versionText = name[match]
-                .replacingOccurrences(of: " v", with: "")
-                .components(separatedBy: "-")
-                .first?
-                .replacingOccurrences(of: ".wav", with: "") ?? ""
-            if let version = Int(versionText) {
-                highest = max(highest, version)
+        for directoryName in candidateDirectoryNames {
+            let songDirectory = outputRoot.appendingPathComponent(directoryName, isDirectory: true)
+            let files = (try? FileManager.default.contentsOfDirectory(at: songDirectory, includingPropertiesForKeys: nil)) ?? []
+            for file in files {
+                let name = file.lastPathComponent
+                guard let match = name.range(of: #" v(\d{3})(?:-[A-Za-z]+)?\.wav$"#, options: .regularExpression) else {
+                    continue
+                }
+                let versionText = name[match]
+                    .replacingOccurrences(of: " v", with: "")
+                    .components(separatedBy: "-")
+                    .first?
+                    .replacingOccurrences(of: ".wav", with: "") ?? ""
+                if let version = Int(versionText) {
+                    highest = max(highest, version)
+                }
             }
         }
         return highest + 1
     }
 
-    private func locateDownloadedCover(
-        baseTitle: String,
-        version: Int,
-        songID: String,
-        suffix: String,
-        outputRoot: URL
-    ) -> String? {
-        let expected = outputRoot
-            .appendingPathComponent(baseTitle, isDirectory: true)
-            .appendingPathComponent(String(format: "%@ v%03d-%@.wav", baseTitle, version, suffix))
-        if FileManager.default.fileExists(atPath: expected.path) {
-            return expected.path
+    private func sunoDeduplicateSongIDs(_ ids: [String]) -> [String] {
+        var seen: Set<String> = []
+        var deduped: [String] = []
+        for id in ids {
+            let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !normalized.isEmpty, seen.insert(normalized).inserted else { continue }
+            deduped.append(normalized)
         }
+        return deduped
+    }
 
-        let songDirectory = outputRoot.appendingPathComponent(baseTitle, isDirectory: true)
-        let candidates = (try? FileManager.default.contentsOfDirectory(at: songDirectory, includingPropertiesForKeys: nil)) ?? []
-        for candidate in candidates where candidate.pathExtension.lowercased() == "wav" {
-            let name = candidate.lastPathComponent.lowercased()
-            if name.contains(songID.prefix(8).lowercased()) || name.contains("-\(suffix.lowercased()).wav") {
-                return candidate.path
-            }
+    private func nextSunoQueueDelaySeconds() -> Int {
+        Int.random(in: Self.sunoCoverQueueDelayRangeSeconds)
+    }
+
+    private func formattedSunoQueueDelay(seconds: Int) -> String {
+        let minutes = seconds / 60
+        let remainingSeconds = seconds % 60
+        if remainingSeconds == 0 {
+            return "\(minutes)m"
         }
-
-        return nil
+        return "\(minutes)m \(remainingSeconds)s"
     }
 
     private func updateSunoGeneration(

@@ -63,6 +63,20 @@ struct GeminiStatusBadge: View {
 }
 
 @available(macOS 26.0, *)
+struct VertexCreditTitleBarLabel: View {
+    @Bindable var store: AnimateStore
+
+    var body: some View {
+        if ImageGenBackendStore.currentBackend() == .vertex {
+            Text("Vertex $\(String(format: "%.2f", store.vertexCreditRemainingUSD))")
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(Color.secondary.opacity(0.75))
+                .help("Estimated Vertex AI remaining credit. Adjust it in Settings if it drifts.")
+        }
+    }
+}
+
+@available(macOS 26.0, *)
 struct GeminiActivityPopover: View {
     @Bindable var store: AnimateStore
 

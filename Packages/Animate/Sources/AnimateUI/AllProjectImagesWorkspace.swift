@@ -116,12 +116,13 @@ final class AllProjectImagesState {
         let sizeBytes: Int64?
     }
 
-    private struct RecordSeed: Sendable {
+    private struct RecordSeed: Equatable, Sendable {
         let id: String
         let path: String
         let resolvedPath: String
         let source: AllProjectImagesSource
         let originLabel: String
+        let groupLabel: String
         let rating: Int?
         let isRejected: Bool
         let notes: String
@@ -131,6 +132,7 @@ final class AllProjectImagesState {
     private struct FilterCacheKey: Equatable {
         let buildSignature: Int
         let selectedSource: AllProjectImagesSource?
+        let selectedGroupLabel: String?
         let searchText: String
         let sortMode: AllProjectImagesSortMode
         let flagFilter: AllProjectImagesFlagFilter
@@ -138,7 +140,14 @@ final class AllProjectImagesState {
     }
 
     // Filter / selection
-    var selectedSource: AllProjectImagesSource? = nil
+    var selectedSource: AllProjectImagesSource? = nil {
+        didSet {
+            if oldValue != selectedSource {
+                selectedGroupLabel = nil
+            }
+        }
+    }
+    var selectedGroupLabel: String? = nil
     var selectedRecordID: String? = nil
     var sortMode: AllProjectImagesSortMode = .newest
     var thumbnailSize: CGFloat = 140
@@ -160,6 +169,7 @@ final class AllProjectImagesState {
     var cachedAllRecords: [ProjectImageRecord] = []
     var lastBuildSignature: Int = -1
     private var pendingBuildSignature: Int = -1
+    @ObservationIgnored private var seedsByID: [String: RecordSeed] = [:]
     @ObservationIgnored private var recordsByID: [String: ProjectImageRecord] = [:]
     @ObservationIgnored private var countsBySource: [AllProjectImagesSource: Int] = [:]
     private var fileMetadataCache: [String: CachedFileMetadata] = [:]
@@ -168,6 +178,7 @@ final class AllProjectImagesState {
     @ObservationIgnored private var filteredRecordsByID: [String: ProjectImageRecord] = [:]
     @ObservationIgnored private var rebuildRequestID: Int = 0
     @ObservationIgnored private var rebuildTask: Task<Void, Never>?
+    @ObservationIgnored private var lastProjectPath: String?
 
     // MARK: - Aggregation
 
@@ -185,9 +196,22 @@ final class AllProjectImagesState {
         mix(store.canvasGenerations.count &<< 7)
         mix(store.placesWorkflowLibrary.generatedImageRecords.count &<< 11)
         for c in store.characters {
+            mix(c.profileImagePath == nil ? 0 : 1)
             mix(c.inspirationImagePaths.count)
+            mix((c.inspirationReferenceImagePath == nil ? 0 : 1) &<< 1)
             mix(c.referenceImagePaths.count &<< 2)
             mix(c.animatedImagePaths.count &<< 4)
+            mix(c.masterReferenceSourceImagePaths.count &<< 6)
+            mix(c.masterReferenceSheetVariants.count &<< 8)
+            mix(c.headTurnaroundSheetVariants.count &<< 10)
+            mix(c.lookDevelopmentSlots.reduce(0) { $0 + $1.variants.count } &<< 12)
+            mix(c.headTurnaroundSlots.reduce(0) { $0 + $1.variants.count } &<< 14)
+            mix(c.costumeReferenceSets.count &<< 16)
+            mix(c.costumeReferenceSets.reduce(0) { $0 + $1.sheetVariants.count } &<< 18)
+            mix(c.costumeReferenceSets.reduce(0) { $0 + $1.fullBodySlots.reduce(0) { $0 + $1.variants.count } } &<< 20)
+            mix(c.costumeReferenceSets.reduce(0) { $0 + $1.accessorySlots.reduce(0) { $0 + $1.variants.count } } &<< 22)
+            mix(c.costumeReferenceSets.reduce(0) { $0 + $1.costumeReferenceImagePaths.count } &<< 24)
+            mix(c.costumeReferenceSets.reduce(0) { $0 + $1.generatedVariationImagePaths.count } &<< 26)
         }
         for (_, galleries) in store.imagineSceneGalleries {
             for g in galleries {
@@ -201,43 +225,79 @@ final class AllProjectImagesState {
 
     func requestRebuildIfNeeded(store: AnimateStore) {
         let sig = recordsSignature(store: store)
-        if sig == lastBuildSignature || sig == pendingBuildSignature { return }
+        let projectPath = store.owpURL?.standardizedFileURL.path
+        let isSameProject = projectPath == lastProjectPath
+        if isSameProject && (sig == lastBuildSignature || sig == pendingBuildSignature) { return }
 
         pendingBuildSignature = sig
         let seeds = buildRecordSeeds(store: store)
+        let previousSeedsByID = isSameProject ? seedsByID : [:]
+        let previousRecordsByID = isSameProject ? recordsByID : [:]
+        let metadataCache = isSameProject ? fileMetadataCache : [:]
         rebuildTask?.cancel()
         rebuildRequestID &+= 1
         let requestID = rebuildRequestID
 
         rebuildTask = Task { [weak self] in
+            let rebuiltSeedsByID = Dictionary(uniqueKeysWithValues: seeds.map { ($0.id, $0) })
             let rebuiltRecords = await Task.detached(priority: .utility) {
-                Self.buildRecords(from: seeds)
+                Self.buildRecordsIncrementally(
+                    from: seeds,
+                    previousSeedsByID: previousSeedsByID,
+                    previousRecordsByID: previousRecordsByID,
+                    metadataCache: metadataCache
+                )
             }.value
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self,
                       requestID == self.rebuildRequestID else { return }
-                self.applyRebuiltRecords(rebuiltRecords, signature: sig)
+                self.applyRebuiltRecords(
+                    rebuiltRecords,
+                    seedsByID: rebuiltSeedsByID,
+                    signature: sig,
+                    projectPath: projectPath
+                )
                 self.pendingBuildSignature = -1
                 self.rebuildTask = nil
             }
         }
     }
 
-    private func applyRebuiltRecords(_ rebuiltRecords: [ProjectImageRecord], signature: Int) {
+    private func applyRebuiltRecords(
+        _ rebuiltRecords: [ProjectImageRecord],
+        seedsByID rebuiltSeedsByID: [String: RecordSeed],
+        signature: Int,
+        projectPath: String?
+    ) {
         cachedAllRecords = rebuiltRecords
-        recordsByID = Dictionary(uniqueKeysWithValues: rebuiltRecords.map { ($0.id, $0) })
-        countsBySource = Dictionary(grouping: rebuiltRecords, by: \.source).mapValues(\.count)
+        seedsByID = rebuiltSeedsByID
+        recordsByID = rebuiltRecords.reduce(into: [:]) { partialResult, record in
+            partialResult[record.id] = record
+        }
+        countsBySource = rebuiltRecords.reduce(into: [:]) { partialResult, record in
+            partialResult[record.source, default: 0] += 1
+        }
         lastBuildSignature = signature
+        lastProjectPath = projectPath
         filteredCacheKey = nil
         filteredCacheRecords = []
         filteredRecordsByID = [:]
+        let rebuiltMetadata = rebuiltRecords.reduce(into: [String: CachedFileMetadata]()) { partialResult, record in
+            guard !record.resolvedPath.isEmpty else { return }
+            partialResult[record.resolvedPath] = CachedFileMetadata(
+                createdAt: record.createdAt,
+                sizeBytes: record.sizeBytes
+            )
+        }
         fileMetadataCache.merge(
-            Dictionary(uniqueKeysWithValues: rebuiltRecords.map {
-                ($0.resolvedPath, CachedFileMetadata(createdAt: $0.createdAt, sizeBytes: $0.sizeBytes))
-            }),
+            rebuiltMetadata,
             uniquingKeysWith: { _, new in new }
         )
+        if let selectedGroupLabel,
+           !availableGroupLabels.contains(selectedGroupLabel) {
+            self.selectedGroupLabel = nil
+        }
         if let selectedRecordID, recordsByID[selectedRecordID] == nil {
             self.selectedRecordID = nil
         }
@@ -251,6 +311,7 @@ final class AllProjectImagesState {
             resolvedPath: cachedAllRecords[index].resolvedPath,
             source: cachedAllRecords[index].source,
             originLabel: cachedAllRecords[index].originLabel,
+            groupLabel: cachedAllRecords[index].groupLabel,
             createdAt: cachedAllRecords[index].createdAt,
             sizeBytes: cachedAllRecords[index].sizeBytes,
             rating: rating,
@@ -298,10 +359,7 @@ final class AllProjectImagesState {
                     path: path,
                     source: .places,
                     originLabel: place.name.isEmpty ? "Place" : place.name,
-                    rating: {
-                        let value = store.placeImageRating(path: path, placeID: place.id)
-                        return value > 0 ? value : nil
-                    }(),
+                    groupLabel: place.name.isEmpty ? "Place" : place.name,
                     store: store
                 ), dedupeByResolvedPath: true)
             }
@@ -311,10 +369,7 @@ final class AllProjectImagesState {
                     path: path,
                     source: .places,
                     originLabel: "\(place.name) (animated)",
-                    rating: {
-                        let value = store.placeImageRating(path: path, placeID: place.id)
-                        return value > 0 ? value : nil
-                    }(),
+                    groupLabel: place.name.isEmpty ? "Place" : place.name,
                     store: store
                 ), dedupeByResolvedPath: true)
             }
@@ -338,6 +393,7 @@ final class AllProjectImagesState {
                 path: activePath,
                 source: isMap3D ? .map3dCaptures : .places,
                 originLabel: origin,
+                groupLabel: origin,
                 rating: record.rating,
                 isRejected: record.isRejected,
                 notes: record.draftEditNotes,
@@ -351,41 +407,135 @@ final class AllProjectImagesState {
                 path: gen.imagePath,
                 source: .canvas,
                 originLabel: gen.prompt.isEmpty ? "Canvas generation" : String(gen.prompt.prefix(50)),
+                groupLabel: "Canvas",
                 store: store
             ))
         }
 
         for character in store.characters {
             let originBase = character.name.isEmpty ? "Character" : character.name
-            for path in character.inspirationImagePaths {
-                records.append(makeSeed(
-                    id: "char-insp-\(character.id.uuidString)-\(path)",
-                    path: path,
+
+            func appendCharacterSeed(
+                prefix: String,
+                rawPath: String?,
+                originSuffix: String,
+                rating: Int? = nil,
+                isRejected: Bool = false,
+                notes: String = ""
+            ) {
+                guard let trimmedPath = rawPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !trimmedPath.isEmpty else { return }
+                appendRecord(makeSeed(
+                    id: "\(prefix)-\(character.id.uuidString)-\(trimmedPath)",
+                    path: trimmedPath,
                     source: .characters,
-                    originLabel: "\(originBase) (inspiration)",
+                    originLabel: "\(originBase) (\(originSuffix))",
+                    groupLabel: originBase,
+                    rating: rating,
+                    isRejected: isRejected,
+                    notes: notes,
+                    store: store
+                ), dedupeByResolvedPath: true)
+            }
+
+            appendCharacterSeed(prefix: "char-profile", rawPath: character.profileImagePath, originSuffix: "profile")
+            appendCharacterSeed(prefix: "char-insp-ref", rawPath: character.inspirationReferenceImagePath, originSuffix: "reference anchor")
+
+            for path in character.inspirationImagePaths {
+                appendCharacterSeed(
+                    prefix: "char-insp",
+                    rawPath: path,
+                    originSuffix: "inspiration",
                     rating: character.inspirationRatings?[path],
                     isRejected: character.inspirationRejectedPaths.contains(path),
-                    notes: character.inspirationNotes?[path] ?? "",
-                    store: store
-                ))
+                    notes: character.inspirationNotes?[path] ?? ""
+                )
             }
+
             for path in character.referenceImagePaths {
-                records.append(makeSeed(
-                    id: "char-ref-\(character.id.uuidString)-\(path)",
-                    path: path,
-                    source: .characters,
-                    originLabel: "\(originBase) (reference)",
-                    store: store
-                ))
+                appendCharacterSeed(prefix: "char-ref", rawPath: path, originSuffix: "reference")
             }
+
             for path in character.animatedImagePaths {
-                records.append(makeSeed(
-                    id: "char-anim-\(character.id.uuidString)-\(path)",
-                    path: path,
-                    source: .characters,
-                    originLabel: "\(originBase) (animated)",
-                    store: store
-                ))
+                appendCharacterSeed(prefix: "char-anim", rawPath: path, originSuffix: "animated")
+            }
+
+            for path in character.masterReferenceSourceImagePaths {
+                appendCharacterSeed(prefix: "char-master-source", rawPath: path, originSuffix: "master sheet source")
+            }
+
+            for variant in character.masterReferenceSheetVariants {
+                appendCharacterSeed(prefix: "char-master-sheet", rawPath: variant.imagePath, originSuffix: "master sheet")
+            }
+
+            for variant in character.headTurnaroundSheetVariants {
+                appendCharacterSeed(prefix: "char-head-sheet", rawPath: variant.imagePath, originSuffix: "head turnaround sheet")
+            }
+
+            for slot in character.lookDevelopmentSlots {
+                for variant in slot.variants {
+                    appendCharacterSeed(
+                        prefix: "char-lookdev-\(slot.id.uuidString)",
+                        rawPath: variant.imagePath,
+                        originSuffix: slot.title
+                    )
+                }
+            }
+
+            for slot in character.headTurnaroundSlots {
+                for variant in slot.variants {
+                    appendCharacterSeed(
+                        prefix: "char-headslot-\(slot.id.uuidString)",
+                        rawPath: variant.imagePath,
+                        originSuffix: slot.title
+                    )
+                }
+            }
+
+            for costume in character.costumeReferenceSets {
+                for variant in costume.sheetVariants {
+                    appendCharacterSeed(
+                        prefix: "char-costume-sheet-\(costume.id.uuidString)",
+                        rawPath: variant.imagePath,
+                        originSuffix: "\(costume.name) sheet"
+                    )
+                }
+
+                for slot in costume.fullBodySlots {
+                    for variant in slot.variants {
+                        appendCharacterSeed(
+                            prefix: "char-costume-fullbody-\(costume.id.uuidString)-\(slot.id.uuidString)",
+                            rawPath: variant.imagePath,
+                            originSuffix: "\(costume.name) \(slot.title)"
+                        )
+                    }
+                }
+
+                for slot in costume.accessorySlots {
+                    for variant in slot.variants {
+                        appendCharacterSeed(
+                            prefix: "char-costume-accessory-\(costume.id.uuidString)-\(slot.id.uuidString)",
+                            rawPath: variant.imagePath,
+                            originSuffix: "\(costume.name) \(slot.title)"
+                        )
+                    }
+                }
+
+                for path in costume.costumeReferenceImagePaths {
+                    appendCharacterSeed(
+                        prefix: "char-costume-ref-\(costume.id.uuidString)",
+                        rawPath: path,
+                        originSuffix: "\(costume.name) reference"
+                    )
+                }
+
+                for path in costume.generatedVariationImagePaths {
+                    appendCharacterSeed(
+                        prefix: "char-costume-var-\(costume.id.uuidString)",
+                        rawPath: path,
+                        originSuffix: "\(costume.name) variation"
+                    )
+                }
             }
         }
 
@@ -402,6 +552,7 @@ final class AllProjectImagesState {
                             path: path,
                             source: .sceneShots,
                             originLabel: "Shot (\(moment.rawValue))",
+                            groupLabel: "Shot",
                             store: store
                         ))
                     }
@@ -417,6 +568,7 @@ final class AllProjectImagesState {
         path: String,
         source: AllProjectImagesSource,
         originLabel: String,
+        groupLabel: String,
         rating: Int? = nil,
         isRejected: Bool = false,
         notes: String = "",
@@ -430,6 +582,7 @@ final class AllProjectImagesState {
             resolvedPath: resolved,
             source: source,
             originLabel: originLabel,
+            groupLabel: groupLabel,
             rating: rating,
             isRejected: isRejected,
             notes: notes,
@@ -439,45 +592,67 @@ final class AllProjectImagesState {
 
     nonisolated private static func buildRecords(from seeds: [RecordSeed]) -> [ProjectImageRecord] {
         var metadataCache: [String: CachedFileMetadata] = [:]
-        let fileManager = FileManager.default
-
         return seeds.map { seed in
-            let metadata: CachedFileMetadata
-            if let cached = metadataCache[seed.resolvedPath] {
-                metadata = cached
-            } else {
-                let attrs = try? fileManager.attributesOfItem(atPath: seed.resolvedPath)
-                metadata = CachedFileMetadata(
-                    createdAt: (attrs?[.creationDate] as? Date) ?? (attrs?[.modificationDate] as? Date),
-                    sizeBytes: (attrs?[.size] as? NSNumber)?.int64Value
-                )
-                metadataCache[seed.resolvedPath] = metadata
-            }
-
-            let hasSeedMetadata = seed.rating != nil
-                || seed.isRejected
-                || !seed.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            let sidecarMetadata = (seed.source == .places || !hasSeedMetadata)
-                ? ImageLibraryMetadataSidecarService.load(forImagePath: seed.resolvedPath)
-                : nil
-            let mergedNotes = seed.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? (sidecarMetadata?.notes ?? "")
-                : seed.notes
-
-            return ProjectImageRecord(
-                id: seed.id,
-                path: seed.path,
-                resolvedPath: seed.resolvedPath,
-                source: seed.source,
-                originLabel: seed.originLabel,
-                createdAt: metadata.createdAt,
-                sizeBytes: metadata.sizeBytes,
-                rating: seed.rating ?? sidecarMetadata?.rating,
-                isRejected: seed.isRejected || (sidecarMetadata?.isRejected ?? false),
-                notes: mergedNotes,
-                supportsLibraryCuration: seed.supportsLibraryCuration
-            )
+            buildRecord(from: seed, metadataCache: &metadataCache)
         }
+    }
+
+    nonisolated private static func buildRecordsIncrementally(
+        from seeds: [RecordSeed],
+        previousSeedsByID: [String: RecordSeed],
+        previousRecordsByID: [String: ProjectImageRecord],
+        metadataCache: [String: CachedFileMetadata]
+    ) -> [ProjectImageRecord] {
+        var mutableMetadataCache = metadataCache
+        return seeds.map { seed in
+            if previousSeedsByID[seed.id] == seed,
+               let existing = previousRecordsByID[seed.id] {
+                return existing
+            }
+            return buildRecord(from: seed, metadataCache: &mutableMetadataCache)
+        }
+    }
+
+    nonisolated private static func buildRecord(
+        from seed: RecordSeed,
+        metadataCache: inout [String: CachedFileMetadata]
+    ) -> ProjectImageRecord {
+        let metadata: CachedFileMetadata
+        if let cached = metadataCache[seed.resolvedPath] {
+            metadata = cached
+        } else {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: seed.resolvedPath)
+            metadata = CachedFileMetadata(
+                createdAt: (attrs?[.creationDate] as? Date) ?? (attrs?[.modificationDate] as? Date),
+                sizeBytes: (attrs?[.size] as? NSNumber)?.int64Value
+            )
+            metadataCache[seed.resolvedPath] = metadata
+        }
+
+        let hasSeedMetadata = seed.rating != nil
+            || seed.isRejected
+            || !seed.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let sidecarMetadata = (seed.source == .places || !hasSeedMetadata)
+            ? ImageLibraryMetadataSidecarService.load(forImagePath: seed.resolvedPath)
+            : nil
+        let mergedNotes = seed.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? (sidecarMetadata?.notes ?? "")
+            : seed.notes
+
+        return ProjectImageRecord(
+            id: seed.id,
+            path: seed.path,
+            resolvedPath: seed.resolvedPath,
+            source: seed.source,
+            originLabel: seed.originLabel,
+            groupLabel: seed.groupLabel,
+            createdAt: metadata.createdAt,
+            sizeBytes: metadata.sizeBytes,
+            rating: seed.rating ?? sidecarMetadata?.rating,
+            isRejected: seed.isRejected || (sidecarMetadata?.isRejected ?? false),
+            notes: mergedNotes,
+            supportsLibraryCuration: seed.supportsLibraryCuration
+        )
     }
 
     // MARK: - Filter + Sort
@@ -487,6 +662,7 @@ final class AllProjectImagesState {
         let cacheKey = FilterCacheKey(
             buildSignature: lastBuildSignature,
             selectedSource: selectedSource,
+            selectedGroupLabel: selectedGroupLabel,
             searchText: query,
             sortMode: sortMode,
             flagFilter: flagFilter,
@@ -496,6 +672,9 @@ final class AllProjectImagesState {
             var records = cachedAllRecords
             if let source = selectedSource {
                 records = records.filter { $0.source == source }
+            }
+            if let selectedGroupLabel, !selectedGroupLabel.isEmpty {
+                records = records.filter { $0.groupLabel == selectedGroupLabel }
             }
             switch flagFilter {
             case .all:
@@ -554,6 +733,18 @@ final class AllProjectImagesState {
         countsBySource[source] ?? 0
     }
 
+    var availableGroupLabels: [String] {
+        let scopedRecords: [ProjectImageRecord]
+        if let selectedSource {
+            scopedRecords = cachedAllRecords.filter { $0.source == selectedSource }
+        } else {
+            scopedRecords = cachedAllRecords
+        }
+        return Array(Set(scopedRecords.map(\.groupLabel)))
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     func ensureFilmstripSelection() {
         let records = filteredRecords
         guard !records.isEmpty else {
@@ -600,7 +791,10 @@ public struct AllProjectImagesWorkspace: View {
 
     public var body: some View {
         ZStack {
-            AllProjectImagesWorkspaceContent(store: controller.store)
+            AllProjectImagesWorkspaceContent(
+                store: controller.store,
+                state: controller.allProjectImagesState
+            )
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
             if controller.isLoadingProject || controller.isSelectionRestorePending {
@@ -618,7 +812,7 @@ public struct AllProjectImagesWorkspace: View {
 @available(macOS 26.0, *)
 private struct AllProjectImagesWorkspaceContent: View {
     @Bindable var store: AnimateStore
-    @State private var state = AllProjectImagesState()
+    @Bindable var state: AllProjectImagesState
 
     @AppStorage("novotro.allImages.sidebarVisible") private var sidebarVisible = true
     @AppStorage("novotro.allImages.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
@@ -626,14 +820,6 @@ private struct AllProjectImagesWorkspaceContent: View {
     @AppStorage("novotro.allImages.inspector.width") private var inspectorWidth: Double = 340
 
     var body: some View {
-        // Shadow `state` with @Bindable so `$state.editPendingPreflight`
-        // produces a Binding that SwiftUI actually subscribes to when the
-        // property changes. Without this, `@State` on an `@Observable`
-        // reference type + `$state.property` goes through dynamic member
-        // lookup in a way that silently fails to trigger `.sheet(item:)`
-        // — that's why right-clicking "Edit with Gemini…" did nothing
-        // visible even though the closure was firing and mutating state.
-        @Bindable var state = state
         Group {
             if store.owpURL == nil {
                 OperaChromeEmptyState(
@@ -781,9 +967,7 @@ private struct AllProjectImagesWorkspaceContent: View {
             }
         }
         .background(OperaChromeTheme.workspaceBackground)
-        // Preflight + alerts live on `body` (not here), with an explicit
-        // @Bindable shadow of `state`, so `$state.editPendingPreflight`
-        // actually triggers the sheet. See comment in `body`.
+        // Preflight + alerts live on `body`.
     }
 
     private var centerPaneTitle: String {
@@ -823,8 +1007,8 @@ private struct AllProjectImagesWorkspaceContent: View {
         _ drafts: [GeminiGenerationDraft],
         sourceRecord: ProjectImageRecord?
     ) {
-        guard store.isGeminiAllowed() else {
-            state.editErrorMessage = "Gemini API calls are blocked. Enable Gemini API Calls in Inspector > Tools."
+        if let error = store.geminiImageGenerationAvailabilityError {
+            state.editErrorMessage = error.localizedDescription
             return
         }
         Task { @MainActor in
@@ -1338,6 +1522,7 @@ private struct AllProjectImageSelection: DetailedImageSelection {
 
     var metadataRows: [(label: String, value: String)] {
         guard let record else { return [] }
+        let candidatePaths = candidatePaths(for: record)
         var rows: [(label: String, value: String)] = [
             ("Source", record.source.displayName),
             ("Origin", record.originLabel)
@@ -1353,7 +1538,7 @@ private struct AllProjectImageSelection: DetailedImageSelection {
             rows.append(("Image Type", characterContext.kind))
         }
 
-        if let metadata = store.generationMetadata(for: record.path) ?? store.generationMetadata(for: record.resolvedPath) {
+        if let metadata = candidatePaths.lazy.compactMap({ store.generationMetadata(for: $0) }).first {
             if !metadata.model.isEmpty {
                 rows.append(("Model", metadata.model))
             }
@@ -1366,9 +1551,8 @@ private struct AllProjectImageSelection: DetailedImageSelection {
             }
         }
 
-        if let resolution = store.imageResolutionDescription(for: record.path), !resolution.isEmpty {
-            rows.append(("Resolution", resolution))
-        } else if let resolution = store.imageResolutionDescription(for: record.resolvedPath), !resolution.isEmpty {
+        if let resolution = candidatePaths.lazy.compactMap({ store.imageResolutionDescription(for: $0) }).first,
+           !resolution.isEmpty {
             rows.append(("Resolution", resolution))
         }
 

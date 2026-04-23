@@ -35,21 +35,28 @@ final class ImagineScenePromptService {
             moment: moment,
             subjectStyle: subjectStyle
         )
-        let workflowMode = "for reference-image scene editing with neutral subject labels"
-        let goodStyleExample = "\"subject_1 on screen-left reaches left arm toward subject_2 on screen-right. slight frown, looking away, medium shot, clinic courtyard at dusk, photoreal documentary still.\""
+        let workflowMode = "for the Scenes imagine begin/middle/end triplet workflow with neutral subject labels"
+        let goodStyleExample = "\"subject_1 screen-left pauses in the clinic doorway while subject_2 screen-right keeps eyes down at the table, medium-wide documentary frame, same clinic interior and warm battery-lamp light, photoreal still.\""
+        let existingTripletBlock = buildExistingTripletPromptBlock(sceneID: scene.id, shotIndex: shotIndex)
 
         let instruction = """
         You are writing production prompts for FLUX.2 [klein] in Draw Things \(workflowMode).
 
+        WORKFLOW MODEL:
+        - Each shot belongs to a prompt triplet: Beginning, Middle, End.
+        - These are three continuity-locked stills from the SAME shot.
+        - Keep camera placement, lens feel, framing logic, screen direction, geography, lighting, wardrobe logic, and subject identity consistent across the triplet.
+        - Only change the visible beat inside the frame for the selected moment.
+
         OUTPUT FORMAT:
         - Return ONLY the final prompt text.
-        - Use 1 or 2 natural-language sentences.
-        - 20 to 60 words total.
+        - Use 2 to 4 short natural-language clauses or sentences.
+        - 35 to 95 words total.
         - No bullets, no labels, no markdown, no JSON.
 
         STYLE RULES:
-        - Start with subject token + visible action + exact screen blocking.
-        - Then add only the most important visible details: gaze, expression, pose, shot size, setting, lighting.
+        - Start with subject token + visible action beat + exact screen blocking.
+        - Then add the shot size / framing, setting, lighting, and only the most important visible details.
         - Keep it short, literal, and visual.
         - Front-load the most important visual information.
         - Use plain descriptive language, not screenplay language.
@@ -58,14 +65,16 @@ final class ImagineScenePromptService {
         ABSOLUTE RULES:
         1. The STAGE DIRECTIONS field is the highest priority. Follow it literally.
         2. Use ONLY the character identifier tokens provided in the context. NEVER write human names.
-        3. If the stage directions imply screen-left, screen-right, foreground, background, facing left, or facing right, keep those directions explicit in the prompt.
-        4. Give each visible character one distinct physical action clause.
-        5. Use only visible expression words such as frown, neutral face, looking away, eyes down, jaw tense. Do NOT write motivations, longing, symbolism, metaphor, subtext, or backstory.
-        6. LYRIC/DIALOGUE may inform only visible expression or posture. Never depict singing, microphones, stage performance, or rendered text.
-        7. Keep civilians and soldiers visually distinct using the wardrobe/world notes.
-        8. Style must stay photorealistic documentary cinema with grounded, period-accurate detail.
-        9. Prefer one clear composition over many secondary details.
-        10. Never write the words "emotion", "motivation", "charged", "poetic", "dangerous openness", "barrier", or "bond".
+        3. This prompt must stay inside the SAME SHOT as the companion moments. Do NOT invent a new angle, reverse angle, lens change, location change, time-of-day change, or subject swap.
+        4. If the stage directions imply screen-left, screen-right, foreground, background, facing left, or facing right, keep those directions explicit in the prompt.
+        5. Give each visible character one distinct physical action clause.
+        6. Use only visible expression words such as frown, neutral face, looking away, eyes down, jaw tense. Do NOT write motivations, longing, symbolism, metaphor, subtext, or backstory.
+        7. LYRIC/DIALOGUE may inform only visible expression or posture. Never depict singing, microphones, stage performance, or rendered text.
+        8. Keep civilians and soldiers visually distinct using the wardrobe/world notes.
+        9. Style must stay photorealistic documentary cinema with grounded, period-accurate detail.
+        10. Beginning = opening readable state. Middle = peak readable state. End = resolved readable state.
+        11. If companion prompts already exist, stay compatible with them and only advance the beat for the selected moment.
+        12. Never write the words "emotion", "motivation", "charged", "poetic", "dangerous openness", "barrier", or "bond".
 
         GOOD STYLE EXAMPLE:
         \(goodStyleExample)
@@ -74,7 +83,9 @@ final class ImagineScenePromptService {
 
         \(contextBlock)
 
-        The most important thing is to preserve the authored blocking and who-does-what for shot \(shotIndex + 1), \(moment.rawValue.lowercased()).
+        \(existingTripletBlock)
+
+        The most important thing is to preserve the authored blocking, same-camera continuity, and who-does-what for shot \(shotIndex + 1), \(moment.rawValue.lowercased()).
         """
 
         return try await runCodexExec(instruction: instruction)
@@ -403,17 +414,38 @@ final class ImagineScenePromptService {
         // === MOMENT ===
         switch moment {
         case .beginning:
-            parts.append("TEMPORAL MOMENT: BEGINNING of this shot's action. Show the opening state.")
+            parts.append("TEMPORAL MOMENT: BEGINNING of this shot's action. Show the opening readable state while preserving the locked shot geography.")
         case .middle:
-            parts.append("TEMPORAL MOMENT: MIDDLE/PEAK of this shot's action. Full intensity.")
+            parts.append("TEMPORAL MOMENT: MIDDLE/PEAK of this shot's action. Show the clearest peak beat while preserving the same shot.")
         case .end:
-            parts.append("TEMPORAL MOMENT: END of this shot's action. Resolution/transition.")
+            parts.append("TEMPORAL MOMENT: END of this shot's action. Show the resolved closing readable state while preserving the same shot.")
         }
 
         // === STYLE ===
-        parts.append("STYLE TARGET: Photorealistic cinematic documentary photography with grounded, period-accurate Afghanistan detail, natural skin texture, clean unmarked surfaces, and realistic wardrobe.")
+        parts.append("STYLE TARGET: Photorealistic cinematic documentary photography with grounded, period-accurate Afghanistan detail, natural skin texture, clean unmarked surfaces, realistic wardrobe, and continuity-locked shot framing.")
 
         return parts.joined(separator: "\n")
+    }
+
+    private func buildExistingTripletPromptBlock(
+        sceneID: UUID,
+        shotIndex: Int
+    ) -> String {
+        guard let gallery = store.imagineGallery(for: sceneID, shotIndex: shotIndex) else {
+            return "EXISTING STORED SHOT TRIPLET PROMPTS: none"
+        }
+
+        let entries = ImagineShotMoment.allCases.compactMap { moment -> String? in
+            let prompt = gallery.prompt(for: moment).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !prompt.isEmpty else { return nil }
+            return "\(moment.rawValue.uppercased()): \(prompt)"
+        }
+
+        guard !entries.isEmpty else {
+            return "EXISTING STORED SHOT TRIPLET PROMPTS: none"
+        }
+
+        return "EXISTING STORED SHOT TRIPLET PROMPTS:\n" + entries.joined(separator: "\n")
     }
 
     private func orderedSceneCharacters(

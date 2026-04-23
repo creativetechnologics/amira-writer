@@ -351,7 +351,6 @@ public final class ProjectServerRegistry: @unchecked Sendable {
             "Songs",
             "Metadata",
             "Characters",
-            "Synopsis",
             "Animate",
         ]
         for relativePath in requiredDirectories {

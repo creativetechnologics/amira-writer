@@ -292,6 +292,7 @@ struct ImagineCharactersPageView: View {
                             Button("Submit 27-Image Batch + Watchdog (with \(yellowSelection.count) Selected)") {
                                 prepareInspirationWithSelectedReferences(character: character, mode: .batch)
                             }
+                            .disabled(!store.canSubmitGeminiBatchJobs)
                         }
                     }
                 } label: {
@@ -398,6 +399,12 @@ struct ImagineCharactersPageView: View {
                     .foregroundStyle(.tertiary)
                     .padding(.top, 4)
             }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            let valid = AnimateStore.filterImportableImageURLs(urls)
+            guard !valid.isEmpty else { return false }
+            store.importInspirationImages(from: valid, for: character.id)
+            return true
         }
         .onAppear {
             loadGalleryState(for: character)
@@ -1054,11 +1061,8 @@ struct ImagineCharactersPageView: View {
 
     /// Returns a human-readable reason why the Generate button is disabled, or nil if it should be enabled.
     private var generateButtonDisabledReason: String? {
-        if store.geminiAPIKey.isEmpty {
-            return "No Gemini API key"
-        }
-        if !store.geminiMasterSwitch {
-            return "Gemini blocked (Tools tab)"
+        if let error = store.geminiImageGenerationAvailabilityError {
+            return error.localizedDescription
         }
         if isGeneratingInspiration {
             return "Generating…"
@@ -1177,7 +1181,7 @@ struct ImagineCharactersPageView: View {
 
         let characterID = character.id
         let prefetchSize = Int(galleryThumbnailBaseSize * 2)
-        let resolvedForPrefetch = resolvedPairs.compactMap { $0.resolved }
+        let resolvedForPrefetch = Array(resolvedPairs.compactMap(\.resolved).prefix(48))
 
         Task { @MainActor in
             let sorted = await Task.detached(priority: .utility) {
@@ -1252,7 +1256,7 @@ struct ImagineCharactersPageView: View {
         let isRejected = character.inspirationRejectedPaths.contains(path)
         let isNew = !character.reviewedInspirationImagePaths.contains(path)
         let charID = character.id
-        let geminiActive = !store.geminiAPIKey.isEmpty && store.geminiMasterSwitch
+        let geminiActive = store.canGenerateGeminiImagesImmediately
 
         UnifiedImageTile(
             path: path,
@@ -1542,6 +1546,7 @@ struct ImagineCharactersPageView: View {
                     mode: .batch
                 )
             }
+            .disabled(!store.canSubmitGeminiBatchJobs)
         }
 
         Section("Action Images (Amira-specific)") {
@@ -1561,6 +1566,7 @@ struct ImagineCharactersPageView: View {
                     mode: .batch
                 )
             }
+            .disabled(!store.canSubmitGeminiBatchJobs)
         }
     }
 
@@ -1745,8 +1751,8 @@ struct ImagineCharactersPageView: View {
         _ drafts: [GeminiGenerationDraft]
     ) {
         guard let character = store.selectedCharacter else { return }
-        guard store.isGeminiAllowed() else {
-            inspirationGenerationErrorMessage = "Gemini API calls are blocked. Enable Gemini API Calls in Inspector > Tools."
+        if let error = store.geminiImageGenerationAvailabilityError {
+            inspirationGenerationErrorMessage = error.localizedDescription
             return
         }
         guard !drafts.isEmpty else { return }
@@ -1844,7 +1850,6 @@ struct ImagineCharactersPageView: View {
                             status: .completed,
                             outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent
                         )
-                        store.recordVertexCreditUsage(draft.estimatedCost)
                         if let activeCharacter = store.selectedCharacter,
                            activeCharacter.id == run.characterID {
                             refreshPreloadedPaths(character: activeCharacter)
@@ -1898,8 +1903,8 @@ struct ImagineCharactersPageView: View {
     ) {
         guard let character = store.selectedCharacter,
               let animateURL = store.animateURL else { return }
-        guard store.isGeminiAllowed() else {
-            inspirationGenerationErrorMessage = "Gemini API calls are blocked. Enable Gemini API Calls in Inspector > Tools."
+        if let error = store.geminiBatchGenerationAvailabilityError {
+            inspirationGenerationErrorMessage = error
             return
         }
 

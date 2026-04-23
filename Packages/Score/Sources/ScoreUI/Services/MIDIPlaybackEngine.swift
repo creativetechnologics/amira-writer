@@ -212,6 +212,10 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     private var systemWakeObserver: NSObjectProtocol?
     /// True while playback setup/teardown is in progress — health check should skip.
     private var isReconfiguring = false
+    /// Best-effort idle AU prewarm work item for live playback. Kept separate from the
+    /// synchronous export prewarm path so exports can still force immediate readiness.
+    private var pendingIdleAUPrewarmWorkItem: DispatchWorkItem?
+    private var idleAUPrewarmGeneration: UInt64 = 0
 
     /// Clear `isReconfiguring` from outside (e.g. when the restart callback declines to restart).
     func clearReconfiguring() {
@@ -530,6 +534,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         audioQueue.async { [weak self] in
             guard let self else { return }
             guard self.isPlayRequestCurrent(requestID) else { return }
+            self.cancelPendingIdleAUPrewarmOnAudioQueue()
             self.playOnAudioQueue(
                 notes: notes,
                 lengthTicks: lengthTicks,
@@ -703,6 +708,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     func reloadAllInstruments(mappings: [String: InstrumentMapping]) {
         audioQueue.async { [weak self] in
             guard let self else { return }
+            self.cancelPendingIdleAUPrewarmOnAudioQueue()
             self.fileLog("reloadAllInstruments: \(mappings.count) mappings, \(self.samplerByMappingKey.count) samplers, \(self.auInstrumentByMappingKey.count) AUs")
             NSLog("[Engine] reloadAllInstruments: tearing down %d samplers, %d AUs",
                   self.samplerByMappingKey.count, self.auInstrumentByMappingKey.count)
@@ -811,6 +817,12 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         }
     }
 
+    private func cancelPendingIdleAUPrewarmOnAudioQueue() {
+        idleAUPrewarmGeneration &+= 1
+        pendingIdleAUPrewarmWorkItem?.cancel()
+        pendingIdleAUPrewarmWorkItem = nil
+    }
+
     /// if it hasn't been loaded yet (e.g. before playback). Also starts the audio engine so the
     /// AU can produce sound immediately (e.g. when pressing keys in the plugin UI).
     func ensureAudioUnit(for mappingKey: String, mapping: InstrumentMapping, completion: @escaping @MainActor @Sendable (AUAudioUnit?) -> Void) {
@@ -848,6 +860,8 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 return
             }
 
+            self.cancelPendingIdleAUPrewarmOnAudioQueue()
+
             let orderedAUKeys = snapshot.keys
                 .filter {
                     guard let mapping = snapshot[$0] else { return false }
@@ -872,6 +886,45 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             self.installPreparedAudioUnits(preparedLoads)
 
             DispatchQueue.main.async { completion?() }
+        }
+    }
+
+    /// Queue a best-effort idle AU prewarm for live playback. Unlike `prewarmAudioUnits`,
+    /// this intentionally waits a moment before doing any work so an immediate Play press can
+    /// jump ahead on the serial audio queue instead of sitting behind background AU loads.
+    func scheduleIdleAUPrewarm(for mappings: [String: InstrumentMapping], delay: DispatchTimeInterval = .milliseconds(350)) {
+        let snapshot = mappings
+        audioQueue.async { [weak self] in
+            guard let self else { return }
+
+            self.cancelPendingIdleAUPrewarmOnAudioQueue()
+
+            let orderedAUKeys = snapshot.keys
+                .filter {
+                    guard let mapping = snapshot[$0] else { return false }
+                    return mapping.effectiveSourceType == .audioUnit && mapping.audioComponentDescription != nil
+                }
+                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+
+            guard !orderedAUKeys.isEmpty else { return }
+
+            let generation = self.idleAUPrewarmGeneration
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                guard self.idleAUPrewarmGeneration == generation else { return }
+                self.pendingIdleAUPrewarmWorkItem = nil
+
+                // Only prewarm while transport is idle. If the user hit Play before the
+                // delayed work fired, playback should already be ahead of this on audioQueue.
+                guard !self.isPlaying else { return }
+
+                _ = self.configureAudioGraphIfNeeded()
+                let preparedLoads = self.prepareAudioUnitLoads(for: orderedAUKeys, mappings: snapshot)
+                self.installPreparedAudioUnits(preparedLoads)
+            }
+
+            self.pendingIdleAUPrewarmWorkItem = workItem
+            self.audioQueue.asyncAfter(deadline: .now() + delay, execute: workItem)
         }
     }
 

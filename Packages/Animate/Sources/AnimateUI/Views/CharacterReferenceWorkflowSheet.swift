@@ -336,7 +336,7 @@ struct CharacterReferenceWorkflowSheet: View {
                     Label("Generate 1", systemImage: "sparkles")
                 }
                 .buttonStyle(.bordered)
-                .disabled(store.geminiAPIKey.isEmpty)
+                .disabled(!store.canGenerateGeminiImagesImmediately)
 
                 Button {
                     importExistingMasterSheet()
@@ -351,7 +351,7 @@ struct CharacterReferenceWorkflowSheet: View {
                     Label("Generate 3", systemImage: "square.stack.3d.up")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.geminiAPIKey.isEmpty)
+                .disabled(!store.canGenerateGeminiImagesImmediately)
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -490,7 +490,7 @@ struct CharacterReferenceWorkflowSheet: View {
                     Label("Generate Sheet", systemImage: "square.grid.2x2")
                 }
                 .buttonStyle(.bordered)
-                .disabled(store.geminiAPIKey.isEmpty)
+                .disabled(!store.canGenerateGeminiImagesImmediately)
 
                 Button {
                     prepareHeadBatchPlan()
@@ -498,7 +498,7 @@ struct CharacterReferenceWorkflowSheet: View {
                     Label("Generate Missing", systemImage: "sparkles")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.geminiAPIKey.isEmpty)
+                .disabled(!store.canSubmitGeminiBatchJobs)
 
                 if character.approvedHeadTurnaroundSheetVariant != nil {
                     Button {
@@ -1423,6 +1423,10 @@ struct CharacterReferenceWorkflowSheet: View {
     private func submitBatch(plan: PendingGenerationPlan, drafts: [GeminiGenerationDraft]) {
         guard let character,
               let animateURL = store.animateURL else { return }
+        if let error = store.geminiBatchGenerationAvailabilityError {
+            generationError = error
+            return
+        }
 
         isGenerating = true
         generationStatus = "Submitting batch…"

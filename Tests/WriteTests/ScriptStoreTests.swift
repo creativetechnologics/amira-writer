@@ -710,10 +710,8 @@ final class ScriptStoreTests: XCTestCase {
     private func makeProjectPackage(in root: URL, sceneTitle: String, sceneLyrics: String) throws -> URL {
         let projectURL = root.appendingPathComponent("Example.owp", isDirectory: true)
         let songsURL = projectURL.appendingPathComponent("Songs", isDirectory: true)
-        let synopsisURL = projectURL.appendingPathComponent("Synopsis", isDirectory: true)
 
         try FileManager.default.createDirectory(at: songsURL, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: synopsisURL, withIntermediateDirectories: true)
         try writeSong(
             at: songsURL.appendingPathComponent("01 \(sceneTitle).ows"),
             title: sceneTitle,
@@ -722,7 +720,6 @@ final class ScriptStoreTests: XCTestCase {
             activeVersionIsLatest: true,
             latestUpdatedAt: Date(timeIntervalSince1970: 10)
         )
-        try "Synopsis".write(to: synopsisURL.appendingPathComponent("synopsis.txt"), atomically: true, encoding: .utf8)
 
         return projectURL
     }

@@ -32,7 +32,7 @@ struct CharactersSidebarView: View {
                             store.selectedCharacterID = character.id
                             store.showRigEditor = true
                         }
-                        if !store.geminiAPIKey.isEmpty {
+                        if store.canGenerateGeminiImagesImmediately {
                             Button("Generate Assets...") {
                                 store.selectedCharacterID = character.id
                                 store.showGenerationSheet = true
@@ -63,6 +63,9 @@ struct CharactersSidebarView: View {
                     renamingCharacter = nil
                 }
             )
+        }
+        .task(id: store.owpURL?.path) {
+            store.recoverMissingPersistedCharactersIfNeeded()
         }
     }
 

@@ -61,6 +61,7 @@ struct UnifiedImageTile: View {
     var bottomTrailingOverlay: AnyView? = nil
 
     private var effectivePath: String { resolvedPath ?? path }
+    private var dragURL: URL? { projectImageDragURL(forResolvedPath: resolvedPath ?? (path.hasPrefix("/") ? path : nil)) }
 
     var body: some View {
         // No captions under tiles, per Gary (2026-04-17): "All thumbnails
@@ -84,6 +85,7 @@ struct UnifiedImageTile: View {
                     lineWidth: isSelected ? 2 : 0
                 )
         )
+        .modifier(ProjectImageFileDragModifier(url: dragURL))
         .contentShape(Rectangle())
         .modifier(TapHandlers(onTap: onTap, onDoubleTap: onDoubleTap))
     }

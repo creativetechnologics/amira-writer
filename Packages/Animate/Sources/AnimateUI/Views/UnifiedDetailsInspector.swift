@@ -100,6 +100,7 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
     }
 
     var body: some View {
+        let metadataRows = selection.metadataRows
         VStack(alignment: .leading, spacing: 14) {
             Label("Details", systemImage: "info.circle")
                 .font(.headline)
@@ -113,9 +114,9 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                     notesEditor
                 }
                 extraActions()
-                if !selection.metadataRows.isEmpty {
+                if !metadataRows.isEmpty {
                     Divider()
-                    metadataSection
+                    metadataSection(rows: metadataRows)
                 }
             } else {
                 emptyState
@@ -158,9 +159,17 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
             }
 
             if let url = selection.imageURL {
+                let cachedPreview = ImagineThumbnailCache.shared.bestCached(
+                    for: url.path,
+                    minimumPixelSize: max(1, min(previewPixelSize / 3, 640))
+                )
                 Group {
                     if let image = loadedImage, loadedImageURL == url {
                         Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                    } else if let cachedPreview {
+                        Image(nsImage: cachedPreview)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
                     } else {
@@ -179,6 +188,10 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                     // changes don't block UI. Decode an inspector-sized
                     // preview instead of the full source asset so 4K/8K
                     // images don't beachball the main actor.
+                    if loadedImageURL != url {
+                        loadedImage = cachedPreview
+                        loadedImageURL = cachedPreview == nil ? nil : url
+                    }
                     if loadedImageURL == url,
                        let loadedImage,
                        Int(max(loadedImage.size.width, loadedImage.size.height)) >= previewPixelSize {
@@ -186,9 +199,7 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                     }
                     let target = url
                     let pixelSize = previewPixelSize
-                    let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
-                        return loadInspectorPreview(url: target, maxPixelSize: pixelSize)
-                    }.value
+                    let image = await loadSharedPreviewImage(at: target.path, maxPixelSize: pixelSize)
                     if !Task.isCancelled {
                         loadedImage = image
                         loadedImageURL = url
@@ -308,13 +319,13 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
 
     // MARK: - Metadata
 
-    private var metadataSection: some View {
+    private func metadataSection(rows: [(label: String, value: String)]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Metadata")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            ForEach(Array(selection.metadataRows.enumerated()), id: \.offset) { _, row in
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 // Long values (like full prompts) need a stacked layout so they
                 // can wrap to the full inspector width instead of being squeezed
                 // to whatever space LabeledContent leaves on the right.
@@ -355,26 +366,6 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                 }
         }
     }
-}
-
-@available(macOS 26.0, *)
-private func loadInspectorPreview(url: URL, maxPixelSize: Int) -> NSImage? {
-    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-        return NSImage(contentsOf: url)
-    }
-    let options: [CFString: Any] = [
-        kCGImageSourceCreateThumbnailFromImageAlways: true,
-        kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-        kCGImageSourceCreateThumbnailWithTransform: true,
-        kCGImageSourceShouldCacheImmediately: true
-    ]
-    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-        return NSImage(contentsOf: url)
-    }
-    return NSImage(
-        cgImage: cgImage,
-        size: NSSize(width: cgImage.width, height: cgImage.height)
-    )
 }
 
 // Convenience init when no extra actions are needed
@@ -424,7 +415,7 @@ struct PlaceDetailsExtraActionsSection: View {
                         Label("Add to Batch", systemImage: "tray.and.arrow.down")
                     }
                     .buttonStyle(.bordered)
-                    .disabled(record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(record.draftEditNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.canSubmitGeminiBatchJobs)
 
                     Button {
                         runImmediateEdit(record)

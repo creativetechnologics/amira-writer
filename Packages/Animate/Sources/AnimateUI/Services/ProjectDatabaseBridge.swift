@@ -11,13 +11,14 @@ enum ProjectDatabaseBridge {
     static let animatePlacesWorkflowPath = "Places/places-workflow.json"
     static let characterPackageSelectionsPath = "Animate/character-package-selections.json"
     static let shotPresetsPath = "Animate/shot-presets.json"
+    static let animatedLookPromptPath = "Settings/animated-look-prompt.json"
     /// Wave D: archived — Animate/3d/ moved to _Archive/Animate-3d/.
     static let animate3DRegistryRootPath = "_Archive/Animate-3d"
     static let animate3DRegistryIndexPath = "_Archive/Animate-3d/registry-index.json"
 
     private static let charactersCandidatePaths = ["Characters/characters.json", "characters.json"]
 
-    struct AnimateProjectLoad {
+    struct AnimateProjectLoad: Sendable {
         var workingProjectURL: URL
         var characters: [OPWCharacter]
         var songs: [OWPSongStub]
@@ -28,18 +29,20 @@ enum ProjectDatabaseBridge {
     }
 
     static func loadAnimateProject(url: URL) async throws -> AnimateProjectLoad {
-        let projectURL = url
-        let diskProject = try await OWPProjectLoader().load(from: projectURL)
+        try await Task.detached(priority: .utility) { @Sendable in
+            let projectURL = url
+            let diskProject = try await OWPProjectLoader().load(from: projectURL)
 
-        return AnimateProjectLoad(
-            workingProjectURL: projectURL,
-            characters: diskProject.characters,
-            songs: diskProject.songs,
-            indexFile: diskProject.indexFile,
-            instrumentMappings: diskProject.instrumentMappings,
-            animateMetadata: loadAnimateMetadataFromDisk(projectURL: projectURL),
-            savedScenes: loadSavedScenesFromDisk(projectURL: projectURL)
-        )
+            return AnimateProjectLoad(
+                workingProjectURL: projectURL,
+                characters: diskProject.characters,
+                songs: diskProject.songs,
+                indexFile: diskProject.indexFile,
+                instrumentMappings: diskProject.instrumentMappings,
+                animateMetadata: loadAnimateMetadataFromDisk(projectURL: projectURL),
+                savedScenes: loadSavedScenesFromDisk(projectURL: projectURL)
+            )
+        }.value
     }
 
     static func isCharactersProjectFilePath(_ path: String) -> Bool {
@@ -51,8 +54,9 @@ enum ProjectDatabaseBridge {
         guard FileManager.default.fileExists(atPath: songURL.path) else {
             return nil
         }
-        let loader = OWPProjectLoader()
-        return try? await loader.loadSongData(from: songURL)
+        return try? await Task.detached(priority: .utility) { @Sendable in
+            try await OWPProjectLoader().loadSongData(from: songURL)
+        }.value
     }
 
     private static func loadAnimateMetadataFromDisk(projectURL: URL) -> AnimateMetadata? {
@@ -184,6 +188,40 @@ enum ProjectDatabaseBridge {
             withIntermediateDirectories: true
         )
         let data = try configuredEncoder().encode(config)
+        try data.write(to: fileURL)
+    }
+
+    static func loadAnimatedLookPromptFromDisk(projectURL: URL) -> String? {
+        struct Payload: Codable {
+            var prompt: String
+        }
+
+        let fileURL = ProjectPaths(root: projectURL).animatedLookPromptJSON
+        guard let data = try? Data(contentsOf: fileURL),
+              let payload = try? configuredDecoder().decode(Payload.self, from: data) else {
+            return nil
+        }
+        let trimmed = payload.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func saveAnimatedLookPromptToDisk(_ prompt: String, projectURL: URL) throws {
+        struct Payload: Codable {
+            var prompt: String
+        }
+
+        let fileURL = ProjectPaths(root: projectURL).animatedLookPromptJSON
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            try? FileManager.default.removeItem(at: fileURL)
+            return
+        }
+
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try configuredEncoder().encode(Payload(prompt: trimmed))
         try data.write(to: fileURL)
     }
 

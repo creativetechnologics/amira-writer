@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 // MARK: - Error Type
 
@@ -41,7 +44,8 @@ struct SunoSelftestResult: Sendable {
 }
 
 struct SunoGenerateResult: Sendable {
-    let songIDs: [String]       // A + B variants
+    let songIDs: [String]       // Preferred A + B variants
+    let allCapturedSongIDs: [String]
     let title: String?
     let message: String
 }
@@ -190,12 +194,14 @@ final class SunoCLIRunner {
         weirdness: Int = 30,
         styleInfluence: Int = 0,
         audioInfluence: Int = 95,
+        headless: Bool = true,
         wait: Bool = true
     ) async throws -> SunoGenerateResult {
         var args: [String] = ["generate", "cover", "--source", source, "--style", style]
         if let title, !title.isEmpty { args += ["--title", title] }
         if let lyrics, !lyrics.isEmpty { args += ["--lyrics-text", lyrics] }
         if let excludeStyles, !excludeStyles.isEmpty { args += ["--negative", excludeStyles] }
+        args += [headless ? "--headless" : "--visible"]
         args += ["--weirdness", "\(weirdness)"]
         args += ["--style-influence", "\(styleInfluence)"]
         args += ["--audio-influence", "\(audioInfluence)"]
@@ -212,12 +218,14 @@ final class SunoCLIRunner {
         title: String? = nil,
         instrumental: Bool = false,
         lyrics: String? = nil,
+        headless: Bool = true,
         wait: Bool = true
     ) async throws -> SunoGenerateResult {
         var args: [String] = ["generate", "original", "--prompt", prompt, "--style", style]
         if let title, !title.isEmpty { args += ["--title", title] }
         if instrumental { args += ["--instrumental"] }
         if let lyrics, !lyrics.isEmpty { args += ["--lyrics-text", lyrics] }
+        args += [headless ? "--headless" : "--visible"]
         args += [wait ? "--wait" : "--no-wait"]
 
         let timeout: TimeInterval = wait ? 1800 : 300
@@ -266,6 +274,37 @@ final class SunoCLIRunner {
         return try await runJSON(["browser", "status"], timeoutSeconds: 60)
     }
 
+    func openLoginBrowser() async throws -> String {
+        #if canImport(AppKit)
+        let browserAppURL = try resolvedLoginBrowserAppURL()
+        let profileURL = URL(fileURLWithPath: profileDir, isDirectory: true)
+        try FileManager.default.createDirectory(at: profileURL, withIntermediateDirectories: true, attributes: nil)
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = true
+        configuration.arguments = [
+            "--user-data-dir=\(profileURL.path)",
+            "--no-first-run",
+            "--new-window",
+            "https://suno.com/create",
+        ]
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            NSWorkspace.shared.openApplication(at: browserAppURL, configuration: configuration) { _, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
+        return browserAppURL.deletingPathExtension().lastPathComponent
+        #else
+        throw SunoCLIError.runtime(message: "Visible Suno login browser is only available on macOS.")
+        #endif
+    }
+
     func selftest() async throws -> SunoSelftestResult {
         let json = try await runJSON(["selftest"], timeoutSeconds: 60)
         let result = parseSelftestResult(from: json)
@@ -273,13 +312,70 @@ final class SunoCLIRunner {
         return result
     }
 
+    private func resolvedLoginBrowserAppURL() throws -> URL {
+        // Prefer a user-installed browser for visible login flows. On macOS 26.4.1
+        // the bundled Playwright Chrome-for-Testing build can launch and then crash,
+        // while a normal system Chrome/Chromium app remains stable with the same
+        // `--user-data-dir` persistent profile.
+        let candidates = systemLoginBrowserAppURLs + bundledLoginBrowserAppURLs
+        for candidate in candidates where FileManager.default.fileExists(atPath: candidate.path) {
+            return candidate
+        }
+        throw SunoCLIError.runtime(message: "Could not locate a Chromium-compatible browser bundle for Suno login.")
+    }
+
+    private var bundledLoginBrowserAppURLs: [URL] {
+        let fileManager = FileManager.default
+        let browserRoots = [bundledPlaywrightBrowsersPath].compactMap { $0 } + fallbackPlaywrightPathCandidates.compactMap { $0 }
+        var seen: Set<String> = []
+        var results: [URL] = []
+
+        for browserRoot in browserRoots {
+            let rootURL = URL(fileURLWithPath: browserRoot, isDirectory: true)
+            guard let enumerator = fileManager.enumerator(
+                at: rootURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else {
+                continue
+            }
+
+            for case let url as URL in enumerator {
+                let name = url.lastPathComponent
+                guard name == "Google Chrome for Testing.app" || name == "Chromium.app" else { continue }
+                if seen.insert(url.path).inserted {
+                    results.append(url)
+                }
+            }
+        }
+
+        return results
+    }
+
+    private var systemLoginBrowserAppURLs: [URL] {
+        [
+            "/Applications/Google Chrome.app",
+            "/Applications/Chromium.app",
+            "/Applications/Brave Browser.app",
+            "/Applications/Microsoft Edge.app",
+        ].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
     // MARK: - Private: Result Parsers
 
     private func parseGenerateResult(from json: [String: Any]) throws -> SunoGenerateResult {
         let songIDs = (json["song_ids"] as? [String]) ?? []
+        let allCapturedSongIDs = (json["all_captured_ids"] as? [String])
+            ?? (json["allCapturedSongIDs"] as? [String])
+            ?? songIDs
         let title = json["title"] as? String
         let message = (json["message"] as? String) ?? ""
-        return SunoGenerateResult(songIDs: songIDs, title: title, message: message)
+        return SunoGenerateResult(
+            songIDs: songIDs,
+            allCapturedSongIDs: allCapturedSongIDs,
+            title: title,
+            message: message
+        )
     }
 
     private func parseSelftestResult(from json: [String: Any]) -> SunoSelftestResult {

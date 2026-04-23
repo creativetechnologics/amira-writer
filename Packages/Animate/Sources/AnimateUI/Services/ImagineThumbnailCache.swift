@@ -76,6 +76,11 @@ final class ImagineThumbnailCache: @unchecked Sendable {
         registryLock.unlock()
     }
 
+    private static func maxPixelSize(fromMemKey key: String) -> Int? {
+        guard let separatorIndex = key.lastIndex(of: "#") else { return nil }
+        return Int(key[key.index(after: separatorIndex)...])
+    }
+
     // MARK: - Public API
 
     /// Async load: memory → disk → generate. Writes back up the chain.
@@ -142,6 +147,49 @@ final class ImagineThumbnailCache: @unchecked Sendable {
     func cached(for path: String, maxPixelSize: Int) -> NSImage? {
         let key = memKey(path: path, maxPixelSize: maxPixelSize) as NSString
         return memCache.object(forKey: key)
+    }
+
+    /// Memory-only lookup that returns the best already-decoded image for a
+    /// path, even if it was cached at a different target size. This lets
+    /// larger previews render immediately from an existing grid thumbnail
+    /// while a sharper decode is loaded in the background.
+    func bestCached(for path: String, minimumPixelSize: Int = 1) -> NSImage? {
+        registryLock.lock()
+        let keys = Array(keysByPath[path] ?? [])
+        registryLock.unlock()
+
+        var smallestAdequate: (pixelSize: Int, image: NSImage)?
+        var largestFallback: (pixelSize: Int, image: NSImage)?
+        var staleKeys: [String] = []
+
+        for key in keys {
+            guard let pixelSize = Self.maxPixelSize(fromMemKey: key) else { continue }
+            guard let image = memCache.object(forKey: key as NSString) else {
+                staleKeys.append(key)
+                continue
+            }
+
+            if pixelSize >= minimumPixelSize {
+                if smallestAdequate == nil || pixelSize < smallestAdequate!.pixelSize {
+                    smallestAdequate = (pixelSize, image)
+                }
+            } else if largestFallback == nil || pixelSize > largestFallback!.pixelSize {
+                largestFallback = (pixelSize, image)
+            }
+        }
+
+        if !staleKeys.isEmpty {
+            registryLock.lock()
+            if var registeredKeys = keysByPath[path] {
+                for key in staleKeys {
+                    registeredKeys.remove(key)
+                }
+                keysByPath[path] = registeredKeys.isEmpty ? nil : registeredKeys
+            }
+            registryLock.unlock()
+        }
+
+        return smallestAdequate?.image ?? largestFallback?.image
     }
 
     /// Fire-and-forget batch warming.

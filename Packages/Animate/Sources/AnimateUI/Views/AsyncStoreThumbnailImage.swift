@@ -27,6 +27,12 @@ struct AsyncStoreThumbnailImage<Placeholder: View>: View {
     @State private var loadedPath: String?
     @State private var loadedSize: CGFloat = 0
 
+    private var dragURL: URL? {
+        guard let path else { return nil }
+        return store.resolvedCharacterAssetURL(for: path)
+            ?? projectImageDragURL(forResolvedPath: path)
+    }
+
     init(
         store: AnimateStore,
         path: String?,
@@ -66,6 +72,7 @@ struct AsyncStoreThumbnailImage<Placeholder: View>: View {
                     .applyFrame(width: width, height: height)
             }
         }
+        .modifier(ProjectImageFileDragModifier(url: dragURL))
         .task(id: "\(path ?? "")#\(Int(maxSize.rounded()))") {
             // If we've already got it cached, nothing to do.
             if store.cachedThumbnailImage(for: path, maxSize: maxSize) != nil {

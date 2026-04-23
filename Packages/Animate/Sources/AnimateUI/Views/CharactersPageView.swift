@@ -248,7 +248,7 @@ struct CharactersPageView: View {
                                     store.selectedCharacterID = character.id
                                     store.showRigEditor = true
                                 }
-                                if !store.geminiAPIKey.isEmpty {
+                                if store.canGenerateGeminiImagesImmediately {
                                     Button("Generate Assets...") {
                                         store.selectedCharacterID = character.id
                                         store.showGenerationSheet = true
@@ -398,7 +398,7 @@ struct CharactersPageView: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .disabled(store.geminiAPIKey.isEmpty || !store.geminiMasterSwitch)
+                            .disabled(!store.canGenerateGeminiImagesImmediately)
                         }
                     ) {
                         if showExpressionLibraryPane {
@@ -1001,6 +1001,7 @@ private struct AsyncSidebarThumbnail: View {
                 )
             }
         }
+        .modifier(ProjectImageFileDragModifier(url: store.resolvedCharacterAssetURL(for: character.profileImagePath)))
         .task(id: character.profileImagePath ?? "") {
             guard let path = character.profileImagePath,
                   let url = store.resolvedCharacterAssetURL(for: path) else {
@@ -1071,6 +1072,7 @@ private struct AsyncProfileImageView: View {
                     }
             }
         }
+        .modifier(ProjectImageFileDragModifier(url: store.resolvedCharacterAssetURL(for: character.profileImagePath)))
         .task(id: character.profileImagePath ?? "") {
             guard let path = character.profileImagePath else { image = nil; return }
             let loaded = await store.thumbnailImageAsync(for: path, maxSize: 128)
@@ -1136,6 +1138,7 @@ private struct AsyncReferenceThumbView: View {
                     }
             }
         }
+        .modifier(ProjectImageFileDragModifier(url: store.resolvedCharacterAssetURL(for: character.inspirationReferenceImagePath)))
         .task(id: character.inspirationReferenceImagePath ?? "") {
             guard let path = character.inspirationReferenceImagePath,
                   let url = store.resolvedCharacterAssetURL(for: path) else {
@@ -1163,58 +1166,57 @@ private struct AsyncApprovedVariantView: View {
     @State private var image: NSImage?
 
     var body: some View {
-        if image != nil || true {
-            VStack(alignment: .leading, spacing: 4) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(.quaternary.opacity(0.22))
+        VStack(alignment: .leading, spacing: 4) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(.quaternary.opacity(0.22))
+                    .frame(width: width, height: height)
+                if let image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
                         .frame(width: width, height: height)
-                    if let image {
-                        Image(nsImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: width, height: height)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .transition(.opacity.animation(.easeIn(duration: 0.15)))
-                    } else {
-                        Image(systemName: "photo")
-                            .foregroundStyle(.tertiary)
-                    }
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .transition(.opacity.animation(.easeIn(duration: 0.15)))
+                } else {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.tertiary)
                 }
-                .frame(width: width, height: height)
-                .onTapGesture(count: 2) { onQuickLook() }
-                .onTapGesture(count: 1) {
-                    // Surface this variant in the Inspector Details pane.
-                    store.imaginePreviewImagePath = variant.imagePath
-                }
-                .contextMenu {
-                    UnifiedImageContextMenuContent(
-                        selectedCount: 0,
-                        isSelected: false,
-                        actions: UnifiedImageActions(
-                            onSetAsProfile: onSetAsProfilePic,
-                            onShowInFinder: onShowInFinder,
-                            onCopy: onCopy,
-                            onQuickLook: onQuickLook
-                        )
+            }
+            .frame(width: width, height: height)
+            .onTapGesture(count: 2) { onQuickLook() }
+            .onTapGesture(count: 1) {
+                // Surface this variant in the Inspector Details pane.
+                store.imaginePreviewImagePath = variant.imagePath
+            }
+            .contextMenu {
+                UnifiedImageContextMenuContent(
+                    selectedCount: 0,
+                    isSelected: false,
+                    actions: UnifiedImageActions(
+                        onSetAsProfile: onSetAsProfilePic,
+                        onShowInFinder: onShowInFinder,
+                        onCopy: onCopy,
+                        onQuickLook: onQuickLook
                     )
-                }
-
-                Text(title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(width: width, alignment: .leading)
-                    .lineLimit(2)
-            }
-            .task(id: variant.imagePath) {
-                guard let url = store.resolvedCharacterAssetURL(for: variant.imagePath) else { return }
-                let loaded = await loadSharedPreviewImage(
-                    at: url.path,
-                    maxPixelSize: Int(max(width, height) * 2)
                 )
-                if !Task.isCancelled { image = loaded }
             }
+
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: width, alignment: .leading)
+                .lineLimit(2)
         }
+        .task(id: variant.imagePath) {
+            guard let url = store.resolvedCharacterAssetURL(for: variant.imagePath) else { return }
+            let loaded = await loadSharedPreviewImage(
+                at: url.path,
+                maxPixelSize: Int(max(width, height) * 2)
+            )
+            if !Task.isCancelled { image = loaded }
+        }
+        .modifier(ProjectImageFileDragModifier(url: store.resolvedCharacterAssetURL(for: variant.imagePath)))
     }
 }
 
@@ -1332,6 +1334,9 @@ struct ImageGallerySection: View {
                     .focusable()
                     .focused($galleryKeyboardFocused)
                     .focusEffectDisabled()
+                    .onTapGesture {
+                        galleryKeyboardFocused = true
+                    }
                     .onKeyPress(.space) {
                         guard let focusPath = lastClickedPath,
                               let index = paths.firstIndex(of: focusPath) else {
@@ -1390,6 +1395,16 @@ struct ImageGallerySection: View {
                             return .handled
                         }
                         return .ignored
+                    }
+                    .onKeyPress(.init("1")) { applyRatingShortcut(1) }
+                    .onKeyPress(.init("2")) { applyRatingShortcut(2) }
+                    .onKeyPress(.init("3")) { applyRatingShortcut(3) }
+                    .onKeyPress(.init("4")) { applyRatingShortcut(4) }
+                    .onKeyPress(.init("5")) { applyRatingShortcut(5) }
+                    .onKeyPress(.init(".")) { applyRatingShortcut(5) }
+                    .onKeyPress(.init("0")) { applyRatingShortcut(0) }
+                    .onKeyPress(phases: .down) { press in
+                        handleRatingKeyPress(press)
                     }
                     .onKeyPress(characters: CharacterSet(charactersIn: "p")) { _ in
                         guard let focusPath = lastClickedPath,
@@ -1516,6 +1531,45 @@ struct ImageGallerySection: View {
            let clickIndex = paths.firstIndex(of: path) {
             QuickLookPreviewController.shared.navigateTo(index: clickIndex)
         }
+    }
+
+    private func applyRatingShortcut(_ rating: Int) -> KeyPress.Result {
+        guard let onSetRating else { return .ignored }
+        let targets = selectedRatingTargets
+        guard !targets.isEmpty else { return .ignored }
+        for path in targets {
+            onSetRating(path, rating)
+        }
+        return .handled
+    }
+
+    private func handleRatingKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case "1":
+            return applyRatingShortcut(1)
+        case "2":
+            return applyRatingShortcut(2)
+        case "3":
+            return applyRatingShortcut(3)
+        case "4":
+            return applyRatingShortcut(4)
+        case "5", ".":
+            return applyRatingShortcut(5)
+        case "0":
+            return applyRatingShortcut(0)
+        default:
+            return .ignored
+        }
+    }
+
+    private var selectedRatingTargets: [String] {
+        if !selectedPaths.isEmpty {
+            return paths.filter { selectedPaths.contains($0) }
+        }
+        if let lastClickedPath, paths.contains(lastClickedPath) {
+            return [lastClickedPath]
+        }
+        return []
     }
 
     private var galleryGrid: some View {
@@ -2229,6 +2283,12 @@ struct InspirationGallerySheet: View {
             }
         }
         .frame(width: 700, height: 600)
+        .dropDestination(for: URL.self) { urls, _ in
+            let valid = AnimateStore.filterImportableImageURLs(urls)
+            guard !valid.isEmpty else { return false }
+            store.importInspirationImages(from: valid, for: character.id)
+            return true
+        }
         .sheet(item: $generatePendingPlan) { plan in
             GeminiGenerationPreflightSheet(
                 store: store,
@@ -2319,7 +2379,7 @@ struct InspirationGallerySheet: View {
     @ViewBuilder
     private func galleryThumbnail(path: String, index: Int) -> some View {
         // Pass 4 (Gary): inspiration gallery sheet now uses UnifiedImageTile.
-        let geminiEnabled = !store.geminiAPIKey.isEmpty && store.geminiMasterSwitch
+        let geminiEnabled = store.canGenerateGeminiImagesImmediately
         let resolvedURL = store.resolvedCharacterAssetURL(for: path)
         let displayName = resolvedURL?.lastPathComponent ?? URL(fileURLWithPath: path).lastPathComponent
         UnifiedImageTile(
@@ -2389,6 +2449,12 @@ struct ReferenceImagesSheet: View {
             }
         }
         .frame(width: 600, height: 650)
+        .dropDestination(for: URL.self) { urls, _ in
+            let valid = AnimateStore.filterImportableImageURLs(urls)
+            guard !valid.isEmpty else { return false }
+            store.importReferenceImages(from: valid, for: character.id)
+            return true
+        }
         .task(id: character.inspirationReferenceImagePath ?? "") {
             guard let path = character.inspirationReferenceImagePath,
                   let url = store.resolvedCharacterAssetURL(for: path) else {
@@ -2443,7 +2509,7 @@ struct ReferenceImagesSheet: View {
                         }
                         .contextMenu {
                             if let refPath = character.inspirationReferenceImagePath {
-                                let geminiEnabled = !store.geminiAPIKey.isEmpty && store.geminiMasterSwitch
+                                let geminiEnabled = store.canGenerateGeminiImagesImmediately
                                 UnifiedImageContextMenuContent(
                                     selectedCount: 0,
                                     isSelected: false,
@@ -2624,7 +2690,7 @@ struct ReferenceImagesSheet: View {
     @ViewBuilder
     private func referenceGalleryThumbnail(path: String, index: Int) -> some View {
         // Pass 4 (Gary): reference images sheet now uses UnifiedImageTile.
-        let geminiEnabled = !store.geminiAPIKey.isEmpty && store.geminiMasterSwitch
+        let geminiEnabled = store.canGenerateGeminiImagesImmediately
         let resolvedURL = store.resolvedCharacterAssetURL(for: path)
         let displayName = resolvedURL?.lastPathComponent ?? URL(fileURLWithPath: path).lastPathComponent
         UnifiedImageTile(

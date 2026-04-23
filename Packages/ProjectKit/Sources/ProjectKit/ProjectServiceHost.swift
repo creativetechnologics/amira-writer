@@ -602,7 +602,6 @@ public final class ProjectServiceHost: @unchecked Sendable {
         let prefixes = [
             "Metadata/",
             "Characters/",
-            "Synopsis/",
             "Animate/",
             "Scenes/",    // Wave D
             "Places/",    // Wave D
@@ -620,7 +619,6 @@ public final class ProjectServiceHost: @unchecked Sendable {
         {"createdAt":"\(now)","name":"\(Self.jsonEscaped(displayName))","notes":"","projectVersions":[],"updatedAt":"\(now)"}
         """
         let characters = #"{"characters":[],"version":1}"#
-        let synopsis = ""
         let index = #"{"cueMappings":[],"instrumentMappings":[],"version":2}"#
         let instruments = #"[]"#
         let animateMetadata = """
@@ -638,11 +636,6 @@ public final class ProjectServiceHost: @unchecked Sendable {
         try await database.upsertProjectFile(
             path: "Characters/characters.json",
             jsonData: Data(characters.utf8),
-            actorID: "project-service"
-        )
-        try await database.upsertProjectFile(
-            path: "Synopsis/synopsis.txt",
-            jsonData: Data(synopsis.utf8),
             actorID: "project-service"
         )
         try await database.upsertProjectFile(
@@ -785,7 +778,6 @@ public final class ProjectServiceHost: @unchecked Sendable {
         let prefixes = [
             "Metadata/",
             "Characters/",
-            "Synopsis/",
             "Animate/",
             "Scenes/",    // Wave D
             "Places/",    // Wave D

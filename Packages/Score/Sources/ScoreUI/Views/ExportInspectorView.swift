@@ -19,6 +19,14 @@ struct ExportInspectorView: View {
             .controlSize(.small)
             .disabled(store.pianoRollNotes.isEmpty || store.isExportingFullMix)
 
+            Button {
+                store.exportAllSongsToWavsWithPanel()
+            } label: {
+                Label("Export All WAVs", systemImage: "waveform.badge.plus")
+            }
+            .controlSize(.small)
+            .disabled(store.midiAssets.isEmpty || store.isExportingFullMix || store.isBatchExporting)
+
             if store.isExportingFullMix {
                 VStack(alignment: .leading, spacing: 3) {
                     ProgressView(value: store.fullMixExportProgress)

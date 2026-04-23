@@ -150,6 +150,9 @@ struct ActionImagesPane: View {
         }
         .onAppear { loadData() }
         .onChange(of: store.selectedCharacterID) { _, _ in loadData() }
+        .dropDestination(for: URL.self) { urls, _ in
+            return importDroppedImages(urls)
+        }
     }
 
     private func loadData() {
@@ -191,6 +194,35 @@ struct ActionImagesPane: View {
                 try? ActionImageService.savePoses(poses, animateURL: animateURL, characterSlug: character.assetFolderSlug)
             }
         }
+    }
+
+    private func importDroppedImages(_ urls: [URL]) -> Bool {
+        let valid = AnimateStore.filterImportableImageURLs(urls)
+        guard !valid.isEmpty,
+              let animateURL = store.animateURL else { return false }
+
+        let destinationDir = ActionImageService.actionImagesDirectory(
+            animateURL: animateURL,
+            characterSlug: character.assetFolderSlug
+        )
+        var importedAny = false
+
+        for url in valid {
+            do {
+                _ = try ImagineProjectStorage.importImage(from: url.standardizedFileURL, to: destinationDir)
+                importedAny = true
+            } catch {
+                store.statusMessage = "Failed to import action image: \(error.localizedDescription)"
+            }
+        }
+
+        if importedAny {
+            loadData()
+            store.statusMessage = valid.count == 1
+                ? "Imported 1 action image"
+                : "Imported \(valid.count) action images"
+        }
+        return importedAny
     }
 
 }

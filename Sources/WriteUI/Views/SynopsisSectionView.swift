@@ -209,7 +209,7 @@ struct SynopsisSectionView: View {
     }
 }
 
-// MARK: - Legacy Synopsis Parser (for migration from Synopsis/synopsis.txt)
+// MARK: - Legacy Synopsis Parser (retained only for legacy/manual import helpers)
 
 struct LegacySynopsisSection {
     let scenePath: String?

@@ -46,6 +46,7 @@ final class APIRouter {
         case ("GET", "/api/soundfonts"):     return getSoundfonts(request)
         case ("GET", "/api/audio-units"):    return getAudioUnits(request)
         case ("GET", "/api/audio-units/state"): return await getAudioUnitState(request)
+        case ("GET", "/api/suno/status"):    return getSunoStatus(request)
 
         // Write endpoints
         case ("POST", "/api/song/notes/add"):         return addNotes(request)
@@ -82,6 +83,7 @@ final class APIRouter {
         case ("POST", "/api/import/musicxml"): return importMusicXML(request)
         case ("POST", "/api/project/save"):   return projectSave(request)
         case ("POST", "/api/project/open"):   return await projectOpen(request)
+        case ("POST", "/api/suno/run-cover"): return runSunoCover(request)
 
         // Version endpoints
         case ("POST", "/api/song/versions/snapshot"): return snapshotVersion(request)
@@ -325,6 +327,60 @@ final class APIRouter {
             .filter { ["sf2", "sf3", "dls"].contains($0.fileExtension.lowercased()) }
             .map { APISoundfontEntry(relativePath: $0.relativePath, fileName: $0.fileName, fileSize: $0.fileSize) }
         return .ok(APISoundfontsResponse(entries: entries))
+    }
+
+    private func getSunoStatus(_ req: HTTPRequest) -> HTTPResponse {
+        guard let store = requireStore() else { return .error(500, "Store unavailable") }
+
+        struct SunoGenerationSummary: Encodable {
+            let id: String
+            let songPath: String?
+            let trackID: String?
+            let songIDs: [String]
+            let baseTitle: String?
+            let coverTitle: String?
+            let status: String
+            let resultMessage: String?
+            let downloadedFilePath: String?
+            let downloadedFilePaths: [String]
+            let errorMessage: String?
+            let createdAt: Date
+            let submissionIndex: Int?
+            let submissionCount: Int?
+        }
+
+        struct SunoStatusResponse: Encodable {
+            let isGenerating: Bool
+            let status: String
+            let selectedSongPath: String?
+            let generations: [SunoGenerationSummary]
+        }
+
+        let generations = store.sunoGenerations.prefix(20).map { generation in
+            SunoGenerationSummary(
+                id: generation.id.uuidString,
+                songPath: generation.songPath,
+                trackID: generation.trackID,
+                songIDs: generation.songIDs,
+                baseTitle: generation.baseTitle,
+                coverTitle: generation.coverTitle,
+                status: generation.status.rawValue,
+                resultMessage: generation.resultMessage,
+                downloadedFilePath: generation.downloadedFilePath,
+                downloadedFilePaths: generation.downloadedFilePaths,
+                errorMessage: generation.errorMessage,
+                createdAt: generation.createdAt,
+                submissionIndex: generation.submissionIndex,
+                submissionCount: generation.submissionCount
+            )
+        }
+
+        return .ok(SunoStatusResponse(
+            isGenerating: store.sunoIsGenerating,
+            status: store.sunoGenerateStatus,
+            selectedSongPath: store.selectedMidiAsset?.relativePath,
+            generations: Array(generations)
+        ))
     }
 
     private func getAudioUnits(_ req: HTTPRequest) -> HTTPResponse {
@@ -1103,6 +1159,18 @@ final class APIRouter {
 
         await store.loadProject(url: url)
         return .ok(APISuccessResponse("Opened project: \(body.path)"))
+    }
+
+    private func runSunoCover(_ req: HTTPRequest) -> HTTPResponse {
+        guard let store = requireStore() else { return .error(500, "Store unavailable") }
+        guard !store.sunoIsGenerating else {
+            return .error(400, "Suno cover queue already running")
+        }
+
+        Task { @MainActor in
+            await store.sunoRunCanonicalCover()
+        }
+        return .ok(APISuccessResponse("Suno cover queue started"))
     }
 
     // MARK: - Version Endpoints

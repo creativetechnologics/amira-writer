@@ -233,6 +233,7 @@ struct OperaShellView: View {
     @State private var isOpeningFromPanel = false
     @State private var didInitialize = false
     @State private var modeSwitchTask: Task<Void, Never>?
+    @State private var workspacePrewarmTask: Task<Void, Never>?
     @State private var sceneSelectionByProjectPath: [String: String] = [:]
     @State private var pendingSceneSelectionRestores: [OperaMode: PendingSceneSelectionRestore] = [:]
 
@@ -246,6 +247,7 @@ struct OperaShellView: View {
     @AppStorage("novotro.mix.sidebarVisible") private var mixSidebarVisible: Bool = true
     @AppStorage("novotro.imagine.sidebarVisible") private var imagineSidebarVisible: Bool = true
     @AppStorage("novotro.allImages.sidebarVisible") private var allImagesSidebarVisible: Bool = true
+    @AppStorage("novotro.canvas.sidebarVisible") private var canvasSidebarVisible: Bool = true
 
     // Inspector visibility (per-mode, shared with each mode's ContentView via same AppStorage key)
     @AppStorage("novotro.write.showInspector") private var writeInspectorVisible: Bool = true
@@ -257,9 +259,13 @@ struct OperaShellView: View {
     @AppStorage("novotro.mix.inspector.visible") private var mixInspectorVisible: Bool = true
     @AppStorage("novotro.imagine.showInspector") private var imagineInspectorVisible: Bool = true
     @AppStorage("novotro.allImages.showInspector") private var allImagesInspectorVisible: Bool = true
+    @AppStorage("novotro.canvas.showInspector") private var canvasInspectorVisible: Bool = true
     private static let controlFileCandidates = [
         "Metadata/project.json",
         "project.json"
+    ]
+    private static let animateClusterModes: Set<OperaMode> = [
+        .scenes, .characters, .places, .props, .animate, .allImages, .canvas
     ]
 
     var body: some View {
@@ -306,6 +312,9 @@ struct OperaShellView: View {
             for await note in NotificationCenter.default.notifications(named: ScoreWorkspaceController.didExportSongToMix) {
                 guard let wavURL = note.userInfo?["wavURL"] as? URL,
                       let songPath = note.userInfo?["songRelativePath"] as? String else { continue }
+                if let activeProjectURL {
+                    _ = await mixController.ensureProjectLoaded(activeProjectURL)
+                }
                 mixController.registerScoreExport(wavURL: wavURL, songRelativePath: songPath)
             }
         }
@@ -455,7 +464,7 @@ struct OperaShellView: View {
         case .props: return propsSidebarVisible
         case .animate: return animateSidebarVisible
         case .allImages: return allImagesSidebarVisible
-        case .canvas: return false
+        case .canvas: return canvasSidebarVisible
         }
     }
 
@@ -524,7 +533,7 @@ struct OperaShellView: View {
             case .props: propsSidebarVisible.toggle()
             case .animate: animateSidebarVisible.toggle()
             case .allImages: allImagesSidebarVisible.toggle()
-            case .canvas: break
+            case .canvas: canvasSidebarVisible.toggle()
             }
         }
     }
@@ -540,7 +549,7 @@ struct OperaShellView: View {
         case .props: return propsInspectorVisible
         case .animate: return animateInspectorVisible
         case .allImages: return allImagesInspectorVisible
-        case .canvas: return false
+        case .canvas: return canvasInspectorVisible
         }
     }
 
@@ -556,9 +565,9 @@ struct OperaShellView: View {
             case .props: propsInspectorVisible.toggle()
             case .animate: animateInspectorVisible.toggle()
             case .allImages: allImagesInspectorVisible.toggle()
-            case .canvas: break
-            }
+            case .canvas: canvasInspectorVisible.toggle()
         }
+    }
     }
 
     private var tabBar: some View {
@@ -596,6 +605,7 @@ struct OperaShellView: View {
             Spacer(minLength: 4)
 
             HStack(spacing: 6) {
+                animateController.vertexCreditTitleBarView()
                 animateController.geminiStatusBadgeView()
 
                 OperaChromeActionButton(
@@ -757,6 +767,7 @@ struct OperaShellView: View {
     private func openProject(_ url: URL, displayName: String) async -> Bool {
         let normalizedURL = url.standardizedFileURL
         let requestedMode = selectedMode
+        workspacePrewarmTask?.cancel()
         beginSceneSelectionRestore(for: requestedMode, projectURL: normalizedURL)
         loadState = .loading(mode: requestedMode, projectName: displayName, projectPath: normalizedURL.path)
         progressCenter.start(
@@ -793,9 +804,11 @@ struct OperaShellView: View {
         recentProjects = OperaRecentProjectsStore.noteProject(normalizedURL)
         switch loadResult {
         case .success:
+            scheduleIdleWorkspacePrewarm(for: normalizedURL, activeMode: requestedMode)
             progressCenter.finish(projectURL: normalizedURL)
             loadState = .idle
         case .timedOut:
+            scheduleIdleWorkspacePrewarm(for: normalizedURL, activeMode: requestedMode)
             progressCenter.update(
                 projectURL: normalizedURL,
                 phaseTitle: "Opening Workspace",
@@ -913,6 +926,7 @@ struct OperaShellView: View {
             return
         }
         guard newMode != renderedMode else { return }
+        workspacePrewarmTask?.cancel()
         beginSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
 
         // Suspend background watchers on the mode we're leaving so they don't
@@ -965,6 +979,7 @@ struct OperaShellView: View {
         case .success:
             finishSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
             renderedMode = newMode
+            scheduleIdleWorkspacePrewarm(for: activeProjectURL, activeMode: newMode)
             // When switching to Animate, ensure Mix is loaded then auto-populate audio
             if newMode == .animate {
                 Task {
@@ -978,6 +993,7 @@ struct OperaShellView: View {
             selectedMode = renderedMode
         case .timedOut:
             renderedMode = newMode
+            scheduleIdleWorkspacePrewarm(for: activeProjectURL, activeMode: newMode)
             progressCenter.update(
                 projectURL: activeProjectURL,
                 phaseTitle: "Switching Workspace",
@@ -1012,6 +1028,42 @@ struct OperaShellView: View {
             return await animateController.ensureProjectLoaded(projectURL)
         case .canvas:
             return await animateController.ensureProjectLoaded(projectURL)
+        }
+    }
+
+    @MainActor
+    private func scheduleIdleWorkspacePrewarm(for projectURL: URL, activeMode: OperaMode) {
+        workspacePrewarmTask?.cancel()
+        let normalizedURL = projectURL.standardizedFileURL
+        let projectPath = normalizedURL.path
+
+        workspacePrewarmTask = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            let canPrewarmScore = await MainActor.run(resultType: Bool.self) {
+                activeProjectURL?.standardizedFileURL.path == projectPath && loadState == .idle
+            }
+            guard canPrewarmScore else {
+                return
+            }
+
+            if activeMode != .score {
+                _ = await load(mode: .score, projectURL: normalizedURL)
+            }
+
+            guard !Task.isCancelled else { return }
+
+            if !Self.animateClusterModes.contains(activeMode) {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                let canPrewarmAnimate = await MainActor.run(resultType: Bool.self) {
+                    activeProjectURL?.standardizedFileURL.path == projectPath && loadState == .idle
+                }
+                guard canPrewarmAnimate else {
+                    return
+                }
+                _ = await load(mode: .scenes, projectURL: normalizedURL)
+            }
         }
     }
 

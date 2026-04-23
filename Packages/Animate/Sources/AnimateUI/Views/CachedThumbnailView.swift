@@ -3,6 +3,31 @@ import ImageIO
 import SwiftUI
 
 @available(macOS 26.0, *)
+func projectImageDragURL(forResolvedPath path: String?) -> URL? {
+    guard let path,
+          !path.isEmpty,
+          path.hasPrefix("/"),
+          FileManager.default.fileExists(atPath: path) else {
+        return nil
+    }
+    return URL(fileURLWithPath: path)
+}
+
+@available(macOS 26.0, *)
+struct ProjectImageFileDragModifier: ViewModifier {
+    let url: URL?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let url {
+            content.draggable(url)
+        } else {
+            content
+        }
+    }
+}
+
+@available(macOS 26.0, *)
 struct CachedThumbnailView: View {
     let path: String
     let size: CGFloat
@@ -37,6 +62,7 @@ struct CachedThumbnailView: View {
                     .frame(width: size, height: size)
             }
         }
+        .modifier(ProjectImageFileDragModifier(url: projectImageDragURL(forResolvedPath: path)))
         .task(id: path) {
             image = nil
             if let cached = ImagineThumbnailCache.shared.cached(for: path, maxPixelSize: maxPixelSize) {
@@ -90,11 +116,20 @@ struct AsyncResolvedImageView: View {
 
     @State private var image: NSImage?
 
+    private var immediatePreviewMinimumPixelSize: Int {
+        max(1, min(maxPixelSize / 6, 192))
+    }
+
     var body: some View {
         Group {
             if let image {
                 render(image)
             } else if let cached = ImagineThumbnailCache.shared.cached(for: path, maxPixelSize: maxPixelSize) {
+                render(cached)
+            } else if let cached = ImagineThumbnailCache.shared.bestCached(
+                for: path,
+                minimumPixelSize: immediatePreviewMinimumPixelSize
+            ) {
                 render(cached)
             } else {
                 RoundedRectangle(cornerRadius: 6)
@@ -102,7 +137,14 @@ struct AsyncResolvedImageView: View {
             }
         }
         .task(id: "\(path)#\(maxPixelSize)") {
-            image = await loadSharedPreviewImage(at: path, maxPixelSize: maxPixelSize)
+            image = ImagineThumbnailCache.shared.bestCached(
+                for: path,
+                minimumPixelSize: immediatePreviewMinimumPixelSize
+            )
+            if let loaded = await loadSharedPreviewImage(at: path, maxPixelSize: maxPixelSize),
+               !Task.isCancelled {
+                image = loaded
+            }
         }
     }
 

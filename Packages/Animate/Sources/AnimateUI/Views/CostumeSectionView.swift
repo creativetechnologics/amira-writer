@@ -158,7 +158,7 @@ struct CostumeSectionView: View {
                     Label("Generate Sheet", systemImage: "square.grid.2x2")
                 }
                 .buttonStyle(.bordered)
-                .disabled(store.geminiAPIKey.isEmpty)
+                .disabled(!store.canGenerateGeminiImagesImmediately)
 
                 Button {
                     prepareCostumeBatchPlan(costume)
@@ -166,7 +166,7 @@ struct CostumeSectionView: View {
                     Label("Generate Missing", systemImage: "sparkles")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.geminiAPIKey.isEmpty)
+                .disabled(!store.canSubmitGeminiBatchJobs)
 
                 if costume.approvedSheetVariant != nil {
                     Button {
@@ -338,7 +338,7 @@ struct CostumeSectionView: View {
                     Label("Generate All Accessories", systemImage: "shippingbox")
                 }
                 .buttonStyle(.bordered)
-                .disabled(store.geminiAPIKey.isEmpty)
+                .disabled(!store.canSubmitGeminiBatchJobs)
             }
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 14)], spacing: 14) {

@@ -70,6 +70,7 @@ struct GeminiGenerationDraft: Identifiable, Hashable, Sendable {
     var editInstructions: String? = nil
     var pricingMode: PricingMode = .standard
     var isSelected: Bool = true
+    var usesMasterAnimatedLookPrompt: Bool = false
     var overrideTelemetry: GeminiGenerationDraftOverrideTelemetry? = nil
 
     var estimatedCost: Double {
@@ -109,7 +110,10 @@ struct GeminiGenerationDraft: Identifiable, Hashable, Sendable {
                 "[EDIT INSTRUCTIONS]\nUsing the attached reference image as the starting point, apply these adjustments: \(adj). Preserve everything else about the image exactly (composition, lighting, style, subject) unless the instructions above explicitly change it."
             )
         }
-        return parts.joined(separator: "\n\n")
+        return AnimatedLookPromptSettings.compose(
+            basePrompt: parts.joined(separator: "\n\n"),
+            includeMasterPrompt: usesMasterAnimatedLookPrompt
+        )
     }
 }
 
@@ -131,6 +135,7 @@ struct GeminiGenerationPreflightSheet: View {
 
     @State private var selectedMode: GeminiGenerationDraft.PricingMode = .standard
     @State private var cameraPickerDraftID: UUID? = nil
+    @AppStorage(AnimatedLookPromptSettings.preflightToggleDefaultsKey) private var applyMasterAnimatedLookPrompt = false
 
     private let aspectRatioOptions = ["1:1", "2:3", "3:4", "4:5", "4:3", "16:9", "21:9"]
     private let imageSizeOptions = ["1K", "2K", "4K"]
@@ -169,12 +174,23 @@ struct GeminiGenerationPreflightSheet: View {
             && selectedDrafts.count > 1
     }
 
+    private var generationBlockingMessage: String? {
+        if selectedMode == .batch {
+            return store.geminiBatchGenerationAvailabilityError
+        }
+        return store.geminiImageGenerationAvailabilityError?.localizedDescription
+    }
+
     private var selectedProviderOverrideCount: Int {
         selectedDrafts.filter { $0.overrideTelemetry?.hasProviderOverride == true }.count
     }
 
     private var selectedAppendixOverrideCount: Int {
         selectedDrafts.filter { $0.overrideTelemetry?.hasPromptAppendix == true }.count
+    }
+
+    private var hasConfiguredMasterAnimatedLookPrompt: Bool {
+        AnimatedLookPromptSettings.hasConfiguredMasterPrompt()
     }
 
     private var lockedOverrideDrafts: [GeminiGenerationDraft] {
@@ -227,13 +243,22 @@ struct GeminiGenerationPreflightSheet: View {
         )
         .onAppear {
             if let first = drafts.first {
-                selectedMode = first.pricingMode
+                let preferredMode = first.pricingMode
+                if preferredMode == .batch, !store.canSubmitGeminiBatchJobs {
+                    selectedMode = .standard
+                } else {
+                    selectedMode = preferredMode
+                }
             }
+            syncAnimatedLookToggleIntoDrafts()
         }
         .onChange(of: selectedMode) { _, newMode in
             for index in drafts.indices {
                 drafts[index].pricingMode = newMode
             }
+        }
+        .onChange(of: applyMasterAnimatedLookPrompt) { _, _ in
+            syncAnimatedLookToggleIntoDrafts()
         }
         .sheet(isPresented: Binding(
             get: { cameraPickerDraftID != nil },
@@ -427,6 +452,25 @@ struct GeminiGenerationPreflightSheet: View {
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            if hasConfiguredMasterAnimatedLookPrompt {
+                Toggle(isOn: $applyMasterAnimatedLookPrompt) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Apply Master Animated Look")
+                            .font(.caption.weight(.semibold))
+                        Text("Prepends the global animated-look prompt to every selected Gemini request in this sheet.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+            } else {
+                Label("No master animated-look prompt is configured yet. Add one in Settings to enable animated-look injection here.", systemImage: "sparkles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(14)
@@ -937,8 +981,8 @@ struct GeminiGenerationPreflightSheet: View {
     private var footer: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                if store.geminiAPIKey.isEmpty {
-                    Label("Set a Gemini API key before generating.", systemImage: "exclamationmark.triangle.fill")
+                if let message = generationBlockingMessage {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                         .font(.callout)
                 } else if !selectedDrafts.isEmpty {
@@ -978,7 +1022,7 @@ struct GeminiGenerationPreflightSheet: View {
                 onConfirm(selectedDrafts, selectedMode)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(store.geminiAPIKey.isEmpty || selectedDrafts.isEmpty)
+            .disabled(generationBlockingMessage != nil || selectedDrafts.isEmpty)
             .keyboardShortcut(.defaultAction)
         }
         .padding()
@@ -1033,6 +1077,13 @@ struct GeminiGenerationPreflightSheet: View {
                 }
             }
         )
+    }
+
+    private func syncAnimatedLookToggleIntoDrafts() {
+        let shouldApply = hasConfiguredMasterAnimatedLookPrompt && applyMasterAnimatedLookPrompt
+        for index in drafts.indices {
+            drafts[index].usesMasterAnimatedLookPrompt = shouldApply
+        }
     }
 
     private var sharedReferenceItems: [GeminiGenerationReferenceDraft] {

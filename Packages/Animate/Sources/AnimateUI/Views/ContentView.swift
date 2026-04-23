@@ -12,12 +12,19 @@ struct ContentView: View {
     @AppStorage("novotro.animate.selectedPage") private var selectedPage: AnimatePage = .animate
 
     @AppStorage("novotro.animate.inspector.width") private var inspectorWidth: Double = 320
+    @AppStorage("novotro.places.viewMode.v1") private var placesViewModeRaw: String = PlacesViewMode.grid.rawValue
     @State private var showAPISettings: Bool = false
     @State private var animateWorkspaceState = AnimateWorkspaceState()
-    @State private var placesViewMode: PlacesViewMode = .grid
 
     private var projectTitle: String {
         store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
+    }
+
+    private var placesViewModeBinding: Binding<PlacesViewMode> {
+        Binding(
+            get: { PlacesViewMode(rawValue: placesViewModeRaw) ?? .grid },
+            set: { placesViewModeRaw = $0.rawValue }
+        )
     }
 
     private var activeDetailTitle: String {
@@ -245,7 +252,7 @@ struct ContentView: View {
                 } content: {
                     PlacesSidebarView(
                         store: store,
-                        viewMode: $placesViewMode,
+                        viewMode: placesViewModeBinding,
                         allImageCount: store.placesWorkflowLibrary.generatedImageRecords.count
                     )
                 }
@@ -273,7 +280,7 @@ struct ContentView: View {
         case .characters:
             CharactersPageView(store: store, showSidebar: false)
         case .places:
-            PlacesPageView(store: store, viewMode: $placesViewMode, showSidebar: false)
+            PlacesPageView(store: store, viewMode: placesViewModeBinding, showSidebar: false)
         case .props:
             // Props has its own dedicated workspace; this fallback shows animate.
             AnimatePageView(store: store, workspaceState: animateWorkspaceState)

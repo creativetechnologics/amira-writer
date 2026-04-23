@@ -9,6 +9,7 @@ import SwiftUI
 struct GeminiGenerationView: View {
     @Bindable var store: AnimateStore
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(AnimatedLookPromptSettings.preflightToggleDefaultsKey) private var applyMasterAnimatedLookPrompt = false
 
     @State private var generationMode: GenerationMode = .turnaround
     @State private var isGenerating = false
@@ -330,12 +331,19 @@ struct GeminiGenerationView: View {
 
                 Spacer()
 
+                if AnimatedLookPromptSettings.hasConfiguredMasterPrompt() {
+                    Toggle("Animated Look", isOn: $applyMasterAnimatedLookPrompt)
+                        .toggleStyle(.checkbox)
+                        .controlSize(.small)
+                        .help("Prepends the master animated-look prompt to every request in this generation run.")
+                }
+
                 Button("Generate") {
                     preflightDrafts = plannedDrafts
                     showPreflight = true
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.geminiAPIKey.isEmpty || character == nil)
+                .disabled(!store.canGenerateGeminiImagesImmediately || character == nil)
                 .keyboardShortcut(.defaultAction)
             }
         }
@@ -388,11 +396,18 @@ struct GeminiGenerationView: View {
             )
 
             store.logGeminiAPICall(endpoint: "image-generation", source: "GeminiGenerationView.generate()")
-            let result = try await service.generate(request: request, apiKey: apiKey)
+            let result = try await service.generate(
+                request: request,
+                apiKey: apiKey,
+                includePreviewImage: true
+            )
+            guard let previewImage = result.image ?? NSImage(data: result.imageData) else {
+                throw GeminiImageService.ServiceError.imageDecodingFailed
+            }
 
             generatedImages.append(GeneratedImageEntry(
                 label: draft.title,
-                image: result.image,
+                image: previewImage,
                 data: result.imageData,
                 accepted: true
             ))
@@ -418,7 +433,8 @@ struct GeminiGenerationView: View {
                     model: store.selectedGeminiModel,
                     aspectRatio: "1:1",
                     imageSize: "2K",
-                    referenceItems: referenceDrafts
+                    referenceItems: referenceDrafts,
+                    usesMasterAnimatedLookPrompt: applyMasterAnimatedLookPrompt
                 )
             }
         case .expressions:
@@ -430,7 +446,8 @@ struct GeminiGenerationView: View {
                     model: store.selectedGeminiModel,
                     aspectRatio: "1:1",
                     imageSize: "1K",
-                    referenceItems: referenceDrafts
+                    referenceItems: referenceDrafts,
+                    usesMasterAnimatedLookPrompt: applyMasterAnimatedLookPrompt
                 )
             }
         case .visemes:
@@ -442,7 +459,8 @@ struct GeminiGenerationView: View {
                     model: store.selectedGeminiModel,
                     aspectRatio: "1:1",
                     imageSize: "1K",
-                    referenceItems: referenceDrafts
+                    referenceItems: referenceDrafts,
+                    usesMasterAnimatedLookPrompt: applyMasterAnimatedLookPrompt
                 )
             }
         case .partBreakdown:
@@ -460,7 +478,8 @@ struct GeminiGenerationView: View {
                     model: store.selectedGeminiModel,
                     aspectRatio: "1:1",
                     imageSize: "2K",
-                    referenceItems: referenceDrafts
+                    referenceItems: referenceDrafts,
+                    usesMasterAnimatedLookPrompt: applyMasterAnimatedLookPrompt
                 )
             }
         }

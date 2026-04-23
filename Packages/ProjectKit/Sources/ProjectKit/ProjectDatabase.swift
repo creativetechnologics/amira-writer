@@ -1428,7 +1428,6 @@ public actor ProjectDatabase {
         let managedPrefixes = [
             "Metadata/",
             "Characters/",
-            "Synopsis/",
             "Animate/",
             "Scenes/",    // Wave D
             "Places/",    // Wave D
