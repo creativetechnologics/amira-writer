@@ -926,6 +926,11 @@ struct OperaShellView: View {
             return
         }
         guard newMode != renderedMode else { return }
+        let modeSwitchSignpost = PerfSignposts.begin(
+            .modeSwitch,
+            "\(renderedMode.rawValue)→\(newMode.rawValue)"
+        )
+        defer { PerfSignposts.end(.modeSwitch, token: modeSwitchSignpost) }
         workspacePrewarmTask?.cancel()
         beginSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
 

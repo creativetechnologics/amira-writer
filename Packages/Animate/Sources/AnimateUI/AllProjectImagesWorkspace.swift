@@ -152,7 +152,13 @@ final class AllProjectImagesState {
         }
     }
     var selectedGroupLabel: String? = nil
-    var selectedRecordID: String? = nil
+    var selectedRecordID: String? = nil {
+        didSet {
+            if selectedRecordID != oldValue {
+                PerfSignposts.event(.inspectorSelection, "id=\(selectedRecordID ?? "nil")")
+            }
+        }
+    }
     var sortMode: AllProjectImagesSortMode = .newest
     var thumbnailSize: CGFloat = 140
     var searchText: String = ""
@@ -233,6 +239,10 @@ final class AllProjectImagesState {
         let isSameProject = projectPath == lastProjectPath
         if isSameProject && (sig == lastBuildSignature || sig == pendingBuildSignature) { return }
 
+        let rebuildSignpost = PerfSignposts.begin(
+            .allImagesRebuild,
+            "sig=\(sig) sameProject=\(isSameProject)"
+        )
         pendingBuildSignature = sig
         let seeds = buildRecordSeeds(store: store)
         let previousSeedsByID = isSameProject ? seedsByID : [:]
@@ -252,10 +262,16 @@ final class AllProjectImagesState {
                     metadataCache: metadataCache
                 )
             }.value
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                PerfSignposts.end(.allImagesRebuild, token: rebuildSignpost)
+                return
+            }
             await MainActor.run { [weak self] in
                 guard let self,
-                      requestID == self.rebuildRequestID else { return }
+                      requestID == self.rebuildRequestID else {
+                    PerfSignposts.end(.allImagesRebuild, token: rebuildSignpost)
+                    return
+                }
                 self.applyRebuiltRecords(
                     rebuiltRecords,
                     seedsByID: rebuiltSeedsByID,
@@ -264,6 +280,7 @@ final class AllProjectImagesState {
                 )
                 self.pendingBuildSignature = -1
                 self.rebuildTask = nil
+                PerfSignposts.end(.allImagesRebuild, token: rebuildSignpost)
             }
         }
     }
@@ -1629,6 +1646,10 @@ private struct InspectorImageIntelligenceTab: View {
     @State private var lastBackfillReport: String?
     @State private var analysisRecord: ImageAssetRecord?
     @State private var analysisJobs: [ImageAnalysisCoordinator.JobRecord] = []
+    @State private var analysisRuns: [ImageAnalysisRunRecord] = []
+    @State private var latestMetadata: ImageVisualMetadataRecord?
+    @State private var queueSnapshot: [ImageAnalysisCoordinator.JobRecord] = []
+    @State private var recentLogs: [ImageAnalysisCoordinator.LogEntry] = []
     @State private var searchResults: [ImageSearchService.SearchResult] = []
     @State private var selectedQuery: String = ""
     @State private var isSearching = false
@@ -1640,7 +1661,10 @@ private struct InspectorImageIntelligenceTab: View {
                 statusSection
                 actionsSection
                 analysisSection
+                returnedDataSection
                 jobsSection
+                queueSection
+                logsSection
                 searchSection
             }
             .padding()
@@ -1745,22 +1769,138 @@ private struct InspectorImageIntelligenceTab: View {
     }
 
     @ViewBuilder
+    private var returnedDataSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Returned Data")
+                .font(.subheadline.bold())
+            if let md = latestMetadata {
+                if let summary = md.summary, !summary.isEmpty {
+                    labeledValue("Summary", summary)
+                }
+                if let shortCaption = md.shortCaption, !shortCaption.isEmpty {
+                    labeledValue("Short Caption", shortCaption)
+                }
+                if let longCaption = md.longCaption, !longCaption.isEmpty {
+                    labeledValue("Long Caption", longCaption)
+                }
+                if let retrievalJSON = md.retrievalJSON, !retrievalJSON.isEmpty {
+                    labeledValue("Retrieval Tags JSON", retrievalJSON)
+                }
+                if let sceneJSON = md.sceneJSON, !sceneJSON.isEmpty {
+                    labeledValue("Scene JSON", sceneJSON)
+                }
+                if let styleJSON = md.styleJSON, !styleJSON.isEmpty {
+                    labeledValue("Style JSON", styleJSON)
+                }
+                if let confidenceJSON = md.confidenceJSON, !confidenceJSON.isEmpty {
+                    labeledValue("Confidence JSON", confidenceJSON)
+                }
+                DisclosureGroup("Raw Model JSON") {
+                    ScrollView(.horizontal) {
+                        Text(md.rawModelJSON ?? "")
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 180)
+                }
+            } else {
+                Text("No returned analysis data yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
     private var jobsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Queue")
+            Text("This Image: Jobs & Runs")
                 .font(.subheadline.bold())
-            if analysisJobs.isEmpty {
-                Text("No jobs in queue.")
+            if analysisJobs.isEmpty && analysisRuns.isEmpty {
+                Text("No jobs or runs recorded for this image.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(analysisJobs, id: \.id) { job in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Job • \(job.status.rawValue.capitalized)")
+                            .font(.caption.bold())
+                        Text("Reason: \(job.reason)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if let lastError = job.lastError, !lastError.isEmpty {
+                            Text("Error: \(lastError)")
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
+                ForEach(analysisRuns, id: \.id) { run in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Run • \(run.status)")
+                            .font(.caption.bold())
+                        if let reason = run.reason {
+                            Text("Reason: \(reason)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let errorMessage = run.errorMessage, !errorMessage.isEmpty {
+                            Text("Run Error: \(errorMessage)")
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var queueSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Global Queue Snapshot")
+                .font(.subheadline.bold())
+            if queueSnapshot.isEmpty {
+                Text("Queue is empty.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(queueSnapshot.prefix(10), id: \.id) { job in
                     HStack {
                         Text(job.status.rawValue.capitalized)
                             .font(.caption.bold())
+                            .frame(width: 72, alignment: .leading)
                         Text(job.reason)
                             .font(.caption)
+                        Spacer()
+                        Text(job.updatedAt.formatted(date: .omitted, time: .shortened))
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var logsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recent Logs")
+                .font(.subheadline.bold())
+            if recentLogs.isEmpty {
+                Text("No logs yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(recentLogs.suffix(15).enumerated()), id: \.offset) { _, entry in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.timestamp.formatted(date: .omitted, time: .standard))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(entry.message)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
                     }
                 }
             }
@@ -1811,10 +1951,27 @@ private struct InspectorImageIntelligenceTab: View {
             .foregroundStyle(color)
     }
 
+    @ViewBuilder
+    private func labeledValue(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 11, design: .monospaced))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     @MainActor
     private func refresh() async {
         analysisRecord = await store.imageIntelligenceRecord(for: record.resolvedPath)
         analysisJobs = await store.imageIntelligenceJobs(for: record.resolvedPath)
+        analysisRuns = await store.imageIntelligenceRuns(for: record.resolvedPath)
+        latestMetadata = await store.imageIntelligenceLatestMetadata(for: record.resolvedPath)
+        queueSnapshot = await store.imageIntelligenceQueueSnapshot(limit: 50)
+        recentLogs = await store.imageIntelligenceRecentLogs(limit: 100)
     }
 
     @MainActor

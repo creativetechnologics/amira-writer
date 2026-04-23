@@ -11,22 +11,22 @@ import os
 /// defer { PerfSignposts.end(.projectOpen, token: token) }
 /// ```
 /// `PerfSignposts.event` is for one-shot markers (e.g. "hydration finished").
-enum PerfSignposts {
-    enum Area: String {
+public enum PerfSignposts {
+    public enum Area: String {
         case projectOpen = "Project.Open"
         case modeSwitch = "Mode.Switch"
         case allImagesRebuild = "AllImages.Rebuild"
         case inspectorSelection = "Inspector.Selection"
     }
 
-    nonisolated(unsafe) static let log = OSLog(
+    nonisolated(unsafe) public static let log = OSLog(
         subsystem: "com.amira.writer",
         category: "Perf"
     )
 
-    nonisolated(unsafe) static let signposter = OSSignposter(logHandle: log)
+    nonisolated(unsafe) public static let signposter = OSSignposter(logHandle: log)
 
-    static func begin(_ area: Area, _ detail: String = "") -> OSSignpostIntervalState {
+    public static func begin(_ area: Area, _ detail: String = "") -> OSSignpostIntervalState {
         let name: StaticString
         switch area {
         case .projectOpen: name = "Project.Open"
@@ -37,7 +37,7 @@ enum PerfSignposts {
         return signposter.beginInterval(name, id: signposter.makeSignpostID(), "\(detail)")
     }
 
-    static func end(_ area: Area, token: OSSignpostIntervalState) {
+    public static func end(_ area: Area, token: OSSignpostIntervalState) {
         let name: StaticString
         switch area {
         case .projectOpen: name = "Project.Open"
@@ -48,7 +48,7 @@ enum PerfSignposts {
         signposter.endInterval(name, token)
     }
 
-    static func event(_ area: Area, _ detail: String) {
+    public static func event(_ area: Area, _ detail: String) {
         let name: StaticString
         switch area {
         case .projectOpen: name = "Project.Open"
