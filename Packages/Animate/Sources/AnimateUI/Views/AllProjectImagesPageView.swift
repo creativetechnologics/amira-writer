@@ -47,6 +47,32 @@ private extension View {
     }
 }
 
+/// Copy a full-res image to the pasteboard without blocking the main thread.
+/// Immediately seats a cached thumbnail on the pasteboard so the clipboard
+/// feels responsive, then replaces it with the real decoded image once the
+/// disk read + decode finish on a background actor.
+@available(macOS 26.0, *)
+@MainActor
+func copyImageToPasteboardAsync(path: String) {
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    // Fast-path: if we already have any-size thumbnail decoded, seat it now so
+    // Cmd-V feels instant. The full-res decode will overwrite below.
+    if let thumb = ImagineThumbnailCache.shared.bestCached(for: path) {
+        pasteboard.writeObjects([thumb])
+    } else {
+        pasteboard.setString(path, forType: .string)
+    }
+    Task.detached(priority: .userInitiated) {
+        guard let fullData = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return }
+        await MainActor.run {
+            guard let full = NSImage(data: fullData) else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.writeObjects([full])
+        }
+    }
+}
+
 @available(macOS 26.0, *)
 struct ProjectImageRecord: Identifiable, Hashable, Sendable {
     let id: String
@@ -67,6 +93,7 @@ struct ProjectImageRecord: Identifiable, Hashable, Sendable {
 enum AllProjectImagesInspectorTab: String, CaseIterable, Identifiable, Hashable {
     case details
     case generate
+    case imageIntelligence
 
     var id: String { rawValue }
 
@@ -74,6 +101,7 @@ enum AllProjectImagesInspectorTab: String, CaseIterable, Identifiable, Hashable 
         switch self {
         case .details: "Details"
         case .generate: "Edit with Gemini"
+        case .imageIntelligence: "Image Intelligence"
         }
     }
 }
@@ -688,13 +716,7 @@ struct AllProjectImagesPageView: View {
                                         )
                                     },
                                     onCopy: {
-                                        if let image = NSImage(contentsOfFile: record.resolvedPath) {
-                                            NSPasteboard.general.clearContents()
-                                            NSPasteboard.general.writeObjects([image])
-                                        } else {
-                                            NSPasteboard.general.clearContents()
-                                            NSPasteboard.general.setString(record.resolvedPath, forType: .string)
-                                        }
+                                        copyImageToPasteboardAsync(path: record.resolvedPath)
                                     },
                                     onEditWithGemini: {
                                         state.selectedRecordID = record.id
@@ -796,13 +818,7 @@ struct AllProjectImagesPageView: View {
                     )
                 },
                 onCopy: {
-                    if let image = NSImage(contentsOfFile: record.resolvedPath) {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.writeObjects([image])
-                    } else {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(record.resolvedPath, forType: .string)
-                    }
+                    copyImageToPasteboardAsync(path: record.resolvedPath)
                 },
                 onEditWithGemini: {
                     // Open the preflight sheet immediately so the user can

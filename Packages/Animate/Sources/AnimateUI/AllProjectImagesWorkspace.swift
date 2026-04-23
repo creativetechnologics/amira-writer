@@ -98,8 +98,12 @@ enum ImageLibraryMetadataSidecarService {
             .replacingOccurrences(of: "&amp;", with: "&")
     }
 
-    private static func iso8601Formatter() -> ISO8601DateFormatter {
+    nonisolated(unsafe) private static let sharedISO8601Formatter: ISO8601DateFormatter = {
         ISO8601DateFormatter()
+    }()
+
+    private static func iso8601Formatter() -> ISO8601DateFormatter {
+        sharedISO8601Formatter
     }
 }
 
@@ -1150,7 +1154,8 @@ private struct AllProjectImagesInspectorView: View {
         VStack(spacing: 0) {
             SharedInspectorTabBar(selection: $state.inspectorTab, items: [
                 SharedInspectorTabItem(value: .details, title: "Details", systemImage: "info.circle"),
-                SharedInspectorTabItem(value: .generate, title: "Edit with Gemini", systemImage: "sparkles")
+                SharedInspectorTabItem(value: .generate, title: "Edit with Gemini", systemImage: "sparkles"),
+                SharedInspectorTabItem(value: .imageIntelligence, title: "AI", systemImage: "brain.head.profile")
             ])
 
             Divider()
@@ -1223,6 +1228,12 @@ private struct AllProjectImagesInspectorView: View {
                     generateTab(for: record)
                 } else {
                     emptyGenerateState
+                }
+            case .imageIntelligence:
+                if let record = state.selectedRecord {
+                    imageIntelligenceTab(for: record)
+                } else {
+                    emptyImageIntelligenceState
                 }
             }
         }
@@ -1314,6 +1325,31 @@ private struct AllProjectImagesInspectorView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.vertical, 40)
+    }
+
+    private var emptyImageIntelligenceState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: 30))
+                .foregroundStyle(OperaChromeTheme.textTertiary)
+            Text("No image selected")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+            Text("Select an image to see AI analysis, tags, and search.")
+                .font(.system(size: 11))
+                .foregroundStyle(OperaChromeTheme.textTertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 40)
+    }
+
+    // MARK: Image Intelligence tab
+
+    @ViewBuilder
+    private func imageIntelligenceTab(for record: ProjectImageRecord) -> some View {
+        InspectorImageIntelligenceTab(store: store, record: record)
     }
 
     // MARK: Preflight trigger (Edit-with-Gemini tab button)
@@ -1580,5 +1616,245 @@ private struct AllProjectImageSelection: DetailedImageSelection {
 
     func setNotes(_ newValue: String) {
         onSetNotes(newValue)
+    }
+}
+
+// MARK: - Inspector Image Intelligence Tab
+
+@available(macOS 26.0, *)
+private struct InspectorImageIntelligenceTab: View {
+    @Bindable var store: AnimateStore
+    let record: ProjectImageRecord
+
+    @State private var lastBackfillReport: String?
+    @State private var analysisRecord: ImageAssetRecord?
+    @State private var analysisJobs: [ImageAnalysisCoordinator.JobRecord] = []
+    @State private var searchResults: [ImageSearchService.SearchResult] = []
+    @State private var selectedQuery: String = ""
+    @State private var isSearching = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                headerSection
+                statusSection
+                actionsSection
+                analysisSection
+                jobsSection
+                searchSection
+            }
+            .padding()
+        }
+        .task(id: record.resolvedPath) {
+            await refresh()
+        }
+    }
+
+    @ViewBuilder
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(URL(fileURLWithPath: record.resolvedPath).lastPathComponent)
+                .font(.headline)
+            Text(record.originLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(record.groupLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var statusSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Status")
+                .font(.subheadline.bold())
+            HStack(spacing: 8) {
+                statusPill(label: analysisRecord == nil ? "Not Indexed" : "Indexed", color: analysisRecord == nil ? .orange : .green)
+                if !analysisJobs.isEmpty {
+                    statusPill(label: "\(analysisJobs.count) job(s)", color: .blue)
+                }
+            }
+            if let report = lastBackfillReport {
+                Text(report)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var actionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Actions")
+                .font(.subheadline.bold())
+            HStack(spacing: 6) {
+                Button("Reanalyze") {
+                    Task { await reanalyze() }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button("Backfill All") {
+                    Task { await runBackfill() }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button("Dry Run") {
+                    Task { await runDryRun() }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            HStack(spacing: 6) {
+                Button("Start Worker") {
+                    store.startImageAnalysisWorker()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button("Stop Worker") {
+                    store.stopImageAnalysisWorker()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var analysisSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Analysis")
+                .font(.subheadline.bold())
+            if let ar = analysisRecord {
+                Text("Path: \(ar.resolvedPath)")
+                    .font(.caption)
+                Text("Missing: \(ar.isMissing ? "Yes" : "No")")
+                    .font(.caption)
+                if let hash = ar.contentHashSHA256 {
+                    Text("SHA-256: \(String(hash.prefix(16)))…")
+                        .font(.caption)
+                }
+            } else {
+                Text("Not indexed. Click Reanalyze to queue this image for analysis.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var jobsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Queue")
+                .font(.subheadline.bold())
+            if analysisJobs.isEmpty {
+                Text("No jobs in queue.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(analysisJobs, id: \.id) { job in
+                    HStack {
+                        Text(job.status.rawValue.capitalized)
+                            .font(.caption.bold())
+                        Text(job.reason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var searchSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Search by Text")
+                .font(.subheadline.bold())
+            HStack {
+                TextField("Tags or caption…", text: $selectedQuery)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                Button("Search") {
+                    Task { await search() }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            if isSearching {
+                ProgressView()
+            } else {
+                ForEach(searchResults.prefix(5), id: \.assetID) { result in
+                    HStack {
+                        Image(systemName: "photo")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading) {
+                            Text(URL(fileURLWithPath: result.resolvedPath).lastPathComponent)
+                                .font(.caption)
+                            Text("score \(result.score, specifier: "%.3f")")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func statusPill(label: String, color: Color) -> some View {
+        Text(label)
+            .font(.caption2.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.15), in: Capsule())
+            .foregroundStyle(color)
+    }
+
+    @MainActor
+    private func refresh() async {
+        analysisRecord = await store.imageIntelligenceRecord(for: record.resolvedPath)
+        analysisJobs = await store.imageIntelligenceJobs(for: record.resolvedPath)
+    }
+
+    @MainActor
+    private func reanalyze() async {
+        store.registerImageAsset(
+            path: record.resolvedPath,
+            linkKind: .sceneShotImage,
+            enqueueForAnalysis: true
+        )
+        await refresh()
+    }
+
+    @MainActor
+    private func runBackfill() async {
+        store.runImageIntelligenceBackfill(dryRun: false) { [self] report in
+            Task { @MainActor in
+                lastBackfillReport = report.summary
+            }
+        }
+    }
+
+    @MainActor
+    private func runDryRun() async {
+        store.runImageIntelligenceBackfill(dryRun: true) { [self] report in
+            Task { @MainActor in
+                lastBackfillReport = report.summary
+            }
+        }
+    }
+
+    @MainActor
+    private func search() async {
+        guard let service = store.imageIntelligenceSearchService() else { return }
+        isSearching = true
+        let query = selectedQuery
+        defer { isSearching = false }
+        do {
+            searchResults = try await service.searchByText(query, limit: 10)
+        } catch {
+            searchResults = []
+        }
     }
 }

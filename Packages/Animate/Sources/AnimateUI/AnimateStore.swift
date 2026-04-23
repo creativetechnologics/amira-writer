@@ -178,6 +178,11 @@ final class AnimateStore {
         workingOWPURL ?? owpURL
     }
 
+    /// Debounce state for animated-look prompt disk persistence (Phase 1.2).
+    @ObservationIgnored fileprivate var animatedLookPromptWriteTask: Task<Void, Never>?
+    @ObservationIgnored fileprivate var pendingAnimatedLookPromptValue: String?
+    @ObservationIgnored fileprivate var pendingAnimatedLookPromptProjectURL: URL?
+
     // MARK: - Characters
 
     var characters: [AnimationCharacter] = []
@@ -643,6 +648,36 @@ final class AnimateStore {
             geminiCredentialStore.saveAPIKey(geminiAPIKey)
         }
     }
+
+    // MARK: - Image Analysis Settings (Phase 1)
+
+    @ObservationIgnored private var isHydratingImageAnalysisSettings = false
+    var imageAnalysisGeminiAPIKey: String = "" {
+        didSet {
+            guard !isHydratingImageAnalysisSettings else { return }
+            ProjectCredentialStore.shared.setImageAnalysisGeminiAPIKey(imageAnalysisGeminiAPIKey)
+            let apiKey = imageAnalysisGeminiAPIKey
+            Task {
+                guard let imageAnalysisCoordinator else { return }
+                await imageAnalysisCoordinator.configure(apiKey: apiKey)
+            }
+        }
+    }
+
+    func setImageAnalysisGeminiAPIKey(_ apiKey: String) {
+        imageAnalysisGeminiAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func clearImageAnalysisGeminiAPIKey() {
+        imageAnalysisGeminiAPIKey = ""
+    }
+
+    private func hydrateImageAnalysisSettings() {
+        isHydratingImageAnalysisSettings = true
+        imageAnalysisGeminiAPIKey = ProjectCredentialStore.shared.imageAnalysisGeminiAPIKey()
+        isHydratingImageAnalysisSettings = false
+    }
+
     var selectedGeminiModel: GeminiModel = .flash {
         didSet {
             guard !isHydratingGeminiSettings else { return }
@@ -784,6 +819,155 @@ final class AnimateStore {
     private let runPodAccountService = RunPodAccountService()
     private let sceneAutomationPlanner = SceneAutomationPlanner()
     let audioPlayer = AnimationAudioPlayer()
+    
+    // MARK: - Image Intelligence (Phase 1-6)
+    
+    @ObservationIgnored private var imageIntelligenceStore: ImageIntelligenceStore?
+    @ObservationIgnored private var imageAnalysisCoordinator: ImageAnalysisCoordinator?
+    @ObservationIgnored private var imageAssetDiscovery: ImageAssetDiscoveryService?
+    @ObservationIgnored private var imageAnalysisBackfill: ImageAnalysisBackfillService?
+    
+    private func setupImageIntelligence() {
+        guard let projectURL = fileOWPURL else { return }
+
+        let store = ImageIntelligenceStore(projectURL: projectURL)
+        let coordinator = ImageAnalysisCoordinator(store: store)
+        let discovery = ImageAssetDiscoveryService(store: self)
+
+        imageIntelligenceStore = store
+        imageAnalysisCoordinator = coordinator
+        imageAssetDiscovery = discovery
+        imageAnalysisBackfill = ImageAnalysisBackfillService(
+            store: store,
+            discoveryService: discovery,
+            coordinator: coordinator
+        )
+
+        Task {
+            do {
+                try await store.open()
+                if !imageAnalysisGeminiAPIKey.isEmpty {
+                    await coordinator.configure(apiKey: imageAnalysisGeminiAPIKey)
+                }
+            } catch {
+                AppLog.log("IMAGE_INTELLIGENCE", "Failed to open image intelligence store: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    /// Register an image asset and optionally enqueue for analysis.
+    /// Call this after saving any image to disk.
+    public func registerImageAsset(
+        path: String,
+        linkKind: ImageAssetLinkKind,
+        ownerID: String? = nil,
+        ownerParentID: String? = nil,
+        moment: String? = nil,
+        workflow: String? = nil,
+        context: [String: String] = [:],
+        enqueueForAnalysis: Bool = true
+    ) {
+        guard let store = imageIntelligenceStore else { return }
+
+        Task {
+            do {
+                let normalizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+                let inspection = ImageAssetInspector.inspect(path: normalizedPath)
+
+                let assetID = try await store.registerAsset(
+                    resolvedPath: normalizedPath,
+                    filename: URL(fileURLWithPath: normalizedPath).lastPathComponent,
+                    mimeType: inspection.mimeType,
+                    width: inspection.width,
+                    height: inspection.height,
+                    fileSizeBytes: inspection.fileSizeBytes,
+                    contentHashSHA256: inspection.contentHashSHA256
+                )
+                
+                try await store.linkAsset(
+                    assetID: assetID,
+                    kind: linkKind,
+                    ownerID: ownerID,
+                    ownerParentID: ownerParentID,
+                    moment: moment,
+                    workflow: workflow,
+                    context: context
+                )
+                
+                if enqueueForAnalysis {
+                    try await imageAnalysisCoordinator?.enqueue(assetID: assetID)
+                }
+            } catch {
+                print("[AnimateStore] Failed to register image asset: \(error)")
+            }
+        }
+    }
+    
+    /// Run backfill for all existing images.
+    public func runImageIntelligenceBackfill(
+        dryRun: Bool = false,
+        maxBatchSize: Int? = nil,
+        completion: ((ImageAnalysisBackfillService.BackfillReport) -> Void)? = nil
+    ) {
+        guard let backfill = imageAnalysisBackfill else {
+            print("[AnimateStore] Image intelligence not initialized")
+            return
+        }
+        
+        Task {
+            let report = await backfill.backfill(
+                options: ImageAnalysisBackfillService.BackfillOptions(
+                    dryRun: dryRun,
+                    maxBatchSize: maxBatchSize
+                )
+            )
+            
+            await MainActor.run {
+                completion?(report)
+            }
+        }
+    }
+    
+    /// Get image intelligence statistics.
+    public func imageIntelligenceStats() async -> ImageAnalysisCoordinator.WorkerStats? {
+        try? await imageAnalysisCoordinator?.stats()
+    }
+
+    public func imageIntelligenceRecord(for path: String) async -> ImageAssetRecord? {
+        guard let store = imageIntelligenceStore else { return nil }
+        return try? await store.assetByPath(URL(fileURLWithPath: path).standardizedFileURL.path)
+    }
+
+    public func imageIntelligenceJobs(for path: String) async -> [ImageAnalysisCoordinator.JobRecord] {
+        guard let store = imageIntelligenceStore,
+              let record = try? await store.assetByPath(URL(fileURLWithPath: path).standardizedFileURL.path) else { return [] }
+        return (try? await imageAnalysisCoordinator?.jobsForAsset(record.id)) ?? []
+    }
+
+    public func imageIntelligenceSearchService() -> ImageSearchService? {
+        guard let store = imageIntelligenceStore else { return nil }
+        return ImageSearchService(store: store)
+    }
+
+    public func imageIntelligenceBackfillReport(dryRun: Bool = true) async -> ImageAnalysisBackfillService.BackfillReport? {
+        guard let backfill = imageAnalysisBackfill else { return nil }
+        return await backfill.backfill(options: .init(dryRun: dryRun))
+    }
+
+    /// Start the image analysis worker.
+    public func startImageAnalysisWorker() {
+        Task {
+            await imageAnalysisCoordinator?.startWorker()
+        }
+    }
+    
+    /// Stop the image analysis worker.
+    public func stopImageAnalysisWorker() {
+        Task {
+            await imageAnalysisCoordinator?.stopWorker()
+        }
+    }
+    
     private var backgroundIndexRefreshTask: Task<Void, Never>?
     private var deferredStartupRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var deferredProjectHydrationTask: Task<Void, Never>?
@@ -828,6 +1012,7 @@ final class AnimateStore {
         observePersistedSaveState()
         observeVertexCreditTracking()
         hydrateGeminiSettings()
+        hydrateImageAnalysisSettings()
         hydrateMiniMaxSettings()
         hydrateViduSettings()
         hydrateRunPodSettings()
@@ -5180,9 +5365,11 @@ final class AnimateStore {
             ProjectCredentialStore.shared.setActiveProject(effectiveProjectURL)
             AppLog.log("STARTUP", "Credentials: project store active at \(ProjectPaths(root: effectiveProjectURL).apiCredentialsJSON.path)")
             hydrateGeminiSettings()
+            hydrateImageAnalysisSettings()
             hydrateMiniMaxSettings()
             hydrateViduSettings()
             hydrateRunPodSettings()
+            setupImageIntelligence()
 
             // 2. Ensure Animate/ directory exists
             let animateDir = ProjectPaths(root: effectiveProjectURL).animate
@@ -6494,6 +6681,11 @@ final class AnimateStore {
         updatedCharacter.inspirationImagePaths.append(normalizedPath)
         characters[index] = updatedCharacter
         save()
+        registerImageAsset(
+            path: resolvedCharacterAssetURL(for: normalizedPath)?.path ?? normalizedPath,
+            linkKind: .characterInspiration,
+            ownerID: characterID.uuidString
+        )
     }
 
     func removeInspirationImage(at indexToRemove: Int, for characterID: UUID) {
@@ -6766,6 +6958,17 @@ final class AnimateStore {
         updatedCharacter.inspirationImagePaths.append(storedPath)
         characters[charIndex] = updatedCharacter
         save()
+        registerImageAsset(
+            path: storedURL.path,
+            linkKind: .characterInspiration,
+            ownerID: characterID.uuidString,
+            context: [
+                "prompt": prompt,
+                "model": model.rawValue,
+                "aspectRatio": aspectRatio,
+                "imageSize": imageSize
+            ]
+        )
         return storedPath
     }
 
@@ -6830,6 +7033,18 @@ final class AnimateStore {
             )
         }
         save(writePlaces: true)
+        registerImageAsset(
+            path: storedURL.path,
+            linkKind: .placeGenerated,
+            ownerID: placeID.uuidString,
+            workflow: workflow.rawValue,
+            context: [
+                "prompt": prompt,
+                "model": model.rawValue,
+                "aspectRatio": aspectRatio,
+                "imageSize": imageSize
+            ]
+        )
         return storedPath
     }
 
@@ -7220,6 +7435,11 @@ final class AnimateStore {
         }
         characters[index].referenceImagePaths.append(normalizedPath)
         save()
+        registerImageAsset(
+            path: resolvedCharacterAssetURL(for: normalizedPath)?.path ?? normalizedPath,
+            linkKind: .characterReference,
+            ownerID: characterID.uuidString
+        )
     }
 
     func removeReferenceImage(at indexToRemove: Int, for characterID: UUID) {
@@ -9352,6 +9572,12 @@ final class AnimateStore {
             appendPlaceImagePath(imagePath, to: &backgrounds[index], workflow: workflow)
             syncGeneratedBackgroundLibrary()
             save(writePlaces: true)
+            registerImageAsset(
+                path: storedURL.path,
+                linkKind: .placeReference,
+                ownerID: placeID.uuidString,
+                workflow: workflow.rawValue
+            )
         } catch {
             statusMessage = "Failed to add place image: \(error.localizedDescription)"
         }
@@ -11755,6 +11981,12 @@ final class AnimateStore {
         appendPlaceImagePath(normalizedPath, to: &backgrounds[index], workflow: workflow)
         syncGeneratedBackgroundLibrary()
         save(writePlaces: true)
+        registerImageAsset(
+            path: resolvedCharacterAssetURL(for: normalizedPath)?.path ?? normalizedPath,
+            linkKind: .placeReference,
+            ownerID: placeID.uuidString,
+            workflow: workflow.rawValue
+        )
         return true
     }
 
@@ -13579,17 +13811,40 @@ final class AnimateStore {
 
     func persistProjectAnimatedLookPrompt(_ prompt: String) {
         let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        // UserDefaults is cheap + in-process; keep it immediate for live UI sync.
+        UserDefaults.standard.set(trimmedPrompt, forKey: AnimatedLookPromptSettings.masterPromptDefaultsKey)
+
         guard let projectURL = fileOWPURL ?? workingOWPURL ?? animateURL?.deletingLastPathComponent() else {
-            UserDefaults.standard.set(trimmedPrompt, forKey: AnimatedLookPromptSettings.masterPromptDefaultsKey)
             return
         }
 
-        do {
-            try ProjectDatabaseBridge.saveAnimatedLookPromptToDisk(trimmedPrompt, projectURL: projectURL)
-            UserDefaults.standard.set(trimmedPrompt, forKey: AnimatedLookPromptSettings.masterPromptDefaultsKey)
-            recordExternalFileSnapshots()
-        } catch {
-            statusMessage = "Could not save animated look prompt: \(error.localizedDescription)"
+        // Coalesce disk writes: latest-value-wins with a 500 ms debounce. Disk
+        // I/O runs off the main actor via Task.detached.
+        pendingAnimatedLookPromptValue = trimmedPrompt
+        pendingAnimatedLookPromptProjectURL = projectURL
+        animatedLookPromptWriteTask?.cancel()
+        animatedLookPromptWriteTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled { return }
+            guard let self = self else { return }
+            guard let value = self.pendingAnimatedLookPromptValue,
+                  let url = self.pendingAnimatedLookPromptProjectURL else { return }
+            self.pendingAnimatedLookPromptValue = nil
+            self.pendingAnimatedLookPromptProjectURL = nil
+            let writeResult: Result<Void, Error> = await Task.detached(priority: .utility) {
+                do {
+                    try ProjectDatabaseBridge.saveAnimatedLookPromptToDisk(value, projectURL: url)
+                    return .success(())
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+            switch writeResult {
+            case .success:
+                self.recordExternalFileSnapshots()
+            case .failure(let error):
+                self.statusMessage = "Could not save animated look prompt: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -16604,6 +16859,17 @@ extension AnimateStore {
     func appendCanvasGeneration(_ gen: CanvasGeneration) {
         canvasGenerations.append(gen)
         persistCanvasIndex()
+        registerImageAsset(
+            path: gen.imagePath,
+            linkKind: .canvasGeneration,
+            ownerID: gen.id.uuidString,
+            context: [
+                "prompt": gen.prompt,
+                "model": gen.model.rawValue,
+                "aspectRatio": gen.aspectRatio,
+                "imageSize": gen.imageSize
+            ]
+        )
     }
 
     /// Removes a generation record by id, deletes the image file, and rewrites `_index.json`.

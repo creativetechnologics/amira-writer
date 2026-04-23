@@ -93,14 +93,21 @@ final class GeminiImageService {
     /// Maximum number of `generate()` calls allowed per 60-second window.
     static var rateLimitPerMinute: Int = 12
 
-    /// Circuit breaker: after this many consecutive failures, all calls are blocked
-    /// until the app is restarted. Prevents runaway retry loops from burning API quota.
+    /// Circuit breaker: after this many consecutive failures the breaker trips.
+    /// It auto-resets after `circuitBreakerCooldownSeconds` of no new failures
+    /// so a single 429 burst no longer locks Gemini for the whole session.
     static let circuitBreakerThreshold: Int = 10
+
+    /// Sliding window after which a tripped breaker self-heals if no new
+    /// failures have arrived. Matches Gary's `feedback_no_auto_api_calls` rule:
+    /// we still refuse calls while tripped; we just don't require a restart.
+    static let circuitBreakerCooldownSeconds: TimeInterval = 300
 
     private static var callCount: Int = 0
     private static var callCountResetTime: Date = Date()
     private static var consecutiveFailures: Int = 0
     private static var circuitBreakerTripped: Bool = false
+    private static var lastFailureAt: Date?
 
     // MARK: - Properties
 
@@ -144,11 +151,18 @@ final class GeminiImageService {
             guard !apiKey.isEmpty else { throw ServiceError.noAPIKey }
         }
 
-        // Circuit breaker: if too many consecutive failures, refuse ALL calls
-        // until the app is restarted. This prevents runaway retry loops.
+        // Circuit breaker: if too many consecutive failures, refuse calls until
+        // the sliding cooldown window elapses with no further failures.
         if Self.circuitBreakerTripped {
-            print("[GeminiImageService] 🛑 CIRCUIT BREAKER TRIPPED — all API calls blocked. Restart the app to reset.")
-            throw ServiceError.rateLimitExceeded
+            if let last = Self.lastFailureAt,
+               Date().timeIntervalSince(last) > Self.circuitBreakerCooldownSeconds {
+                print("[GeminiImageService] ♻️ CIRCUIT BREAKER auto-reset after \(Int(Self.circuitBreakerCooldownSeconds))s cooldown. Allowing a probe call.")
+                Self.circuitBreakerTripped = false
+                Self.consecutiveFailures = 0
+            } else {
+                print("[GeminiImageService] 🛑 CIRCUIT BREAKER TRIPPED — all API calls blocked until cooldown expires.")
+                throw ServiceError.rateLimitExceeded
+            }
         }
 
         // Rate limiting: reset the window counter if more than 60 seconds have elapsed.
@@ -203,8 +217,10 @@ final class GeminiImageService {
         do {
             let (data, httpResponse) = try await performRequestWithRetry(urlRequest, backend: backend)
 
-            // Success — reset the failure counter
+            // Success — reset the failure counter and clear any prior trip.
             Self.consecutiveFailures = 0
+            Self.circuitBreakerTripped = false
+            Self.lastFailureAt = nil
 
             let payload = try await Self.decodeResponsePayload(from: data)
             let previewImage: NSImage?
@@ -413,11 +429,19 @@ final class GeminiImageService {
     }
 
     private func recordFailure(_ error: Error) {
+        let now = Date()
+        // Sliding-window reset: if no failures for the cooldown period, treat
+        // this as a fresh failure streak instead of piling onto an ancient one.
+        if let last = Self.lastFailureAt,
+           now.timeIntervalSince(last) > Self.circuitBreakerCooldownSeconds {
+            Self.consecutiveFailures = 0
+        }
+        Self.lastFailureAt = now
         Self.consecutiveFailures += 1
         print("[GeminiImageService] failure (\(Self.consecutiveFailures) consecutive): \(error.localizedDescription)")
         if Self.consecutiveFailures >= Self.circuitBreakerThreshold {
             Self.circuitBreakerTripped = true
-            print("[GeminiImageService] 🛑 CIRCUIT BREAKER TRIPPED after \(Self.consecutiveFailures) consecutive failures. All API calls blocked until app restart.")
+            print("[GeminiImageService] 🛑 CIRCUIT BREAKER TRIPPED after \(Self.consecutiveFailures) consecutive failures. Auto-reset in \(Int(Self.circuitBreakerCooldownSeconds))s of quiet.")
         }
     }
 

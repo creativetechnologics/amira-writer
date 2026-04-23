@@ -69,9 +69,14 @@ enum ProjectDatabaseBridge {
         return metadata
     }
 
+    nonisolated(unsafe) private static let debugLogFormatter: ISO8601DateFormatter = {
+        ISO8601DateFormatter()
+    }()
+
     private static func debugLog(_ message: String) {
-        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
         NSLog("%@", message)
+        #if DEBUG
+        let line = "[\(debugLogFormatter.string(from: Date()))] \(message)\n"
         let logURL = URL(fileURLWithPath: "/tmp/animate-debug.log")
         if let handle = try? FileHandle(forWritingTo: logURL) {
             handle.seekToEndOfFile()
@@ -80,6 +85,7 @@ enum ProjectDatabaseBridge {
         } else {
             try? Data(line.utf8).write(to: logURL)
         }
+        #endif
     }
 
     static func loadSavedScenesFromDisk(projectURL: URL) -> [String: AnimateSceneData] {

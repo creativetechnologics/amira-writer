@@ -298,23 +298,10 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
     // MARK: - Notes Editor
 
     private var notesEditor: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Notes")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            TextEditor(text: Binding(
-                get: { selection.notes },
-                set: { selection.setNotes($0) }
-            ))
-            .font(.system(.body, design: .default))
-            .frame(minHeight: 120)
-            .padding(8)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.secondary.opacity(0.08))
-            )
-        }
+        DebouncedNotesEditor(
+            initialValue: selection.notes,
+            onCommit: { newValue in selection.setNotes(newValue) }
+        )
     }
 
     // MARK: - Metadata
@@ -325,7 +312,7 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            ForEach(rows, id: \.label) { row in
                 // Long values (like full prompts) need a stacked layout so they
                 // can wrap to the full inspector width instead of being squeezed
                 // to whatever space LabeledContent leaves on the right.
@@ -627,4 +614,61 @@ struct PropImageSelection: DetailedImageSelection {
     func setRating(_ newValue: Int?) {}
     func toggleRejected() {}
     func setNotes(_ newValue: String) {}
+}
+
+/// Keystrokes stay in local @State; the real selection is only poked after
+/// a 400 ms idle, so the grid + sidebar + selection store aren't invalidated
+/// on every character.
+@available(macOS 26.0, *)
+private struct DebouncedNotesEditor: View {
+    let initialValue: String
+    let onCommit: (String) -> Void
+
+    @State private var draft: String
+    @State private var commitTask: Task<Void, Never>?
+
+    init(initialValue: String, onCommit: @escaping (String) -> Void) {
+        self.initialValue = initialValue
+        self.onCommit = onCommit
+        _draft = State(initialValue: initialValue)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Notes")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: $draft)
+                .font(.system(.body, design: .default))
+                .frame(minHeight: 120)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.secondary.opacity(0.08))
+                )
+                .onChange(of: draft) { _, newValue in
+                    commitTask?.cancel()
+                    commitTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 400_000_000)
+                        if Task.isCancelled { return }
+                        onCommit(newValue)
+                    }
+                }
+                .onChange(of: initialValue) { _, externalValue in
+                    // Selection changed to a different record — replace the
+                    // draft wholesale and drop the pending commit.
+                    if externalValue != draft {
+                        commitTask?.cancel()
+                        draft = externalValue
+                    }
+                }
+                .onDisappear {
+                    commitTask?.cancel()
+                    if draft != initialValue {
+                        onCommit(draft)
+                    }
+                }
+        }
+    }
 }

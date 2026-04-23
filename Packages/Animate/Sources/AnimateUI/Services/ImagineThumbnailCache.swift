@@ -30,6 +30,8 @@ final class ImagineThumbnailCache: @unchecked Sendable {
     private let registryLock = NSLock()
     private var keysByPath: [String: Set<String>] = [:]
 
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+
     init() {
         memCache.totalCostLimit = 200 * 1024 * 1024
         memCache.countLimit = 2000
@@ -49,6 +51,28 @@ final class ImagineThumbnailCache: @unchecked Sendable {
             withIntermediateDirectories: true
         )
         self.diskCacheDir = base
+
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: queue
+        )
+        source.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            let event = source.data
+            if event.contains(.critical) {
+                self.memCache.removeAllObjects()
+                self.registryLock.lock()
+                self.keysByPath.removeAll()
+                self.registryLock.unlock()
+            } else {
+                self.memCache.totalCostLimit = max(
+                    50 * 1024 * 1024,
+                    self.memCache.totalCostLimit / 2
+                )
+            }
+        }
+        source.resume()
+        self.memoryPressureSource = source
     }
 
     // MARK: - Keys
@@ -60,9 +84,10 @@ final class ImagineThumbnailCache: @unchecked Sendable {
     private func diskFileURL(
         path: String,
         mtime: TimeInterval,
+        fileSize: Int64,
         maxPixelSize: Int
     ) -> URL {
-        let raw = "\(path)|\(Int(mtime))|\(maxPixelSize)"
+        let raw = "\(path)|\(Int(mtime))|\(fileSize)|\(maxPixelSize)"
         let hash = SHA256.hash(data: Data(raw.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
@@ -99,12 +124,14 @@ final class ImagineThumbnailCache: @unchecked Sendable {
                     return
                 }
 
-                let mtime = (try? FileManager.default
-                    .attributesOfItem(atPath: path)[.modificationDate] as? Date)?
+                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+                let mtime = (attrs?[.modificationDate] as? Date)?
                     .timeIntervalSince1970 ?? 0
+                let fileSize = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
                 let diskURL = self.diskFileURL(
                     path: path,
                     mtime: mtime,
+                    fileSize: fileSize,
                     maxPixelSize: maxPixelSize
                 )
 

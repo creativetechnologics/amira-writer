@@ -22,6 +22,59 @@ final class AnimateAudioWaveformCache: ObservableObject {
     private static let maxCacheEntries = 24
     nonisolated private static let waveformImageHeight = 96
 
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+
+    init() {
+        installMemoryPressureHandler()
+    }
+
+    deinit {
+        memoryPressureSource?.cancel()
+    }
+
+    private func installMemoryPressureHandler() {
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: .global(qos: .utility)
+        )
+        source.setEventHandler { [weak self] in
+            let isCritical = source.data.contains(.critical)
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if isCritical {
+                    self.clearAllCaches()
+                } else {
+                    self.trimHalfOldest()
+                }
+            }
+        }
+        source.resume()
+        memoryPressureSource = source
+    }
+
+    private func clearAllCaches() {
+        for task in pendingTasks.values { task.cancel() }
+        pendingTasks.removeAll()
+        pending.removeAll()
+        failed.removeAll()
+        accessOrder.removeAll()
+        imageCache.removeAll()
+        durationCache.removeAll()
+    }
+
+    private func trimHalfOldest() {
+        let dropCount = accessOrder.count / 2
+        guard dropCount > 0 else { return }
+        for key in accessOrder.prefix(dropCount) {
+            imageCache.removeValue(forKey: key)
+            durationCache.removeValue(forKey: key)
+            pendingTasks[key]?.cancel()
+            pendingTasks.removeValue(forKey: key)
+            failed.remove(key)
+        }
+        accessOrder.removeFirst(dropCount)
+    }
+
     func waveformImage(for path: String) -> CGImage? {
         imageCache[path]
     }
