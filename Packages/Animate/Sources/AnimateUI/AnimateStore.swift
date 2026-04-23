@@ -5481,9 +5481,17 @@ final class AnimateStore {
                 NSLog("[Animate] openOWP:   %@ = %d shots", scene.owpSongPath, scene.shots.count)
             }
 
-            // 6. Sync characters with OWP characters.json
-            syncCharactersFromOWP(result.characters)
-            recoverMissingPersistedCharactersIfNeeded()
+            // 6. Sync characters with OWP characters.json.
+            // Decode every rig.json in parallel once, then share the result
+            // with both syncs so we're not decoding rigs twice back-to-back.
+            let prefetchedPersistedCharacters = await persistedCharactersOnDiskAsync()
+            syncCharactersFromOWP(
+                result.characters,
+                prefetchedPersistedCharacters: prefetchedPersistedCharacters
+            )
+            recoverMissingPersistedCharactersIfNeeded(
+                prefetchedPersistedCharacters: prefetchedPersistedCharacters
+            )
             let didMigrateCharacterStorage = migrateAllCharacterStorageSlugsIfNeeded()
             scheduleDeferredStartupRefreshes()
 
@@ -5530,7 +5538,9 @@ final class AnimateStore {
             } else {
                 backgrounds = []
             }
-            placesWorkflowLibrary = hydratedPlacesWorkflowLibrary(loadPlacesWorkflowLibrary(from: animateDir))
+            placesWorkflowLibrary = await hydratedPlacesWorkflowLibrary(
+                loadPlacesWorkflowLibraryAsync(from: animateDir)
+            )
             placesWorldContextBlocks = loadPlacesWorldContextBlocks(from: animateDir)
             syncMasterAnimatedLookPromptFromProject(effectiveProjectURL)
             generatedBackgroundLibraryNeedsRefresh = !skipBackgroundRefresh
@@ -13796,13 +13806,66 @@ final class AnimateStore {
         }
     }
 
-    private func loadPlacesWorkflowLibrary(from animateDir: URL) -> PlacesWorkflowLibrary {
+    /// Parallelizes the three disk reads that the sync `loadPlacesWorkflowLibrary`
+    /// does serially (workflow manifest + canon + review-state). Decode stays on
+    /// the MainActor because it mutates `self.placesWorldMapCanonRawPayload` etc.
+    /// I/O is the slow part — that's what we fan out.
+    private func loadPlacesWorkflowLibraryAsync(from animateDir: URL) async -> PlacesWorkflowLibrary {
+        let workflowURL = ProjectPaths(root: animateDir.deletingLastPathComponent()).animatePlacesWorkflowJSON
+        let canonURL = placesWorldMapCanonURL(in: animateDir)
+        let reviewURL = placesGeneratedReviewStateURL(in: animateDir)
+
+        let workflowTask = Task.detached(priority: .userInitiated) {
+            Self.readManifestDataIfExists(workflowURL)
+        }
+        let canonTask = Task.detached(priority: .userInitiated) {
+            Self.readManifestDataIfExists(canonURL)
+        }
+        let reviewTask = Task.detached(priority: .userInitiated) {
+            Self.readManifestDataIfExists(reviewURL)
+        }
+
+        let workflowData = await workflowTask.value
+        let canonData = await canonTask.value
+        let reviewData = await reviewTask.value
+
+        return loadPlacesWorkflowLibrary(
+            from: animateDir,
+            prefetchedWorkflowData: workflowData,
+            prefetchedCanonData: canonData,
+            prefetchedReviewData: reviewData
+        )
+    }
+
+    nonisolated private static func readManifestDataIfExists(_ url: URL) -> Data? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    private func loadPlacesWorkflowLibrary(
+        from animateDir: URL,
+        prefetchedWorkflowData: Data? = nil,
+        prefetchedCanonData: Data? = nil,
+        prefetchedReviewData: Data? = nil
+    ) -> PlacesWorkflowLibrary {
         let libraryURL = ProjectPaths(root: animateDir.deletingLastPathComponent()).animatePlacesWorkflowJSON
-        placesWorldMapCanonLibrary = loadPlacesWorldMapCanonLibrary(from: animateDir)
-        placesGeneratedReviewStateLibrary = loadGeneratedBackgroundReviewStateLibrary(from: animateDir)
-        guard FileManager.default.fileExists(atPath: libraryURL.path),
-              let data = try? Data(contentsOf: libraryURL),
-              var decoded = try? JSONDecoder().decode(PlacesWorkflowLibrary.self, from: data) else {
+        placesWorldMapCanonLibrary = loadPlacesWorldMapCanonLibrary(
+            from: animateDir,
+            prefetchedData: prefetchedCanonData
+        )
+        placesGeneratedReviewStateLibrary = loadGeneratedBackgroundReviewStateLibrary(
+            from: animateDir,
+            prefetchedData: prefetchedReviewData
+        )
+        let data: Data?
+        if let prefetched = prefetchedWorkflowData {
+            data = prefetched
+        } else if FileManager.default.fileExists(atPath: libraryURL.path) {
+            data = try? Data(contentsOf: libraryURL)
+        } else {
+            data = nil
+        }
+        guard let data, var decoded = try? JSONDecoder().decode(PlacesWorkflowLibrary.self, from: data) else {
             return .init()
         }
 
@@ -14066,10 +14129,20 @@ final class AnimateStore {
         try data.write(to: url, options: .atomic)
     }
 
-    private func loadGeneratedBackgroundReviewStateLibrary(from animateDir: URL) -> GeneratedBackgroundReviewStateLibrary {
+    private func loadGeneratedBackgroundReviewStateLibrary(
+        from animateDir: URL,
+        prefetchedData: Data? = nil
+    ) -> GeneratedBackgroundReviewStateLibrary {
         let url = placesGeneratedReviewStateURL(in: animateDir)
-        guard FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
+        let data: Data?
+        if let prefetchedData {
+            data = prefetchedData
+        } else if FileManager.default.fileExists(atPath: url.path) {
+            data = try? Data(contentsOf: url)
+        } else {
+            data = nil
+        }
+        guard let data,
               let decoded = try? JSONDecoder().decode(GeneratedBackgroundReviewStateLibrary.self, from: data) else {
             return .init()
         }
@@ -14096,10 +14169,20 @@ final class AnimateStore {
         ProjectPaths(root: animateDir.deletingLastPathComponent()).animatePlacesWorldMapCanonJSON
     }
 
-    private func loadPlacesWorldMapCanonLibrary(from animateDir: URL) -> PlacesWorldMapCanonLibrary {
+    private func loadPlacesWorldMapCanonLibrary(
+        from animateDir: URL,
+        prefetchedData: Data? = nil
+    ) -> PlacesWorldMapCanonLibrary {
         let canonURL = placesWorldMapCanonURL(in: animateDir)
-        guard FileManager.default.fileExists(atPath: canonURL.path),
-              let data = try? Data(contentsOf: canonURL) else {
+        let resolvedData: Data?
+        if let prefetchedData {
+            resolvedData = prefetchedData
+        } else if FileManager.default.fileExists(atPath: canonURL.path) {
+            resolvedData = try? Data(contentsOf: canonURL)
+        } else {
+            resolvedData = nil
+        }
+        guard let data = resolvedData else {
             placesWorldMapCanonRawPayload = [:]
             return .init()
         }
@@ -15412,9 +15495,75 @@ final class AnimateStore {
         }
     }
 
+    /// Parallel variant: reads + JSON-decodes each `rig.json` on a detached task,
+    /// then fans back in on the MainActor to normalize + migrate in order. Migration
+    /// writes stay on the MainActor because they touch backup state on disk under the
+    /// project. The speed-up is the file I/O + initial JSON decode done concurrently.
+    private func persistedCharactersOnDiskAsync() async -> [AnimationCharacter] {
+        let rigURLs = persistedCharacterRigURLsOnDisk()
+        guard !rigURLs.isEmpty else { return [] }
+
+        struct RawRig: Sendable {
+            let index: Int
+            let rigURL: URL
+            let data: Data
+            let decoded: AnimationCharacter
+            let fallbackSlug: String
+        }
+
+        let raws: [RawRig] = await withTaskGroup(of: RawRig?.self) { group in
+            for (index, rigURL) in rigURLs.enumerated() {
+                let fallback = rigURL.deletingLastPathComponent().lastPathComponent
+                group.addTask(priority: .userInitiated) {
+                    guard FileManager.default.fileExists(atPath: rigURL.path),
+                          let data = try? Data(contentsOf: rigURL),
+                          let decoded = try? JSONDecoder().decode(AnimationCharacter.self, from: data) else {
+                        return nil
+                    }
+                    return RawRig(
+                        index: index,
+                        rigURL: rigURL,
+                        data: data,
+                        decoded: decoded,
+                        fallbackSlug: fallback
+                    )
+                }
+            }
+            var out: [RawRig] = []
+            for await item in group {
+                if let item { out.append(item) }
+            }
+            return out.sorted { $0.index < $1.index }
+        }
+
+        var output: [AnimationCharacter] = []
+        output.reserveCapacity(raws.count)
+        for raw in raws {
+            let normalized = normalizedPersistedCharacterState(raw.decoded, fallbackSlug: raw.fallbackSlug)
+            let originalSchemaVersion = schemaVersionForCharacterRigData(raw.data)
+            if originalSchemaVersion < AnimationCharacter.currentSchemaVersion {
+                do {
+                    _ = try backupCharacterRigBeforeMigration(
+                        rigURL: raw.rigURL,
+                        originalData: raw.data,
+                        originalSchemaVersion: originalSchemaVersion
+                    )
+                    try writeMigratedCharacterRig(normalized, to: raw.rigURL)
+                    print("AnimateStore: migrated character rig at \(raw.rigURL.path) to schema v\(AnimationCharacter.currentSchemaVersion)")
+                } catch {
+                    print("AnimateStore: failed to migrate character rig at \(raw.rigURL.path): \(error)")
+                }
+            }
+            output.append(normalized)
+        }
+        return output
+    }
+
     @MainActor
-    func recoverMissingPersistedCharactersIfNeeded() {
-        let persistedCharacters = persistedCharactersOnDisk()
+    func recoverMissingPersistedCharactersIfNeeded(
+        prefetchedPersistedCharacters: [AnimationCharacter]? = nil
+    ) {
+        let persistedCharacters = prefetchedPersistedCharacters ?? persistedCharactersOnDisk()
         guard !persistedCharacters.isEmpty else { return }
 
         func matchesPersistedCharacter(_ candidate: AnimationCharacter, persisted: AnimationCharacter) -> Bool {
@@ -15498,10 +15647,13 @@ final class AnimateStore {
         return didChange
     }
 
-    private func syncCharactersFromOWP(_ sourceCharacters: [OPWCharacter]) {
+    private func syncCharactersFromOWP(
+        _ sourceCharacters: [OPWCharacter],
+        prefetchedPersistedCharacters: [AnimationCharacter]? = nil
+    ) {
         owpCharacters = sourceCharacters
 
-        let persistedCharacters = persistedCharactersOnDisk()
+        let persistedCharacters = prefetchedPersistedCharacters ?? persistedCharactersOnDisk()
         let persistedByOWPSlug = persistedCharacters.reduce(into: [String: AnimationCharacter]()) { partialResult, character in
             let key = character.owpSlug.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty, partialResult[key] == nil else { return }
