@@ -25,7 +25,7 @@
     <key>NSCameraUsageDescription</key>
     <string>Amira Writer uses the camera for real-time motion capture to drive character animations.</string>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Amira Writer connects to Draw Things on your local network for AI image generation.</string>
+    <string>Amira Writer connects to Draw Things on your local network for AI image generation, and serves the Storyboard tool so you can sketch panels on your iPad.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_http._tcp</string>

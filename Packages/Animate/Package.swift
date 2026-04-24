@@ -26,10 +26,14 @@ let package = Package(
                 .product(name: "ProjectKit", package: "ProjectKit")
             ],
             path: "Sources/AnimateUI",
-            exclude: ["_archived_3d"],
+            exclude: [
+                "_archived_3d",
+                "Services/ImageIntelligence/README.md"
+            ],
             resources: [
                 .copy("Resources/Models3D"),
-                .copy("Resources/gemini_inspiration_batch.py")
+                .copy("Resources/gemini_inspiration_batch.py"),
+                .copy("Resources/storyboard-web")
             ]
         ),
         .executableTarget(
@@ -45,13 +49,6 @@ let package = Package(
                 .product(name: "ProjectKit", package: "ProjectKit")
             ],
             path: "Tests/AnimateTests"
-        ),
-        .testTarget(
-            name: "Animate3DTests",
-            dependencies: [
-                "AnimateUI"
-            ],
-            path: "Tests/Animate3DTests"
         )
     ]
 )

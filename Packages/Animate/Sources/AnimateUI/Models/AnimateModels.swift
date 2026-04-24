@@ -654,6 +654,9 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
     var headTurnaroundSlots: [CharacterPoseSlot]
     var costumeReferenceSets: [CharacterCostumeReferenceSet]
     var models3D: [Character3DModel]
+    var activeLORAFilename: String?
+    var activeLORATriggerWord: String?
+    var activeLORAWeight: Double?
 
     init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -693,7 +696,10 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         approvedHeadTurnaroundSheetVariantID: UUID? = nil,
         headTurnaroundSlots: [CharacterPoseSlot] = [],
         costumeReferenceSets: [CharacterCostumeReferenceSet] = [],
-        models3D: [Character3DModel] = []
+        models3D: [Character3DModel] = [],
+        activeLORAFilename: String? = nil,
+        activeLORATriggerWord: String? = nil,
+        activeLORAWeight: Double? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -733,6 +739,9 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         self.headTurnaroundSlots = headTurnaroundSlots
         self.costumeReferenceSets = costumeReferenceSets
         self.models3D = models3D
+        self.activeLORAFilename = activeLORAFilename
+        self.activeLORATriggerWord = activeLORATriggerWord
+        self.activeLORAWeight = activeLORAWeight
     }
 
     init(from decoder: Decoder) throws {
@@ -775,6 +784,9 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         headTurnaroundSlots = try c.decodeIfPresent([CharacterPoseSlot].self, forKey: .headTurnaroundSlots) ?? []
         costumeReferenceSets = try c.decodeIfPresent([CharacterCostumeReferenceSet].self, forKey: .costumeReferenceSets) ?? []
         models3D = try c.decodeIfPresent([Character3DModel].self, forKey: .models3D) ?? []
+        activeLORAFilename = try c.decodeIfPresent(String.self, forKey: .activeLORAFilename)
+        activeLORATriggerWord = try c.decodeIfPresent(String.self, forKey: .activeLORATriggerWord)
+        activeLORAWeight = try c.decodeIfPresent(Double.self, forKey: .activeLORAWeight)
     }
 
     var resolvedRenderMode: CharacterCanvasRenderMode {

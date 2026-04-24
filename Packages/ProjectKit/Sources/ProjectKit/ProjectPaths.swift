@@ -190,6 +190,13 @@ public struct ProjectPaths: Sendable {
         novotroDir.appendingPathComponent("project.sqlite")
     }
 
+    /// `<project>/.novotro/image-intelligence.sqlite`
+    /// Phase 1: Dedicated SQLite store for image intelligence subsystem.
+    /// Note: If .novotro/ is not synced in your setup, move this to Settings/ before use.
+    public var imageIntelligenceSQLite: URL {
+        novotroDir.appendingPathComponent("image-intelligence.sqlite")
+    }
+
     // MARK: - Mix
 
     /// `<project>/Mix/exports/`
@@ -465,6 +472,27 @@ public struct ProjectPaths: Sendable {
         animate.appendingPathComponent("motion-timeline-\(sceneID).json")
     }
 
+    // MARK: - Storyboard paths (per-scene, per-shot)
+
+    /// `<project>/Scenes/<sceneID>/storyboards/`
+    public func sceneStoryboardsDir(sceneID: UUID) -> URL {
+        scenes
+            .appendingPathComponent(sceneID.uuidString, isDirectory: true)
+            .appendingPathComponent("storyboards", isDirectory: true)
+    }
+
+    /// `<project>/Scenes/<sceneID>/storyboards/<shotID>/`
+    public func shotStoryboardDir(sceneID: UUID, shotID: UUID) -> URL {
+        sceneStoryboardsDir(sceneID: sceneID)
+            .appendingPathComponent(shotID.uuidString, isDirectory: true)
+    }
+
+    /// `<project>/Scenes/<sceneID>/storyboards/<shotID>/<frame>.png`
+    public func shotStoryboardImage(sceneID: UUID, shotID: UUID, frame: StoryboardFrame) -> URL {
+        shotStoryboardDir(sceneID: sceneID, shotID: shotID)
+            .appendingPathComponent("\(frame.rawValue).png")
+    }
+
     // MARK: - Songs per-song lyric iterations
 
     /// `<project>/Songs/<songDir>/<songName>.lyric-iterations/`
@@ -480,4 +508,12 @@ public struct ProjectPaths: Sendable {
         return songs.appendingPathComponent(dir, isDirectory: true)
             .appendingPathComponent(folderName, isDirectory: true)
     }
+}
+
+// MARK: - StoryboardFrame
+
+public enum StoryboardFrame: String, CaseIterable, Sendable {
+    case begin
+    case middle
+    case end
 }

@@ -45,6 +45,8 @@ public final class AnimateWorkspaceController: ObservableObject {
             guard let url = self.apiHostProjectURL else { return }
             _ = await self.ensureProjectLoaded(url)
         }
+        // LAN HTTP server for the iPad storyboard drawing tool (port 19850).
+        StoryboardAPIServer.startIfNeeded(workspace: self)
     }
 
     /// Called by the Opera shell whenever the active project URL changes so
@@ -98,6 +100,11 @@ public final class AnimateWorkspaceController: ObservableObject {
     /// Returns the global-settings gear button bound to this workspace's store.
     public func globalSettingsGearView() -> some View {
         GlobalSettingsGear(store: store)
+    }
+
+    /// Returns the storyboard URL button for the title bar.
+    public func storyboardURLButtonView() -> some View {
+        StoryboardURLButton()
     }
 
     // Note: AllProjectImages is now dispatched from `OperaShellView` as a

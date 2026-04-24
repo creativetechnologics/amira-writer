@@ -607,6 +607,7 @@ struct OperaShellView: View {
             HStack(spacing: 6) {
                 animateController.vertexCreditTitleBarView()
                 animateController.geminiStatusBadgeView()
+                animateController.storyboardURLButtonView()
 
                 OperaChromeActionButton(
                     systemImage: "paintpalette",
