@@ -31,3 +31,11 @@ Scripts/3d-map-pipeline/work/
 
 # Local server / pipeline logs
 *.log
+
+# Codex Kimi companion agent state (contains credentials)
+.codex-kimi-companion/
+.codex-kimi-share/
+
+# Stray Chromium profile data accidentally created at repo root
+/Default/
+/Local State
