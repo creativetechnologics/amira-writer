@@ -1948,8 +1948,8 @@ struct PlacesPageView: View {
         if let place = selectedPlace {
             VStack(alignment: .leading, spacing: 16) {
                 placeHeader(place)
-                placeIPadSketchSection(place)
                 if renderPlaceDetailPrimaryAssets {
+                    placeIPadSketchSection(place)
                     workflowOutputSection(place)
                 } else {
                     placeDetailSectionPlaceholder(

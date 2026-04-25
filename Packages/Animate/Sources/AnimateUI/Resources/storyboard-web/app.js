@@ -8,6 +8,7 @@ import {
   initDrawing,
   recalcLayout,
   loadImageURL,
+  pasteImageURL,
   exportPNG,
   setTool,
   setBrushSizeForTool,
@@ -221,9 +222,17 @@ function syncBrushUi(tool) {
   const label = tool === 'eraser' ? 'Eraser' : 'Pencil';
   const size = getBrushSizeForTool(tool);
   brushLabel.textContent = label;
-  brushSlider.min = String(brushLimits(tool).min);
-  brushSlider.max = String(brushLimits(tool).max);
-  brushSlider.value = String(size);
+  const limits = brushLimits(tool);
+  const oldMax = parseInt(brushSlider.max, 10) || limits.max;
+  if (size <= oldMax) {
+    brushSlider.value = String(size);
+    brushSlider.min = String(limits.min);
+    brushSlider.max = String(limits.max);
+  } else {
+    brushSlider.min = String(limits.min);
+    brushSlider.max = String(limits.max);
+    brushSlider.value = String(size);
+  }
   brushSlider.setAttribute('aria-label', `${label} size`);
   brushValue.textContent = String(size);
 }
@@ -242,9 +251,17 @@ function selectTool(tool, { syncSlider = true } = {}) {
   } else {
     const size = getBrushSizeForTool(tool);
     brushLabel.textContent = tool === 'eraser' ? 'Eraser' : 'Pencil';
-    brushSlider.min = String(brushLimits(tool).min);
-    brushSlider.max = String(brushLimits(tool).max);
-    brushSlider.value = String(size);
+    const limits2 = brushLimits(tool);
+    const oldMax2 = parseInt(brushSlider.max, 10) || limits2.max;
+    if (size <= oldMax2) {
+      brushSlider.value = String(size);
+      brushSlider.min = String(limits2.min);
+      brushSlider.max = String(limits2.max);
+    } else {
+      brushSlider.min = String(limits2.min);
+      brushSlider.max = String(limits2.max);
+      brushSlider.value = String(size);
+    }
     brushSlider.setAttribute('aria-label', `${tool === 'eraser' ? 'Eraser' : 'Pencil'} size`);
     brushValue.textContent = String(size);
   }
@@ -365,10 +382,6 @@ function renderShotList() {
       row.addEventListener('click', async (event) => {
         // Don't navigate if a drag just finished or originated from the handle
         if (event.target.closest('.shot-drag-handle')) return;
-        if (dragState && dragState.suppressClick) {
-          dragState.suppressClick = false;
-          return;
-        }
         if (shot.shotId === currentShotId) return;
         await saveIfDirty();
         await navigateTo(shot.shotId, currentFrame, true);
@@ -462,7 +475,6 @@ function beginShotDrag(e, handle, row, shot) {
     shotId: shot.shotId,
     sceneId: shot.sceneId,
     startY: e.clientY,
-    suppressClick: false,
     targetIndex: null,
     moved: false,
   };
@@ -488,14 +500,12 @@ function beginShotDrag(e, handle, row, shot) {
     const shotId = dragState.shotId;
     clearShotDropIndicator();
     row.classList.remove('shot-row--dragging');
-    dragState.suppressClick = moved;
 
     if (moved && newIndex != null) {
       await commitShotReorder(sceneId, shotId, newIndex);
     }
 
-    // Defer clearing dragState so the upcoming click handler still sees it
-    setTimeout(() => { if (dragState && dragState.shotId === shotId) dragState = null; }, 0);
+    dragState = null;
   };
 
   handle.addEventListener('pointermove', onMove);
@@ -1180,8 +1190,7 @@ function setupToolbar() {
   pasteBtn?.addEventListener('click', async () => {
     if (!copiedFrameDataURL) return;
     try {
-      resetUndoStacks();
-      await loadImageURL(copiedFrameDataURL);
+      await pasteImageURL(copiedFrameDataURL);
       markDirty();
     } catch (err) {
       console.error('Paste failed:', err);

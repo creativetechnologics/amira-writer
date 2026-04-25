@@ -539,6 +539,42 @@ export function loadImageURL(url) {
 }
 
 /**
+ * Paste an image URL onto the canvas while preserving undo history.
+ * Unlike loadImageURL, this captures the pre-paste state as an undo entry
+ * so the user can ⌘Z back to what the canvas looked like before the paste.
+ * markDirty() is intentionally NOT called here — the caller (app.js) does it.
+ */
+export function pasteImageURL(url) {
+  // Capture pre-paste state BEFORE touching the canvas
+  const prePasteSnapshot = ctx.getImageData(0, 0, BACKING_W, BACKING_H);
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      clearToWhite();
+      ctx.drawImage(img, 0, 0, BACKING_W, BACKING_H);
+      // Push pre-paste snapshot so undo() can restore it; clear redo branch
+      undoStack.push(prePasteSnapshot);
+      if (undoStack.length > MAX_UNDO) undoStack.shift();
+      redoStack = [];
+      updateUndoRedoUI();
+      resolve();
+    };
+    img.onerror = () => {
+      // Mirror loadImageURL failure behaviour: clear to white
+      clearToWhite();
+      // Still record the pre-paste snapshot so undo works even on failure
+      undoStack.push(prePasteSnapshot);
+      if (undoStack.length > MAX_UNDO) undoStack.shift();
+      redoStack = [];
+      updateUndoRedoUI();
+      resolve();
+    };
+    img.src = url;
+  });
+}
+
+/**
  * Export canvas as PNG blob at backing resolution.
  */
 export function exportPNG() {
