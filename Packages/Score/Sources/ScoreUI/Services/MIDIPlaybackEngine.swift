@@ -3057,6 +3057,14 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         let usesHostedMIDIScheduler = shouldRenderMIDI
 
         if usesHostedMIDIScheduler {
+            // When exporting via live hosted-AU playback, the main-mix tap must be
+            // installed before any tick-0 MIDI is delivered. startHostedMIDIPlayback
+            // immediately sends the first look-ahead batch, so installing taps after it
+            // can miss the attack of the opening notes in captured WAVs.
+            if isRecordingMainMix {
+                installMeterTaps()
+            }
+
             guard !shouldRenderMIDI || startHostedMIDIPlayback(
                 noteGroups: noteGroups,
                 instrumentMappings: instrumentMappings,
@@ -3198,6 +3206,13 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
             // Ensure master volume is correct after engine restart cycles
             engine.mainMixerNode.outputVolume = masterOutputVolume
+
+            // Same export safety as the hosted scheduler path: for realtime WAV
+            // capture, the master tap has to be armed before AVAudioSequencer.start(),
+            // otherwise tick-0 notes can begin before the file writer sees audio.
+            if isRecordingMainMix {
+                installMeterTaps()
+            }
 
             let startBeats = Double(clampedStartTick) / Double(max(ticksPerQuarter, 1))
             newSequencer.currentPositionInBeats = startBeats
