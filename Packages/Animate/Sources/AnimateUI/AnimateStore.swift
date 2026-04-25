@@ -2828,7 +2828,7 @@ final class AnimateStore {
         update(&profile)
         profile.sync(with: scenes[sceneIndex], characters: characters)
         scenes[sceneIndex].automationProfile = profile
-        save()
+        scheduleDebouncedSave()
     }
 
     func setSelectedSceneExecutionMode(_ mode: SceneExecutionMode) {
@@ -2976,7 +2976,7 @@ final class AnimateStore {
 
         syncSelectedSceneTimeline()
         if reloadedCount > 0 {
-            save()
+            scheduleDebouncedSave()
             statusMessage = "Reloaded \(reloadedCount) scenes from disk"
             NSLog("[Animate] reloadScenesFromDisk: refreshed %d scenes", reloadedCount)
         }
@@ -5226,7 +5226,7 @@ final class AnimateStore {
             _ = await self.refreshPlacesFromScript()
             await MainActor.run {
                 self.markAgentUpdated(paths: [relativePath])
-                self.save()
+                self.scheduleDebouncedSave()
                 self.statusMessage = "Reloaded external song data"
             }
         }
@@ -5318,7 +5318,7 @@ final class AnimateStore {
                         self.syncCharactersFromOWP(loaded.characters)
                         self.recoverMissingPersistedCharactersIfNeeded()
                         if self.migrateAllCharacterStorageSlugsIfNeeded() {
-                            self.save()
+                            self.scheduleDebouncedSave()
                         }
                         self.refreshInspirationBatchJobs()
                     }
@@ -6546,7 +6546,7 @@ final class AnimateStore {
     func scheduleDebouncedSave(writePlaces: Bool = false) {
         debouncedSaveTask?.cancel()
         debouncedSaveTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
+            try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
             self?.save(writePlaces: writePlaces)
         }
@@ -7160,7 +7160,7 @@ final class AnimateStore {
         }
         characters[index].profileImagePath = normalizedCharacterAssetPath(imagePath)
         statusMessage = "Profile image updated"
-        save()
+        scheduleDebouncedSave()
     }
 
     func setCharacterProfileImageFromPicker(for characterID: UUID) {
@@ -7362,7 +7362,7 @@ final class AnimateStore {
                     }
                     characters[charIdx].headTurnaroundSlots[slotIdx].variants[variantIdx].sourceCropRect = CropRect.from(cropRect)
                     characters[charIdx].headTurnaroundSlots[slotIdx].variants[variantIdx].sourceSheetPath = sourceSheetPath
-                    save()
+                    scheduleDebouncedSave()
                     return
                 }
             }
@@ -7381,7 +7381,7 @@ final class AnimateStore {
                         }
                         characters[charIdx].costumeReferenceSets[costumeIdx].fullBodySlots[slotIdx].variants[variantIdx].sourceCropRect = CropRect.from(cropRect)
                         characters[charIdx].costumeReferenceSets[costumeIdx].fullBodySlots[slotIdx].variants[variantIdx].sourceSheetPath = sourceSheetPath
-                        save()
+                        scheduleDebouncedSave()
                         return
                     }
                 }
@@ -7452,7 +7452,7 @@ final class AnimateStore {
         updateCharacterSortOrders()
         selectedCharacterID = character.id
         statusMessage = "Added \(candidateName)"
-        save()
+        scheduleDebouncedSave()
     }
 
     func renameCharacter(_ name: String, for characterID: UUID) {
@@ -7471,7 +7471,7 @@ final class AnimateStore {
 
         characters[index] = updatedCharacter
         renameCharacterTracks(characterID: characterID, oldName: oldName, newName: trimmedName)
-        save()
+        scheduleDebouncedSave()
     }
 
     func updateCharacterBackstory(_ text: String, for characterID: UUID) {
@@ -7663,19 +7663,19 @@ final class AnimateStore {
     func updateCharacterDefaultWardrobeType(_ wardrobeType: CharacterWardrobeType, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[index].defaultWardrobeType = wardrobeType
-        save()
+        scheduleDebouncedSave()
     }
 
     func updateCharacterGenderType(_ genderType: CharacterGenderType, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[index].genderType = genderType
-        save()
+        scheduleDebouncedSave()
     }
 
     func updateCharacterAge(_ age: Int?, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[index].age = age
-        save()
+        scheduleDebouncedSave()
     }
 
     // MARK: - Inspiration Images
@@ -7700,7 +7700,7 @@ final class AnimateStore {
         var updatedCharacter = characters[index]
         updatedCharacter.inspirationImagePaths.append(normalizedPath)
         characters[index] = updatedCharacter
-        save()
+        scheduleDebouncedSave()
         registerImageAsset(
             path: resolvedCharacterAssetURL(for: normalizedPath)?.path ?? normalizedPath,
             linkKind: .characterInspiration,
@@ -7717,7 +7717,7 @@ final class AnimateStore {
             characters[charIndex].inspirationReferenceImagePath = nil
         }
         characters[charIndex].curatedInspirationImagePaths.removeAll(where: { $0 == removedPath })
-        save()
+        scheduleDebouncedSave()
     }
 
     func removeInspirationImages(at indices: IndexSet, for characterID: UUID) {
@@ -7728,7 +7728,7 @@ final class AnimateStore {
             characters[charIndex].inspirationReferenceImagePath = nil
         }
         characters[charIndex].curatedInspirationImagePaths.removeAll(where: { removedPaths.contains($0) })
-        save()
+        scheduleDebouncedSave()
     }
 
     private func mutateImageLibrarySidecar(
@@ -7834,7 +7834,7 @@ final class AnimateStore {
         mutateImageLibrarySidecar(for: path) { metadata in
             metadata.rating = rating
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func updateInspirationNotes(_ notes: String, path: String, for characterID: UUID) {
@@ -7869,7 +7869,7 @@ final class AnimateStore {
         mutateImageLibrarySidecar(for: path) { metadata in
             metadata.isRejected = isRejected
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func isInspirationRejected(path: String, for characterID: UUID) -> Bool {
@@ -7883,7 +7883,7 @@ final class AnimateStore {
         guard let idx = characters.firstIndex(where: { $0.id == characterID }) else { return }
         if characters[idx].reviewedInspirationImagePaths.contains(path) { return }
         characters[idx].reviewedInspirationImagePaths.insert(path)
-        save()
+        scheduleDebouncedSave()
     }
 
     /// Mark EVERY inspiration image on a character as reviewed at once.
@@ -7893,7 +7893,7 @@ final class AnimateStore {
         let all = Set(characters[idx].inspirationImagePaths)
         if characters[idx].reviewedInspirationImagePaths == all { return }
         characters[idx].reviewedInspirationImagePaths = all
-        save()
+        scheduleDebouncedSave()
     }
 
     /// Remove an inspiration image by path and move the underlying file to the
@@ -7935,7 +7935,7 @@ final class AnimateStore {
         } else {
             characters[charIndex].curatedInspirationImagePaths.append(path)
         }
-        save()
+        scheduleDebouncedSave()
     }
 
 
@@ -8062,7 +8062,7 @@ final class AnimateStore {
         var updatedCharacter = characters[charIndex]
         updatedCharacter.inspirationImagePaths.append(storedPath)
         characters[charIndex] = updatedCharacter
-        save()
+        scheduleDebouncedSave()
         registerImageAsset(
             path: storedURL.path,
             linkKind: .characterInspiration,
@@ -8137,7 +8137,7 @@ final class AnimateStore {
                 canonStatus: .candidate
             )
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
         registerImageAsset(
             path: storedURL.path,
             linkKind: .placeGenerated,
@@ -8200,7 +8200,7 @@ final class AnimateStore {
         record.keywords = kind.keywords
         placesWorkflowLibrary.generatedImageRecords.append(record)
 
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
         return storedPath
     }
 
@@ -8269,13 +8269,13 @@ final class AnimateStore {
         updatedJob.metadataPath = normalizedMetadataPath
         updatedJob.outputRootPath = normalizedCharacterAssetPath(job.outputRootPath) ?? job.outputRootPath
         characters[charIndex].inspirationBatchJobs.append(updatedJob)
-        save()
+        scheduleDebouncedSave()
     }
 
     func removeInspirationBatchJob(_ jobID: UUID, for characterID: UUID) {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[charIndex].inspirationBatchJobs.removeAll(where: { $0.id == jobID })
-        save()
+        scheduleDebouncedSave()
     }
 
     func dismissInspirationBatchJob(_ job: CharacterInspirationBatchJob, for characterID: UUID) {
@@ -8285,7 +8285,7 @@ final class AnimateStore {
         dismissedKeys.insert(key)
         persistDismissedInspirationBatchJobKeys(dismissedKeys, for: characters[charIndex])
         characters[charIndex].inspirationBatchJobs.removeAll { inspirationBatchJobKey($0) == key }
-        save()
+        scheduleDebouncedSave()
     }
 
     /// Cancel a Gemini batch on Google's side. Shells out to the Python
@@ -8317,7 +8317,7 @@ final class AnimateStore {
         if let jobIndex = characters[charIndex].inspirationBatchJobs.firstIndex(where: { $0.id == job.id }) {
             characters[charIndex].inspirationBatchJobs[jobIndex].state = "JOB_STATE_CANCELLED"
             characters[charIndex].inspirationBatchJobs[jobIndex].lastCheckedAt = Date()
-            save()
+            scheduleDebouncedSave()
         }
 
         let characterID = characterID
@@ -8347,7 +8347,7 @@ final class AnimateStore {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }),
               let jobIndex = characters[charIndex].inspirationBatchJobs.firstIndex(where: { $0.id == jobID }) else { return }
         characters[charIndex].inspirationBatchJobs[jobIndex].lastErrorMessage = "Cancel failed: \(message)"
-        save()
+        scheduleDebouncedSave()
     }
 
     func refreshInspirationBatchJobs() {
@@ -8444,7 +8444,7 @@ final class AnimateStore {
         }
 
         if didChange {
-            save()
+            scheduleDebouncedSave()
         }
     }
 
@@ -8478,7 +8478,7 @@ final class AnimateStore {
     func setInspirationReferenceImage(_ imagePath: String?, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[index].inspirationReferenceImagePath = normalizedCharacterAssetPath(imagePath)
-        save()
+        scheduleDebouncedSave()
     }
 
     func setInspirationReferenceImageFromPicker(for characterID: UUID) {
@@ -8547,7 +8547,7 @@ final class AnimateStore {
             return
         }
         characters[index].referenceImagePaths.append(normalizedPath)
-        save()
+        scheduleDebouncedSave()
         registerImageAsset(
             path: resolvedCharacterAssetURL(for: normalizedPath)?.path ?? normalizedPath,
             linkKind: .characterReference,
@@ -8559,7 +8559,7 @@ final class AnimateStore {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
         guard characters[charIndex].referenceImagePaths.indices.contains(indexToRemove) else { return }
         characters[charIndex].referenceImagePaths.remove(at: indexToRemove)
-        save()
+        scheduleDebouncedSave()
     }
 
     func importReferenceImages(for characterID: UUID) {
@@ -8618,7 +8618,7 @@ final class AnimateStore {
     func moveCharacter(from source: IndexSet, to destination: Int) {
         characters.move(fromOffsets: source, toOffset: destination)
         updateCharacterSortOrders()
-        save()
+        scheduleDebouncedSave()
     }
 
     func moveCharacterToEnd(characterID: UUID) {
@@ -8626,7 +8626,7 @@ final class AnimateStore {
         let character = characters.remove(at: index)
         characters.append(character)
         updateCharacterSortOrders()
-        save()
+        scheduleDebouncedSave()
     }
 
     // MARK: - Animated Images
@@ -8649,20 +8649,20 @@ final class AnimateStore {
             return
         }
         characters[index].animatedImagePaths.append(normalizedPath)
-        save()
+        scheduleDebouncedSave()
     }
 
     func removeAnimatedImage(at indexToRemove: Int, for characterID: UUID) {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
         guard characters[charIndex].animatedImagePaths.indices.contains(indexToRemove) else { return }
         characters[charIndex].animatedImagePaths.remove(at: indexToRemove)
-        save()
+        scheduleDebouncedSave()
     }
 
     func removeAnimatedImages(at indices: IndexSet, for characterID: UUID) {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[charIndex].animatedImagePaths.remove(atOffsets: indices)
-        save()
+        scheduleDebouncedSave()
     }
 
     func importAnimatedImages(for characterID: UUID) {
@@ -8800,14 +8800,14 @@ final class AnimateStore {
         characters[index].costumeReferenceSets = CharacterReferenceWorkflowCatalog.defaultCostumeSets(
             for: characters[index].name
         )
-        save()
+        scheduleDebouncedSave()
     }
 
     /// Explicitly save any in-memory prompt/text edits to disk.
     /// Call this on generate, navigate away, or other explicit user actions — NOT on keystroke.
     func saveCharacterPromptEdits() {
         guard hasUnsavedCharacterPromptEdits else { return }
-        save()
+        scheduleDebouncedSave()
     }
 
     func updateMasterReferenceSheetPrompt(_ prompt: String, for characterID: UUID) {
@@ -8835,7 +8835,7 @@ final class AnimateStore {
         } else {
             characters[index].masterReferenceSourceImagePaths.removeAll { $0 == normalizedPath }
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func setMasterReferenceSourceImagePaths(_ paths: [String], for characterID: UUID) {
@@ -8869,13 +8869,13 @@ final class AnimateStore {
         if let prompt = metadata.prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             characters[charIndex].masterReferenceSheetPrompt = prompt
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func setApprovedMasterReferenceSheetVariant(_ variantID: UUID?, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[index].approvedMasterReferenceSheetVariantID = variantID
-        save()
+        scheduleDebouncedSave()
     }
 
     func removeMasterReferenceSheetVariant(_ variantID: UUID, for characterID: UUID) {
@@ -8884,7 +8884,7 @@ final class AnimateStore {
         if characters[index].approvedMasterReferenceSheetVariantID == variantID {
             characters[index].approvedMasterReferenceSheetVariantID = characters[index].masterReferenceSheetVariants.last?.id
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func storeMasterReferenceSheetVariant(
@@ -8908,7 +8908,7 @@ final class AnimateStore {
         )
         characters[charIndex].masterReferenceSheetVariants.append(variant)
         characters[charIndex].approvedMasterReferenceSheetVariantID = variant.id
-        save()
+        scheduleDebouncedSave()
     }
 
     func updateHeadTurnaroundSheetPrompt(_ prompt: String, for characterID: UUID) {
@@ -8922,7 +8922,7 @@ final class AnimateStore {
     func setApprovedHeadTurnaroundSheetVariant(_ variantID: UUID?, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[index].approvedHeadTurnaroundSheetVariantID = variantID
-        save()
+        scheduleDebouncedSave()
         if variantID != nil {
             do {
                 try cropApprovedHeadTurnaroundSheet(for: characterID)
@@ -8938,7 +8938,7 @@ final class AnimateStore {
         if characters[index].approvedHeadTurnaroundSheetVariantID == variantID {
             characters[index].approvedHeadTurnaroundSheetVariantID = characters[index].headTurnaroundSheetVariants.last?.id
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func storeHeadTurnaroundSheetVariant(
@@ -8962,7 +8962,7 @@ final class AnimateStore {
         )
         characters[charIndex].headTurnaroundSheetVariants.append(variant)
         characters[charIndex].approvedHeadTurnaroundSheetVariantID = variant.id
-        save()
+        scheduleDebouncedSave()
         try cropApprovedHeadTurnaroundSheet(for: characterID)
     }
 
@@ -8983,7 +8983,7 @@ final class AnimateStore {
         if let prompt = metadata.prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             characters[charIndex].headTurnaroundSheetPrompt = prompt
         }
-        save()
+        scheduleDebouncedSave()
         try cropApprovedHeadTurnaroundSheet(for: characterID)
     }
 
@@ -8993,7 +8993,7 @@ final class AnimateStore {
             return
         }
         characters[charIndex].headTurnaroundSlots[slotIndex].prompt = prompt
-        save()
+        scheduleDebouncedSave()
     }
 
     func setApprovedHeadTurnaroundVariant(_ variantID: UUID?, slotID: UUID, for characterID: UUID) {
@@ -9002,7 +9002,7 @@ final class AnimateStore {
             return
         }
         characters[charIndex].headTurnaroundSlots[slotIndex].approvedVariantID = variantID
-        save()
+        scheduleDebouncedSave()
     }
 
     func removeHeadTurnaroundVariant(_ variantID: UUID, slotID: UUID, for characterID: UUID) {
@@ -9015,7 +9015,7 @@ final class AnimateStore {
             characters[charIndex].headTurnaroundSlots[slotIndex].approvedVariantID =
                 characters[charIndex].headTurnaroundSlots[slotIndex].variants.last?.id
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func storeHeadTurnaroundVariant(
@@ -9044,7 +9044,7 @@ final class AnimateStore {
         )
         characters[charIndex].headTurnaroundSlots[slotIndex].variants.append(variant)
         characters[charIndex].headTurnaroundSlots[slotIndex].approvedVariantID = variant.id
-        save()
+        scheduleDebouncedSave()
     }
 
     func importHeadTurnaroundVariant(
@@ -9073,7 +9073,7 @@ final class AnimateStore {
         if let prompt = metadata.prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             characters[charIndex].headTurnaroundSlots[slotIndex].prompt = prompt
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     @discardableResult
@@ -9160,7 +9160,7 @@ final class AnimateStore {
             notes: "Describe the approved costume, silhouette, palette, and accessories for this wardrobe."
         )
         characters[charIndex].costumeReferenceSets.append(set)
-        save()
+        scheduleDebouncedSave()
     }
 
     func updateCostumeReferenceSetName(_ name: String, costumeID: UUID, for characterID: UUID) {
@@ -9278,7 +9278,7 @@ final class AnimateStore {
             return
         }
         characters[charIndex].costumeReferenceSets[costumeIndex].approvedSheetVariantID = variantID
-        save()
+        scheduleDebouncedSave()
         if variantID != nil {
             do {
                 try cropApprovedCostumeSheet(for: characterID, costumeID: costumeID)
@@ -9298,7 +9298,7 @@ final class AnimateStore {
             characters[charIndex].costumeReferenceSets[costumeIndex].approvedSheetVariantID =
                 characters[charIndex].costumeReferenceSets[costumeIndex].sheetVariants.last?.id
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func storeCostumeSheetVariant(
@@ -9327,7 +9327,7 @@ final class AnimateStore {
         )
         characters[charIndex].costumeReferenceSets[costumeIndex].sheetVariants.append(variant)
         characters[charIndex].costumeReferenceSets[costumeIndex].approvedSheetVariantID = variant.id
-        save()
+        scheduleDebouncedSave()
         try cropApprovedCostumeSheet(for: characterID, costumeID: costumeID)
     }
 
@@ -9356,14 +9356,14 @@ final class AnimateStore {
         if let prompt = metadata.prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             characters[charIndex].costumeReferenceSets[costumeIndex].sheetPrompt = prompt
         }
-        save()
+        scheduleDebouncedSave()
         try cropApprovedCostumeSheet(for: characterID, costumeID: costumeID)
     }
 
     func removeCostumeReferenceSet(_ costumeID: UUID, for characterID: UUID) {
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[charIndex].costumeReferenceSets.removeAll { $0.id == costumeID }
-        save()
+        scheduleDebouncedSave()
     }
 
     func updateCostumePosePrompt(_ prompt: String, costumeID: UUID, slotID: UUID, for characterID: UUID) {
@@ -9373,7 +9373,7 @@ final class AnimateStore {
             return
         }
         characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].prompt = prompt
-        save()
+        scheduleDebouncedSave()
     }
 
     func setApprovedCostumePoseVariant(
@@ -9388,7 +9388,7 @@ final class AnimateStore {
             return
         }
         characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].approvedVariantID = variantID
-        save()
+        scheduleDebouncedSave()
     }
 
     func removeCostumePoseVariant(
@@ -9407,7 +9407,7 @@ final class AnimateStore {
             characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].approvedVariantID =
                 characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].variants.last?.id
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func storeCostumePoseVariant(
@@ -9439,7 +9439,7 @@ final class AnimateStore {
         )
         characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].variants.append(variant)
         characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].approvedVariantID = variant.id
-        save()
+        scheduleDebouncedSave()
     }
 
     func importCostumePoseVariant(
@@ -9471,7 +9471,7 @@ final class AnimateStore {
         if let prompt = metadata.prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].prompt = prompt
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func updateAccessoryPrompt(_ prompt: String, costumeID: UUID, accessoryID: UUID, for characterID: UUID) {
@@ -9481,7 +9481,7 @@ final class AnimateStore {
             return
         }
         characters[charIndex].costumeReferenceSets[costumeIndex].accessorySlots[accessoryIndex].prompt = prompt
-        save()
+        scheduleDebouncedSave()
     }
 
     func addAccessorySlot(named rawName: String, costumeID: UUID, for characterID: UUID) {
@@ -9533,7 +9533,7 @@ final class AnimateStore {
             return
         }
         characters[charIndex].costumeReferenceSets[costumeIndex].accessorySlots[accessoryIndex].approvedVariantID = variantID
-        save()
+        scheduleDebouncedSave()
     }
 
     func removeAccessoryVariant(
@@ -9552,7 +9552,7 @@ final class AnimateStore {
             characters[charIndex].costumeReferenceSets[costumeIndex].accessorySlots[accessoryIndex].approvedVariantID =
                 characters[charIndex].costumeReferenceSets[costumeIndex].accessorySlots[accessoryIndex].variants.last?.id
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func storeAccessoryVariant(
@@ -9584,7 +9584,7 @@ final class AnimateStore {
         )
         characters[charIndex].costumeReferenceSets[costumeIndex].accessorySlots[accessoryIndex].variants.append(variant)
         characters[charIndex].costumeReferenceSets[costumeIndex].accessorySlots[accessoryIndex].approvedVariantID = variant.id
-        save()
+        scheduleDebouncedSave()
     }
 
     func importAccessoryVariant(
@@ -9616,7 +9616,7 @@ final class AnimateStore {
         if let prompt = metadata.prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             characters[charIndex].costumeReferenceSets[costumeIndex].accessorySlots[accessoryIndex].prompt = prompt
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func masterReferenceSheetReferencePaths(for characterID: UUID, limit: Int = 8) -> [String] {
@@ -9939,7 +9939,7 @@ final class AnimateStore {
             characters[charIndex].headTurnaroundSlots[slotIndex].approvedVariantID = variant.id
         }
 
-        save()
+        scheduleDebouncedSave()
     }
 
     func cropApprovedCostumeSheet(for characterID: UUID, costumeID: UUID) throws {
@@ -9984,7 +9984,7 @@ final class AnimateStore {
             characters[charIndex].costumeReferenceSets[costumeIndex].fullBodySlots[slotIndex].approvedVariantID = variant.id
         }
 
-        save()
+        scheduleDebouncedSave()
     }
 
     // MARK: - Background Removal (Re-mask transparent PNGs)
@@ -10342,7 +10342,7 @@ final class AnimateStore {
         characters[index].lookDevelopmentSlots = CharacterLookDevelopmentCatalog.defaultSlots(
             for: characters[index].name
         )
-        save()
+        scheduleDebouncedSave()
     }
 
     func resetLookDevelopmentSlots(for characterID: UUID) {
@@ -10350,7 +10350,7 @@ final class AnimateStore {
         characters[index].lookDevelopmentSlots = CharacterLookDevelopmentCatalog.defaultSlots(
             for: characters[index].name
         )
-        save()
+        scheduleDebouncedSave()
     }
 
     func setLookDevelopmentApprovedVariant(
@@ -10364,7 +10364,7 @@ final class AnimateStore {
         }
 
         characters[charIndex].lookDevelopmentSlots[slotIndex].approvedVariantID = variantID
-        save()
+        scheduleDebouncedSave()
     }
 
     func setLookDevelopmentReferenceInclusion(
@@ -10378,7 +10378,7 @@ final class AnimateStore {
         }
 
         characters[charIndex].lookDevelopmentSlots[slotIndex].includeApprovedVariantInReferencePack = includeApprovedVariant
-        save()
+        scheduleDebouncedSave()
     }
 
     func removeLookDevelopmentVariant(
@@ -10396,7 +10396,7 @@ final class AnimateStore {
             characters[charIndex].lookDevelopmentSlots[slotIndex].approvedVariantID =
                 characters[charIndex].lookDevelopmentSlots[slotIndex].variants.last?.id
         }
-        save()
+        scheduleDebouncedSave()
     }
 
     func storeLookDevelopmentVariant(
@@ -10436,7 +10436,7 @@ final class AnimateStore {
 
         characters[charIndex].lookDevelopmentSlots[slotIndex].variants.append(variant)
         characters[charIndex].lookDevelopmentSlots[slotIndex].approvedVariantID = variant.id
-        save()
+        scheduleDebouncedSave()
     }
 
     func curatedLookDevelopmentReferencePaths(
@@ -10630,7 +10630,7 @@ final class AnimateStore {
         }
 
         if didMutate && persistChanges {
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         }
 
         return didMutate
@@ -10650,7 +10650,7 @@ final class AnimateStore {
             )
             backgrounds.append(place)
             selectedBackgroundID = place.id
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         } catch {
             statusMessage = "Failed to import place image: \(error.localizedDescription)"
         }
@@ -10680,189 +10680,189 @@ final class AnimateStore {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         backgrounds[index].name = trimmed
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceNotes(_ notes: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].notes != notes else { return }
         backgrounds[index].notes = notes
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceCoreIdentity(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].coreIdentity != value else { return }
         backgrounds[index].coreIdentity = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceGeographicPlacement(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].geographicPlacement != value else { return }
         backgrounds[index].geographicPlacement = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlacePhysicalLayoutAndTopography(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].physicalLayoutAndTopography != value else { return }
         backgrounds[index].physicalLayoutAndTopography = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceWartimeAndHistoricalContext(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].wartimeAndHistoricalContext != value else { return }
         backgrounds[index].wartimeAndHistoricalContext = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceWorkflowPromptNotes(_ notes: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].workflowPromptNotes != notes else { return }
         backgrounds[index].workflowPromptNotes = notes
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceSideOfRiver(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].sideOfRiver != value else { return }
         backgrounds[index].sideOfRiver = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceTimeOfDay(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].timeOfDay != value else { return }
         backgrounds[index].timeOfDay = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceDayLabel(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].dayLabel != value else { return }
         backgrounds[index].dayLabel = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlacePositionInValley(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].positionInValley != value else { return }
         backgrounds[index].positionInValley = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceGeographicPosition(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].geographicPosition != value else { return }
         backgrounds[index].geographicPosition = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlacePhysicalDescription(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].physicalDescription != value else { return }
         backgrounds[index].physicalDescription = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceSensoryWorld(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].sensoryWorld != value else { return }
         backgrounds[index].sensoryWorld = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceCulturalHistoricalContext(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].culturalHistoricalContext != value else { return }
         backgrounds[index].culturalHistoricalContext = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceInhabitantsActivity(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].inhabitantsActivity != value else { return }
         backgrounds[index].inhabitantsActivity = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceKeyPropsSetDressing(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].keyPropsSetDressing != value else { return }
         backgrounds[index].keyPropsSetDressing = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceDramaticFunction(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].dramaticFunction != value else { return }
         backgrounds[index].dramaticFunction = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceVisualContinuityAnchors(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].visualContinuityAnchors != value else { return }
         backgrounds[index].visualContinuityAnchors = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceSceneStateVariations(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].sceneStateVariations != value else { return }
         backgrounds[index].sceneStateVariations = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceHumanActivityAndSocialUse(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].humanActivityAndSocialUse != value else { return }
         backgrounds[index].humanActivityAndSocialUse = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceNearbyConnections(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].nearbyConnections != value else { return }
         backgrounds[index].nearbyConnections = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceVisualPaletteLighting(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].visualPaletteLighting != value else { return }
         backgrounds[index].visualPaletteLighting = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceCameraFramingNotes(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].cameraFramingNotes != value else { return }
         backgrounds[index].cameraFramingNotes = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceImageGenerationGuardrails(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].imageGenerationGuardrails != value else { return }
         backgrounds[index].imageGenerationGuardrails = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceFormerTimeSpecificRecordsFoldedIntoLocation(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].formerTimeSpecificRecordsFoldedIntoLocation != value else { return }
         backgrounds[index].formerTimeSpecificRecordsFoldedIntoLocation = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceAdditionalGuidance(_ value: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               backgrounds[index].additionalGuidance != value else { return }
         backgrounds[index].additionalGuidance = value
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceImageGenerationPrompt(_ value: String, promptIndex: Int, placeID: UUID) {
@@ -10873,7 +10873,7 @@ final class AnimateStore {
         guard prompts[promptIndex] != value else { return }
         prompts[promptIndex] = value
         backgrounds[index].imageGenerationPrompts = prompts
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func addImagesToPlaceFromPicker(placeID: UUID) {
@@ -10912,7 +10912,7 @@ final class AnimateStore {
             let imagePath = normalizedCharacterAssetPath(storedURL.path) ?? storedURL.path
             appendPlaceImagePath(imagePath, to: &backgrounds[index], workflow: workflow)
             syncGeneratedBackgroundLibrary()
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
             registerImageAsset(
                 path: storedURL.path,
                 linkKind: .placeReference,
@@ -10975,7 +10975,7 @@ final class AnimateStore {
         }
 
         guard importedCount > 0 else { return false }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
         statusMessage = importedCount == 1
             ? "Imported 1 image into All Images"
             : "Imported \(importedCount) images into All Images"
@@ -11287,7 +11287,7 @@ final class AnimateStore {
             placeID: placeID
         )
         placesWorkflowLibrary.worldGraph.routes.append(route)
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
         return route.id
     }
 
@@ -11296,19 +11296,19 @@ final class AnimateStore {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         placesWorkflowLibrary.worldGraph.routes[index].name = trimmed
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateWorldRouteNotes(_ notes: String, routeID: UUID) {
         guard let index = placesWorkflowLibrary.worldGraph.routes.firstIndex(where: { $0.id == routeID }) else { return }
         placesWorkflowLibrary.worldGraph.routes[index].notes = notes
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateWorldRouteColor(_ colorHex: String, routeID: UUID) {
         guard let index = placesWorkflowLibrary.worldGraph.routes.firstIndex(where: { $0.id == routeID }) else { return }
         placesWorkflowLibrary.worldGraph.routes[index].colorHex = colorHex
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func deleteWorldRoute(_ routeID: UUID) {
@@ -11346,7 +11346,7 @@ final class AnimateStore {
             mapPoint: mapPoint
         )
         placesWorkflowLibrary.worldGraph.nodes.append(node)
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
         return node.id
     }
 
@@ -11372,31 +11372,31 @@ final class AnimateStore {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         placesWorkflowLibrary.worldGraph.nodes[index].title = trimmed
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateWorldNodeNotes(_ notes: String, nodeID: UUID) {
         guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
         placesWorkflowLibrary.worldGraph.nodes[index].notes = notes
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateWorldNodeRole(_ role: PlaceWorldNodeRole, nodeID: UUID) {
         guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
         placesWorkflowLibrary.worldGraph.nodes[index].role = role
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateWorldNodeMapPoint(_ mapPoint: WorldMapPoint, nodeID: UUID) {
         guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
         placesWorkflowLibrary.worldGraph.nodes[index].mapPoint = mapPoint
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateWorldNodeCameraPose(_ pose: WorldCameraPose, nodeID: UUID) {
         guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
         placesWorkflowLibrary.worldGraph.nodes[index].cameraPose = pose
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateWorldNodeLandmarkExpectations(
@@ -11411,13 +11411,13 @@ final class AnimateStore {
         placesWorkflowLibrary.worldGraph.nodes[index].forbiddenLandmarkTitles = forbiddenTitles
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateWorldNodePlace(_ placeID: UUID?, nodeID: UUID) {
         guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
         placesWorkflowLibrary.worldGraph.nodes[index].placeID = placeID
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     @discardableResult
@@ -11436,7 +11436,7 @@ final class AnimateStore {
             let nodeID = placesWorkflowLibrary.worldGraph.nodes[index].id
             adoptGeneratedBackgroundRecords(for: placeID, nodeID: nodeID)
             if shouldSave {
-                save(writePlaces: true)
+                scheduleDebouncedSave(writePlaces: true)
             }
             return nodeID
         }
@@ -11452,7 +11452,7 @@ final class AnimateStore {
         placesWorkflowLibrary.worldGraph.nodes.append(node)
         adoptGeneratedBackgroundRecords(for: placeID, nodeID: node.id)
         if shouldSave {
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         }
         return node.id
     }
@@ -11460,7 +11460,7 @@ final class AnimateStore {
     func updateWorldNodeSequenceIndex(_ sequenceIndex: Int, nodeID: UUID) {
         guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
         placesWorkflowLibrary.worldGraph.nodes[index].sequenceIndex = max(0, sequenceIndex)
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     private func adoptGeneratedBackgroundRecords(for placeID: UUID, nodeID: UUID) {
@@ -11488,7 +11488,7 @@ final class AnimateStore {
             }
         }
         if shouldSave {
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         }
     }
 
@@ -11500,7 +11500,7 @@ final class AnimateStore {
             let others = uniqueIDs.filter { $0 != nodeID }
             placesWorkflowLibrary.worldGraph.nodes[index].linkedNodeIDs = Array(Set(placesWorkflowLibrary.worldGraph.nodes[index].linkedNodeIDs + others))
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func attachGeneratedBackgroundRecord(
@@ -11536,7 +11536,7 @@ final class AnimateStore {
         }
         placesWorkflowLibrary.generatedImageRecords[recordIndex].canonStatus = canonStatus
         placesWorkflowLibrary.generatedImageRecords[recordIndex].updatedAt = Date()
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateGeneratedBackgroundPlacement(
@@ -11576,7 +11576,7 @@ final class AnimateStore {
         placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPlacementStatus = status
         placesWorkflowLibrary.generatedImageRecords[recordIndex].mapPlacementConfirmedAt = status == .confirmed ? Date() : nil
         placesWorkflowLibrary.generatedImageRecords[recordIndex].updatedAt = Date()
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func confirmGeneratedBackgroundPlacement(
@@ -11607,7 +11607,7 @@ final class AnimateStore {
         guard let recordIndex = placesWorkflowLibrary.generatedImageRecords.firstIndex(where: { $0.id == recordID }) else { return }
         placesWorkflowLibrary.generatedImageRecords[recordIndex].orientationState = orientationState
         placesWorkflowLibrary.generatedImageRecords[recordIndex].updatedAt = Date()
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func linkGeneratedBackgroundRecord(
@@ -11621,7 +11621,7 @@ final class AnimateStore {
             placesWorkflowLibrary.generatedImageRecords[recordIndex].linkedPlaceID = placeID
         }
         placesWorkflowLibrary.generatedImageRecords[recordIndex].updatedAt = Date()
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func generatedBackgroundPlacementCoverage(
@@ -11657,7 +11657,7 @@ final class AnimateStore {
         for index in placesWorkflowLibrary.generatedImageRecords.indices where placesWorkflowLibrary.generatedImageRecords[index].worldNodeID == nodeID && placesWorkflowLibrary.generatedImageRecords[index].workflow == workflow {
             placesWorkflowLibrary.generatedImageRecords[index].canonStatus = placesWorkflowLibrary.generatedImageRecords[index].activePath == normalizedPath ? .canon : .candidate
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateContinuityReviewStatus(
@@ -11666,7 +11666,7 @@ final class AnimateStore {
     ) {
         guard let reviewIndex = placesWorkflowLibrary.continuityReviews.firstIndex(where: { $0.id == reviewID }) else { return }
         placesWorkflowLibrary.continuityReviews[reviewIndex].status = status
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func registerWorldGenerationBatch(_ batch: PlaceWorldGenerationBatch) {
@@ -11679,7 +11679,7 @@ final class AnimateStore {
         } else {
             placesWorkflowLibrary.worldGenerationBatches.append(normalized)
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func refreshPlaceWorldGenerationBatches() {
@@ -11838,7 +11838,7 @@ final class AnimateStore {
 
         let linkageChanged = reconcilePlaceWorldBatchGeneratedImageLinkage()
         if didChange || linkageChanged {
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         }
     }
 
@@ -11929,7 +11929,7 @@ final class AnimateStore {
                 }
             }
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func generatedBackgroundRecord(for path: String) -> GeneratedBackgroundLibraryRecord? {
@@ -12129,7 +12129,7 @@ final class AnimateStore {
                !records.contains(where: { $0.id == selectedGeneratedBackgroundRecordID }) {
                 self.selectedGeneratedBackgroundRecordID = nil
             }
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         }
     }
 
@@ -12144,7 +12144,7 @@ final class AnimateStore {
         }
         persistGeneratedBackgroundReviewStateNow()
         appendGeneratedBackgroundReviewEvent(action: "set_rating", record: placesWorkflowLibrary.generatedImageRecords[index])
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func toggleGeneratedBackgroundRejected(_ recordID: UUID) {
@@ -12159,7 +12159,7 @@ final class AnimateStore {
         }
         persistGeneratedBackgroundReviewStateNow()
         appendGeneratedBackgroundReviewEvent(action: "toggle_rejected", record: placesWorkflowLibrary.generatedImageRecords[index])
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updateGeneratedBackgroundRejectionNotes(_ notes: String, for recordID: UUID) {
@@ -12212,12 +12212,12 @@ final class AnimateStore {
                 )
             )
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func removeGeneratedBackgroundEditQueueItem(_ itemID: UUID) {
         placesWorkflowLibrary.pendingEditQueue.removeAll { $0.id == itemID }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func pendingGeneratedBackgroundEditQueueItem(for recordID: UUID) -> PlaceImageEditQueueItem? {
@@ -12234,13 +12234,13 @@ final class AnimateStore {
                 placesWorkflowLibrary.pendingEditQueue[queueIndex].lastBatchJobID = job.id
                 placesWorkflowLibrary.pendingEditQueue[queueIndex].lastErrorMessage = nil
             }
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         }
     }
 
     func dismissPlaceEditBatchJob(_ jobID: UUID) {
         placesWorkflowLibrary.editBatchJobs.removeAll { $0.id == jobID }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func refreshPlaceEditBatchJobs() {
@@ -12329,7 +12329,7 @@ final class AnimateStore {
 
         if didChange {
             placesWorkflowLibrary.editBatchJobs = jobs
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         }
     }
 
@@ -12548,7 +12548,7 @@ final class AnimateStore {
         }
 
         selectedGeneratedBackgroundRecordID = recordID
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     private func scannedGeneratedBackgroundPaths() -> [String] {
@@ -13386,7 +13386,7 @@ final class AnimateStore {
 
         appendPlaceImagePath(normalizedPath, to: &backgrounds[index], workflow: workflow)
         syncGeneratedBackgroundLibrary()
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
         registerImageAsset(
             path: resolvedCharacterAssetURL(for: normalizedPath)?.path ?? normalizedPath,
             linkKind: .placeReference,
@@ -13435,7 +13435,7 @@ final class AnimateStore {
         case .animated:
             backgrounds[index].animatedApprovedImagePath = normalizedPath
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func removePlaceImage(at imageIndex: Int, placeID: UUID) {
@@ -13465,7 +13465,7 @@ final class AnimateStore {
                 backgrounds[index].animatedApprovedImagePath = backgrounds[index].animatedImagePaths.first
             }
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     // MARK: - Gemini Activity Queue
@@ -13804,7 +13804,7 @@ final class AnimateStore {
         mutateImageLibrarySidecar(for: path) { metadata in
             metadata.rating = clamped == 0 ? nil : clamped
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     /// Remove a place image by path AND move the underlying file to macOS
@@ -13833,7 +13833,7 @@ final class AnimateStore {
                 backgrounds[index].animatedApprovedImagePath = backgrounds[index].animatedImagePaths.first
             }
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
 
         if let url = absoluteURL, FileManager.default.fileExists(atPath: url.path) {
             do {
@@ -13994,7 +13994,7 @@ final class AnimateStore {
                 backgrounds[index].filename = URL(fileURLWithPath: imagePath).lastPathComponent
                 backgrounds[index].sourceURL = resolvedCharacterAssetURL(for: imagePath)
             }
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         } catch {
             statusMessage = "Failed to add angle image: \(error.localizedDescription)"
         }
@@ -14027,7 +14027,7 @@ final class AnimateStore {
         backgrounds[placeIndex].angleImages[angleIndex].angle = angle
         backgrounds[placeIndex].angleImages[angleIndex].timeOfDay = timeOfDay
         backgrounds[placeIndex].angleImages[angleIndex].notes = notes
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func removeAngleImage(_ angleImageID: UUID, placeID: UUID) {
@@ -14035,19 +14035,19 @@ final class AnimateStore {
               let angleIndex = backgrounds[placeIndex].angleImages.firstIndex(where: { $0.id == angleImageID }) else { return }
 
         backgrounds[placeIndex].angleImages.remove(at: angleIndex)
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceCategory(_ category: String, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
         backgrounds[index].locationCategory = category
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func updatePlaceSceneUsage(_ usage: [String], placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
         backgrounds[index].sceneUsage = usage
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func addPlaceReferenceImagesFromPicker(placeID: UUID, category: PlaceReferenceImage.Category = .misc) {
@@ -14079,7 +14079,7 @@ final class AnimateStore {
             if !backgrounds[index].referenceImages.contains(where: { $0.imagePath == imagePath }) {
                 backgrounds[index].referenceImages.append(item)
             }
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         } catch {
             statusMessage = "Failed to add place reference: \(error.localizedDescription)"
         }
@@ -14088,7 +14088,7 @@ final class AnimateStore {
     func removePlaceReferenceImage(_ referenceID: UUID, placeID: UUID) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
         backgrounds[index].referenceImages.removeAll { $0.id == referenceID }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     func setMasterPlaceMapFromPicker() {
@@ -14112,7 +14112,7 @@ final class AnimateStore {
             let storedURL = try assetManager.importBackgroundImage(from: url, animateURL: animateDir)
             placesWorkflowLibrary.masterMapImagePath = normalizedCharacterAssetPath(storedURL.path) ?? storedURL.path
             pendingMasterPlaceMapCandidatePath = nil
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         } catch {
             statusMessage = "Failed to set master map: \(error.localizedDescription)"
         }
@@ -14120,7 +14120,7 @@ final class AnimateStore {
 
     func clearMasterPlaceMap() {
         placesWorkflowLibrary.masterMapImagePath = nil
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     @MainActor
@@ -14182,7 +14182,7 @@ final class AnimateStore {
         guard !normalized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         placesWorkflowLibrary.masterMapImagePath = normalized
         pendingMasterPlaceMapCandidatePath = nil
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     @MainActor
@@ -14278,7 +14278,7 @@ final class AnimateStore {
             if !placesWorkflowLibrary.landmarkReferences.contains(where: { $0.imagePath == imagePath }) {
                 placesWorkflowLibrary.landmarkReferences.append(item)
             }
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         } catch {
             statusMessage = "Failed to add global place reference: \(error.localizedDescription)"
         }
@@ -14286,7 +14286,7 @@ final class AnimateStore {
 
     func removeGlobalPlaceReference(_ referenceID: UUID) {
         placesWorkflowLibrary.landmarkReferences.removeAll { $0.id == referenceID }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     @MainActor
@@ -14410,7 +14410,7 @@ final class AnimateStore {
 
         if changed {
             placesWorkflowLibrary.landmarkProfiles = profiles
-            save(writePlaces: true)
+            scheduleDebouncedSave(writePlaces: true)
         }
     }
 
@@ -14509,7 +14509,7 @@ final class AnimateStore {
         guard let index = placesWorkflowLibrary.landmarkProfiles.firstIndex(where: { $0.id == landmarkID }) else { return }
         placesWorkflowLibrary.landmarkProfiles[index].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     @MainActor
@@ -14615,7 +14615,7 @@ final class AnimateStore {
             placesWorkflowLibrary.landmarkProfiles[index].exteriorImagePath = normalizedPath
         }
         placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     @MainActor
@@ -14634,7 +14634,7 @@ final class AnimateStore {
             placesWorkflowLibrary.landmarkProfiles[index].interiorImagePath = nil
         }
         placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     @MainActor
@@ -14660,7 +14660,7 @@ final class AnimateStore {
             placesWorkflowLibrary.landmarkProfiles[index].interiorImagePath = nil
         }
         placesWorkflowLibrary.landmarkProfiles[index].updatedAt = Date()
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     @MainActor
@@ -14865,7 +14865,7 @@ final class AnimateStore {
         case .animated:
             placesWorkflowLibrary.animatedConfig = normalized
         }
-        save(writePlaces: true)
+        scheduleDebouncedSave(writePlaces: true)
     }
 
     // MARK: - Loopback API: Place Image Generation
