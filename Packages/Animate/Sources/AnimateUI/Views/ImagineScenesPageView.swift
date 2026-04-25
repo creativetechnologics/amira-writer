@@ -15,6 +15,23 @@ struct ImagineScenesPageView: View {
         }
     }
 
+    private enum SceneGallerySortMode: String, CaseIterable, Identifiable {
+        case newest, oldest, highestRated
+        var id: String { rawValue }
+        var displayName: String {
+            switch self {
+            case .newest: "Newest"
+            case .oldest: "Oldest"
+            case .highestRated: "Highest Rated"
+            }
+        }
+    }
+
+    private enum SceneGalleryFlagFilter: String, CaseIterable, Identifiable {
+        case all, unflagged, rejected
+        var id: String { rawValue }
+    }
+
     @Bindable var store: AnimateStore
     @State private var selectedMoment: ImagineShotMoment = .beginning
     @State private var previewImagePath: String?
@@ -27,15 +44,27 @@ struct ImagineScenesPageView: View {
     @State private var generationPromptDragStartHeight: CGFloat?
     @State private var useGemini: Bool = false
     @State private var geminiReferenceImages: [GeminiImageService.ReferenceImage] = []
+    @State private var automaticReferenceImagePaths: [String] = []
+    @State private var automaticReferenceStatus: String?
+    @State private var cachedGenerationPlanPreview: ShotFrameGenerationPlan?
     @State private var drawThingsSourceImagePath: String?
     @State private var drawThingsDenoisingStrength: Double = 0.35
     @State private var activeReferencePicker: ReferencePickerMode?
     @State private var isBulkRunningScene: Bool = false
     @State private var isBulkRunningAll: Bool = false
+    @State private var isDryRunningShotPipeline: Bool = false
     @State private var bulkProgressMessage: String?
+    @State private var dryRunSummaryMessage: String?
     @State private var promptPopoverText: String?
     @State private var showPromptPopover: Bool = false
     @State private var scenePreparationTask: Task<Void, Never>?
+    @State private var galleryThumbnailSize: CGFloat = 120
+    @State private var gallerySortMode: SceneGallerySortMode = .newest
+    @State private var galleryMinimumRating: Int? = nil
+    @State private var galleryFlagFilter: SceneGalleryFlagFilter = .all
+    @State private var deleteConfirmationPath: String? = nil
+    @State private var galleryMetadataRevision: Int = 0
+    @State private var filteredMomentPaths: [String] = []
 
     private var selectedScene: AnimationScene? { store.selectedScene }
     private var shots: [AnimationSceneShot] { selectedScene?.shots ?? [] }
@@ -49,6 +78,10 @@ struct ImagineScenesPageView: View {
         currentGallery?.paths(for: selectedMoment) ?? []
     }
 
+    private var filteredMomentPathsKey: String {
+        "\(currentMomentPaths.count)|\(gallerySortMode.rawValue)|\(galleryMinimumRating ?? 0)|\(galleryFlagFilter.rawValue)|\(galleryMetadataRevision)"
+    }
+
     private var usesReferenceDrivenPromptStyle: Bool {
         useGemini || drawThingsSourceImagePath != nil
     }
@@ -57,6 +90,59 @@ struct ImagineScenesPageView: View {
         guard let scene = selectedScene,
               let shotIndex = store.imagineSelectedShotIndex else { return "" }
         return store.imaginePrompt(for: scene.id, shotIndex: shotIndex, moment: selectedMoment)
+    }
+
+    private var currentGenerationPlanPreview: ShotFrameGenerationPlan? {
+        cachedGenerationPlanPreview
+    }
+
+    private var automaticReferenceRefreshKey: String {
+        guard let scene = selectedScene,
+              let shotIndex = store.imagineSelectedShotIndex,
+              shotIndex >= 0,
+              shotIndex < scene.shots.count else {
+            return "none|\(useGemini)"
+        }
+        let shot = scene.shots[shotIndex]
+        let characterIDs = resolvedCharacterIDs(for: scene, shot: shot).joined(separator: ",")
+        return [
+            useGemini ? "gemini" : "off",
+            scene.id.uuidString,
+            shot.id.uuidString,
+            selectedMoment.directoryName,
+            "\(generationPrompt.hashValue)",
+            scene.backgroundID?.uuidString ?? "no-place",
+            characterIDs
+        ].joined(separator: "|")
+    }
+
+    private var generationPlanPreviewRefreshKey: String {
+        guard let scene = selectedScene,
+              let owpURL = store.fileOWPURL,
+              let shotIndex = store.imagineSelectedShotIndex,
+              shotIndex >= 0,
+              shotIndex < scene.shots.count else {
+            return "none"
+        }
+        let shot = scene.shots[shotIndex]
+        let gallery = store.imagineGallery(for: scene.id, shotIndex: shotIndex)
+        let previousGallery = shotIndex > 0
+            ? store.imagineGallery(for: scene.id, shotIndex: shotIndex - 1)
+            : nil
+        return [
+            owpURL.path,
+            scene.id.uuidString,
+            shot.id.uuidString,
+            shot.cameraShot?.rawValue ?? "",
+            shot.shotIntent?.rawValue ?? "",
+            "\(shotIndex)",
+            selectedMoment.directoryName,
+            "\(generationPrompt.hashValue)",
+            automaticReferenceImagePaths.joined(separator: ","),
+            "\(geminiReferenceImages.count)",
+            generationPlanGallerySignature(gallery),
+            generationPlanGallerySignature(previousGallery)
+        ].joined(separator: "|")
     }
 
 
@@ -70,13 +156,19 @@ struct ImagineScenesPageView: View {
 
                 Divider()
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        previewSection
-                        momentTabBar
-                        galleryGrid
+                HStack(spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            momentTabBar
+                            galleryFilterBar
+                            galleryGrid
+                        }
+                        .padding()
                     }
-                    .padding()
+
+                    Divider()
+
+                    inspectorPane
                 }
 
                 Divider()
@@ -108,6 +200,63 @@ struct ImagineScenesPageView: View {
             }
             .onChange(of: generationPrompt) { _, _ in
                 persistCurrentPrompt(debounced: true)
+            }
+            .task(id: filteredMomentPathsKey) {
+                let paths = currentMomentPaths
+                let sortMode = gallerySortMode
+                let flagFilter = galleryFlagFilter
+                let minRating = galleryMinimumRating
+
+                let result = await Task.detached(priority: .userInitiated) {
+                    let metadataByPath: [String: ImageLibraryReviewMetadata] = paths.reduce(into: [:]) { result, path in
+                        result[path] = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+                    }
+
+                    var filtered = paths
+
+                    switch flagFilter {
+                    case .all: break
+                    case .unflagged:
+                        filtered = filtered.filter { !(metadataByPath[$0]?.isRejected ?? false) }
+                    case .rejected:
+                        filtered = filtered.filter { metadataByPath[$0]?.isRejected ?? false }
+                    }
+
+                    if let minRating {
+                        filtered = filtered.filter { (metadataByPath[$0]?.rating ?? 0) >= minRating }
+                    }
+
+                    switch sortMode {
+                    case .newest:
+                        filtered.sort {
+                            ((try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date) ?? .distantPast) >
+                            ((try? FileManager.default.attributesOfItem(atPath: $1)[.modificationDate] as? Date) ?? .distantPast)
+                        }
+                    case .oldest:
+                        filtered.sort {
+                            ((try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date) ?? .distantPast) <
+                            ((try? FileManager.default.attributesOfItem(atPath: $1)[.modificationDate] as? Date) ?? .distantPast)
+                        }
+                    case .highestRated:
+                        filtered.sort { (metadataByPath[$0]?.rating ?? 0) > (metadataByPath[$1]?.rating ?? 0) }
+                    }
+
+                    return filtered
+                }.value
+
+                if !Task.isCancelled {
+                    filteredMomentPaths = result
+                }
+            }
+            .task(id: automaticReferenceRefreshKey) {
+                if useGemini {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    guard !Task.isCancelled else { return }
+                }
+                await refreshAutomaticReferenceImages()
+            }
+            .task(id: generationPlanPreviewRefreshKey) {
+                refreshGenerationPlanPreview()
             }
             .sheet(item: $activeReferencePicker) { pickerMode in
                 UniversalImagePickerSheet(
@@ -279,6 +428,38 @@ struct ImagineScenesPageView: View {
             }
     }
 
+    // MARK: - Inspector Pane
+
+    private var inspectorPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                UnifiedDetailsInspectorSection(
+                    selection: SceneShotImageSelection(
+                        path: previewImagePath,
+                        store: store,
+                        scene: selectedScene,
+                        shotIndex: store.imagineSelectedShotIndex,
+                        moment: selectedMoment,
+                        onSetRating: { rating in
+                            guard let path = previewImagePath else { return }
+                            setSceneShotImageRating(rating, path: path)
+                        },
+                        onToggleRejected: {
+                            guard let path = previewImagePath else { return }
+                            toggleSceneShotImageRejected(path)
+                        },
+                        onSetNotes: { notes in
+                            guard let path = previewImagePath else { return }
+                            setSceneShotImageNotes(notes, path: path)
+                        }
+                    )
+                )
+            }
+            .padding()
+        }
+        .frame(width: 280)
+    }
+
     // MARK: - Moment Tab Bar
 
     private var momentTabBar: some View {
@@ -305,17 +486,97 @@ struct ImagineScenesPageView: View {
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
     }
 
+    // MARK: - Gallery Filter Bar
+
+    private var galleryFilterBar: some View {
+        HStack(spacing: 10) {
+            Text("\(filteredMomentPaths.count) of \(currentMomentPaths.count)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 50, alignment: .leading)
+
+            Picker("Sort", selection: $gallerySortMode) {
+                ForEach(SceneGallerySortMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(width: 140)
+
+            // Rating filter
+            HStack(spacing: 2) {
+                ForEach(1...5, id: \.self) { star in
+                    Button {
+                        galleryMinimumRating = galleryMinimumRating == star ? nil : star
+                    } label: {
+                        Image(systemName: galleryMinimumRating != nil && star <= (galleryMinimumRating ?? 0) ? "star.fill" : "star")
+                            .font(.caption2)
+                            .foregroundStyle(galleryMinimumRating != nil && star <= (galleryMinimumRating ?? 0) ? .yellow : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.quaternary.opacity(0.12), in: Capsule())
+
+            // Flag filter
+            HStack(spacing: 2) {
+                Button { galleryFlagFilter = .all } label: {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .foregroundStyle(galleryFlagFilter == .all ? .primary : .secondary)
+                }
+                .buttonStyle(.plain)
+                Button { galleryFlagFilter = .unflagged } label: {
+                    Image(systemName: "flag.slash")
+                        .foregroundStyle(galleryFlagFilter == .unflagged ? .primary : .secondary)
+                }
+                .buttonStyle(.plain)
+                Button { galleryFlagFilter = .rejected } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(galleryFlagFilter == .rejected ? .red : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .font(.caption)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(.quaternary.opacity(0.12), in: Capsule())
+
+            Spacer()
+
+            // Thumbnail size slider
+            HStack(spacing: 4) {
+                Image(systemName: "photo")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Slider(value: $galleryThumbnailSize, in: 80...260)
+                    .frame(width: 100)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
     // MARK: - Gallery Grid
 
     private var galleryGrid: some View {
         Group {
-            if currentMomentPaths.isEmpty {
-                Text("No \(selectedMoment.rawValue.lowercased()) images for this shot yet.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 80)
+            if filteredMomentPaths.isEmpty {
+                if currentMomentPaths.isEmpty {
+                    Text("No \(selectedMoment.rawValue.lowercased()) images for this shot yet.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 80)
+                } else {
+                    Text("No images match the current filters.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 80)
+                }
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 8) {
-                    ForEach(currentMomentPaths, id: \.self) { path in
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: galleryThumbnailSize), spacing: 10)],
+                    spacing: 10
+                ) {
+                    ForEach(filteredMomentPaths, id: \.self) { path in
                         galleryThumbnail(path: path)
                     }
                 }
@@ -324,43 +585,114 @@ struct ImagineScenesPageView: View {
         .dropDestination(for: URL.self) { urls, _ in
             return importDroppedImagesToCurrentMoment(urls: urls)
         }
+        .confirmationDialog(
+            "Delete Image",
+            isPresented: Binding(
+                get: { deleteConfirmationPath != nil },
+                set: { if !$0 { deleteConfirmationPath = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Move to Trash", role: .destructive) {
+                if let path = deleteConfirmationPath {
+                    trashSceneShotImage(path)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                deleteConfirmationPath = nil
+            }
+        } message: {
+            Text("This image will be moved to the Trash and removed from the project.")
+        }
     }
 
     @ViewBuilder
     private func galleryThumbnail(path: String) -> some View {
         let isSelected = previewImagePath == path
-        AsyncStoreThumbnailImage<AnyView>.rounded(
-            store: store,
+        let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+
+        UnifiedImageTile(
             path: path,
-            maxSize: 200,
-            width: 100,
-            height: 100,
-            contentMode: .fill,
-            cornerRadius: 6
-        )
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2))
-        .onTapGesture {
-            previewImagePath = path
-            store.imaginePreviewImagePath = path
-        }
-        .contextMenu {
-            Button("Show Prompt") {
-                showPromptForImage(path: path)
-            }
-            Button("Show in Finder") { ImagineProjectStorage.revealInFinder(path) }
-            Button("Copy Image") {
-                if let image = NSImage(contentsOfFile: path) {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.writeObjects([image])
+            thumbnailSize: galleryThumbnailSize,
+            isSelected: isSelected,
+            isRejected: metadata?.isRejected ?? false,
+            rating: metadata?.rating,
+            actions: UnifiedImageActions(
+                onShowPrompt: { showPromptForImage(path: path) },
+                onShowInFinder: { ImagineProjectStorage.revealInFinder(path) },
+                onCopy: { copyImageToPasteboardAsync(path: path) },
+                onSetRating: { newRating in
+                    setSceneShotImageRating(newRating, path: path)
+                },
+                currentRating: metadata?.rating,
+                onToggleRejected: {
+                    toggleSceneShotImageRejected(path)
+                },
+                isRejected: metadata?.isRejected ?? false,
+                onMoveToTrash: {
+                    deleteConfirmationPath = path
                 }
+            ),
+            onTap: {
+                previewImagePath = path
+                store.imaginePreviewImagePath = path
             }
-            Divider()
-            Button("Delete", role: .destructive) {
-                try? FileManager.default.removeItem(atPath: path)
-                if let sceneID = selectedScene?.id { store.refreshImagineGalleryFromDisk(sceneID: sceneID) }
-            }
+        )
+    }
+
+    // MARK: - Scene Shot Image Metadata
+
+    private func setSceneShotImageRating(_ rating: Int?, path: String) {
+        var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+        metadata.rating = rating
+        metadata.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: path)
+        galleryMetadataRevision += 1
+    }
+
+    private func toggleSceneShotImageRejected(_ path: String) {
+        var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+        metadata.isRejected.toggle()
+        metadata.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: path)
+        galleryMetadataRevision += 1
+    }
+
+    private func setSceneShotImageNotes(_ notes: String, path: String) {
+        var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+        metadata.notes = notes
+        metadata.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: path)
+        galleryMetadataRevision += 1
+    }
+
+    private func trashSceneShotImage(_ path: String) {
+        let url = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: path) else { return }
+
+        do {
+            var resultingURL: NSURL? = nil
+            try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
+        } catch {
+            print("[ImagineScenesPageView] trashItem failed for \(path): \(error.localizedDescription)")
+            return
         }
-        .draggable(URL(fileURLWithPath: path))
+
+        // Refresh gallery from disk to pick up the deletion
+        if let sceneID = selectedScene?.id {
+            store.refreshImagineGalleryFromDisk(sceneID: sceneID)
+        }
+
+        // Clear preview if it was the deleted image
+        if previewImagePath == path {
+            previewImagePath = nil
+            store.imaginePreviewImagePath = nil
+        }
+
+        deleteConfirmationPath = nil
     }
 
     // MARK: - Generation Controls (pinned bottom)
@@ -455,6 +787,17 @@ struct ImagineScenesPageView: View {
                     }
                     Button("Clear") { geminiReferenceImages = [] }.controlSize(.mini)
                 }
+            }
+
+            if useGemini, let plan = currentGenerationPlanPreview {
+                generationPlanSummary(plan)
+            }
+
+            if useGemini, let automaticReferenceStatus {
+                Text(automaticReferenceStatus)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
 
             if isGeneratingPrompt {
@@ -568,6 +911,9 @@ struct ImagineScenesPageView: View {
         generationPrompt = currentStoredPrompt
         generationError = nil
         previewImagePath = nil
+        automaticReferenceImagePaths = []
+        automaticReferenceStatus = nil
+        cachedGenerationPlanPreview = nil
     }
 
     private func persistCurrentPrompt(debounced: Bool) {
@@ -598,6 +944,7 @@ struct ImagineScenesPageView: View {
             subjectStyle: .neutralSubjects
         )
         persistCurrentPrompt(debounced: false)
+        Task { await refreshAutomaticReferenceImages() }
     }
 
     private func autoGeneratePrompt() {
@@ -614,6 +961,7 @@ struct ImagineScenesPageView: View {
                     subjectStyle: .neutralSubjects
                 )
                 persistCurrentPrompt(debounced: false)
+                await refreshAutomaticReferenceImages()
             } catch {
                 generationError = error.localizedDescription
             }
@@ -639,13 +987,41 @@ struct ImagineScenesPageView: View {
                         generationError = "Gemini API calls are blocked. Enable in Inspector > Tools."
                         return
                     }
-                    try await service.generateWithGemini(
-                        prompt: generationPrompt, referenceImages: geminiReferenceImages,
+                    let automaticReferences = await resolveAutomaticReferenceImagePaths(
+                        scene: scene,
+                        shotIndex: shotIndex,
+                        moment: selectedMoment,
+                        prompt: generationPrompt
+                    )
+                    automaticReferenceImagePaths = automaticReferences
+                    automaticReferenceStatus = automaticReferences.isEmpty
+                        ? nil
+                        : "Image Intelligence attached \(automaticReferences.count) automatic reference\(automaticReferences.count == 1 ? "" : "s")."
+                    let plan = makeShotFrameGenerationPlan(
+                        scene: scene,
+                        owpURL: owpURL,
+                        shotIndex: shotIndex,
+                        moment: selectedMoment,
+                        prompt: generationPrompt,
+                        automaticReferenceImagePaths: automaticReferences
+                    )
+                    cachedGenerationPlanPreview = plan
+                    let savedURL = try await service.generateWithGemini(
+                        plan: plan,
+                        manualReferenceImages: geminiReferenceImages,
                         model: store.selectedGeminiModel, apiKey: store.geminiAPIKey,
                         owpURL: owpURL, sceneSlug: sceneSlug, shotIndex: shotIndex, moment: selectedMoment
                     )
+                    registerGeneratedShotImage(
+                        savedURL,
+                        scene: scene,
+                        shotIndex: shotIndex,
+                        moment: selectedMoment,
+                        generator: "gemini",
+                        mode: plan.mode.rawValue
+                    )
                 } else {
-                    _ = try await service.generateWithDrawThings(
+                    let savedURLs = try await service.generateWithDrawThings(
                         prompt: generationPrompt, model: selectedDrawThingsModel,
                         config: store.drawThingsPlaceConfig, owpURL: owpURL,
                         sceneSlug: sceneSlug, shotIndex: shotIndex, moment: selectedMoment,
@@ -653,6 +1029,16 @@ struct ImagineScenesPageView: View {
                         sourceImageURL: drawThingsSourceImagePath.map { URL(fileURLWithPath: $0) },
                         denoisingStrength: drawThingsDenoisingStrength
                     )
+                    for savedURL in savedURLs {
+                        registerGeneratedShotImage(
+                            savedURL,
+                            scene: scene,
+                            shotIndex: shotIndex,
+                            moment: selectedMoment,
+                            generator: "drawthings",
+                            mode: drawThingsSourceImagePath == nil ? "generate" : "img2img"
+                        )
+                    }
                 }
             } catch {
                 if !useGemini {
@@ -727,22 +1113,268 @@ struct ImagineScenesPageView: View {
         switch mode {
         case .gemini:
             geminiReferenceImages = makeGeminiReferenceImages(from: paths)
+            refreshGenerationPlanPreview()
         case .drawThingsSource:
             drawThingsSourceImagePath = paths.first
         }
     }
 
+    private func refreshGenerationPlanPreview() {
+        guard useGemini,
+              let scene = selectedScene,
+              let owpURL = store.fileOWPURL,
+              let shotIndex = store.imagineSelectedShotIndex,
+              shotIndex >= 0,
+              shotIndex < scene.shots.count else {
+            cachedGenerationPlanPreview = nil
+            return
+        }
+        cachedGenerationPlanPreview = makeShotFrameGenerationPlan(
+            scene: scene,
+            owpURL: owpURL,
+            shotIndex: shotIndex,
+            moment: selectedMoment,
+            prompt: generationPrompt
+        )
+    }
+
+    private func generationPlanGallerySignature(_ gallery: ImagineSceneShotGallery?) -> String {
+        guard let gallery else { return "none" }
+        return [
+            gallery.selectedBeginningPath ?? "",
+            gallery.selectedMiddlePath ?? "",
+            gallery.selectedEndPath ?? "",
+            "\(gallery.beginningImagePaths.count)",
+            "\(gallery.middleImagePaths.count)",
+            "\(gallery.endImagePaths.count)"
+        ].joined(separator: "#")
+    }
+
+    private func refreshAutomaticReferenceImages() async {
+        let refreshKey = automaticReferenceRefreshKey
+        guard useGemini else {
+            automaticReferenceImagePaths = []
+            automaticReferenceStatus = nil
+            return
+        }
+        guard let scene = selectedScene,
+              let shotIndex = store.imagineSelectedShotIndex,
+              shotIndex >= 0,
+              shotIndex < scene.shots.count else {
+            automaticReferenceImagePaths = []
+            automaticReferenceStatus = nil
+            return
+        }
+
+        let paths = await resolveAutomaticReferenceImagePaths(
+            scene: scene,
+            shotIndex: shotIndex,
+            moment: selectedMoment,
+            prompt: generationPrompt
+        )
+        guard refreshKey == automaticReferenceRefreshKey else { return }
+        automaticReferenceImagePaths = paths
+        automaticReferenceStatus = paths.isEmpty
+            ? "Image Intelligence has no automatic references for this shot yet."
+            : "Image Intelligence attached \(paths.count) automatic reference\(paths.count == 1 ? "" : "s")."
+        refreshGenerationPlanPreview()
+    }
+
+    private func resolveAutomaticReferenceImagePaths(
+        scene: AnimationScene,
+        shotIndex: Int,
+        moment: ImagineShotMoment,
+        prompt: String
+    ) async -> [String] {
+        guard useGemini,
+              shotIndex >= 0,
+              shotIndex < scene.shots.count,
+              let searchService = store.imageIntelligenceSearchService() else {
+            return []
+        }
+
+        let shot = scene.shots[shotIndex]
+        let input = ImageSearchService.SelectorInput(
+            sceneID: scene.id.uuidString,
+            shotID: shot.id.uuidString,
+            moment: moment.directoryName,
+            characterIDs: resolvedCharacterIDs(for: scene, shot: shot),
+            placeID: scene.backgroundID?.uuidString,
+            queryText: automaticReferenceQueryText(scene: scene, shot: shot, prompt: prompt)
+        )
+
+        do {
+            let selections = try await searchService.selectForShot(input: input, maxImages: 5)
+            var seen = Set<String>()
+            return selections.compactMap { selection in
+                let path = URL(fileURLWithPath: selection.resolvedPath).standardizedFileURL.path
+                guard FileManager.default.fileExists(atPath: path),
+                      seen.insert(path).inserted else { return nil }
+                return path
+            }
+        } catch {
+            automaticReferenceStatus = "Image Intelligence reference selection failed: \(error.localizedDescription)"
+            return []
+        }
+    }
+
+    private func resolvedCharacterIDs(
+        for scene: AnimationScene,
+        shot: AnimationSceneShot
+    ) -> [String] {
+        var ids: [UUID] = scene.characterIDs
+        if let focusCharacterID = scene.directionTemplate?.focusCharacterID {
+            ids.append(focusCharacterID)
+        }
+        if let focusCharacterID = shot.focusCharacterID {
+            ids.append(focusCharacterID)
+        }
+
+        let slugs = (
+            scene.characterSlugs +
+            [scene.directionTemplate?.focusCharacterSlug, shot.focusCharacterSlug].compactMap { $0 }
+        )
+        for slug in slugs {
+            if let character = store.characters.first(where: { character in
+                character.owpSlug == slug || character.storageSlug == slug
+            }) {
+                ids.append(character.id)
+            }
+        }
+
+        var seen = Set<UUID>()
+        return ids.filter { seen.insert($0).inserted }.map(\.uuidString)
+    }
+
+    private func automaticReferenceQueryText(
+        scene: AnimationScene,
+        shot: AnimationSceneShot,
+        prompt: String
+    ) -> String {
+        [
+            scene.name,
+            scene.directionTemplate?.notes,
+            shot.name,
+            shot.notes,
+            shot.sourceLyricExcerpt,
+            prompt
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n")
+    }
+
+    private func registerGeneratedShotImage(
+        _ url: URL,
+        scene: AnimationScene,
+        shotIndex: Int,
+        moment: ImagineShotMoment,
+        generator: String,
+        mode: String
+    ) {
+        guard shotIndex >= 0,
+              shotIndex < scene.shots.count else { return }
+        let shot = scene.shots[shotIndex]
+        store.registerImageAsset(
+            path: url.standardizedFileURL.path,
+            linkKind: .sceneShotImage,
+            ownerID: shot.id.uuidString,
+            ownerParentID: scene.id.uuidString,
+            moment: moment.directoryName,
+            workflow: "imagine_scene",
+            context: [
+                "sceneID": scene.id.uuidString,
+                "sceneName": scene.name,
+                "shotID": shot.id.uuidString,
+                "shotName": shot.name,
+                "shotOrder": "\(shotIndex + 1)",
+                "moment": moment.directoryName,
+                "generator": generator,
+                "mode": mode
+            ]
+        )
+    }
+
+    private func makeShotFrameGenerationPlan(
+        scene: AnimationScene,
+        owpURL: URL,
+        shotIndex: Int,
+        moment: ImagineShotMoment,
+        prompt: String,
+        automaticReferenceImagePaths: [String]? = nil
+    ) -> ShotFrameGenerationPlan {
+        let shot = scene.shots[shotIndex]
+        return ShotFrameGenerationPlanResolver.resolve(
+            input: ShotFrameGenerationPlanResolver.Input(
+                projectRoot: owpURL,
+                sceneID: scene.id,
+                shotID: shot.id,
+                shotIndex: shotIndex,
+                moment: moment,
+                prompt: prompt,
+                gallery: store.imagineGallery(for: scene.id, shotIndex: shotIndex),
+                previousShotGallery: shotIndex > 0
+                    ? store.imagineGallery(for: scene.id, shotIndex: shotIndex - 1)
+                    : nil,
+                automaticReferenceImagePaths: automaticReferenceImagePaths ?? self.automaticReferenceImagePaths,
+                manualReferenceCount: geminiReferenceImages.count,
+                cameraShot: resolvedCameraShot(for: scene, shot: shot),
+                cameraMovement: resolvedCameraMovement(for: shot)
+            )
+        )
+    }
+
+    private func generationPlanSummary(_ plan: ShotFrameGenerationPlan) -> some View {
+        HStack(spacing: 8) {
+            Label(plan.mode.displayName, systemImage: plan.usesEditPrompt ? "wand.and.rays.inverse" : "sparkles")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    plan.usesEditPrompt ? Color.orange.opacity(0.16) : Color.accentColor.opacity(0.14),
+                    in: Capsule()
+                )
+
+            if let source = plan.sourceImage {
+                Text("Source: \(source.source.displayName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else {
+                Text("Full prompt + references")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if plan.storyboardImagePath != nil {
+                Label("Storyboard attached", systemImage: "pencil.and.outline")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !plan.referenceImagePaths.isEmpty {
+                Text("\(plan.referenceImagePaths.count) plan ref\(plan.referenceImagePaths.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            if let openMatte = plan.openMattePlan {
+                Label(
+                    "\(openMatte.generatedAspectRatio) \(openMatte.generatedImageSize) → \(openMatte.extractionTargetAspectRatio) · \(openMatte.cropMotion.displayName)",
+                    systemImage: "crop"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .help(plan.decision.reasons.map(\.label).joined(separator: " • "))
+    }
+
     private func makeGeminiReferenceImages(from paths: [String]) -> [GeminiImageService.ReferenceImage] {
         paths.compactMap { path in
-            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
-            let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
-            let mime: String
-            switch ext {
-            case "png": mime = "image/png"
-            case "webp": mime = "image/webp"
-            default: mime = "image/jpeg"
-            }
-            return GeminiImageService.ReferenceImage(data: data.base64EncodedString(), mimeType: mime)
+            GeminiImageService.referenceImage(from: URL(fileURLWithPath: path).standardizedFileURL)
         }
     }
 
@@ -750,19 +1382,21 @@ struct ImagineScenesPageView: View {
 
     private func bulkBar(scene: AnimationScene) -> some View {
         HStack(spacing: 8) {
-            if isBulkRunningScene || isBulkRunningAll {
+            if isBulkRunningScene || isBulkRunningAll || isDryRunningShotPipeline {
                 ProgressView().controlSize(.small)
-                Text(bulkProgressMessage ?? "Generating…")
+                Text(bulkProgressMessage ?? (isDryRunningShotPipeline ? "Planning shot frame pipeline…" : "Generating…"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
-                Button(role: .destructive) {
-                    store.imagineBulkRunProgress.isCancelled = true
-                } label: {
-                    Label("Cancel", systemImage: "stop.fill")
+                if isBulkRunningScene || isBulkRunningAll {
+                    Button(role: .destructive) {
+                        store.imagineBulkRunProgress.isCancelled = true
+                    } label: {
+                        Label("Cancel", systemImage: "stop.fill")
+                    }
+                    .controlSize(.small)
                 }
-                .controlSize(.small)
             } else {
                 Button {
                     bulkGenerateScene(scene)
@@ -778,12 +1412,26 @@ struct ImagineScenesPageView: View {
                 }
                 .controlSize(.small)
 
+                Button {
+                    dryRunShotFramePipeline(scene)
+                } label: {
+                    Label("Dry Run: Scene", systemImage: "checklist")
+                }
+                .controlSize(.small)
+
                 Spacer()
 
-                let cfg = store.imagineBulkRunConfig
-                Text("\(cfg.batchSize)×\(cfg.repeatsPerPrompt) per moment")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                if let dryRunSummaryMessage {
+                    Text(dryRunSummaryMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                } else {
+                    let cfg = store.imagineBulkRunConfig
+                    Text("\(cfg.batchSize)×\(cfg.repeatsPerPrompt) per moment")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -812,6 +1460,34 @@ struct ImagineScenesPageView: View {
         }
     }
 
+    private func dryRunShotFramePipeline(_ scene: AnimationScene) {
+        guard let owpURL = store.fileOWPURL else { return }
+        isDryRunningShotPipeline = true
+        bulkProgressMessage = "Planning \(scene.shots.count) shot\(scene.shots.count == 1 ? "" : "s") × 3 frames…"
+        dryRunSummaryMessage = nil
+
+        Task {
+            defer {
+                isDryRunningShotPipeline = false
+                bulkProgressMessage = nil
+            }
+            let planner = ShotFrameGenerationDryRunPlanner(store: store)
+            let report = await planner.buildReport(
+                scenes: store.scenes,
+                projectRoot: owpURL,
+                sceneFilter: [scene.id],
+                model: store.selectedGeminiModel,
+                imageSize: ShotFrameOpenMattePlan.defaultGeneratedImageSize
+            )
+            do {
+                let reportURL = try await planner.writeReportAsync(report, projectRoot: owpURL)
+                dryRunSummaryMessage = "Dry run: \(report.totalFrames) frames, \(report.generateFrames) generate / \(report.editFrames) edit, \(report.openMatteFrames) open-matte, \(report.automaticReferenceCount) auto refs, est. Vertex $\(String(format: "%.2f", report.estimatedVertexCostUSD)) — \(reportURL.lastPathComponent)"
+            } catch {
+                generationError = "Dry run failed to save report: \(error.localizedDescription)"
+            }
+        }
+    }
+
     private func bulkGenerateAllScenes() {
         isBulkRunningAll = true
         var config = store.imagineBulkRunConfig
@@ -830,5 +1506,141 @@ struct ImagineScenesPageView: View {
                 }
             )
         }
+    }
+
+    private func resolvedCameraShot(
+        for scene: AnimationScene,
+        shot: AnimationSceneShot
+    ) -> CameraShot {
+        shot.cameraShot
+            ?? scene.directionTemplate?.defaultCameraShot
+            ?? shot.shotIntent?.recommendedCameraShot
+            ?? .medium
+    }
+
+    private func resolvedCameraMovement(for shot: AnimationSceneShot) -> CameraMovement? {
+        shot.shotIntent?.recommendedCameraMovement
+    }
+}
+
+// MARK: - Scene Shot Image Selection
+
+@available(macOS 26.0, *)
+@MainActor
+struct SceneShotImageSelection: DetailedImageSelection {
+    let path: String?
+    let store: AnimateStore
+    let scene: AnimationScene?
+    let shotIndex: Int?
+    let moment: ImagineShotMoment
+    let onSetRating: (Int?) -> Void
+    let onToggleRejected: () -> Void
+    let onSetNotes: (String) -> Void
+
+    private static let byteFormatter: ByteCountFormatter = {
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        return f
+    }()
+
+    var imageURL: URL? {
+        guard let path else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    var title: String {
+        guard let path else { return "" }
+        return URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    var subtitle: String? {
+        var parts: [String] = []
+        if let scene { parts.append(scene.name) }
+        if let shotIndex, let scene, shotIndex < scene.shots.count {
+            let shot = scene.shots[shotIndex]
+            parts.append("S\(shotIndex + 1)")
+            if !shot.name.isEmpty { parts.append(shot.name) }
+        }
+        parts.append(moment.rawValue)
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    var rating: Int? {
+        guard let path else { return nil }
+        return ImageLibraryMetadataSidecarService.load(forImagePath: path)?.rating
+    }
+
+    var isRejected: Bool {
+        guard let path else { return false }
+        return ImageLibraryMetadataSidecarService.load(forImagePath: path)?.isRejected ?? false
+    }
+
+    var notes: String {
+        guard let path else { return "" }
+        return ImageLibraryMetadataSidecarService.load(forImagePath: path)?.notes ?? ""
+    }
+
+    var metadataRows: [(label: String, value: String)] {
+        guard let path else { return [] }
+        var rows: [(label: String, value: String)] = []
+
+        // Generation metadata from .json sidecar
+        if let metadata = store.generationMetadata(for: path) {
+            if !metadata.model.isEmpty {
+                rows.append(("Model", metadata.model))
+            }
+            let sizing = [metadata.imageSize, metadata.aspectRatio]
+                .filter { !$0.isEmpty }.joined(separator: " · ")
+            if !sizing.isEmpty {
+                rows.append(("Generation", sizing))
+            }
+            if !metadata.prompt.isEmpty {
+                rows.append(("Prompt", metadata.prompt))
+            }
+        } else {
+            // Fallback: .prompt.txt sidecar
+            let url = URL(fileURLWithPath: path)
+            let promptURL = url.deletingPathExtension().appendingPathExtension("prompt.txt")
+            if let text = try? String(contentsOf: promptURL, encoding: .utf8),
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                rows.append(("Prompt", text))
+            }
+        }
+
+        // Resolution
+        if let resolution = store.imageResolutionDescription(for: path), !resolution.isEmpty {
+            rows.append(("Resolution", resolution))
+        }
+
+        // File size
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let size = attrs[.size] as? Int64 {
+            rows.append(("File Size", Self.byteFormatter.string(fromByteCount: size)))
+        }
+
+        // Created date
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let created = attrs[.creationDate] as? Date {
+            rows.append(("Created", created.formatted(date: .abbreviated, time: .shortened)))
+        }
+
+        rows.append(("Path", path))
+        return rows
+    }
+
+    var emptyStateMessage: String {
+        "Select an image to see details."
+    }
+
+    func setRating(_ newValue: Int?) {
+        onSetRating(newValue)
+    }
+
+    func toggleRejected() {
+        onToggleRejected()
+    }
+
+    func setNotes(_ newValue: String) {
+        onSetNotes(newValue)
     }
 }
