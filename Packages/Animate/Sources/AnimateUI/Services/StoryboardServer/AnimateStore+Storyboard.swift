@@ -54,7 +54,11 @@ extension AnimateStore {
         let lookup: [UUID: AnimationSceneShot] = Dictionary(
             uniqueKeysWithValues: existing.map { ($0.id, $0) }
         )
-        scenes[sceneIndex].shots = shotIDs.compactMap { lookup[$0] }
+        // The set-equality + count guard above guarantees every UUID in
+        // `shotIDs` is a key in `lookup`. Force-unwrap rather than
+        // `compactMap` so we crash loudly if that invariant ever weakens —
+        // silently dropping shots would corrupt the project.
+        scenes[sceneIndex].shots = shotIDs.map { lookup[$0]! }
         save()
         return true
     }

@@ -2714,7 +2714,6 @@ struct PlacesPageView: View {
     /// Shows the latest iPad-drawn storyboard sketch for a place. Isolated
     /// from the photoreal pipeline — the iPad PWA writes here, the macOS
     /// gallery is left untouched. Only the latest sketch is retained.
-    @ViewBuilder
     private func placeIPadSketchSection(_ place: BackgroundPlate) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -2736,6 +2735,10 @@ struct PlacesPageView: View {
             if let path = place.storyboardSketchPath,
                let url = store.resolvedCharacterAssetURL(for: path),
                let image = NSImage(contentsOf: url) {
+                // The iPad PWA overwrites `ipad-sketch.png` in place — the
+                // path string never changes, so we seed `.id` with the
+                // file's mtime to force SwiftUI to invalidate `Image` when
+                // the bytes on disk change.
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
@@ -2746,6 +2749,7 @@ struct PlacesPageView: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .strokeBorder(.quaternary, lineWidth: 1)
                     )
+                    .id(storyboardSketchFingerprint(url))
             } else {
                 Text("Open this place in the iPad storyboard PWA and draw a quick sketch — the latest version will appear here.")
                     .font(.callout)
@@ -2755,6 +2759,17 @@ struct PlacesPageView: View {
         }
         .padding(18)
         .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    /// Returns a stable fingerprint (file mtime + size) for the given URL so
+    /// that SwiftUI can invalidate cached image views whenever the file is
+    /// overwritten in place. Returns 0 when the URL isn't readable.
+    private func storyboardSketchFingerprint(_ url: URL) -> Double {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
+        guard let values = try? url.resourceValues(forKeys: keys) else { return 0 }
+        let mtime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let size = Double(values.fileSize ?? 0)
+        return mtime + size / 1_000_000_000
     }
 
     private func placeReferencesSection(_ place: BackgroundPlate) -> some View {
@@ -5305,6 +5320,9 @@ private struct PlaceLandmarkDetailView: View {
             if let path = profile.storyboardSketchPath,
                let url = resolvedAssetURL(for: path),
                let image = NSImage(contentsOf: url) {
+                // See `placeIPadSketchSection` — same in-place overwrite
+                // pattern: seed `.id` with file mtime+size to invalidate
+                // SwiftUI's image cache when the bytes change.
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
@@ -5315,6 +5333,7 @@ private struct PlaceLandmarkDetailView: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .strokeBorder(.quaternary, lineWidth: 1)
                     )
+                    .id(landmarkSketchFingerprint(url))
             } else {
                 Text("Open this landmark in the iPad storyboard PWA and draw a quick sketch — the latest version will appear here.")
                     .font(.callout)
@@ -5325,6 +5344,17 @@ private struct PlaceLandmarkDetailView: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    /// File-stat fingerprint for the iPad sketch image — mirrors
+    /// `placeIPadSketchSection`'s helper, scoped to this view because
+    /// `PlacesPageView`'s helper is not visible from this private struct.
+    private func landmarkSketchFingerprint(_ url: URL) -> Double {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
+        guard let values = try? url.resourceValues(forKeys: keys) else { return 0 }
+        let mtime = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let size = Double(values.fileSize ?? 0)
+        return mtime + size / 1_000_000_000
     }
 
     private var notesCard: some View {

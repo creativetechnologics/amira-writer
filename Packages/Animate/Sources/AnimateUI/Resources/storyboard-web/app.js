@@ -516,12 +516,15 @@ function updateShotDropIndicator(clientY) {
   });
 
   // Find the row whose vertical midpoint is nearest the pointer.
-  let targetIndex = sceneRows.length;
+  // We compute targetIndex against the array of *other* shots (the source
+  // shot is removed before reinsertion in commitShotReorder), so the index
+  // we want is the position within sceneRows-without-dragState.row.
+  const others = sceneRows.filter((r) => r !== dragState.row);
+  let targetIndex = others.length; // default: drop at end
   let chosenRow = null;
   let chosenBefore = false;
-  for (let i = 0; i < sceneRows.length; i++) {
-    const r = sceneRows[i];
-    if (r === dragState.row) continue;
+  for (let i = 0; i < others.length; i++) {
+    const r = others[i];
     const rect = r.getBoundingClientRect();
     const mid = rect.top + rect.height / 2;
     if (clientY < mid) {
@@ -531,25 +534,16 @@ function updateShotDropIndicator(clientY) {
       break;
     }
   }
-  if (!chosenRow) {
-    // After the last non-drag row
-    for (let i = sceneRows.length - 1; i >= 0; i--) {
-      if (sceneRows[i] !== dragState.row) {
-        chosenRow = sceneRows[i];
-        chosenBefore = false;
-        targetIndex = i + 1;
-        break;
-      }
-    }
+  if (!chosenRow && others.length > 0) {
+    // After the last non-drag row — targetIndex stays others.length
+    chosenRow = others[others.length - 1];
+    chosenBefore = false;
   }
 
   if (chosenRow) {
     chosenRow.classList.add(chosenBefore ? 'shot-row--drop-before' : 'shot-row--drop-after');
   }
 
-  // Adjust targetIndex relative to the order *without* the dragged row
-  const draggedIndex = sceneRows.indexOf(dragState.row);
-  if (draggedIndex !== -1 && targetIndex > draggedIndex) targetIndex -= 1;
   dragState.targetIndex = targetIndex;
 }
 
