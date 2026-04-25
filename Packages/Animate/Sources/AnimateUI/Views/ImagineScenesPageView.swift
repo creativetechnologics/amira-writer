@@ -542,15 +542,19 @@ struct ImagineScenesPageView: View {
             let featuredFrameMaxHeight = max(120, min(440, topHeight * 0.5))
 
             VStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        featuredFrameLargeView
-                            .frame(maxHeight: featuredFrameMaxHeight)
-                        momentTabBar
-                        galleryFilterBar
-                        galleryGrid
+                HStack(spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            momentTabBar
+                            galleryFilterBar
+                            galleryGrid
+                        }
+                        .padding()
                     }
-                    .padding()
+
+                    Divider()
+
+                    inspectorPane
                 }
                 .frame(height: topHeight)
 
@@ -585,6 +589,38 @@ struct ImagineScenesPageView: View {
                 .frame(height: bottomHeight)
             }
         }
+    }
+
+    // MARK: - Inspector Pane
+
+    private var inspectorPane: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                UnifiedDetailsInspectorSection(
+                    selection: SceneShotImageSelection(
+                        path: previewImagePath ?? currentGallery?.selectedPath(for: selectedMoment),
+                        store: store,
+                        scene: selectedScene,
+                        shotIndex: store.imagineSelectedShotIndex,
+                        moment: selectedMoment,
+                        onSetRating: { rating in
+                            guard let path = previewImagePath ?? currentGallery?.selectedPath(for: selectedMoment) else { return }
+                            setSceneShotImageRating(rating, path: path)
+                        },
+                        onToggleRejected: {
+                            guard let path = previewImagePath ?? currentGallery?.selectedPath(for: selectedMoment) else { return }
+                            toggleSceneShotImageRejected(path)
+                        },
+                        onSetNotes: { notes in
+                            guard let path = previewImagePath ?? currentGallery?.selectedPath(for: selectedMoment) else { return }
+                            setSceneShotImageNotes(notes, path: path)
+                        }
+                    )
+                )
+            }
+            .padding()
+        }
+        .frame(width: 280)
     }
 
     // MARK: - Moment Tab Bar
