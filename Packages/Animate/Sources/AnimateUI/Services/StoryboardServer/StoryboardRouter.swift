@@ -18,16 +18,17 @@ final class StoryboardRouter {
         self.workspace = workspace
     }
 
+    func updateWorkspace(_ workspace: AnimateWorkspaceController) {
+        self.workspace = workspace
+    }
+
     func handle(_ request: SBHTTPRequest) async -> SBHTTPResponse {
         let method = request.method
         let path = request.path
 
         // Static asset routes
-        if method == "GET" && (path == "/" || path.hasPrefix("/static/")) {
-            if let (data, mime) = StoryboardAssets.serve(path: path) {
-                return SBHTTPResponse(status: 200, contentType: mime, body: data)
-            }
-            return .notFound("Asset not found: \(path)")
+        if method == "GET", let (data, mime) = StoryboardAssets.serve(path: path) {
+            return SBHTTPResponse(status: 200, contentType: mime, body: data)
         }
 
         // API routes
@@ -36,6 +37,21 @@ final class StoryboardRouter {
             return projectResponse()
         case ("GET", "/api/shots"):
             return shotsResponse()
+        case ("GET", "/api/places"):
+            return placesResponse()
+        case ("GET", "/api/landmarks"):
+            return landmarksResponse()
+        case ("POST", "/api/shots"):
+            return await postShotResponse(sceneIDStr: nil, request: request)
+        case ("POST", "/api/shots/reorder"):
+            return await reorderShotsResponse(request: request)
+        case ("POST", "/api/places"):
+            return await postPlaceResponse(request: request)
+        case ("POST", "/api/landmarks"):
+            return await postLandmarkResponse(request: request)
+        case _ where method == "POST" && path.hasPrefix("/api/scenes/") && path.hasSuffix("/shots"):
+            let sceneIDStr = extractPathComponent(from: path, prefix: "/api/scenes/", suffix: "/shots")
+            return await postShotResponse(sceneIDStr: sceneIDStr, request: request)
         case _ where method == "PUT" && path.hasPrefix("/api/shots/") && path.hasSuffix("/summary"):
             let shotIDStr = extractPathComponent(from: path, prefix: "/api/shots/", suffix: "/summary")
             return await putSummaryResponse(shotIDStr: shotIDStr, request: request)
@@ -47,6 +63,18 @@ final class StoryboardRouter {
             let parts = path.dropFirst("/api/storyboard/".count).split(separator: "/", maxSplits: 1)
             guard parts.count == 2 else { return .badRequest("Malformed storyboard path") }
             return await putStoryboardResponse(shotIDStr: String(parts[0]), frameStr: String(parts[1]), request: request)
+        case _ where method == "GET" && path.hasPrefix("/api/places/") && path.hasSuffix("/sketch"):
+            let placeIDStr = extractPathComponent(from: path, prefix: "/api/places/", suffix: "/sketch")
+            return getPlaceSketchResponse(placeIDStr: placeIDStr)
+        case _ where method == "PUT" && path.hasPrefix("/api/places/") && path.hasSuffix("/sketch"):
+            let placeIDStr = extractPathComponent(from: path, prefix: "/api/places/", suffix: "/sketch")
+            return await putPlaceSketchResponse(placeIDStr: placeIDStr, request: request)
+        case _ where method == "GET" && path.hasPrefix("/api/landmarks/") && path.hasSuffix("/sketch"):
+            let landmarkIDStr = extractPathComponent(from: path, prefix: "/api/landmarks/", suffix: "/sketch")
+            return getLandmarkSketchResponse(landmarkIDStr: landmarkIDStr)
+        case _ where method == "PUT" && path.hasPrefix("/api/landmarks/") && path.hasSuffix("/sketch"):
+            let landmarkIDStr = extractPathComponent(from: path, prefix: "/api/landmarks/", suffix: "/sketch")
+            return await putLandmarkSketchResponse(landmarkIDStr: landmarkIDStr, request: request)
         case ("OPTIONS", _):
             return SBHTTPResponse(status: 204, contentType: "text/plain", body: Data())
         default:
@@ -69,25 +97,7 @@ final class StoryboardRouter {
         guard let ws = workspace, let root = projectRoot(ws) else {
             return .serviceUnavailable("no project open")
         }
-        let scenes = ws.store.scenes
-        var payload: [[String: Any]] = []
-        for (sceneOrder, scene) in scenes.enumerated() {
-            for (shotOrder, shot) in scene.shots.enumerated() {
-                let has = diskStore.hasFrames(projectRoot: root, sceneID: scene.id, shotID: shot.id)
-                let entry: [String: Any] = [
-                    "sceneId": scene.id.uuidString,
-                    "sceneName": scene.name,
-                    "sceneOrder": sceneOrder,
-                    "shotId": shot.id.uuidString,
-                    "shotName": shot.name,
-                    "shotOrder": shotOrder,
-                    "startFrame": shot.startFrame,
-                    "summary": shot.notes,
-                    "hasFrames": has
-                ]
-                payload.append(entry)
-            }
-        }
+        var payload = shotEntries(projectRoot: root, scenes: ws.store.scenes)
         payload.sort {
             let s0 = $0["sceneOrder"] as? Int ?? 0
             let s1 = $1["sceneOrder"] as? Int ?? 0
@@ -95,6 +105,188 @@ final class StoryboardRouter {
             return ($0["shotOrder"] as? Int ?? 0) < ($1["shotOrder"] as? Int ?? 0)
         }
         return .okJSONArray(payload)
+    }
+
+    private func placesResponse() -> SBHTTPResponse {
+        guard let ws = workspace, projectRoot(ws) != nil else {
+            return .serviceUnavailable("no project open")
+        }
+        return .okJSONArray(ws.store.storyboardPlaceEntries())
+    }
+
+    private func landmarksResponse() -> SBHTTPResponse {
+        guard let ws = workspace, projectRoot(ws) != nil else {
+            return .serviceUnavailable("no project open")
+        }
+        return .okJSONArray(ws.store.storyboardLandmarkEntries())
+    }
+
+    private func postShotResponse(sceneIDStr: String?, request: SBHTTPRequest) async -> SBHTTPResponse {
+        guard let ws = workspace, let root = projectRoot(ws) else {
+            return .serviceUnavailable("no project open")
+        }
+
+        let explicitSceneID = sceneIDStr.flatMap(UUID.init(uuidString:))
+        if sceneIDStr != nil, explicitSceneID == nil {
+            return .badRequest("Invalid sceneId")
+        }
+
+        let body: [String: Any]?
+        if let requestBody = request.body, !requestBody.isEmpty {
+            guard let parsedBody = request.jsonBody() else {
+                return .badRequest("Invalid JSON body")
+            }
+            body = parsedBody
+        } else {
+            body = nil
+        }
+        let bodySceneID: UUID?
+        if let bodySceneIDString = body?["sceneId"] as? String {
+            guard let parsedBodySceneID = UUID(uuidString: bodySceneIDString) else {
+                return .badRequest("Invalid sceneId")
+            }
+            bodySceneID = parsedBodySceneID
+        } else {
+            bodySceneID = nil
+        }
+        let requestedSceneID = explicitSceneID ?? bodySceneID
+        let title = body?["title"] as? String
+
+        guard let created = ws.store.appendStoryboardShot(sceneID: requestedSceneID, title: title) else {
+            return .serviceUnavailable("no scene selected")
+        }
+
+        await MainActor.run {
+            StoryboardServerStatusModel.shared.recordIPadSave("Added shot")
+        }
+        let sceneOrder = ws.store.scenes.firstIndex(where: { $0.id == created.sceneID }) ?? 0
+
+        let shot = created.shot
+        let response: [String: Any] = [
+            "sceneId": created.sceneID.uuidString,
+            "sceneName": created.sceneName,
+            "sceneOrder": sceneOrder,
+            "shotId": shot.id.uuidString,
+            "shotName": shot.name,
+            "shotOrder": created.shotOrder,
+            "startFrame": shot.startFrame,
+            "summary": shot.notes,
+            "hasFrames": diskStore.hasFrames(projectRoot: root, sceneID: created.sceneID, shotID: shot.id),
+            "hasAnalysis": diskStore.hasAnalysisSidecars(projectRoot: root, sceneID: created.sceneID, shotID: shot.id)
+        ]
+        return SBHTTPResponse(
+            status: 201,
+            contentType: "application/json; charset=utf-8",
+            body: (try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])) ?? Data()
+        )
+    }
+
+    private func reorderShotsResponse(request: SBHTTPRequest) async -> SBHTTPResponse {
+        guard let ws = workspace, projectRoot(ws) != nil else {
+            return .serviceUnavailable("no project open")
+        }
+        guard let body = request.jsonBody() else {
+            return .badRequest("Invalid JSON body")
+        }
+        guard let sceneIDString = body["sceneId"] as? String,
+              let sceneID = UUID(uuidString: sceneIDString) else {
+            return .badRequest("Missing or invalid sceneId")
+        }
+        guard let rawShotIDs = body["shotIds"] as? [String] else {
+            return .badRequest("Missing shotIds array")
+        }
+        let shotIDs = rawShotIDs.compactMap { UUID(uuidString: $0) }
+        guard shotIDs.count == rawShotIDs.count else {
+            return .badRequest("Invalid shot UUID in shotIds")
+        }
+
+        let ok = ws.store.reorderSceneShots(sceneID: sceneID, shotIDs: shotIDs)
+        guard ok else {
+            return .badRequest("shotIds must be a permutation of the scene's existing shot IDs")
+        }
+        await MainActor.run {
+            StoryboardServerStatusModel.shared.recordIPadSave("Reordered shots")
+        }
+        return SBHTTPResponse(status: 204, contentType: "application/json", body: Data())
+    }
+
+    private func postPlaceResponse(request: SBHTTPRequest) async -> SBHTTPResponse {
+        guard let ws = workspace, projectRoot(ws) != nil else {
+            return .serviceUnavailable("no project open")
+        }
+        let body = request.jsonBody()
+        let name = (body?["name"] as? String) ?? "New Place"
+        let created = ws.store.createStoryboardPlace(name: name)
+        await MainActor.run {
+            StoryboardServerStatusModel.shared.recordIPadSave("Added place")
+        }
+        return SBHTTPResponse(
+            status: 201,
+            contentType: "application/json; charset=utf-8",
+            body: (try? JSONSerialization.data(withJSONObject: [
+                "id": created.id.uuidString,
+                "name": created.name
+            ], options: [.sortedKeys])) ?? Data()
+        )
+    }
+
+    private func postLandmarkResponse(request: SBHTTPRequest) async -> SBHTTPResponse {
+        guard let ws = workspace, projectRoot(ws) != nil else {
+            return .serviceUnavailable("no project open")
+        }
+        let body = request.jsonBody()
+        let title = (body?["title"] as? String) ?? "New Landmark"
+        let created = ws.store.createStoryboardLandmark(title: title)
+        await MainActor.run {
+            StoryboardServerStatusModel.shared.recordIPadSave("Added landmark")
+        }
+        return SBHTTPResponse(
+            status: 201,
+            contentType: "application/json; charset=utf-8",
+            body: (try? JSONSerialization.data(withJSONObject: [
+                "id": created.id.uuidString,
+                "title": created.title
+            ], options: [.sortedKeys])) ?? Data()
+        )
+    }
+
+    private func shotEntries(projectRoot root: URL, scenes: [AnimationScene]) -> [[String: Any]] {
+        var payload: [[String: Any]] = []
+        for (sceneOrder, scene) in scenes.enumerated() {
+            for (shotOrder, shot) in scene.shots.enumerated() {
+                payload.append(shotEntry(
+                    projectRoot: root,
+                    scene: scene,
+                    sceneOrder: sceneOrder,
+                    shot: shot,
+                    shotOrder: shotOrder
+                ))
+            }
+        }
+        return payload
+    }
+
+    private func shotEntry(
+        projectRoot root: URL,
+        scene: AnimationScene,
+        sceneOrder: Int,
+        shot: AnimationSceneShot,
+        shotOrder: Int
+    ) -> [String: Any] {
+        let has = diskStore.hasFrames(projectRoot: root, sceneID: scene.id, shotID: shot.id)
+        let hasAnalysis = diskStore.hasAnalysisSidecars(projectRoot: root, sceneID: scene.id, shotID: shot.id)
+        return [
+            "sceneId": scene.id.uuidString,
+            "sceneName": scene.name,
+            "sceneOrder": sceneOrder,
+            "shotId": shot.id.uuidString,
+            "shotName": shot.name,
+            "shotOrder": shotOrder,
+            "startFrame": shot.startFrame,
+            "summary": shot.notes,
+            "hasFrames": has,
+            "hasAnalysis": hasAnalysis
+        ]
     }
 
     private func putSummaryResponse(shotIDStr: String?, request: SBHTTPRequest) async -> SBHTTPResponse {
@@ -108,6 +300,77 @@ final class StoryboardRouter {
 
         let found = ws.store.updateShotNotes(shotID: shotID, notes: summary)
         guard found else { return .notFound("Shot not found: \(shotIDStr)") }
+        await MainActor.run {
+            StoryboardServerStatusModel.shared.recordIPadSave("Shot summary")
+        }
+        return SBHTTPResponse(status: 204, contentType: "application/json", body: Data())
+    }
+
+    private func getPlaceSketchResponse(placeIDStr: String?) -> SBHTTPResponse {
+        guard let placeIDStr, let placeID = UUID(uuidString: placeIDStr) else {
+            return .badRequest("Invalid placeId")
+        }
+        guard let ws = workspace, projectRoot(ws) != nil else {
+            return .serviceUnavailable("no project open")
+        }
+        guard let data = ws.store.readStoryboardPlaceSketch(placeID: placeID) else {
+            return .notFound("No sketch for place \(placeIDStr)")
+        }
+        return SBHTTPResponse(status: 200, contentType: "image/png", body: data)
+    }
+
+    private func putPlaceSketchResponse(placeIDStr: String?, request: SBHTTPRequest) async -> SBHTTPResponse {
+        guard let placeIDStr, let placeID = UUID(uuidString: placeIDStr) else {
+            return .badRequest("Invalid placeId")
+        }
+        guard let ws = workspace, projectRoot(ws) != nil else {
+            return .serviceUnavailable("no project open")
+        }
+        guard let body = request.body, !body.isEmpty else {
+            return .badRequest("Empty request body")
+        }
+        do {
+            _ = try ws.store.storeStoryboardPlaceSketch(body, placeID: placeID)
+        } catch {
+            return SBHTTPResponse.error(500, "Failed to save place sketch: \(error.localizedDescription)")
+        }
+        await MainActor.run {
+            StoryboardServerStatusModel.shared.recordIPadSave("Place reference sketch")
+        }
+        return SBHTTPResponse(status: 204, contentType: "application/json", body: Data())
+    }
+
+    private func getLandmarkSketchResponse(landmarkIDStr: String?) -> SBHTTPResponse {
+        guard let landmarkIDStr, let landmarkID = UUID(uuidString: landmarkIDStr) else {
+            return .badRequest("Invalid landmarkId")
+        }
+        guard let ws = workspace, projectRoot(ws) != nil else {
+            return .serviceUnavailable("no project open")
+        }
+        guard let data = ws.store.readStoryboardLandmarkSketch(landmarkID: landmarkID) else {
+            return .notFound("No sketch for landmark \(landmarkIDStr)")
+        }
+        return SBHTTPResponse(status: 200, contentType: "image/png", body: data)
+    }
+
+    private func putLandmarkSketchResponse(landmarkIDStr: String?, request: SBHTTPRequest) async -> SBHTTPResponse {
+        guard let landmarkIDStr, let landmarkID = UUID(uuidString: landmarkIDStr) else {
+            return .badRequest("Invalid landmarkId")
+        }
+        guard let ws = workspace, projectRoot(ws) != nil else {
+            return .serviceUnavailable("no project open")
+        }
+        guard let body = request.body, !body.isEmpty else {
+            return .badRequest("Empty request body")
+        }
+        do {
+            _ = try ws.store.storeStoryboardLandmarkSketch(body, landmarkID: landmarkID)
+        } catch {
+            return SBHTTPResponse.error(500, "Failed to save landmark sketch: \(error.localizedDescription)")
+        }
+        await MainActor.run {
+            StoryboardServerStatusModel.shared.recordIPadSave("Landmark reference sketch")
+        }
         return SBHTTPResponse(status: 204, contentType: "application/json", body: Data())
     }
 
@@ -140,7 +403,7 @@ final class StoryboardRouter {
         guard let ws = workspace, let root = projectRoot(ws) else {
             return .serviceUnavailable("no project open")
         }
-        guard let (sceneID, _) = ws.store.findShot(by: shotID) else {
+        guard let (sceneID, shot) = ws.store.findShot(by: shotID) else {
             return .notFound("Shot not found: \(shotIDStr)")
         }
         guard let body = request.body, !body.isEmpty else {
@@ -151,6 +414,20 @@ final class StoryboardRouter {
         } catch {
             return SBHTTPResponse.error(500, "Failed to save image: \(error.localizedDescription)")
         }
+        do {
+            try registerSavedStoryboardFrame(
+                workspace: ws,
+                projectRoot: root,
+                sceneID: sceneID,
+                shot: shot,
+                frame: frame
+            )
+        } catch {
+            return SBHTTPResponse.error(500, "Saved image but failed to create durable analysis record: \(error.localizedDescription)")
+        }
+        await MainActor.run {
+            StoryboardServerStatusModel.shared.recordIPadSave("\(frameStr.capitalized) storyboard frame")
+        }
         return SBHTTPResponse(status: 204, contentType: "application/json", body: Data())
     }
 
@@ -159,6 +436,172 @@ final class StoryboardRouter {
     private func projectRoot(_ ws: AnimateWorkspaceController) -> URL? {
         guard let path = ws.activeProjectPath else { return nil }
         return URL(fileURLWithPath: path)
+    }
+
+    private func registerSavedStoryboardFrame(
+        workspace ws: AnimateWorkspaceController,
+        projectRoot root: URL,
+        sceneID: UUID,
+        shot: AnimationSceneShot,
+        frame: StoryboardFrame
+    ) throws {
+        let imageURL = diskStore.imageURL(projectRoot: root, sceneID: sceneID, shotID: shot.id, frame: frame)
+        let scene = ws.store.scenes.first { $0.id == sceneID }
+        let sceneOrder = ws.store.scenes.firstIndex { $0.id == sceneID }
+        let shotOrder = scene?.shots.firstIndex { $0.id == shot.id }
+        let sceneName = scene?.name ?? "Scene"
+
+        let context: [String: String] = [
+            "source": "ipad_storyboard",
+            "sceneID": sceneID.uuidString,
+            "sceneName": sceneName,
+            "sceneOrder": sceneOrder.map { String($0) } ?? "",
+            "shotID": shot.id.uuidString,
+            "shotName": shot.name,
+            "shotOrder": shotOrder.map { String($0) } ?? "",
+            "frame": frame.rawValue
+        ]
+
+        ws.store.registerImageAsset(
+            path: imageURL.path,
+            linkKind: .storyboardFrame,
+            ownerID: shot.id.uuidString,
+            ownerParentID: sceneID.uuidString,
+            moment: frame.rawValue,
+            workflow: "storyboard",
+            context: context,
+            enqueueForAnalysis: true
+        )
+
+        // This is the durable queue boundary for iPad storyboard saves.
+        // Asset registration/analysis enqueue can remain background work, but
+        // the sidecar must exist before we acknowledge the PUT. If the app quits
+        // after returning 204, startup recovery can rehydrate jobs from this
+        // hash-stamped record.
+        try StoryboardFrameAnalysisSidecarStore.writePendingAnalysis(
+            projectRoot: root,
+            imageURL: imageURL,
+            context: StoryboardFrameAnalysisSidecarStore.Context(
+                sceneID: sceneID,
+                sceneName: sceneName,
+                shotID: shot.id,
+                shotName: shot.name,
+                frame: frame,
+                promptContext: storyboardAnalysisPromptContext(
+                    workspace: ws,
+                    scene: scene,
+                    sceneID: sceneID,
+                    shot: shot,
+                    frame: frame
+                )
+            )
+        )
+    }
+
+    private func storyboardAnalysisPromptContext(
+        workspace ws: AnimateWorkspaceController,
+        scene: AnimationScene?,
+        sceneID: UUID,
+        shot: AnimationSceneShot,
+        frame: StoryboardFrame
+    ) -> StoryboardAnalysisPromptContext {
+        let sceneCharacters = ws.store.characters
+            .filter { character in
+                scene?.characterIDs.contains(character.id) == true ||
+                    scene?.characterSlugs.contains(character.owpSlug) == true ||
+                    character.id == shot.focusCharacterID ||
+                    character.owpSlug == shot.focusCharacterSlug
+            }
+            .map { character in
+                StoryboardAnalysisKnownEntity(
+                    identifier: character.owpSlug.isEmpty ? character.id.uuidString : character.owpSlug,
+                    name: character.name,
+                    notes: [
+                        character.description,
+                        character.defaultWardrobeType.rawValue,
+                        character.genderType.rawValue
+                    ]
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " • ")
+                )
+            }
+
+        let scenePlaces = knownPlaces(for: scene, store: ws.store)
+        let knownLandmarks = ws.store.placesWorkflowLibrary.landmarkProfiles
+            .prefix(40)
+            .map { landmark in
+                StoryboardAnalysisKnownEntity(
+                    identifier: landmark.id.uuidString,
+                    name: landmark.title,
+                    notes: [
+                        landmark.kind.displayName,
+                        landmark.notes,
+                        landmark.tags.joined(separator: ", ")
+                    ]
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " • ")
+                )
+            }
+
+        let cameraParts = [
+            shot.cameraShot?.rawValue,
+            shot.shotIntent?.rawValue
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+
+        return StoryboardAnalysisPromptContext(
+            sceneID: sceneID.uuidString,
+            shotID: shot.id.uuidString,
+            frame: frame.rawValue,
+            directionText: scene?.directionTemplate?.notes,
+            actionText: shot.notes,
+            cameraText: cameraParts.joined(separator: " • "),
+            shotSummary: [
+                shot.name,
+                shot.sourceLyricExcerpt ?? ""
+            ]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " • "),
+            knownCharacters: sceneCharacters,
+            knownPlaces: scenePlaces,
+            knownLandmarks: Array(knownLandmarks),
+            timeOfDay: scenePlaces.first?.notes,
+            orientationNotes: ws.store.placesWorldContextBlocks.environmental
+        )
+    }
+
+    private func knownPlaces(
+        for scene: AnimationScene?,
+        store: AnimateStore
+    ) -> [StoryboardAnalysisKnownEntity] {
+        let relevantBackgrounds = store.backgrounds.filter { background in
+            scene?.backgroundID == background.id ||
+                background.sceneUsage.contains(scene?.name ?? "")
+        }
+        let backgrounds = relevantBackgrounds.isEmpty
+            ? store.backgrounds.prefix(12)
+            : relevantBackgrounds.prefix(12)
+
+        return backgrounds.map { background in
+            StoryboardAnalysisKnownEntity(
+                identifier: background.id.uuidString,
+                name: background.name,
+                notes: [
+                    background.visualBrief,
+                    background.timeOfDay,
+                    background.geographicPosition,
+                    background.sideOfRiver,
+                    background.visualContinuityAnchors
+                ]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " • ")
+            )
+        }
     }
 
     private func extractPathComponent(from path: String, prefix: String, suffix: String) -> String? {
@@ -273,7 +716,7 @@ struct SBHTTPResponse: Sendable {
             "Content-Type": contentType,
             "Content-Length": "\(body.count)",
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
             "Connection": "close"
         ]

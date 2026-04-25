@@ -14,6 +14,8 @@ import getStroke from './vendor/perfect-freehand.min.js';
 const BACKING_W = 1920;
 const BACKING_H = 1080;
 const MAX_UNDO = 50;
+const PEN_TOUCH_REJECTION_MS = 700;
+const PALM_RADIUS_PX = 28;
 
 // ─── Module state ─────────────────────────────────────────────────────────
 
@@ -23,7 +25,9 @@ let onDirty = null;      // callback from app.js when canvas becomes dirty
 
 // Tool state
 let currentTool = 'pencil';   // 'pencil' | 'eraser'
-let brushSize = 8;
+let pencilBrushSize = 8;
+let eraserBrushSize = 18;
+let activeBrushSize = pencilBrushSize;
 
 // Undo stacks — stored as ImageData for reliability
 // Per-frame stacks managed by app.js calling resetUndoStacks()
@@ -33,7 +37,8 @@ let redoStack = [];
 // Pointer / stroke state
 let activePointerId = null;
 let penInFlight = false;
-let currentPoints = [];   // [{x,y,pressure}]
+let currentPoints = [];   // [{x,y,pressure,opacity}]
+let lastPenEventAt = -Infinity;
 
 // Transform: canvas-space → screen-space
 // The canvas element is positioned at its natural 16:9 CSS size,
@@ -42,6 +47,7 @@ let scale = 1;    // current zoom
 let panX = 0;     // pan offset in backing pixels
 let panY = 0;
 let fitScale = 1; // "fit to screen" scale, recalculated on layout change
+let hasLaidOut = false;
 
 // Touch gesture state (pinch/pan)
 let touchA = null;  // {id, x, y}
@@ -98,13 +104,21 @@ export function initDrawing(canvasEl, dirtyCallback) {
  */
 export function recalcLayout(areaW, areaH) {
   const margin = 24;
+  const previousFitScale = fitScale;
   const scaleX = (areaW - margin * 2) / BACKING_W;
   const scaleY = (areaH - margin * 2) / BACKING_H;
   fitScale = Math.min(scaleX, scaleY);
 
-  // Clamp current scale to [fitScale, 4x]
-  if (scale < fitScale) scale = fitScale;
-  if (scale > fitScale * 4) scale = fitScale * 4;
+  if (!hasLaidOut) {
+    // Start fully fitted so the storyboard canvas never boots zoomed in.
+    scale = fitScale;
+    hasLaidOut = true;
+  } else {
+    // Preserve the current zoom factor across resizes when possible.
+    const zoomFactor = scale / previousFitScale;
+    const maxScale = fitScale * 4;
+    scale = Math.max(fitScale, Math.min(maxScale, zoomFactor * fitScale));
+  }
 
   clampPan(areaW, areaH);
   applyTransform(areaW, areaH);
@@ -161,7 +175,13 @@ function clientToCanvas(clientX, clientY) {
 // ─── Pointer event handlers ───────────────────────────────────────────────
 
 function isDrawablePointer(e) {
-  return e.pointerType === 'pen' || e.pointerType === 'mouse';
+  // ALWAYS-ON pencil-only mode: only Apple Pencil (pointerType 'pen') may
+  // draw. Mouse and finger touches are ignored.
+  return e.pointerType === 'pen';
+}
+
+function notePenEvent(e) {
+  if (e.pointerType === 'pen') lastPenEventAt = performance.now();
 }
 
 function onPointerDown(e) {
@@ -169,13 +189,12 @@ function onPointerDown(e) {
   if (penInFlight) return;
 
   e.preventDefault();
+  notePenEvent(e);
   canvas.setPointerCapture(e.pointerId);
   activePointerId = e.pointerId;
   penInFlight = true;
 
-  const { x, y } = clientToCanvas(e.clientX, e.clientY);
-  const pressure = clampPressure(e.pressure);
-  currentPoints = [{ x, y, pressure }];
+  currentPoints = [makePointFromEvent(e)];
 
   // Snapshot current canvas for live-preview compositing
   strokeSnapshot = ctx.getImageData(0, 0, BACKING_W, BACKING_H);
@@ -186,10 +205,9 @@ function onPointerDown(e) {
 function onPointerMove(e) {
   if (!penInFlight || e.pointerId !== activePointerId) return;
   e.preventDefault();
+  notePenEvent(e);
 
-  const { x, y } = clientToCanvas(e.clientX, e.clientY);
-  const pressure = clampPressure(e.pressure);
-  currentPoints.push({ x, y, pressure });
+  currentPoints.push(makePointFromEvent(e));
 
   scheduleRender();
 }
@@ -197,10 +215,9 @@ function onPointerMove(e) {
 function onPointerUp(e) {
   if (!penInFlight || e.pointerId !== activePointerId) return;
   e.preventDefault();
+  notePenEvent(e);
 
-  const { x, y } = clientToCanvas(e.clientX, e.clientY);
-  const pressure = clampPressure(e.pressure);
-  currentPoints.push({ x, y, pressure });
+  currentPoints.push(makePointFromEvent(e));
 
   commitStroke();
   penInFlight = false;
@@ -211,6 +228,7 @@ function onPointerUp(e) {
 
 function onPointerCancel(e) {
   if (!penInFlight || e.pointerId !== activePointerId) return;
+  notePenEvent(e);
 
   // Restore pre-stroke snapshot on cancel
   if (strokeSnapshot) {
@@ -223,8 +241,46 @@ function onPointerCancel(e) {
 }
 
 function clampPressure(raw) {
-  // Clamp to [0.05, 1] so strokes are always visible
+  // PointerEvent.pressure is normalized to [0, 1]; keep within that range so
+  // perfect-freehand receives predictable Apple Pencil values.
   return Math.max(0.05, Math.min(1.0, raw || 0.5));
+}
+
+function clampOpacity(raw) {
+  return Math.max(0.12, Math.min(0.98, raw));
+}
+
+function getAltitudeAngle(e) {
+  if (typeof e.altitudeAngle === 'number' && Number.isFinite(e.altitudeAngle)) {
+    return Math.max(0, Math.min(Math.PI / 2, e.altitudeAngle));
+  }
+
+  if (typeof e.tiltX === 'number' && typeof e.tiltY === 'number') {
+    const tiltMagnitude = Math.min(90, Math.hypot(e.tiltX, e.tiltY));
+    return (Math.PI / 2) * (1 - tiltMagnitude / 90);
+  }
+
+  return Math.PI / 2;
+}
+
+function makePointFromEvent(e) {
+  const { x, y } = clientToCanvas(e.clientX, e.clientY);
+  const basePressure = clampPressure(typeof e.pressure === 'number' ? e.pressure : 0.5);
+  const altitudeAngle = getAltitudeAngle(e);
+  const flatness = 1 - (altitudeAngle / (Math.PI / 2));
+  const contactSize = Math.max(
+    typeof e.width === 'number' ? e.width : 0,
+    typeof e.height === 'number' ? e.height : 0
+  );
+  const contactBoost = contactSize > 0 ? Math.min(0.25, contactSize / 48) : 0;
+
+  // Flat Pencil strokes should widen noticeably, but stay bounded.
+  const widthPressure = clampPressure(basePressure + flatness * 0.35 + contactBoost);
+
+  // Blend pressure and tilt into opacity so flatter strokes read darker/softer.
+  const opacity = clampOpacity(0.22 + basePressure * 0.58 + flatness * 0.18 + contactBoost * 0.2);
+
+  return { x, y, pressure: widthPressure, opacity };
 }
 
 // ─── Touch gesture handlers (pinch + 2-finger pan) ────────────────────────
@@ -236,32 +292,43 @@ function getTouchById(touches, id) {
   return null;
 }
 
-function onTouchStart(e) {
-  // Block touch drawing — only pen strokes allowed
-  // However, allow 2-finger gestures for zoom/pan
-  const area = canvas.parentElement;
-  const areaRect = area.getBoundingClientRect();
+function resetTouchGesture() {
+  touchA = null;
+  touchB = null;
+}
 
-  if (e.touches.length === 2 && !penInFlight) {
-    e.preventDefault();
-    const t0 = e.touches[0];
-    const t1 = e.touches[1];
-    touchA = { id: t0.identifier, x: t0.clientX, y: t0.clientY };
-    touchB = { id: t1.identifier, x: t1.clientX, y: t1.clientY };
+function recentPenActivity() {
+  return performance.now() - lastPenEventAt < PEN_TOUCH_REJECTION_MS;
+}
 
-    gestureStartDist = Math.hypot(touchA.x - touchB.x, touchA.y - touchB.y);
-    gestureStartScale = scale;
-    gestureStartPanX = panX;
-    gestureStartPanY = panY;
-    gestureStartMidX = (touchA.x + touchB.x) / 2;
-    gestureStartMidY = (touchA.y + touchB.y) / 2;
+function hasPalmLikeTouch(touches) {
+  for (let i = 0; i < touches.length; i++) {
+    const touch = touches[i];
+    const radius = Math.max(touch.radiusX || 0, touch.radiusY || 0);
+    if (radius >= PALM_RADIUS_PX) return true;
   }
+  return false;
+}
+
+function onTouchStart(e) {
+  // ALWAYS-ON pencil-only mode: every finger touch on the canvas is dropped.
+  // Apple Pencil drawing flows through the pointer event path. Two-finger
+  // pinch / pan is intentionally disabled to keep the gesture surface clean
+  // — the user explicitly asked for finger input to be off everywhere.
+  e.preventDefault();
+  resetTouchGesture();
 }
 
 function onTouchMove(e) {
+  if (penInFlight || recentPenActivity() || hasPalmLikeTouch(e.touches)) {
+    e.preventDefault();
+    resetTouchGesture();
+    return;
+  }
+
   if (touchA === null || touchB === null) {
     // Single-finger touch while no gesture — prevent scroll
-    if (!penInFlight) e.preventDefault();
+    e.preventDefault();
     return;
   }
   e.preventDefault();
@@ -295,8 +362,7 @@ function onTouchMove(e) {
 
 function onTouchEnd(e) {
   if (e.touches.length < 2) {
-    touchA = null;
-    touchB = null;
+    resetTouchGesture();
   }
 }
 
@@ -342,10 +408,10 @@ function drawStroke(points, isComplete) {
 
   // Build perfect-freehand options
   const pfOptions = {
-    size: brushSize,
-    smoothing: 0.5,
-    thinning: isEraser ? 0 : 0.5,
-    streamline: 0.5,
+    size: activeBrushSize,
+    smoothing: 0.55,
+    thinning: isEraser ? 0 : 0.55,
+    streamline: 0.45,
     easing: (t) => t,
     last: isComplete,
     simulatePressure: false,
@@ -353,14 +419,7 @@ function drawStroke(points, isComplete) {
     end: { cap: true, taper: 0, easing: (t) => t },
   };
 
-  // Apply tilt-based width multiplier for pencil (altitude angle widens stroke)
-  // We encode this as a pre-processed size per-point via thinning.
-  // perfect-freehand uses the pressure field, so we remap our tilt there.
-  const inputPoints = points.map((pt) => {
-    let p = pt.pressure;
-    // Tilt: if altitudeAngle near 0 (flat), widen — already baked in pressure
-    return [pt.x, pt.y, p];
-  });
+  const inputPoints = points.map((pt) => [pt.x, pt.y, pt.pressure]);
 
   const outlinePoints = getStroke(inputPoints, pfOptions);
   if (outlinePoints.length < 2) return;
@@ -384,31 +443,16 @@ function drawStroke(points, isComplete) {
   ctx.closePath();
 
   if (!isEraser) {
-    // Vary opacity based on average pressure for graphite feel
-    const avgPressure = points.reduce((s, p) => s + p.pressure, 0) / points.length;
-    const alpha = Math.max(0.25, Math.min(0.92, 0.4 + avgPressure * 0.55));
-    ctx.globalAlpha = alpha;
+    // Vary opacity based on average pressure/tilt for a more tactile graphite feel.
+    const avgOpacity = points.reduce((s, p) => s + (p.opacity || 0), 0) / points.length;
+    ctx.globalAlpha = avgOpacity;
   }
 
   ctx.fill();
   ctx.restore();
 }
 
-// ─── Tilt support (called from pointer events externally via pointermove) ──
-
-/**
- * Call this to add altitude angle data to the latest point.
- * Since we batch in rAF, we enrich the last point in currentPoints.
- */
-export function enrichLastPointWithTilt(altitudeAngle) {
-  if (!penInFlight || currentPoints.length === 0) return;
-  const pt = currentPoints[currentPoints.length - 1];
-  // altitudeAngle ∈ [0, π/2]: 0 = flat (wide), π/2 = perpendicular (thin)
-  // Map to a width multiplier [1.0, 2.5]
-  const tiltFactor = 1.0 + (1 - altitudeAngle / (Math.PI / 2)) * 1.5;
-  // Fold into pressure: effective pressure drives size in perfect-freehand
-  pt.pressure = Math.min(1.0, pt.pressure * Math.sqrt(tiltFactor));
-}
+// ─── Brush state API ──────────────────────────────────────────────────────
 
 // ─── Undo / Redo ──────────────────────────────────────────────────────────
 
@@ -507,10 +551,33 @@ export function exportPNG() {
 
 export function setTool(tool) {
   currentTool = tool;
+  activeBrushSize = currentTool === 'eraser' ? eraserBrushSize : pencilBrushSize;
 }
 
 export function setBrushSize(size) {
-  brushSize = Number(size);
+  const normalized = Math.max(2, Number(size) || 2);
+  if (currentTool === 'eraser') {
+    eraserBrushSize = normalized;
+  } else {
+    pencilBrushSize = normalized;
+  }
+  activeBrushSize = normalized;
+}
+
+export function setBrushSizeForTool(tool, size) {
+  const normalized = Math.max(2, Number(size) || 2);
+  if (tool === 'eraser') {
+    eraserBrushSize = normalized;
+  } else {
+    pencilBrushSize = normalized;
+  }
+  if (tool === currentTool) {
+    activeBrushSize = normalized;
+  }
+}
+
+export function getBrushSizeForTool(tool) {
+  return tool === 'eraser' ? eraserBrushSize : pencilBrushSize;
 }
 
 export function getCurrentTool() {
@@ -518,7 +585,7 @@ export function getCurrentTool() {
 }
 
 export function getCurrentBrushSize() {
-  return brushSize;
+  return activeBrushSize;
 }
 
 export function resetZoom() {

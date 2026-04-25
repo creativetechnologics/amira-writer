@@ -10,12 +10,12 @@ import {
   loadImageURL,
   exportPNG,
   setTool,
-  setBrushSize,
+  setBrushSizeForTool,
+  getBrushSizeForTool,
   undo,
   redo,
   clearCanvas,
   resetUndoStacks,
-  enrichLastPointWithTilt,
 } from './drawing.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────
@@ -25,24 +25,45 @@ const SUMMARY_DEBOUNCE_MS = 1_500;
 const FRAMES = ['begin', 'middle', 'end'];
 const LS_SHOT_KEY = 'storyboard_shotId';
 const LS_FRAME_KEY = 'storyboard_frame';
+const LS_MODE_KEY = 'storyboard_sidebar_mode';
+const LS_PLACE_TARGET_KEY = 'storyboard_place_target';
+const LS_PENCIL_SIZE_KEY = 'storyboard_brush_size_pencil';
+const LS_ERASER_SIZE_KEY = 'storyboard_brush_size_eraser';
+const DEFAULT_PENCIL_BRUSH_SIZE = 6;
+const DEFAULT_ERASER_BRUSH_SIZE = 18;
+const BRUSH_LIMITS = {
+  pencil: { min: 1, max: 12 },
+  eraser: { min: 4, max: 50 },
+};
+const DOUBLE_TAP_GUARD_MS = 300;
 
 // ─── App state ────────────────────────────────────────────────────────────
 
 let shots = [];                // flat array from /api/shots
+let places = [];
+let landmarks = [];
+let sidebarMode = 'scenes';    // 'scenes' | 'places'
+let currentPlaceTarget = null; // { type: 'place'|'landmark', id }
 let currentShotId = null;
 let currentFrame = 'middle';   // 'begin' | 'middle' | 'end'
+let currentTool = 'pencil';
 let isDirty = false;
 let isSidebarOpen = true;
 let isToolbarOpen = true;
 let summaryDebounceTimer = null;
 let autosaveTimer = null;
 let isSaving = false;
+let lastTouchTapAt = 0;
+let lastTouchTapTarget = null;
+let isAddShotOpen = false;
+let addPlaceType = 'place';
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────
 
 const canvasEl = document.getElementById('drawing-canvas');
 const canvasArea = document.getElementById('canvas-area');
-const shotListEl = document.getElementById('shot-list');
+const appStatusEl = document.getElementById('app-status');
+const shotListEl = document.getElementById('item-list');
 const sidebar = document.getElementById('sidebar');
 const mainEl = document.getElementById('main');
 const toolbar = document.getElementById('toolbar');
@@ -50,8 +71,21 @@ const toolbarShowBtn = document.getElementById('toolbar-show-btn');
 const toolbarToggleBtn = document.getElementById('toolbar-toggle-btn');
 const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
 const sidebarCloseBtn = document.getElementById('sidebar-close-btn');
+const addShotBtn = document.getElementById('add-item-btn');
+const addShotSheet = document.getElementById('add-shot-sheet');
+const addShotForm = document.getElementById('add-shot-form');
+const addShotTitleInput = document.getElementById('add-shot-title');
+const addShotCloseBtn = document.getElementById('add-shot-close-btn');
+const addShotCancelBtn = document.getElementById('add-shot-cancel-btn');
+const addShotSceneLabel = document.getElementById('add-shot-scene-label');
+const addPlaceTypeRow = document.getElementById('add-place-type-row');
+const addTypePlaceBtn = document.getElementById('add-type-place');
+const addTypeLandmarkBtn = document.getElementById('add-type-landmark');
+const sidebarTabScenes = document.getElementById('sidebar-tab-scenes');
+const sidebarTabPlaces = document.getElementById('sidebar-tab-places');
 const projectNameEl = document.getElementById('project-name');
 const saveStatusEl = document.getElementById('save-status');
+const brushLabel = document.getElementById('brush-label');
 const summaryEditor = document.getElementById('summary-editor');
 const frameBtns = document.querySelectorAll('.frame-btn');
 const undoBtn = document.getElementById('undo-btn');
@@ -63,6 +97,16 @@ const brushSlider = document.getElementById('brush-slider');
 const brushValue = document.getElementById('brush-value');
 const pencilBtn = document.getElementById('tool-pencil');
 const eraserBtn = document.getElementById('tool-eraser');
+const brushDecBtn = document.getElementById('brush-decrement');
+const brushIncBtn = document.getElementById('brush-increment');
+const copyBtn = document.getElementById('copy-btn');
+const pasteBtn = document.getElementById('paste-btn');
+
+// In-memory clipboard for copy/paste of canvas (latest only, cleared on reload)
+let copiedFrameDataURL = null;
+
+// Drag-and-drop reorder state
+let dragState = null; // { shotId, sceneId, originRow, placeholderTarget, ... }
 
 // ─── Boot ──────────────────────────────────────────────────────────────────
 
@@ -70,15 +114,11 @@ async function boot() {
   // Init drawing engine
   initDrawing(canvasEl, markDirty);
 
-  // Wire tilt enrichment into pointer events on the canvas
-  canvasEl.addEventListener('pointermove', (e) => {
-    if (e.pointerType === 'pen' && e.altitudeAngle != null) {
-      enrichLastPointWithTilt(e.altitudeAngle);
-    }
-  }, { passive: true });
-
+  loadBrushSizes();
+  installInputGuards();
   setupToolbar();
   setupSidebar();
+  setupAddShotSheet();
   setupFramePicker();
   setupSummary();
   setupKeyboard();
@@ -95,8 +135,12 @@ async function boot() {
 
   // Load shots
   await refreshShots();
+  await refreshPlaces();
 
   // Restore last position from localStorage
+  const savedMode = localStorage.getItem(LS_MODE_KEY);
+  const shouldRestorePlacesMode = savedMode === 'places';
+  if (shouldRestorePlacesMode) sidebarMode = 'places';
   const savedShotId = localStorage.getItem(LS_SHOT_KEY);
   const savedFrame = localStorage.getItem(LS_FRAME_KEY);
   if (savedFrame && FRAMES.includes(savedFrame)) {
@@ -110,9 +154,25 @@ async function boot() {
   if (targetShot) {
     await navigateTo(targetShot.shotId, currentFrame, false);
   }
+  if (shouldRestorePlacesMode) sidebarMode = 'places';
 
+  const savedPlaceTarget = parseStoredPlaceTarget();
+  if (savedPlaceTarget && findPlaceTarget(savedPlaceTarget.type, savedPlaceTarget.id)) {
+    currentPlaceTarget = savedPlaceTarget;
+  } else if (places.length > 0) {
+    currentPlaceTarget = { type: 'place', id: places[0].id };
+  } else if (landmarks.length > 0) {
+    currentPlaceTarget = { type: 'landmark', id: landmarks[0].id };
+  }
+  if (sidebarMode === 'places' && currentPlaceTarget) {
+    await navigateToPlaceTarget(currentPlaceTarget.type, currentPlaceTarget.id, false);
+  }
+  renderSidebar();
+
+  selectTool('pencil', { syncSlider: true });
   updateLayout();
   startAutosave();
+  clearAppStatus();
 }
 
 // ─── API helpers ──────────────────────────────────────────────────────────
@@ -126,15 +186,125 @@ async function apiFetch(path, options = {}) {
   return res;
 }
 
+function brushLimits(tool) {
+  return BRUSH_LIMITS[tool] || BRUSH_LIMITS.pencil;
+}
+
+function clampBrushSize(tool, value) {
+  const { min, max } = brushLimits(tool);
+  return Math.max(min, Math.min(max, Number(value) || min));
+}
+
+function readStoredBrushSize(key, fallback, tool) {
+  const value = Number.parseInt(localStorage.getItem(key) || '', 10);
+  return Number.isFinite(value) ? clampBrushSize(tool, value) : fallback;
+}
+
+function loadBrushSizes() {
+  const pencilSize = readStoredBrushSize(LS_PENCIL_SIZE_KEY, DEFAULT_PENCIL_BRUSH_SIZE, 'pencil');
+  const eraserSize = readStoredBrushSize(LS_ERASER_SIZE_KEY, DEFAULT_ERASER_BRUSH_SIZE, 'eraser');
+  setBrushSizeForTool('pencil', pencilSize);
+  setBrushSizeForTool('eraser', eraserSize);
+}
+
+function persistBrushSize(tool, size) {
+  const key = tool === 'eraser' ? LS_ERASER_SIZE_KEY : LS_PENCIL_SIZE_KEY;
+  localStorage.setItem(key, String(size));
+}
+
+function syncBrushUi(tool) {
+  currentTool = tool;
+  setTool(tool);
+  pencilBtn.classList.toggle('tool-btn--active', tool === 'pencil');
+  eraserBtn.classList.toggle('tool-btn--active', tool === 'eraser');
+
+  const label = tool === 'eraser' ? 'Eraser' : 'Pencil';
+  const size = getBrushSizeForTool(tool);
+  brushLabel.textContent = label;
+  brushSlider.min = String(brushLimits(tool).min);
+  brushSlider.max = String(brushLimits(tool).max);
+  brushSlider.value = String(size);
+  brushSlider.setAttribute('aria-label', `${label} size`);
+  brushValue.textContent = String(size);
+}
+
+function selectTool(tool, { syncSlider = true } = {}) {
+  if (currentTool !== tool) {
+    currentTool = tool;
+    setTool(tool);
+  }
+
+  pencilBtn.classList.toggle('tool-btn--active', tool === 'pencil');
+  eraserBtn.classList.toggle('tool-btn--active', tool === 'eraser');
+
+  if (syncSlider) {
+    syncBrushUi(tool);
+  } else {
+    const size = getBrushSizeForTool(tool);
+    brushLabel.textContent = tool === 'eraser' ? 'Eraser' : 'Pencil';
+    brushSlider.min = String(brushLimits(tool).min);
+    brushSlider.max = String(brushLimits(tool).max);
+    brushSlider.value = String(size);
+    brushSlider.setAttribute('aria-label', `${tool === 'eraser' ? 'Eraser' : 'Pencil'} size`);
+    brushValue.textContent = String(size);
+  }
+}
+
+function setActiveBrushSize(size) {
+  const normalized = clampBrushSize(currentTool, size);
+  setBrushSizeForTool(currentTool, normalized);
+  persistBrushSize(currentTool, normalized);
+  brushValue.textContent = String(normalized);
+}
+
+function adjustBrush(delta) {
+  const current = getBrushSizeForTool(currentTool);
+  const next = clampBrushSize(currentTool, current + delta);
+  setActiveBrushSize(next);
+  brushSlider.value = String(next);
+}
+
 // ─── Shot list ────────────────────────────────────────────────────────────
 
 async function refreshShots() {
   try {
     shots = await apiFetch('/api/shots');
-    renderShotList();
+    renderSidebar();
+    refreshAddShotSceneLabel();
   } catch (err) {
     shotListEl.innerHTML = '<div class="shot-list-loading">Failed to load shots.</div>';
   }
+}
+
+async function refreshPlaces() {
+  try {
+    const [placeList, landmarkList] = await Promise.all([
+      apiFetch('/api/places'),
+      apiFetch('/api/landmarks'),
+    ]);
+    places = Array.isArray(placeList) ? placeList : [];
+    landmarks = Array.isArray(landmarkList) ? landmarkList : [];
+    renderSidebar();
+  } catch (err) {
+    if (sidebarMode === 'places') {
+      shotListEl.innerHTML = '<div class="shot-list-loading">Failed to load places.</div>';
+    }
+  }
+}
+
+function renderSidebar() {
+  updateSidebarModeUI();
+  if (sidebarMode === 'places') renderPlaceList();
+  else renderShotList();
+}
+
+function updateSidebarModeUI() {
+  sidebarTabScenes?.classList.toggle('sidebar-tab--active', sidebarMode === 'scenes');
+  sidebarTabPlaces?.classList.toggle('sidebar-tab--active', sidebarMode === 'places');
+  sidebarTabScenes?.setAttribute('aria-selected', sidebarMode === 'scenes' ? 'true' : 'false');
+  sidebarTabPlaces?.setAttribute('aria-selected', sidebarMode === 'places' ? 'true' : 'false');
+  addShotBtn?.setAttribute('title', sidebarMode === 'places' ? 'Add place or landmark' : 'Add shot');
+  addShotBtn?.setAttribute('aria-label', sidebarMode === 'places' ? 'Add place or landmark' : 'Add shot');
 }
 
 function renderShotList() {
@@ -166,6 +336,7 @@ function renderShotList() {
       const row = document.createElement('div');
       row.className = 'shot-row';
       row.dataset.shotId = shot.shotId;
+      row.dataset.sceneId = shot.sceneId;
       if (shot.shotId === currentShotId) row.classList.add('shot-row--active');
 
       const name = document.createElement('div');
@@ -181,10 +352,23 @@ function renderShotList() {
         bme.appendChild(dot);
       }
 
+      const handle = document.createElement('div');
+      handle.className = 'shot-drag-handle';
+      handle.setAttribute('aria-label', 'Reorder shot');
+      handle.title = 'Drag to reorder';
+      attachShotReorderHandlers(handle, row, shot);
+
       row.appendChild(name);
       row.appendChild(bme);
+      row.appendChild(handle);
 
-      row.addEventListener('click', async () => {
+      row.addEventListener('click', async (event) => {
+        // Don't navigate if a drag just finished or originated from the handle
+        if (event.target.closest('.shot-drag-handle')) return;
+        if (dragState && dragState.suppressClick) {
+          dragState.suppressClick = false;
+          return;
+        }
         if (shot.shotId === currentShotId) return;
         await saveIfDirty();
         await navigateTo(shot.shotId, currentFrame, true);
@@ -200,10 +384,231 @@ function renderShotList() {
   shotListEl.appendChild(frag);
 }
 
+function renderPlaceList() {
+  if ((!places || places.length === 0) && (!landmarks || landmarks.length === 0)) {
+    shotListEl.innerHTML = '<div class="shot-list-loading">No places or landmarks yet.</div>';
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  appendPlaceSection(frag, 'Places', places, 'place');
+  appendPlaceSection(frag, 'Landmarks', landmarks, 'landmark');
+
+  shotListEl.innerHTML = '';
+  shotListEl.appendChild(frag);
+}
+
+function appendPlaceSection(frag, labelText, items, type) {
+  if (!items || items.length === 0) return;
+  const group = document.createElement('div');
+  group.className = 'scene-group';
+
+  const label = document.createElement('div');
+  label.className = 'scene-label';
+  label.textContent = labelText;
+  group.appendChild(label);
+
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'shot-row place-row';
+    row.dataset.targetType = type;
+    row.dataset.targetId = item.id;
+    if (currentPlaceTarget?.type === type && currentPlaceTarget?.id === item.id) {
+      row.classList.add('shot-row--active');
+    }
+
+    const name = document.createElement('div');
+    name.className = 'shot-name';
+    name.textContent = type === 'landmark' ? item.title : item.name;
+
+    const meta = document.createElement('div');
+    meta.className = 'place-meta';
+    meta.textContent = item.hasSketch ? '●' : '○';
+    meta.title = item.hasSketch ? 'Has iPad sketch' : 'No iPad sketch yet';
+
+    row.appendChild(name);
+    row.appendChild(meta);
+    row.addEventListener('click', async () => {
+      if (currentPlaceTarget?.type === type && currentPlaceTarget?.id === item.id) return;
+      await navigateToPlaceTarget(type, item.id, true);
+    });
+    group.appendChild(row);
+  }
+
+  frag.appendChild(group);
+}
+
+// ─── Shot reordering (drag handle) ───────────────────────────────────────
+
+function attachShotReorderHandlers(handle, row, shot) {
+  handle.addEventListener('pointerdown', (e) => {
+    // Only Apple Pencil (or mouse for desktop debugging) can drag — finger
+    // touches are already blocked at the document-level pointer guard.
+    if (e.pointerType === 'touch') return;
+    e.preventDefault();
+    e.stopPropagation();
+    beginShotDrag(e, handle, row, shot);
+  });
+}
+
+function beginShotDrag(e, handle, row, shot) {
+  if (!shot.sceneId) return;
+  try { handle.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+
+  dragState = {
+    pointerId: e.pointerId,
+    handle,
+    row,
+    shotId: shot.shotId,
+    sceneId: shot.sceneId,
+    startY: e.clientY,
+    suppressClick: false,
+    targetIndex: null,
+    moved: false,
+  };
+
+  row.classList.add('shot-row--dragging');
+
+  const onMove = (event) => {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    if (Math.abs(event.clientY - dragState.startY) > 3) dragState.moved = true;
+    updateShotDropIndicator(event.clientY);
+  };
+
+  const onUp = async (event) => {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    handle.removeEventListener('pointermove', onMove);
+    handle.removeEventListener('pointerup', onUp);
+    handle.removeEventListener('pointercancel', onUp);
+    try { handle.releasePointerCapture(event.pointerId); } catch (_) { /* ignore */ }
+
+    const moved = dragState.moved;
+    const newIndex = dragState.targetIndex;
+    const sceneId = dragState.sceneId;
+    const shotId = dragState.shotId;
+    clearShotDropIndicator();
+    row.classList.remove('shot-row--dragging');
+    dragState.suppressClick = moved;
+
+    if (moved && newIndex != null) {
+      await commitShotReorder(sceneId, shotId, newIndex);
+    }
+
+    // Defer clearing dragState so the upcoming click handler still sees it
+    setTimeout(() => { if (dragState && dragState.shotId === shotId) dragState = null; }, 0);
+  };
+
+  handle.addEventListener('pointermove', onMove);
+  handle.addEventListener('pointerup', onUp);
+  handle.addEventListener('pointercancel', onUp);
+}
+
+function updateShotDropIndicator(clientY) {
+  if (!dragState) return;
+  const sceneRows = Array.from(
+    shotListEl.querySelectorAll(`.shot-row[data-scene-id="${dragState.sceneId}"]`)
+  );
+  if (sceneRows.length === 0) return;
+
+  // Clear all visual hints
+  sceneRows.forEach((r) => {
+    r.classList.remove('shot-row--drop-before', 'shot-row--drop-after');
+  });
+
+  // Find the row whose vertical midpoint is nearest the pointer.
+  let targetIndex = sceneRows.length;
+  let chosenRow = null;
+  let chosenBefore = false;
+  for (let i = 0; i < sceneRows.length; i++) {
+    const r = sceneRows[i];
+    if (r === dragState.row) continue;
+    const rect = r.getBoundingClientRect();
+    const mid = rect.top + rect.height / 2;
+    if (clientY < mid) {
+      chosenRow = r;
+      chosenBefore = true;
+      targetIndex = i;
+      break;
+    }
+  }
+  if (!chosenRow) {
+    // After the last non-drag row
+    for (let i = sceneRows.length - 1; i >= 0; i--) {
+      if (sceneRows[i] !== dragState.row) {
+        chosenRow = sceneRows[i];
+        chosenBefore = false;
+        targetIndex = i + 1;
+        break;
+      }
+    }
+  }
+
+  if (chosenRow) {
+    chosenRow.classList.add(chosenBefore ? 'shot-row--drop-before' : 'shot-row--drop-after');
+  }
+
+  // Adjust targetIndex relative to the order *without* the dragged row
+  const draggedIndex = sceneRows.indexOf(dragState.row);
+  if (draggedIndex !== -1 && targetIndex > draggedIndex) targetIndex -= 1;
+  dragState.targetIndex = targetIndex;
+}
+
+function clearShotDropIndicator() {
+  shotListEl.querySelectorAll('.shot-row--drop-before, .shot-row--drop-after')
+    .forEach((r) => r.classList.remove('shot-row--drop-before', 'shot-row--drop-after'));
+}
+
+async function commitShotReorder(sceneId, shotId, newIndex) {
+  // Build current scene-shot order from in-memory `shots`
+  const sceneShots = shots.filter((s) => s.sceneId === sceneId);
+  const currentIndex = sceneShots.findIndex((s) => s.shotId === shotId);
+  if (currentIndex === -1) return;
+  if (newIndex === currentIndex) return;
+
+  const reordered = sceneShots.slice();
+  const [moving] = reordered.splice(currentIndex, 1);
+  reordered.splice(Math.min(newIndex, reordered.length), 0, moving);
+
+  // Optimistically update `shots` array: replace the slice for this scene
+  const newShots = [];
+  let placedScene = false;
+  for (const s of shots) {
+    if (s.sceneId === sceneId) {
+      if (!placedScene) {
+        newShots.push(...reordered);
+        placedScene = true;
+      }
+    } else {
+      newShots.push(s);
+    }
+  }
+  shots = newShots;
+  renderSidebar();
+
+  try {
+    await apiFetch('/api/shots/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sceneId, shotIds: reordered.map((s) => s.shotId) }),
+    });
+  } catch (err) {
+    console.error('Reorder failed:', err);
+    setAppStatus('Failed to reorder shots.', 'error');
+    await refreshShots();
+  }
+}
+
 function updateShotListActive() {
   const rows = shotListEl.querySelectorAll('.shot-row');
   rows.forEach((row) => {
-    row.classList.toggle('shot-row--active', row.dataset.shotId === currentShotId);
+    if (sidebarMode === 'places') {
+      row.classList.toggle(
+        'shot-row--active',
+        row.dataset.targetType === currentPlaceTarget?.type && row.dataset.targetId === currentPlaceTarget?.id
+      );
+    } else {
+      row.classList.toggle('shot-row--active', row.dataset.shotId === currentShotId);
+    }
   });
 }
 
@@ -217,6 +622,140 @@ function updateShotBME(shotId, frame, filled) {
   }
 }
 
+function currentSceneName() {
+  return shots.find((s) => s.shotId === currentShotId)?.sceneName
+    || shots[0]?.sceneName
+    || 'Selected scene';
+}
+
+function currentSceneId() {
+  return shots.find((s) => s.shotId === currentShotId)?.sceneId
+    || shots[0]?.sceneId
+    || null;
+}
+
+function refreshAddShotSceneLabel() {
+  if (!addShotSceneLabel) return;
+  if (sidebarMode === 'places') {
+    addShotSceneLabel.textContent = 'Adds to Places page';
+  } else {
+    addShotSceneLabel.textContent = `Adds to ${currentSceneName()}`;
+  }
+}
+
+function openAddShotSheet() {
+  if (!addShotSheet) return;
+  refreshAddShotSceneLabel();
+  addShotTitleInput.value = '';
+  addPlaceType = 'place';
+  syncAddTypeUI();
+  document.getElementById('add-shot-heading').textContent = sidebarMode === 'places' ? 'Add place or landmark' : 'Add shot';
+  addPlaceTypeRow.hidden = sidebarMode !== 'places';
+  addShotTitleInput.placeholder = sidebarMode === 'places' ? 'Name' : 'Shot N';
+  addShotSheet.classList.remove('hidden');
+  addShotSheet.hidden = false;
+  addShotSheet.setAttribute('aria-hidden', 'false');
+  isAddShotOpen = true;
+  requestAnimationFrame(() => {
+    addShotTitleInput.focus();
+    addShotTitleInput.select();
+  });
+}
+
+function closeAddShotSheet() {
+  if (!addShotSheet) return;
+  addShotSheet.hidden = true;
+  addShotSheet.classList.add('hidden');
+  addShotSheet.setAttribute('aria-hidden', 'true');
+  isAddShotOpen = false;
+}
+
+function setupAddShotSheet() {
+  if (!addShotBtn || !addShotSheet || !addShotForm || !addShotTitleInput) return;
+
+  addShotBtn.addEventListener('click', openAddShotSheet);
+  addShotCloseBtn?.addEventListener('click', closeAddShotSheet);
+  addShotCancelBtn?.addEventListener('click', closeAddShotSheet);
+
+  addShotSheet.addEventListener('click', (e) => {
+    if (e.target === addShotSheet) closeAddShotSheet();
+  });
+
+  addTypePlaceBtn?.addEventListener('click', () => {
+    addPlaceType = 'place';
+    syncAddTypeUI();
+  });
+
+  addTypeLandmarkBtn?.addEventListener('click', () => {
+    addPlaceType = 'landmark';
+    syncAddTypeUI();
+  });
+
+  addShotForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await createShotFromSheet();
+  });
+}
+
+async function createShotFromSheet() {
+  const title = addShotTitleInput.value.trim();
+  if (sidebarMode === 'places') {
+    await createPlaceTargetFromSheet(title);
+    return;
+  }
+  const sceneId = currentSceneId();
+  const payload = {};
+  if (sceneId) payload.sceneId = sceneId;
+  if (title) payload.title = title;
+
+  try {
+    await saveIfDirty();
+    const created = await apiFetch('/api/shots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    closeAddShotSheet();
+    await refreshShots();
+    if (created?.shotId) {
+      await navigateTo(created.shotId, 'middle', false);
+    }
+  } catch (err) {
+    console.error('Add shot failed:', err);
+    setAppStatus('Failed to add shot.', 'error');
+  }
+}
+
+async function createPlaceTargetFromSheet(title) {
+  const endpoint = addPlaceType === 'landmark' ? '/api/landmarks' : '/api/places';
+  const payload = addPlaceType === 'landmark'
+    ? { title: title || 'New Landmark' }
+    : { name: title || 'New Place' };
+
+  try {
+    await saveIfDirty();
+    const created = await apiFetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    closeAddShotSheet();
+    await refreshPlaces();
+    const id = created?.id;
+    if (id) {
+      await navigateToPlaceTarget(addPlaceType, id, false);
+    }
+  } catch (err) {
+    console.error('Add place/landmark failed:', err);
+    setAppStatus('Failed to add place or landmark.', 'error');
+  }
+}
+
+function syncAddTypeUI() {
+  addTypePlaceBtn?.classList.toggle('add-type-btn--active', addPlaceType === 'place');
+  addTypeLandmarkBtn?.classList.toggle('add-type-btn--active', addPlaceType === 'landmark');
+}
+
 // ─── Navigation ───────────────────────────────────────────────────────────
 
 /**
@@ -228,12 +767,15 @@ function updateShotBME(shotId, frame, filled) {
 async function navigateTo(shotId, frame, save) {
   if (save) await saveIfDirty();
 
+  sidebarMode = 'scenes';
   currentShotId = shotId;
   currentFrame = frame;
 
+  localStorage.setItem(LS_MODE_KEY, sidebarMode);
   localStorage.setItem(LS_SHOT_KEY, shotId);
   localStorage.setItem(LS_FRAME_KEY, frame);
 
+  renderSidebar();
   updateFramePickerUI();
   updateShotListActive();
   updateSummaryEditor();
@@ -244,7 +786,45 @@ async function navigateTo(shotId, frame, save) {
   clearDirty();
 }
 
+async function navigateToPlaceTarget(type, id, save) {
+  if (save) await saveIfDirty();
+
+  sidebarMode = 'places';
+  currentPlaceTarget = { type, id };
+  localStorage.setItem(LS_MODE_KEY, sidebarMode);
+  localStorage.setItem(LS_PLACE_TARGET_KEY, JSON.stringify(currentPlaceTarget));
+
+  renderSidebar();
+  updateShotListActive();
+  updateSummaryEditor();
+  resetUndoStacks();
+  const endpoint = placeSketchEndpoint(type, id);
+  await loadImageURL(endpoint);
+  clearDirty();
+}
+
+function parseStoredPlaceTarget() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(LS_PLACE_TARGET_KEY) || 'null');
+    if ((parsed?.type === 'place' || parsed?.type === 'landmark') && parsed?.id) return parsed;
+  } catch (_) { /* ignore */ }
+  return null;
+}
+
+function findPlaceTarget(type, id) {
+  return type === 'landmark'
+    ? landmarks.find((item) => item.id === id)
+    : places.find((item) => item.id === id);
+}
+
+function placeSketchEndpoint(type, id) {
+  return type === 'landmark'
+    ? `/api/landmarks/${id}/sketch`
+    : `/api/places/${id}/sketch`;
+}
+
 async function navigateFrame(frame) {
+  if (sidebarMode === 'places') return;
   if (frame === currentFrame) return;
   await saveIfDirty();
   currentFrame = frame;
@@ -257,6 +837,7 @@ async function navigateFrame(frame) {
 
 /** Move to prev/next frame across all shots */
 async function navigateStep(direction) {
+  if (sidebarMode === 'places') return;
   const flatFrames = buildFlatFrameList();
   const current = flatFrames.findIndex(
     (f) => f.shotId === currentShotId && f.frame === currentFrame
@@ -307,28 +888,41 @@ function clearDirty() {
 }
 
 async function saveIfDirty() {
-  if (!isDirty || !currentShotId) return;
+  if (!isDirty) return;
+  if (sidebarMode === 'places' && !currentPlaceTarget) return;
+  if (sidebarMode !== 'places' && !currentShotId) return;
   await performSave();
 }
 
 async function performSave() {
-  if (isSaving || !currentShotId) return;
+  if (isSaving) return;
+  if (sidebarMode === 'places' && !currentPlaceTarget) return;
+  if (sidebarMode !== 'places' && !currentShotId) return;
   isSaving = true;
   setSaveStatus('saving');
 
   try {
     const blob = await exportPNG();
-    await apiFetch(`/api/storyboard/${currentShotId}/${currentFrame}`, {
+    const endpoint = sidebarMode === 'places'
+      ? placeSketchEndpoint(currentPlaceTarget.type, currentPlaceTarget.id)
+      : `/api/storyboard/${currentShotId}/${currentFrame}`;
+    await apiFetch(endpoint, {
       method: 'PUT',
       headers: { 'Content-Type': 'image/png' },
       body: blob,
     });
     clearDirty();
-    // Update sidebar dot
-    updateShotBME(currentShotId, currentFrame, true);
-    // Update local shots cache
-    const shot = shots.find((s) => s.shotId === currentShotId);
-    if (shot && shot.hasFrames) shot.hasFrames[currentFrame] = true;
+    if (sidebarMode === 'places') {
+      const item = findPlaceTarget(currentPlaceTarget.type, currentPlaceTarget.id);
+      if (item) item.hasSketch = true;
+      renderSidebar();
+    } else {
+      // Update sidebar dot
+      updateShotBME(currentShotId, currentFrame, true);
+      // Update local shots cache
+      const shot = shots.find((s) => s.shotId === currentShotId);
+      if (shot && shot.hasFrames) shot.hasFrames[currentFrame] = true;
+    }
   } catch (err) {
     setSaveStatus('error');
     console.error('Save failed:', err);
@@ -353,8 +947,20 @@ function startAutosave() {
 // ─── Summary editor ───────────────────────────────────────────────────────
 
 function updateSummaryEditor() {
+  if (sidebarMode === 'places') {
+    const item = currentPlaceTarget ? findPlaceTarget(currentPlaceTarget.type, currentPlaceTarget.id) : null;
+    summaryEditor.value = item ? (item.notes || '') : '';
+    summaryEditor.placeholder = currentPlaceTarget?.type === 'landmark' ? 'Landmark notes…' : 'Place notes…';
+    summaryEditor.disabled = true;
+    frameBtns.forEach((btn) => { btn.disabled = true; });
+    autoGrowTextarea(summaryEditor);
+    return;
+  }
   const shot = shots.find((s) => s.shotId === currentShotId);
   summaryEditor.value = shot ? (shot.summary || '') : '';
+  summaryEditor.placeholder = 'Shot summary…';
+  summaryEditor.disabled = false;
+  frameBtns.forEach((btn) => { btn.disabled = false; });
   autoGrowTextarea(summaryEditor);
 }
 
@@ -377,6 +983,7 @@ function setupSummary() {
 }
 
 async function saveSummary() {
+  if (sidebarMode === 'places') return;
   if (!currentShotId) return;
   const text = summaryEditor.value;
 
@@ -398,6 +1005,125 @@ async function saveSummary() {
 function autoGrowTextarea(el) {
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 72) + 'px';
+}
+
+function isTextInputTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest([
+    'textarea',
+    'input:not([type])',
+    'input[type="email"]',
+    'input[type="number"]',
+    'input[type="password"]',
+    'input[type="search"]',
+    'input[type="tel"]',
+    'input[type="text"]',
+    'input[type="url"]',
+    '[contenteditable="true"]',
+  ].join(',')));
+}
+
+function getGestureGuardTarget(target) {
+  if (!(target instanceof Element)) return null;
+  return target.closest([
+    '#drawing-canvas',
+    'button',
+    '.icon-btn',
+    '.tool-btn',
+    '.frame-btn',
+    '.shot-row',
+    '.place-row',
+    '.sidebar-tab',
+    '.add-type-btn',
+    '.sidebar-toggle-outside',
+    '.toolbar-show-btn',
+    '.toolbar-collapse-btn',
+    '.canvas-area',
+    '.save-status',
+    '.app-status',
+    '.slider',
+  ].join(','));
+}
+
+function isGestureGuardTarget(target) {
+  return Boolean(getGestureGuardTarget(target));
+}
+
+function installInputGuards() {
+  // ALWAYS-ON pencil-only enforcement: block finger-touch interactions on
+  // every UI surface. Apple Pencil and mouse remain unaffected. The flag
+  // is set by the touchstart listener below (which fires before the click)
+  // and consulted by the click listener to suppress synthesized taps.
+  let recentTouchTapAt = 0;
+  const isTouchTapStale = () => performance.now() - recentTouchTapAt > 600;
+
+  document.addEventListener('touchstart', (e) => {
+    if (isTextInputTarget(e.target)) return;
+    recentTouchTapAt = performance.now();
+    // Single-finger taps: block on UI surfaces (canvas handles its own touch
+    // logic in drawing.js). Multi-touch (gestures) is preventDefaulted so the
+    // browser doesn't synthesize zoom or pan.
+    if (isGestureGuardTarget(e.target)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, { capture: true, passive: false });
+
+  // Block synthesized clicks from finger touches.
+  document.addEventListener('click', (e) => {
+    if (isTextInputTarget(e.target)) return;
+    if (!isTouchTapStale() && isGestureGuardTarget(e.target)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, { capture: true });
+
+  document.addEventListener('contextmenu', (e) => {
+    if (!isTextInputTarget(e.target) && isGestureGuardTarget(e.target)) {
+      e.preventDefault();
+    }
+  }, { capture: true });
+
+  document.addEventListener('selectstart', (e) => {
+    if (!isTextInputTarget(e.target) && isGestureGuardTarget(e.target)) {
+      e.preventDefault();
+    }
+  }, { capture: true });
+
+  document.addEventListener('dragstart', (e) => {
+    if (!isTextInputTarget(e.target) && isGestureGuardTarget(e.target)) {
+      e.preventDefault();
+    }
+  }, { capture: true });
+
+  document.addEventListener('selectionchange', () => {
+    if (isTextInputTarget(document.activeElement)) return;
+    const selection = window.getSelection?.();
+    if (selection && !selection.isCollapsed) selection.removeAllRanges();
+  });
+
+  document.addEventListener('touchend', (e) => {
+    if (e.defaultPrevented || e.changedTouches.length !== 1) return;
+    const guardTarget = getGestureGuardTarget(e.target);
+    if (isTextInputTarget(e.target) || !guardTarget) return;
+
+    const now = performance.now();
+    if (lastTouchTapTarget === guardTarget && now - lastTouchTapAt < DOUBLE_TAP_GUARD_MS) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    lastTouchTapTarget = guardTarget;
+    lastTouchTapAt = now;
+  }, { capture: true, passive: false });
+
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach((eventName) => {
+    document.addEventListener(eventName, (e) => {
+      if (!isTextInputTarget(e.target) && isGestureGuardTarget(e.target)) {
+        e.preventDefault();
+      }
+    }, { capture: true, passive: false });
+  });
 }
 
 // ─── Frame picker ─────────────────────────────────────────────────────────
@@ -423,22 +1149,49 @@ function updateFramePickerUI() {
 function setupToolbar() {
   // Tool buttons
   pencilBtn.addEventListener('click', () => {
-    setTool('pencil');
-    pencilBtn.classList.add('tool-btn--active');
-    eraserBtn.classList.remove('tool-btn--active');
+    selectTool('pencil');
   });
 
   eraserBtn.addEventListener('click', () => {
-    setTool('eraser');
-    eraserBtn.classList.add('tool-btn--active');
-    pencilBtn.classList.remove('tool-btn--active');
+    selectTool('eraser');
   });
 
   // Brush slider
   brushSlider.addEventListener('input', () => {
     const val = parseInt(brushSlider.value, 10);
-    brushValue.textContent = val;
-    setBrushSize(val);
+    setActiveBrushSize(val);
+  });
+
+  // Brush +/- step buttons
+  brushDecBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    adjustBrush(-1);
+  });
+  brushIncBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    adjustBrush(1);
+  });
+
+  // Copy / paste in-memory clipboard
+  copyBtn?.addEventListener('click', () => {
+    try {
+      copiedFrameDataURL = canvasEl.toDataURL('image/png');
+      if (pasteBtn) pasteBtn.disabled = false;
+      setSaveStatus(isDirty ? 'unsaved' : 'saved');
+    } catch (err) {
+      console.error('Copy failed:', err);
+    }
+  });
+
+  pasteBtn?.addEventListener('click', async () => {
+    if (!copiedFrameDataURL) return;
+    try {
+      resetUndoStacks();
+      await loadImageURL(copiedFrameDataURL);
+      markDirty();
+    } catch (err) {
+      console.error('Paste failed:', err);
+    }
   });
 
   // Undo / redo
@@ -476,11 +1229,49 @@ function setupToolbar() {
   // Initial undo/redo state
   undoBtn.disabled = true;
   redoBtn.disabled = true;
+
+  syncBrushUi(currentTool);
 }
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────
 
 function setupSidebar() {
+  sidebarTabScenes?.addEventListener('click', async () => {
+    if (sidebarMode === 'scenes') return;
+    await saveIfDirty();
+    sidebarMode = 'scenes';
+    localStorage.setItem(LS_MODE_KEY, sidebarMode);
+    renderSidebar();
+    updateSummaryEditor();
+    if (currentShotId) {
+      resetUndoStacks();
+      await loadImageURL(`/api/storyboard/${currentShotId}/${currentFrame}`);
+      clearDirty();
+    }
+  });
+
+  sidebarTabPlaces?.addEventListener('click', async () => {
+    if (sidebarMode === 'places') return;
+    await saveIfDirty();
+    sidebarMode = 'places';
+    localStorage.setItem(LS_MODE_KEY, sidebarMode);
+    if (!places.length && !landmarks.length) await refreshPlaces();
+    if (!currentPlaceTarget) {
+      if (places[0]) currentPlaceTarget = { type: 'place', id: places[0].id };
+      else if (landmarks[0]) currentPlaceTarget = { type: 'landmark', id: landmarks[0].id };
+    }
+    renderSidebar();
+    updateSummaryEditor();
+    if (currentPlaceTarget) {
+      resetUndoStacks();
+      await loadImageURL(placeSketchEndpoint(currentPlaceTarget.type, currentPlaceTarget.id));
+      clearDirty();
+    } else {
+      clearCanvas();
+      clearDirty();
+    }
+  });
+
   sidebarCloseBtn.addEventListener('click', () => {
     isSidebarOpen = false;
     sidebar.classList.add('sidebar--closed');
@@ -515,6 +1306,14 @@ function setupWindowResize() {
 
 function setupKeyboard() {
   document.addEventListener('keydown', async (e) => {
+    if (isAddShotOpen) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeAddShotSheet();
+      }
+      return;
+    }
+
     // Don't intercept when focus is in a text field
     if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
 
@@ -535,20 +1334,20 @@ function setupKeyboard() {
         break;
       case 'e':
       case 'E':
-        setTool('eraser');
-        eraserBtn.classList.add('tool-btn--active');
-        pencilBtn.classList.remove('tool-btn--active');
+        e.preventDefault();
+        selectTool('eraser');
         break;
       case 'p':
       case 'P':
-        setTool('pencil');
-        pencilBtn.classList.add('tool-btn--active');
-        eraserBtn.classList.remove('tool-btn--active');
+        e.preventDefault();
+        selectTool('pencil');
         break;
       case '[':
+        e.preventDefault();
         adjustBrush(-2);
         break;
       case ']':
+        e.preventDefault();
         adjustBrush(2);
         break;
       case 's':
@@ -558,17 +1357,22 @@ function setupKeyboard() {
   });
 }
 
-function adjustBrush(delta) {
-  const cur = parseInt(brushSlider.value, 10);
-  const next = Math.max(2, Math.min(40, cur + delta));
-  brushSlider.value = next;
-  brushValue.textContent = next;
-  setBrushSize(next);
-}
-
 // ─── Start ────────────────────────────────────────────────────────────────
 
 boot().catch((err) => {
   console.error('Storyboard boot failed:', err);
+  setAppStatus('Storyboard failed to load.', 'error');
   shotListEl.innerHTML = '<div class="shot-list-loading">Error loading app.</div>';
 });
+
+function clearAppStatus() {
+  if (!appStatusEl) return;
+  appStatusEl.hidden = true;
+}
+
+function setAppStatus(message, state = 'loading') {
+  if (!appStatusEl) return;
+  appStatusEl.hidden = false;
+  appStatusEl.textContent = message;
+  appStatusEl.dataset.state = state;
+}

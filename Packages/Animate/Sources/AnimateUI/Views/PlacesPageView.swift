@@ -460,6 +460,9 @@ struct PlacesSidebarView: View {
     @State private var dropTargetLandmarkID: UUID?
     @State private var landmarksExpanded = false
     @State private var placesExpanded = false
+    @State private var showAddLandmarkSheet = false
+    @State private var newLandmarkTitle = ""
+    @State private var newLandmarkTags = ""
 
     private var workflowMode: PlaceWorkflowMode {
         PlaceWorkflowMode(rawValue: workflowModeRawValue) ?? .photorealistic
@@ -574,11 +577,24 @@ struct PlacesSidebarView: View {
                     .padding(.top, 6)
                 }
             } label: {
-                sidebarDisclosureLabel(
-                    title: "Landmarks",
-                    subtitle: "\(store.placesWorkflowLibrary.landmarkProfiles.count) profiles",
-                    systemImage: "building.columns"
-                )
+                HStack(spacing: 6) {
+                    sidebarDisclosureLabel(
+                        title: "Landmarks",
+                        subtitle: "\(store.placesWorkflowLibrary.landmarkProfiles.count) profiles",
+                        systemImage: "building.columns"
+                    )
+                    Spacer(minLength: 4)
+                    Button {
+                        newLandmarkTitle = ""
+                        newLandmarkTags = ""
+                        showAddLandmarkSheet = true
+                    } label: {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add Landmark")
+                }
             }
 
             VStack(spacing: 6) {
@@ -653,6 +669,36 @@ struct PlacesSidebarView: View {
                 }
             }
         }
+        .sheet(isPresented: $showAddLandmarkSheet) {
+            addLandmarkSheet
+        }
+    }
+
+    private var addLandmarkSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add Landmark")
+                .font(.headline)
+            TextField("Landmark name", text: $newLandmarkTitle)
+                .textFieldStyle(.roundedBorder)
+            TextField("Tags (comma-separated, multi-word tags allowed)", text: $newLandmarkTags, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(3...6)
+            HStack {
+                Button("Cancel") { showAddLandmarkSheet = false }
+                Spacer()
+                Button("Create") {
+                    let title = newLandmarkTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "New Landmark" : newLandmarkTitle
+                    let tags = newLandmarkTags.split(separator: ",").map { String($0) }
+                    selectedLandmarkID = store.createLandmarkProfile(title: title, tags: tags)
+                    viewMode = .landmarks
+                    landmarksExpanded = true
+                    showAddLandmarkSheet = false
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 
     @ViewBuilder
@@ -887,6 +933,7 @@ struct PlacesPageView: View {
     @State private var placesRenderStagingTask: Task<Void, Never>?
     @State private var placeDetailStagingTask: Task<Void, Never>?
     @AppStorage("animate.places.workflowMode.v1") private var workflowModeRawValue = PlaceWorkflowMode.photorealistic.rawValue
+    @AppStorage("placesSidebarWidth") private var sidebarWidth: Double = 260
     var showSidebar: Bool = true
 
     private var selectedPlace: BackgroundPlate? {
@@ -1038,25 +1085,26 @@ struct PlacesPageView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            HStack(spacing: 0) {
-                if showSidebar {
-                    PlacesSidebarView(
-                        store: store,
-                        viewMode: $viewMode,
-                        selectedLandmarkID: $selectedLandmarkID,
-                        allImageCount: store.placesWorkflowLibrary.generatedImageRecords.count,
-                        worldSnapshot: worldbuildingSnapshot,
-                        showsThumbnails: renderSidebarThumbnails
-                    )
-                        .frame(width: min(geo.size.width * 0.3, 280))
+        HStack(spacing: 0) {
+            if showSidebar {
+                PlacesSidebarView(
+                    store: store,
+                    viewMode: $viewMode,
+                    selectedLandmarkID: $selectedLandmarkID,
+                    allImageCount: store.placesWorkflowLibrary.generatedImageRecords.count,
+                    worldSnapshot: worldbuildingSnapshot,
+                    showsThumbnails: renderSidebarThumbnails
+                )
+                    .frame(width: CGFloat(sidebarWidth))
 
-                    Divider()
-                }
-
-                mainContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                OperaChromeSplitHandle(
+                    onDragChanged: resizeSidebar,
+                    onDragEnded: { }
+                )
             }
+
+            mainContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task(id: store.workingOWPURL?.path) {
             ensure3DRegistryScaffolding()
@@ -1900,6 +1948,7 @@ struct PlacesPageView: View {
         if let place = selectedPlace {
             VStack(alignment: .leading, spacing: 16) {
                 placeHeader(place)
+                placeIPadSketchSection(place)
                 if renderPlaceDetailPrimaryAssets {
                     workflowOutputSection(place)
                 } else {
@@ -2656,6 +2705,52 @@ struct PlacesPageView: View {
                     }
                     .buttonStyle(.borderedProminent)
                 }
+            }
+        }
+        .padding(18)
+        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    /// Shows the latest iPad-drawn storyboard sketch for a place. Isolated
+    /// from the photoreal pipeline — the iPad PWA writes here, the macOS
+    /// gallery is left untouched. Only the latest sketch is retained.
+    @ViewBuilder
+    private func placeIPadSketchSection(_ place: BackgroundPlate) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("iPad Storyboard Sketch", systemImage: "applepencil.tip")
+                    .font(.headline)
+                Spacer()
+                if let path = place.storyboardSketchPath,
+                   let url = store.resolvedCharacterAssetURL(for: path) {
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    } label: {
+                        Label("Show in Finder", systemImage: "folder")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            if let path = place.storyboardSketchPath,
+               let url = store.resolvedCharacterAssetURL(for: path),
+               let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 220)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(.quaternary, lineWidth: 1)
+                    )
+            } else {
+                Text("Open this place in the iPad storyboard PWA and draw a quick sketch — the latest version will appear here.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
             }
         }
         .padding(18)
@@ -4015,6 +4110,10 @@ struct PlacesPageView: View {
         return drafts
     }
 
+    private func resizeSidebar(_ delta: CGFloat) {
+        sidebarWidth = min(max(sidebarWidth + Double(delta), 180), 350)
+    }
+
     private func runPlaceGeneration(
         _ drafts: [GeminiGenerationDraft],
         for place: BackgroundPlate,
@@ -4872,6 +4971,7 @@ private struct PlaceLandmarkDetailView: View {
     let onRefreshed: () -> Void
 
     @State private var notesDraft: String = ""
+    @State private var tagsDraft: String = ""
     @State private var selectedPaths: Set<String> = []
     @State private var lastClickedPath: String?
 
@@ -4909,6 +5009,7 @@ private struct PlaceLandmarkDetailView: View {
         VStack(alignment: .leading, spacing: 18) {
             headerCard
             heroImageCard
+            iPadSketchCard
 
             HStack(alignment: .top, spacing: 16) {
                 linkedPlacesCard
@@ -4981,12 +5082,17 @@ private struct PlaceLandmarkDetailView: View {
         }
         .onAppear {
             notesDraft = profile.notes
+            tagsDraft = profile.tags.joined(separator: ", ")
             lastClickedPath = primaryImagePath
         }
         .onChange(of: profile.notes) { _, newValue in
             if notesDraft != newValue {
                 notesDraft = newValue
             }
+        }
+        .onChange(of: profile.tags) { _, newValue in
+            let joined = newValue.joined(separator: ", ")
+            if tagsDraft != joined { tagsDraft = joined }
         }
         .onChange(of: profile.primaryImagePath) { _, newValue in
             if lastClickedPath == nil {
@@ -5174,10 +5280,64 @@ private struct PlaceLandmarkDetailView: View {
         .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
+    /// Latest iPad-drawn storyboard sketch for this landmark. Isolated from
+    /// `galleryImagePaths` (the photoreal pipeline) — the iPad PWA writes to
+    /// `storyboardSketchPath` and only the latest version is kept.
+    @ViewBuilder
+    private var iPadSketchCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("iPad Storyboard Sketch", systemImage: "applepencil.tip")
+                    .font(.headline)
+                Spacer()
+                if let path = profile.storyboardSketchPath,
+                   let url = resolvedAssetURL(for: path) {
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    } label: {
+                        Label("Show in Finder", systemImage: "folder")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            if let path = profile.storyboardSketchPath,
+               let url = resolvedAssetURL(for: path),
+               let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 220)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(.quaternary, lineWidth: 1)
+                    )
+            } else {
+                Text("Open this landmark in the iPad storyboard PWA and draw a quick sketch — the latest version will appear here.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
     private var notesCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Landmark Notes", systemImage: "note.text")
+            Label("Landmark Notes + Tags", systemImage: "tag")
                 .font(.headline)
+            TextField(
+                "Tags: bridge, stone bridge, upper bridge…",
+                text: $tagsDraft,
+                axis: .vertical
+            )
+            .textFieldStyle(.roundedBorder)
+            .lineLimit(2...5)
             TextField(
                 "Bridge scale, roof materials, no-modernity rules, required geography cues…",
                 text: $notesDraft,
@@ -5187,12 +5347,14 @@ private struct PlaceLandmarkDetailView: View {
             .lineLimit(4...8)
             .onSubmit {
                 store.updateLandmarkProfileNotes(notesDraft, landmarkID: profile.id)
+                store.updateLandmarkProfileTags(parseTags(tagsDraft), landmarkID: profile.id)
             }
 
             HStack {
                 Spacer()
                 Button("Save Notes") {
                     store.updateLandmarkProfileNotes(notesDraft, landmarkID: profile.id)
+                    store.updateLandmarkProfileTags(parseTags(tagsDraft), landmarkID: profile.id)
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -5224,6 +5386,10 @@ private struct PlaceLandmarkDetailView: View {
                 }
             }
         }
+    }
+
+    private func parseTags(_ raw: String) -> [String] {
+        raw.split(separator: ",").map { String($0) }
     }
 
     private func clearSelectionIfNeeded(removedPaths: [String]) {

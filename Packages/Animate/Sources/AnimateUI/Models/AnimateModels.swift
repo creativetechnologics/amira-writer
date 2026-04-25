@@ -14,6 +14,73 @@ struct AnimateMetadata: Codable, Sendable {
     }
 }
 
+// MARK: - All Images Organizer
+
+enum ImageLibraryOrganizeCategory: String, Codable, Sendable, Hashable, CaseIterable, Identifiable {
+    case costumes
+    case props
+    case vehicles
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .costumes: "Costumes"
+        case .props: "Props"
+        case .vehicles: "Vehicles"
+        }
+    }
+
+    var singularName: String {
+        switch self {
+        case .costumes: "Costume"
+        case .props: "Prop"
+        case .vehicles: "Vehicle"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .costumes: "tshirt"
+        case .props: "shippingbox"
+        case .vehicles: "car"
+        }
+    }
+}
+
+struct ImageLibraryOrganizeItem: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var category: ImageLibraryOrganizeCategory
+    var title: String
+    var imagePaths: [String]
+    var notes: String
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID = UUID(),
+        category: ImageLibraryOrganizeCategory,
+        title: String,
+        imagePaths: [String] = [],
+        notes: String = "",
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.category = category
+        self.title = title
+        self.imagePaths = imagePaths
+        self.notes = notes
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+struct ImageLibraryOrganizeManifest: Codable, Sendable {
+    var schemaVersion: Int = 1
+    var items: [ImageLibraryOrganizeItem] = []
+}
+
 // MARK: - Scenes
 
 struct AnimationScene: Identifiable, Codable, Sendable {
@@ -606,6 +673,32 @@ enum CharacterGenderType: String, Codable, Sendable, CaseIterable, Identifiable,
     }
 }
 
+
+struct CharacterExpressionReferenceSet: Identifiable, Codable, Sendable, Hashable {
+    var id: String { presetID }
+    var presetID: String
+    var displayName: String
+    var variants: [CharacterLookDevelopmentVariant]
+    var approvedVariantID: UUID?
+
+    init(
+        presetID: String,
+        displayName: String,
+        variants: [CharacterLookDevelopmentVariant] = [],
+        approvedVariantID: UUID? = nil
+    ) {
+        self.presetID = presetID
+        self.displayName = displayName
+        self.variants = variants
+        self.approvedVariantID = approvedVariantID
+    }
+
+    var approvedVariant: CharacterLookDevelopmentVariant? {
+        guard let approvedVariantID else { return variants.last }
+        return variants.first(where: { $0.id == approvedVariantID }) ?? variants.last
+    }
+}
+
 struct AnimationCharacter: Identifiable, Codable, Sendable {
     static let currentSchemaVersion = 3
 
@@ -652,6 +745,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
     var headTurnaroundSheetVariants: [CharacterLookDevelopmentVariant]
     var approvedHeadTurnaroundSheetVariantID: UUID?
     var headTurnaroundSlots: [CharacterPoseSlot]
+    var expressionReferenceSets: [CharacterExpressionReferenceSet]
     var costumeReferenceSets: [CharacterCostumeReferenceSet]
     var models3D: [Character3DModel]
     var activeLORAFilename: String?
@@ -695,6 +789,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         headTurnaroundSheetVariants: [CharacterLookDevelopmentVariant] = [],
         approvedHeadTurnaroundSheetVariantID: UUID? = nil,
         headTurnaroundSlots: [CharacterPoseSlot] = [],
+        expressionReferenceSets: [CharacterExpressionReferenceSet] = [],
         costumeReferenceSets: [CharacterCostumeReferenceSet] = [],
         models3D: [Character3DModel] = [],
         activeLORAFilename: String? = nil,
@@ -737,6 +832,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         self.headTurnaroundSheetVariants = headTurnaroundSheetVariants
         self.approvedHeadTurnaroundSheetVariantID = approvedHeadTurnaroundSheetVariantID
         self.headTurnaroundSlots = headTurnaroundSlots
+        self.expressionReferenceSets = expressionReferenceSets
         self.costumeReferenceSets = costumeReferenceSets
         self.models3D = models3D
         self.activeLORAFilename = activeLORAFilename
@@ -782,6 +878,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         headTurnaroundSheetVariants = try c.decodeIfPresent([CharacterLookDevelopmentVariant].self, forKey: .headTurnaroundSheetVariants) ?? []
         approvedHeadTurnaroundSheetVariantID = try c.decodeIfPresent(UUID.self, forKey: .approvedHeadTurnaroundSheetVariantID)
         headTurnaroundSlots = try c.decodeIfPresent([CharacterPoseSlot].self, forKey: .headTurnaroundSlots) ?? []
+        expressionReferenceSets = try c.decodeIfPresent([CharacterExpressionReferenceSet].self, forKey: .expressionReferenceSets) ?? []
         costumeReferenceSets = try c.decodeIfPresent([CharacterCostumeReferenceSet].self, forKey: .costumeReferenceSets) ?? []
         models3D = try c.decodeIfPresent([Character3DModel].self, forKey: .models3D) ?? []
         activeLORAFilename = try c.decodeIfPresent(String.self, forKey: .activeLORAFilename)
@@ -803,6 +900,10 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         guard let approvedHeadTurnaroundSheetVariantID else { return headTurnaroundSheetVariants.last }
         return headTurnaroundSheetVariants.first(where: { $0.id == approvedHeadTurnaroundSheetVariantID })
             ?? headTurnaroundSheetVariants.last
+    }
+
+    func expressionLibraryEntry(for presetID: String) -> CharacterExpressionReferenceSet? {
+        expressionReferenceSets.first { $0.presetID == presetID }
     }
 
     var assetFolderSlug: String {
@@ -1603,6 +1704,7 @@ struct PlaceLandmarkProfile: Identifiable, Codable, Sendable, Hashable {
     var title: String
     var kind: Kind
     var notes: String
+    var tags: [String]
     var exteriorPlaceID: UUID?
     var exteriorImagePath: String?
     var interiorPlaceID: UUID?
@@ -1612,12 +1714,17 @@ struct PlaceLandmarkProfile: Identifiable, Codable, Sendable, Hashable {
     var anchorNodeID: UUID?
     var mapPoint: WorldMapPoint?
     var updatedAt: Date
+    /// Latest iPad-drawn storyboard sketch (project-relative path).
+    /// Isolated from `galleryImagePaths` and the photoreal pipeline. Only the
+    /// most recent drawing is retained — never historical versions.
+    var storyboardSketchPath: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
         case title
         case kind
         case notes
+        case tags
         case exteriorPlaceID
         case exteriorImagePath
         case interiorPlaceID
@@ -1627,6 +1734,7 @@ struct PlaceLandmarkProfile: Identifiable, Codable, Sendable, Hashable {
         case anchorNodeID
         case mapPoint
         case updatedAt
+        case storyboardSketchPath
     }
 
     init(
@@ -1634,6 +1742,7 @@ struct PlaceLandmarkProfile: Identifiable, Codable, Sendable, Hashable {
         title: String,
         kind: Kind,
         notes: String = "",
+        tags: [String] = [],
         exteriorPlaceID: UUID? = nil,
         exteriorImagePath: String? = nil,
         interiorPlaceID: UUID? = nil,
@@ -1648,6 +1757,7 @@ struct PlaceLandmarkProfile: Identifiable, Codable, Sendable, Hashable {
         self.title = title
         self.kind = kind
         self.notes = notes
+        self.tags = tags
         self.exteriorPlaceID = exteriorPlaceID
         self.exteriorImagePath = exteriorImagePath
         self.interiorPlaceID = interiorPlaceID
@@ -1665,6 +1775,7 @@ struct PlaceLandmarkProfile: Identifiable, Codable, Sendable, Hashable {
         title = try container.decode(String.self, forKey: .title)
         kind = try container.decode(Kind.self, forKey: .kind)
         notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         exteriorPlaceID = try container.decodeIfPresent(UUID.self, forKey: .exteriorPlaceID)
         exteriorImagePath = try container.decodeIfPresent(String.self, forKey: .exteriorImagePath)
         interiorPlaceID = try container.decodeIfPresent(UUID.self, forKey: .interiorPlaceID)
@@ -1675,6 +1786,7 @@ struct PlaceLandmarkProfile: Identifiable, Codable, Sendable, Hashable {
         anchorNodeID = try container.decodeIfPresent(UUID.self, forKey: .anchorNodeID)
         mapPoint = try container.decodeIfPresent(WorldMapPoint.self, forKey: .mapPoint)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        storyboardSketchPath = try container.decodeIfPresent(String.self, forKey: .storyboardSketchPath)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1683,6 +1795,7 @@ struct PlaceLandmarkProfile: Identifiable, Codable, Sendable, Hashable {
         try container.encode(title, forKey: .title)
         try container.encode(kind, forKey: .kind)
         try container.encode(notes, forKey: .notes)
+        try container.encode(tags, forKey: .tags)
         try container.encodeIfPresent(exteriorPlaceID, forKey: .exteriorPlaceID)
         try container.encodeIfPresent(exteriorImagePath, forKey: .exteriorImagePath)
         try container.encodeIfPresent(interiorPlaceID, forKey: .interiorPlaceID)
@@ -1692,6 +1805,7 @@ struct PlaceLandmarkProfile: Identifiable, Codable, Sendable, Hashable {
         try container.encodeIfPresent(anchorNodeID, forKey: .anchorNodeID)
         try container.encodeIfPresent(mapPoint, forKey: .mapPoint)
         try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(storyboardSketchPath, forKey: .storyboardSketchPath)
     }
 }
 
@@ -2266,6 +2380,10 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
     var linkedExteriorPlaceID: UUID?
     /// 1-5 star rating per image path. 0 or missing = unrated.
     var imageRatings: [String: Int] = [:]
+    /// Latest iPad-drawn storyboard sketch (project-relative path).
+    /// Isolated from `imagePaths`/`referenceImages`: only the most recent
+    /// drawing is retained — never historical versions. `nil` = blank canvas.
+    var storyboardSketchPath: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, name, filename, notes, imagePaths, approvedImagePath
@@ -2280,6 +2398,7 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         case formerTimeSpecificRecordsFoldedIntoLocation, additionalGuidance, imageGenerationPrompts
         case buildingAnchorNodeID, linkedExteriorPlaceID
         case imageRatings
+        case storyboardSketchPath
     }
 
     init(
@@ -2450,6 +2569,7 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         buildingAnchorNodeID = try c.decodeIfPresent(UUID.self, forKey: .buildingAnchorNodeID)
         linkedExteriorPlaceID = try c.decodeIfPresent(UUID.self, forKey: .linkedExteriorPlaceID)
         imageRatings = try c.decodeIfPresent([String: Int].self, forKey: .imageRatings) ?? [:]
+        storyboardSketchPath = try c.decodeIfPresent(String.self, forKey: .storyboardSketchPath)
     }
 
     var resolvedApprovedImagePath: String? {
@@ -2555,12 +2675,15 @@ enum GeminiModel: String, Codable, Sendable, CaseIterable {
         switch self {
         case .flash:
             switch imageSize {
-            case "4K": 0.151
+            case "4K": 0.150
             case "2K": 0.101
             default: 0.067
             }
         case .pro:
-            0.134
+            switch imageSize {
+            case "4K": 0.240
+            default: 0.134
+            }
         }
     }
 
