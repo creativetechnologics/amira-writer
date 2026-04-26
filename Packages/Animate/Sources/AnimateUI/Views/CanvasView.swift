@@ -45,6 +45,7 @@ final class AnimationCanvasView: NSView {
     private static let softwareBackgroundImageCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 32
+        cache.totalCostLimit = 200 * 1024 * 1024 // 200 MB
         return cache
     }()
 
@@ -376,7 +377,8 @@ final class AnimationCanvasView: NSView {
 
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             if let fallback = NSImage(contentsOf: url) {
-                Self.softwareBackgroundImageCache.setObject(fallback, forKey: key)
+                let cost = Int(fallback.size.width) * Int(fallback.size.height) * 4
+                Self.softwareBackgroundImageCache.setObject(fallback, forKey: key, cost: cost)
                 return fallback
             }
             return nil
@@ -397,7 +399,8 @@ final class AnimationCanvasView: NSView {
         }
 
         if let image {
-            Self.softwareBackgroundImageCache.setObject(image, forKey: key)
+            let cost = Int(image.size.width) * Int(image.size.height) * 4
+            Self.softwareBackgroundImageCache.setObject(image, forKey: key, cost: cost)
         }
         return image
     }

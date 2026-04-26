@@ -11,7 +11,8 @@ final class ThumbnailBackgroundRemover {
     private let processingQueue = DispatchQueue(label: "com.amira.thumbnail-bg-removal", qos: .userInitiated, attributes: .concurrent)
 
     init() {
-        cache.countLimit = 500
+        cache.countLimit = 200
+        cache.totalCostLimit = 100 * 1024 * 1024 // 100 MB
     }
 
     /// Returns a background-removed thumbnail for display. Returns nil if removal fails (caller should show original).
@@ -29,7 +30,8 @@ final class ThumbnailBackgroundRemover {
                 let result = Self.removeBackground(from: url, targetSize: size)
                 DispatchQueue.main.async { [weak self] in
                     if let image = result {
-                        self?.cache.setObject(image, forKey: cacheKey as NSString)
+                        let cost = Int(image.size.width) * Int(image.size.height) * 4
+                        self?.cache.setObject(image, forKey: cacheKey as NSString, cost: cost)
                     }
                     continuation.resume(returning: result)
                 }

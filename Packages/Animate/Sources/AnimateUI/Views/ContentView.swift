@@ -37,6 +37,8 @@ struct ContentView: View {
             return store.selectedPlace?.name ?? "Set and location imagery"
         case .props:
             return "Scene objects, vehicles, and interactive props"
+        case .scenes:
+            return store.selectedScene?.name ?? "Scene image generation"
         case .animate:
             return store.selectedScene?.name ?? "Canvas staging"
         case .timeline:
@@ -202,7 +204,7 @@ struct ContentView: View {
 
     private func normalizedPage(_ page: AnimatePage) -> AnimatePage {
         switch page {
-        case .script, .characters, .places, .props:
+        case .script, .characters, .places, .props, .scenes:
             .animate
         case .animate, .timeline:
             page
@@ -281,8 +283,7 @@ struct ContentView: View {
             CharactersPageView(store: store, showSidebar: false)
         case .places:
             PlacesPageView(store: store, viewMode: placesViewModeBinding, showSidebar: false)
-        case .props:
-            // Props has its own dedicated workspace; this fallback shows animate.
+        case .props, .scenes:
             AnimatePageView(store: store, workspaceState: animateWorkspaceState)
         case .animate:
             AnimatePageView(store: store, workspaceState: animateWorkspaceState)

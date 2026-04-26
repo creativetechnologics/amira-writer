@@ -12,6 +12,9 @@ public struct ScenesWorkspace: View {
     public var body: some View {
         ZStack {
             ScenesWorkspaceContent(store: controller.store)
+                .environment(\.unifiedImageFlipHandler) { path in
+                    controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
+                }
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
             if controller.isLoadingProject || controller.isSelectionRestorePending {
@@ -32,6 +35,8 @@ private struct ScenesWorkspaceContent: View {
     @AppStorage("novotro.imagine.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
     @AppStorage("novotro.imagine.showInspector") private var inspectorVisible = true
     @AppStorage("novotro.imagine.inspector.width") private var inspectorWidth: Double = 320
+
+    @State private var animateWorkspaceState = AnimateWorkspaceState()
 
     private var projectTitle: String {
         store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
@@ -110,7 +115,11 @@ private struct ScenesWorkspaceContent: View {
                         }
                     }
                 } content: {
-                    ImagineInspectorView(store: store)
+                    InspectorView(
+                        store: store,
+                        currentPage: .scenes,
+                        animateWorkspaceState: animateWorkspaceState
+                    )
                 }
                 .frame(width: max(inspectorWidth, 250))
             }

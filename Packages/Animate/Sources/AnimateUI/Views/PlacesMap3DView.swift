@@ -59,15 +59,33 @@ struct PlacesMap3DView: View {
     @State private var webCoordinator: Map3DWebView.Coordinator? = nil
     @StateObject private var diagnostics = Map3DDiagnostics()
 
+    // Regenerate-pipeline state. The runner singleton owns the actual job;
+    // these locals just gate the confirmation alert and remember which
+    // job-id we showed the success/failure UI for so we don't double-fire
+    // the auto-reload + diagnostics dump on every body recompute.
+    @ObservedObject private var pipelineRunner = Map3DPipelineRunner.shared
+    @State private var showRegenConfirm: Bool = false
+    @State private var lastHandledJobId: UUID? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             headerRow
             Text(hint).font(.caption).foregroundStyle(.secondary)
+            if pipelineRunner.state == .running { regenProgressBanner }
             if showDiagnostics { diagnosticsPane }
             mapSurface
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { resolveViewer() }
+        .onChange(of: pipelineRunner.state) { _, newState in
+            handlePipelineStateChange(newState)
+        }
+        .alert("Re-render the 3D map?", isPresented: $showRegenConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Regenerate") { startRegeneration() }
+        } message: {
+            Text("Runs Depth Anything V2 + SAM2 against the current master map. Takes several minutes; you can keep using the app while it runs. The 3D viewer will reload automatically when the new assets are ready.")
+        }
     }
 
     /// Payload delivered to the parent when a capture succeeds. Parent owns
@@ -122,6 +140,87 @@ struct PlacesMap3DView: View {
                 resolveViewer()
             }
             .controlSize(.small)
+
+            Button {
+                showRegenConfirm = true
+            } label: {
+                if pipelineRunner.state == .running {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.small)
+                        Text(pipelineRunner.currentPhaseLabel)
+                    }
+                } else {
+                    Label("Regenerate", systemImage: "arrow.clockwise.circle")
+                }
+            }
+            .controlSize(.small)
+            .disabled(pipelineRunner.state == .running)
+            .help("Re-run the 3D map pipeline (Depth Anything V2 + SAM2 + classical CV) against the current master map.")
+        }
+    }
+
+    /// Compact in-pane progress banner that appears only while the pipeline is
+    /// running. Lives between the hint text and the diagnostics/map surface so
+    /// it doesn't compete with the WKWebView for vertical real estate.
+    private var regenProgressBanner: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Re-rendering 3D map · \(pipelineRunner.currentPhaseLabel)")
+                    .font(.caption).fontWeight(.semibold)
+                if let line = pipelineRunner.snapshot().tailLog.last,
+                   !line.isEmpty {
+                    Text(line)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+
+    // MARK: - Regenerate flow
+
+    private func startRegeneration() {
+        let result = pipelineRunner.start()
+        diagnostics.append(
+            "regenerate started: job=\(result.jobId.uuidString) accepted=\(result.started)",
+            level: .info
+        )
+        // Reset the handled-id guard so we react to this job's completion.
+        if result.started {
+            lastHandledJobId = nil
+        }
+    }
+
+    private func handlePipelineStateChange(_ newState: Map3DPipelineRunner.State) {
+        switch newState {
+        case .succeeded:
+            let snap = pipelineRunner.snapshot()
+            guard snap.jobId != lastHandledJobId else { return }
+            lastHandledJobId = snap.jobId
+            diagnostics.append("regenerate succeeded — reloading viewer", level: .info)
+            // Force the WKWebView to pick up the freshly-written assets.
+            reloadToken &+= 1
+            resolveViewer()
+        case .failed:
+            let snap = pipelineRunner.snapshot()
+            guard snap.jobId != lastHandledJobId else { return }
+            lastHandledJobId = snap.jobId
+            let err = snap.errorMessage ?? "unknown failure"
+            diagnostics.append("regenerate failed: \(err)", level: .error)
+            for line in snap.tailLog.suffix(20) {
+                diagnostics.append("  \(line)", level: .error)
+            }
+            // Auto-show the diagnostics pane so the failure isn't hidden.
+            showDiagnostics = true
+        case .idle, .running:
+            break
         }
     }
 
@@ -611,22 +710,26 @@ struct Map3DWebView: NSViewRepresentable {
 @available(macOS 26.0, *)
 private enum Map3DResourceLocator {
     /// Returns the viewer's `index.html`, searching in order:
-    ///   1. `AMIRA_MAP3D_DIR` env var (dev override),
-    ///   2. the app-bundled `map3d-viewer/` folder (shipped via
-    ///      `Scripts/build-app.sh`),
-    ///   3. the source-tree `Scripts/3d-map-pipeline/viewer/` fallback for
-    ///      developer machines.
+    ///   1. `AMIRA_MAP3D_DIR` env var (explicit override),
+    ///   2. the source-tree `Scripts/3d-map-pipeline/viewer/` if it exists
+    ///      on disk — this is the regen pipeline's output directory, so
+    ///      after the in-app "Regenerate" button runs, the freshly written
+    ///      assets win over the older bundled copy without needing a
+    ///      rebuild,
+    ///   3. the app-bundled `map3d-viewer/` folder (shipped via
+    ///      `Scripts/build-app.sh`) as the final fallback for non-dev
+    ///      machines that don't have the source tree.
     static func indexURL() -> URL? {
         if let override = ProcessInfo.processInfo.environment["AMIRA_MAP3D_DIR"], !override.isEmpty {
             let dir = URL(fileURLWithPath: override)
             if let idx = indexURL(in: dir) { return idx }
         }
+        let sourceTree = URL(fileURLWithPath: "/Volumes/Storage VIII/Programming/Amira Writer/Scripts/3d-map-pipeline/viewer")
+        if let idx = indexURL(in: sourceTree) { return idx }
         if let resourceURL = Bundle.main.resourceURL {
             let bundled = resourceURL.appendingPathComponent("map3d-viewer")
             if let idx = indexURL(in: bundled) { return idx }
         }
-        let sourceTree = URL(fileURLWithPath: "/Volumes/Storage VIII/Programming/Amira Writer/Scripts/3d-map-pipeline/viewer")
-        if let idx = indexURL(in: sourceTree) { return idx }
         return nil
     }
 

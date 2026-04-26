@@ -39,11 +39,22 @@ public enum ImageAnalysisBackendStore {
     }
 
     public static func currentVertexProjectID() -> String {
-        UserDefaults.standard.string(forKey: projectIDKey) ?? ""
+        if let stored = UserDefaults.standard.string(forKey: projectIDKey),
+           !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return stored
+        }
+        return ProjectCredentialStore.shared.vertexProjectID()
     }
 
     public static func currentVertexRegion() -> String {
-        UserDefaults.standard.string(forKey: regionKey) ?? "global"
+        if let stored = UserDefaults.standard.string(forKey: regionKey),
+           !stored.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return stored
+        }
+        let projectRegion = ProjectCredentialStore.shared.vertexRegion()
+        return projectRegion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "global"
+            : projectRegion
     }
 
     public static func setVertexSettings(projectID: String, region: String) {

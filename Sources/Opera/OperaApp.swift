@@ -22,7 +22,7 @@ struct OperaApp: App {
             OperaShellView(selectedMode: $selectedMode)
 
         }
-        .defaultSize(width: 1280, height: 900)
+        .defaultSize(width: 1120, height: 820)
         .windowStyle(.hiddenTitleBar)
         .commands {
             OperaProjectCommands()
@@ -59,13 +59,14 @@ struct OperaApp: App {
 private struct OperaModeCommands: Commands {
     @Binding var selectedMode: OperaMode
 
-    var body: some Commands {
-        CommandMenu("Mode") {
-            ForEach(Array(OperaMode.allCases.enumerated()), id: \.element.id) { index, mode in
+        var body: some Commands {
+            CommandMenu("Mode") {
+            ForEach(Array(OperaMode.sidebarModes.enumerated()), id: \.element.id) { index, mode in
+                let shortcutKey = index < 9 ? "\(index + 1)" : "0"
                 Button(mode.title) {
                     selectedMode = mode
                 }
-                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                .keyboardShortcut(KeyEquivalent(Character(shortcutKey)), modifiers: .command)
             }
         }
     }

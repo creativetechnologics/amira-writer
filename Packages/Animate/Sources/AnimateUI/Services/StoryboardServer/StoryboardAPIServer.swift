@@ -3,36 +3,43 @@ import Network
 
 // MARK: - StoryboardAPIServer
 //
-// LAN HTTP server for the iPad storyboard drawing tool. Binds to 0.0.0.0:19850
-// so any device on the local network can reach it. Port 19849 is already taken
-// by AnimateAPIServer (loopback). The frontend contract uses 19850.
+// LAN HTTP server for the iPad storyboard drawing tool. Binds to 0.0.0.0 on a
+// configurable port so any device on the local network can reach it. Port 19849
+// is already taken by AnimateAPIServer (loopback), so the default remains 19850.
 //
 // Pattern mirrors AnimateAPIServer.swift (loopback variant in the same package).
 
 @available(macOS 26.0, *)
 final class StoryboardAPIServer: @unchecked Sendable {
 
-    static let port: UInt16 = 19850
+    static let defaultPort: UInt16 = 19850
+    static let portDefaultsKey = "animate.storyboard.server.port"
+    static let allowedPortRange = 1024...65535
 
     @MainActor
     static var shared: StoryboardAPIServer?
+
+    @MainActor
+    private static weak var activeWorkspace: AnimateWorkspaceController?
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "com.amira.storyboard.api", qos: .userInitiated)
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private var receiveBuffers: [ObjectIdentifier: Data] = [:]
     private let router: StoryboardRouter
+    private let configuredPort: UInt16
     private(set) var boundPort: UInt16
 
     @MainActor
-    init(workspace: AnimateWorkspaceController) throws {
-        self.boundPort = Self.port
+    init(workspace: AnimateWorkspaceController, port: UInt16) throws {
+        self.configuredPort = port
+        self.boundPort = port
         self.router = StoryboardRouter(workspace: workspace)
 
         let params = NWParameters.tcp
-        guard let nwPort = NWEndpoint.Port(rawValue: Self.port) else {
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             throw NSError(domain: "StoryboardAPIServer", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Invalid port \(Self.port)"])
+                          userInfo: [NSLocalizedDescriptionKey: "Invalid port \(port)"])
         }
         params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: nwPort)
         params.allowLocalEndpointReuse = true
@@ -49,13 +56,71 @@ final class StoryboardAPIServer: @unchecked Sendable {
 
     @MainActor
     static func startIfNeeded(workspace: AnimateWorkspaceController) {
-        guard shared == nil else { return }
+        startOrRestart(workspace: workspace, forceRestart: false)
+    }
+
+    @MainActor
+    static func setConfiguredPort(_ value: Int) {
+        let port = sanitizedPort(value)
+        UserDefaults.standard.set(Int(port), forKey: portDefaultsKey)
+        if let workspace = activeWorkspace {
+            startOrRestart(workspace: workspace, forceRestart: true)
+        } else {
+            StoryboardServerStatusModel.shared.setStopped(
+                port: port,
+                url: currentConfiguredURL()
+            )
+        }
+    }
+
+    static var configuredPortValue: UInt16 {
+        sanitizedPort(UserDefaults.standard.integer(forKey: portDefaultsKey))
+    }
+
+    static func currentConfiguredURL() -> URL {
+        url(for: sanitizedPort(UserDefaults.standard.integer(forKey: portDefaultsKey)))
+    }
+
+    private static func sanitizedPort(_ value: Int) -> UInt16 {
+        guard allowedPortRange.contains(value), let port = UInt16(exactly: value) else {
+            return defaultPort
+        }
+        return port
+    }
+
+    @MainActor
+    private static func startOrRestart(workspace: AnimateWorkspaceController, forceRestart: Bool) {
+        activeWorkspace = workspace
+        let desiredPort = configuredPortValue
+
+        if let server = shared {
+            if !forceRestart, server.configuredPort == desiredPort {
+                server.router.updateWorkspace(workspace)
+                StoryboardServerStatusModel.shared.setLive(
+                    port: server.boundPort,
+                    url: server.currentURL()
+                )
+                return
+            }
+            server.stop()
+            shared = nil
+        }
+
+        StoryboardServerStatusModel.shared.setStarting(
+            port: desiredPort,
+            url: url(for: desiredPort)
+        )
         do {
-            let server = try StoryboardAPIServer(workspace: workspace)
-            server.start()
+            let server = try StoryboardAPIServer(workspace: workspace, port: desiredPort)
             shared = server
-            NSLog("[StoryboardServer] Started on port %d", Self.port)
+            server.start()
+            NSLog("[StoryboardServer] Starting on port %d", desiredPort)
         } catch {
+            StoryboardServerStatusModel.shared.setFailed(
+                error.localizedDescription,
+                port: desiredPort,
+                url: url(for: desiredPort)
+            )
             NSLog("[StoryboardServer] Failed to start: %@", error.localizedDescription)
         }
     }
@@ -64,14 +129,37 @@ final class StoryboardAPIServer: @unchecked Sendable {
         listener.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                if let p = self?.listener.port?.rawValue {
-                    self?.boundPort = p
+                if let self, let p = self.listener.port?.rawValue {
+                    self.boundPort = p
+                    let url = StoryboardAPIServer.url(for: p)
+                    Task { @MainActor [weak self] in
+                        guard let self, StoryboardAPIServer.shared === self else { return }
+                        StoryboardServerStatusModel.shared.setLive(port: p, url: url)
+                    }
                     NSLog("[StoryboardServer] Listening on 0.0.0.0:%d", p)
                 }
             case .failed(let error):
+                let port = self?.configuredPort ?? StoryboardAPIServer.configuredPortValue
+                Task { @MainActor [weak self] in
+                    guard let self, StoryboardAPIServer.shared === self else { return }
+                    StoryboardServerStatusModel.shared.setFailed(
+                        error.localizedDescription,
+                        port: port,
+                        url: StoryboardAPIServer.url(for: port)
+                    )
+                    StoryboardAPIServer.shared = nil
+                }
                 NSLog("[StoryboardServer] Listener failed: %@", error.localizedDescription)
                 self?.listener.cancel()
             case .cancelled:
+                let port = self?.configuredPort ?? StoryboardAPIServer.configuredPortValue
+                Task { @MainActor [weak self] in
+                    guard let self, StoryboardAPIServer.shared === self else { return }
+                    StoryboardServerStatusModel.shared.setStopped(
+                        port: port,
+                        url: StoryboardAPIServer.url(for: port)
+                    )
+                }
                 NSLog("[StoryboardServer] Listener cancelled")
             default:
                 break
@@ -95,10 +183,14 @@ final class StoryboardAPIServer: @unchecked Sendable {
 
     /// Returns the LAN URL an iPad should open. Prefers en0/en1; falls back to loopback.
     func currentURL() -> URL {
+        Self.url(for: boundPort)
+    }
+
+    static func url(for port: UInt16) -> URL {
         if let lan = primaryLANIPv4() {
-            return URL(string: "http://\(lan):\(boundPort)")!
+            return URL(string: "http://\(lan):\(port)")!
         }
-        return URL(string: "http://127.0.0.1:\(boundPort)")!
+        return URL(string: "http://127.0.0.1:\(port)")!
     }
 
     // MARK: - Connection Handling
@@ -171,7 +263,7 @@ final class StoryboardAPIServer: @unchecked Sendable {
 
     // MARK: - LAN IP detection
 
-    private func primaryLANIPv4() -> String? {
+    private static func primaryLANIPv4() -> String? {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
         defer { freeifaddrs(ifaddr) }

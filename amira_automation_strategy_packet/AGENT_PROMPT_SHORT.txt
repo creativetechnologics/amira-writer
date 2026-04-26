@@ -1,0 +1,61 @@
+You are coding in the Amira Writer repo.
+
+Implement the prompt-to-animated-footage automation pipeline in small, testable phases. Start with dry-run/report-only infrastructure; do not run paid image/video generation until the dry-run pipeline is validated.
+
+Repo:
+`/Volumes/Storage VIII/Programming/Amira Writer`
+
+Live project:
+`/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera`
+
+Canonical project sources:
+`Scenes/scenes.json`, `Places/places.json`, `Places/places-world-context.json`, `Characters/*/rig.json`, `Settings/animated-look-prompt.json`, `Animate/reference-registry.json`.
+
+Hard rules:
+- Local-folder-first.
+- Do not use deprecated Novotro Project Server.
+- Preserve manual intervention at every step.
+- Dry-run/preview/report before paid generation.
+- Use `Places/places-world-context.json` as canonical world period.
+- Ignore stale mid-2020s world-context duplicate.
+- Never use the project title as visual shorthand.
+- Prompts must spell out time period, region, architecture/materials, lighting, camera, action, and visual tone.
+- Do not overwrite user-approved refs, frames, videos, text, or QA results.
+
+First target:
+Build a one-scene dry-run report from existing `Scenes/scenes.json` that emits:
+1. `EffectiveShotSpec`
+2. `ReferenceContract`
+3. `ShotFrameGenerationPlan`
+4. blocker/cost report
+
+Add versioned Codable models:
+`TranscriptImport`, `TranscriptShotSpec`, `EffectiveShotSpec`, `ReferenceContract`, `ShotFrameGenerationPlan`, `GeneratedFrameRecord`, `VideoTaskRecord`, `QAResult`.
+
+Add or expose endpoints:
+`GET /automation/project/summary`
+`GET /automation/shots/{shotID}/effective-shot-spec`
+`GET /automation/scenes/{sceneID}/effective-shot-specs`
+`POST /automation/references/resolve`
+`GET /automation/references/{sceneID}/{shotID}`
+`POST /automation/frame-plans/dry-run`
+
+Acceptance for Phase 1:
+- summary reads 52 scenes, 367 shots, 27 places, 6 character rig folders if live project matches packet
+- world context resolves to early 2000s
+- one-scene dry-run creates zero paid jobs
+- known place includes approved place image
+- outdoor geography shots include map ref
+- bridge shots include bridge refs plus map
+- focus-character shots include correct character package refs
+- pinned refs survive rerun
+- rejected refs do not reappear
+- frame-plan prompts include period, region, materials, lighting, camera/framing, action, negative guardrails
+
+After Phase 1, implement in order:
+2. one-shot/one-scene frame generation with sidecars and approvals
+3. Vidu video task queue with upload/public URL strategy, polling, download, retry
+4. frame/video QA and correction loop
+5. dictation/STT-to-shot-spec import
+
+For every chunk, report files changed, tests added, commands run, limitations, and next tasks.

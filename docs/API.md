@@ -1,10 +1,11 @@
 # Amira Writer API
 
-Canonical reference for programs and agents that need to drive Amira Writer without a human at the keyboard. The supported surface is the HTTP JSON API on `localhost:19847`, reachable once the app is open and on the Score page.
+Canonical reference for programs and agents that need to drive Amira Writer without a human at the keyboard. The app exposes local loopback HTTP JSON APIs for Score and Animate workflows.
 
 | Interface | When to use | Surface |
 |-----------|-------------|---------|
 | [HTTP JSON API on `localhost:19847`](#1-http-json-api-localhost19847) | Inspecting / editing / playing back / WAV-exporting in an **already-running app instance** | ~60 endpoints covering songs, notes, tracks, tempo, playback, export, mixer, versions, audio units |
+| [Animate agent API on `localhost:19849`](#3-animate-agent-api-localhost19849) | Driving image generation, shot-frame dry-runs, and Image Intelligence from an **already-running app instance** | Places generation, Image Intelligence status/backfill/worker controls, shot-frame dry-run, Vertex image smoke test |
 
 For WAV export specifically, use `POST /api/export/wav` against the running app. The env-var headless full-mix path (`AMIRA_HEADLESS_FULLMIX_EXPORT`) was documented once and retired — it did not work reliably end-to-end from an agent context. Drive the open app instead.
 
@@ -195,6 +196,137 @@ Swift-side types live in `Packages/Score/Sources/ScoreUI/Services/APITypes.swift
 Use `POST /api/export/wav` against the running app. **Always `POST /api/song/select` first**, then re-read `/api/status` afterward to confirm `selectedSongPath` matches what you intended. Skipping the select step exports whatever song happens to be active — usually the first one, which is the #1 cause of repeated first-song exports.
 
 Validate end-to-end (response status, file exists, duration plausible, selected-song matches the request) before asking a human to listen.
+
+---
+
+## 3. Animate agent API (`localhost:19849`)
+
+Animate also starts a loopback-only JSON API when the app opens the Animate workspace. This is the preferred agent control surface for image/shot automation because it runs inside the same app instance Gary is using, with the same project, credentials, UserDefaults, and Vertex auth context.
+
+- Bind: `127.0.0.1:19849`, loopback only.
+- Transport: HTTP/1.1 JSON, one request per connection.
+- Auth: none beyond the loopback boundary.
+- Server source: `Packages/Animate/Sources/AnimateUI/Services/AnimateAPIServer.swift`.
+
+### Status / places
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/health` | Current project, selected Nano Banana model, backend, Vertex project/region, Gemini availability |
+| `GET` | `/places` | Places/backgrounds with generated-image counts |
+| `POST` | `/places/generate` | Queue place image generation in the running app |
+
+Example:
+
+```bash
+curl -sS http://127.0.0.1:19849/health | jq
+
+curl -sS -X POST http://127.0.0.1:19849/places/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "place": "Madar Valley",
+    "workflow": "photorealistic",
+    "model": "nano-banana-2",
+    "count": 1,
+    "aspectRatio": "16:9",
+    "imageSize": "2K",
+    "referenceMode": "default"
+  }' | jq
+```
+
+### Image Intelligence / image AI recognition
+
+These endpoints let an agent check the image-analysis batch state, discover/register project images, queue Gemini visual metadata + image/semantic embeddings, and start/stop the worker.
+
+| Method | Path | Body / query | Purpose |
+|--------|------|--------------|---------|
+| `GET` | `/image-intelligence/status` | — | Backend config, worker counts, recent jobs, recent logs |
+| `POST` | `/image-intelligence/configure` | `{ "backend": "aiStudio" \| "vertex", "vertexProjectID": "...", "vertexRegion": "global" }` | Switch analysis backend/settings and refresh coordinator config. Optional `aiStudioAPIKey` can set the analysis key. |
+| `POST` | `/image-intelligence/backfill` | See below | Discover/register images and optionally queue analysis jobs |
+| `POST` | `/image-intelligence/worker/start` | — | Start analysis worker |
+| `POST` | `/image-intelligence/worker/stop` | — | Stop analysis worker |
+| `POST` | `/image-intelligence/queue/reset` | — | Cancel pending/running jobs so they can be requeued |
+| `GET` | `/image-intelligence/jobs?limit=100` | — | Recent queue/job records |
+| `GET` | `/image-intelligence/logs?limit=100` | — | Recent coordinator logs |
+| `GET` | `/image-intelligence/asset?path=/absolute/image.png` | `path` query | Asset registration, jobs, runs, and latest visual metadata for one image |
+
+Backfill body:
+
+```json
+{
+  "dryRun": true,
+  "maxBatchSize": 100,
+  "forceReanalysis": false,
+  "enqueueExistingWithoutRuns": true,
+  "markMissingAssets": true,
+  "linkKinds": ["storyboard_frame", "scene_shot_image"],
+  "startWorker": false
+}
+```
+
+Defaults are conservative:
+
+- `dryRun` defaults to `true`; send `"dryRun": false` to actually register/queue.
+- `enqueueExistingWithoutRuns` defaults to `true`, so a real backfill queues already-registered images that do not yet have analysis runs.
+- `forceReanalysis` defaults to `false`; only set it when you intentionally want to reprocess images with existing runs.
+
+Examples:
+
+```bash
+# Check batch/worker state.
+curl -sS http://127.0.0.1:19849/image-intelligence/status | jq
+
+# Dry-run discovery for all project images.
+curl -sS -X POST http://127.0.0.1:19849/image-intelligence/backfill \
+  -H 'Content-Type: application/json' \
+  -d '{"dryRun":true}' | jq
+
+# Queue analysis/embeddings for all images without existing runs, then start worker.
+curl -sS -X POST http://127.0.0.1:19849/image-intelligence/backfill \
+  -H 'Content-Type: application/json' \
+  -d '{"dryRun":false,"enqueueExistingWithoutRuns":true,"startWorker":true}' | jq
+
+# Watch progress.
+curl -sS http://127.0.0.1:19849/image-intelligence/jobs?limit=50 | jq
+```
+
+Headless one-image smoke test (does **not** drain the batch queue):
+
+```bash
+.build/debug/Animate --image-intelligence-smoke \
+  --project "/path/to/Amira - A Modern Opera" \
+  --image "/path/to/existing-project-image.png" \
+  --max-spend 1.00
+```
+
+The smoke test writes an auditable JSON record to:
+
+```text
+<project>/Animate/ImageIntelligenceSmokeTests/image_intelligence_smoke_latest.json
+```
+
+For agent-only runs on a machine without `gcloud`, a short-lived OAuth token can be supplied via `AMIRA_VERTEX_ACCESS_TOKEN_FILE`. The app still prefers `gcloud auth application-default print-access-token` from common install paths, including `~/google-cloud-sdk/bin/gcloud`.
+
+### Shot-frame planning and Vertex smoke testing
+
+| Method | Path | Body | Purpose |
+|--------|------|------|---------|
+| `POST` | `/shot-frames/dry-run` | `{ "scene": "first" \| "all" \| 1 \| "<scene name/id>", "model": "nano-banana-2", "imageSize": "4K" }` | Build the beginning/middle/end plan report without generating images |
+| `POST` | `/vertex/image-smoke` | `{ "model": "nano-banana-2", "imageSize": "4K", "aspectRatio": "4:3", "maxSpendUSD": 1.0 }` | Run a single capped Vertex image smoke test inside the running app |
+
+Examples:
+
+```bash
+# No-spend shot-frame dry run.
+curl -sS -X POST http://127.0.0.1:19849/shot-frames/dry-run \
+  -H 'Content-Type: application/json' \
+  -d '{"scene":"first","model":"nano-banana-2","imageSize":"4K"}' | jq
+
+# Paid Vertex smoke test, capped to $1.
+curl -sS -X POST http://127.0.0.1:19849/vertex/image-smoke \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"nano-banana-2","imageSize":"4K","aspectRatio":"4:3","maxSpendUSD":1.0}' | jq
+```
 
 ---
 

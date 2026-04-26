@@ -141,6 +141,7 @@ struct InspectorView: View {
                 PlaceDetailsExtraActionsSection(store: store)
             }
             if let path = placeSel.imageURL?.path {
+                CharacterTagsInspectorSection(store: store, resolvedPath: path)
                 InspectorImageIntelligenceSummary(store: store, resolvedPath: path)
             }
         }
@@ -151,6 +152,7 @@ struct InspectorView: View {
         return inspectorScrollContainer {
             UnifiedDetailsInspectorSection(selection: sel)
             if let path = sel.imageURL?.path {
+                CharacterTagsInspectorSection(store: store, resolvedPath: path)
                 InspectorImageIntelligenceSummary(store: store, resolvedPath: path)
             }
         }
@@ -161,6 +163,7 @@ struct InspectorView: View {
         return inspectorScrollContainer {
             UnifiedDetailsInspectorSection(selection: sel)
             if let path = sel.imageURL?.path {
+                CharacterTagsInspectorSection(store: store, resolvedPath: path)
                 InspectorImageIntelligenceSummary(store: store, resolvedPath: path)
             }
         }
@@ -171,6 +174,7 @@ struct InspectorView: View {
         return inspectorScrollContainer {
             UnifiedDetailsInspectorSection(selection: sel)
             if let path = sel.imageURL?.path {
+                CharacterTagsInspectorSection(store: store, resolvedPath: path)
                 InspectorImageIntelligenceSummary(store: store, resolvedPath: path)
             }
         }
@@ -2519,6 +2523,8 @@ struct PlaceGeneratedImageDetailsInspectorSection: View {
 private struct CharacterImageLibraryInspectorSection: View {
     @Bindable var store: AnimateStore
     @Bindable var state: AllProjectImagesState
+    @State private var lastAutoSelectedCharacterID: UUID?
+    @State private var lastAutoSelectedCharacterName: String?
 
     private var selectedCharacter: AnimationCharacter? {
         store.selectedCharacter
@@ -2543,7 +2549,7 @@ private struct CharacterImageLibraryInspectorSection: View {
             }
         }
         .task(id: librarySelectionSignature) {
-            configureLibraryFilter()
+            configureLibraryFilterIfNeeded()
         }
     }
 
@@ -2555,12 +2561,34 @@ private struct CharacterImageLibraryInspectorSection: View {
         ].joined(separator: "|")
     }
 
-    private func configureLibraryFilter() {
+    private func configureLibraryFilterIfNeeded() {
         guard let selectedCharacter else { return }
-        state.selectedSource = .characters
-        state.selectedGroupLabel = selectedCharacter.name.isEmpty ? "Character" : selectedCharacter.name
         state.thumbnailSize = 92
+
+        let characterName = selectedCharacter.name.isEmpty ? "Character" : selectedCharacter.name
+        let isStillOnPreviousAutoSelection = state.selectedSource == .characters
+            && state.selectedGroupLabel == lastAutoSelectedCharacterName
+            && state.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && state.minimumRating == nil
+            && state.flagFilter == .all
+
+        let isUnconfigured = state.selectedSource == nil
+            && state.selectedGroupLabel == nil
+            && state.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && state.minimumRating == nil
+            && state.flagFilter == .all
+
+        // Preselect the active character on first open, and follow left-sidebar
+        // character changes only while the pane is still sitting on our own
+        // previous auto-selection. The moment Gary changes any filter, the
+        // library becomes a normal all-project browser and stays unlocked.
+        guard isUnconfigured || isStillOnPreviousAutoSelection else { return }
+
+        state.selectedSource = .characters
+        state.selectedGroupLabel = characterName
         state.flagFilter = .all
+        lastAutoSelectedCharacterID = selectedCharacter.id
+        lastAutoSelectedCharacterName = characterName
     }
 }
 
@@ -2824,5 +2852,189 @@ struct PlaceGeminiBatchInspectorSection: View {
                 inlineErrorMessage = error.localizedDescription
             }
         }
+    }
+}
+
+
+@available(macOS 26.0, *)
+private struct CharacterTagsInspectorSection: View {
+    @Bindable var store: AnimateStore
+    let resolvedPath: String
+    @State private var metadata = ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+    @State private var spatialTags: [ImageCharacterRegionTagRecord] = []
+
+    private var taggedCharacters: [AnimationCharacter] {
+        store.characters.filter { metadata.characterTags.contains(characterTagName($0)) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Character Tags")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Menu {
+                    ForEach(store.characters) { character in
+                        let name = characterTagName(character)
+                        Button(metadata.characterTags.contains(name) ? "Remove \(name)" : "Tag \(name)") {
+                            toggleCharacter(name)
+                        }
+                    }
+                } label: {
+                    Label("Tag", systemImage: "tag")
+                }
+                .menuStyle(.button)
+                .controlSize(.small)
+            }
+
+            if taggedCharacters.isEmpty {
+                Text("No characters tagged yet.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                FlowLayout(spacing: 6) {
+                    ForEach(taggedCharacters) { character in
+                        Button {
+                            store.selectedCharacterID = character.id
+                        } label: {
+                            Label(characterTagName(character), systemImage: "person.crop.circle")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.accentColor.opacity(0.14), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            if !spatialTags.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Spatial Tags")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(spatialTags) { tag in
+                        HStack(spacing: 6) {
+                            Label(tag.characterName ?? tag.characterID, systemImage: "scope")
+                                .font(.caption)
+                            Spacer()
+                            Text("\(Int(tag.x * 100))%, \(Int(tag.y * 100))%")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                            Button {
+                                removeSpatialTag(tag)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Picker("Visual Style", selection: Binding<ImageLibraryVisualStyle?>(
+                get: { metadata.visualStyle },
+                set: { setVisualStyle($0) }
+            )) {
+                Text("Unspecified").tag(nil as ImageLibraryVisualStyle?)
+                ForEach(ImageLibraryVisualStyle.allCases, id: \.self) { style in
+                    Text(style.displayName).tag(Optional(style))
+                }
+            }
+            .pickerStyle(.segmented)
+            .help("Shot auto-generation should prefer images tagged Animated.")
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .task(id: resolvedPath) {
+            reload()
+            await reloadSpatialTags()
+        }
+    }
+
+    private func characterTagName(_ character: AnimationCharacter) -> String {
+        let name = character.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? character.id.uuidString : name
+    }
+
+    private func reload() {
+        metadata = ImageLibraryMetadataSidecarService.load(forImagePath: resolvedPath)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+    }
+
+    @MainActor
+    private func reloadSpatialTags() async {
+        spatialTags = await store.imageCharacterRegionTags(for: resolvedPath)
+    }
+
+    private func toggleCharacter(_ name: String) {
+        if metadata.characterTags.contains(name) {
+            metadata.characterTags.removeAll { $0 == name }
+        } else {
+            metadata.characterTags.append(name)
+            metadata.characterTags = Array(Set(metadata.characterTags)).sorted()
+        }
+        save()
+    }
+
+    private func setVisualStyle(_ style: ImageLibraryVisualStyle?) {
+        metadata.visualStyle = style
+        save()
+    }
+
+    private func save() {
+        metadata.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: resolvedPath)
+    }
+
+    private func removeSpatialTag(_ tag: ImageCharacterRegionTagRecord) {
+        Task { @MainActor in
+            _ = await store.removeImageCharacterRegionTag(id: tag.id)
+            await reloadSpatialTags()
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        layout(in: proposal.width ?? 260, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = layout(in: bounds.width, subviews: subviews)
+        for (index, frame) in result.frames.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                proposal: ProposedViewSize(frame.size)
+            )
+        }
+    }
+
+    private func layout(in width: CGFloat, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+        var frames: [CGRect] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        let maxWidth = max(width, 1)
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return (CGSize(width: maxWidth, height: y + rowHeight), frames)
     }
 }

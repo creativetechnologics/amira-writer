@@ -27,6 +27,18 @@ public final class WriteWorkspaceController: ObservableObject {
         store.suspendBackgroundWork()
     }
 
+    public func resumeBackgroundWork() {
+        store.resumeBackgroundWork()
+    }
+
+    public func isProjectDisplayReady(_ projectURL: URL) -> Bool {
+        let normalizedPath = projectURL.standardizedFileURL.path
+        return loadedProjectPath == normalizedPath
+            && store.projectURL?.standardizedFileURL.path == normalizedPath
+            && !isLoadingProject
+            && store.presentedLoadError == nil
+    }
+
     public func save() {
         store.save()
     }

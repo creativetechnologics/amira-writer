@@ -423,8 +423,9 @@ struct ImagineCanvasPageView: View {
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
-            appendReferenceURLs(urls)
-            return !urls.isEmpty
+            let resolvedURLs = ImageMultiSelectionDragContext.resolveDroppedURLs(urls)
+            appendReferenceURLs(resolvedURLs)
+            return !resolvedURLs.isEmpty
         } isTargeted: { isTargeted in
             isReferenceDropTarget = isTargeted
         }

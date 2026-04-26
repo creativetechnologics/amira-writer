@@ -43,4 +43,14 @@ final class StoryboardStore: Sendable {
         }
         return result
     }
+
+    func hasAnalysisSidecars(projectRoot: URL, sceneID: UUID, shotID: UUID) -> [String: Bool] {
+        let paths = ProjectPaths(root: projectRoot)
+        var result: [String: Bool] = [:]
+        for frame in StoryboardFrame.allCases {
+            let url = paths.shotStoryboardAnalysisJSON(sceneID: sceneID, shotID: shotID, frame: frame)
+            result[frame.rawValue] = FileManager.default.fileExists(atPath: url.path)
+        }
+        return result
+    }
 }

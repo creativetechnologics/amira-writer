@@ -9,6 +9,7 @@ struct ScriptCenterView: View {
     @Bindable var store: ScriptStore
     var showScratchpad: Bool = false
     var showLyricIterations: Bool = false
+    var showCards: Bool = false
     var selectedLyricIterationSlot: Int = 1
 
     var body: some View {
@@ -30,6 +31,7 @@ struct ScriptCenterView: View {
                 store: store,
                 showScratchpad: showScratchpad,
                 showLyricIterations: showLyricIterations,
+                showCards: showCards,
                 selectedLyricIterationSlot: selectedLyricIterationSlot
             )
         }
@@ -43,9 +45,11 @@ struct ScriptScrollContent: View {
     @Bindable var store: ScriptStore
     var showScratchpad: Bool
     var showLyricIterations: Bool
+    var showCards: Bool
     var selectedLyricIterationSlot: Int
     @AppStorage("novotro.write.lyricIterations.width") private var lyricIterationsWidth: Double = 340
     @AppStorage("novotro.write.scratchpad.width") private var scratchpadWidth: Double = 340
+    @AppStorage("novotro.write.cards.width") private var cardsWidth: Double = 340
 
     private var displayNamesByPath: [String: String] {
         Dictionary(uniqueKeysWithValues: store.songAssets.map { ($0.relativePath, $0.displayName) })
@@ -66,7 +70,9 @@ struct ScriptScrollContent: View {
                                 selectedLyricIterationSlot: selectedLyricIterationSlot,
                                 lyricIterationsWidth: lyricIterationsWidth,
                                 showScratchpad: showScratchpad,
-                                scratchpadWidth: scratchpadWidth
+                                scratchpadWidth: scratchpadWidth,
+                                showCards: showCards,
+                                cardsWidth: cardsWidth
                             )
                             .id(libretto.relativePath)
                             .background(
@@ -85,7 +91,7 @@ struct ScriptScrollContent: View {
 
                         Spacer().frame(height: 200)
                     }
-                    .padding(.horizontal, (showScratchpad || showLyricIterations) ? 28 : 40)
+                    .padding(.horizontal, (showScratchpad || showLyricIterations || showCards) ? 28 : 40)
                     .padding(.top, 20)
                     .padding(.bottom, 40)
                 }
@@ -149,6 +155,8 @@ private struct ScriptSectionRowView: View {
     let lyricIterationsWidth: Double
     let showScratchpad: Bool
     let scratchpadWidth: Double
+    let showCards: Bool
+    let cardsWidth: Double
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -185,6 +193,15 @@ private struct ScriptSectionRowView: View {
                         store: store
                     )
                     .frame(width: scratchpadWidth, alignment: .topLeading)
+                }
+
+                if showCards {
+                    ScriptCardLaneView(
+                        displayName: displayName,
+                        path: path,
+                        store: store
+                    )
+                    .frame(width: cardsWidth, alignment: .topLeading)
                 }
             }
         }

@@ -199,13 +199,16 @@ struct CharacterLookDevelopmentBoardSheet: View {
 
     @ViewBuilder
     private func approvedThumbnail(for slot: CharacterLookDevelopmentSlot) -> some View {
-        if let approvedVariant = slot.approvedVariant,
-           let image = store.thumbnailImage(for: approvedVariant.imagePath, maxSize: 40) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 40, height: 40)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+        if let approvedVariant = slot.approvedVariant {
+            AsyncStoreThumbnailImage.rounded(
+                store: store,
+                path: approvedVariant.imagePath,
+                maxSize: 40,
+                width: 40,
+                height: 40,
+                cornerRadius: 8,
+                placeholderOpacity: 0.3
+            )
         } else {
             RoundedRectangle(cornerRadius: 8)
                 .fill(.quaternary.opacity(0.3))
@@ -489,27 +492,21 @@ private struct LookDevelopmentVariantCard: View {
 
     @ViewBuilder
     private var thumbnail: some View {
-        if let image = store.thumbnailImage(for: variant.imagePath, maxSize: 160) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: .infinity)
-                .frame(height: 160)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(alignment: .topTrailing) {
-                    if isApproved {
-                        Image(systemName: "checkmark.seal.fill")
-                            .foregroundStyle(.green)
-                            .padding(8)
-                    }
-                }
-        } else {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(.quaternary.opacity(0.25))
-                .frame(height: 160)
-                .overlay {
-                    Image(systemName: "photo")
-                        .foregroundStyle(.tertiary)
+        AsyncStoreThumbnailImage.rounded(
+            store: store,
+            path: variant.imagePath,
+            maxSize: 160,
+            width: nil,
+            height: 160,
+            cornerRadius: 10,
+            placeholderOpacity: 0.25
+        )
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .topTrailing) {
+            if isApproved {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(.green)
+                    .padding(8)
                 }
         }
     }

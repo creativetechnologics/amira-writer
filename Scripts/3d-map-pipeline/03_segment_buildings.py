@@ -82,22 +82,31 @@ def find_village_roi() -> tuple[int, int, int, int]:
     landmarks plus VILLAGE_BUFFER_M. Falls back to a centre-biased box if
     canon data is missing."""
     layers_path = C.ASSETS_ROOT / "places-master-map-layers.json"
-    meta_path = (C.ASSETS_ROOT
-                 / "backgrounds/chosen-references/map/02-master_valley_topdown_map_expanded_2026-04-14.mapmeta.json")
+    # mapmeta.json sits next to the working image and declares where the
+    # inner-content rect lives inside the raster. For raw inner-content maps
+    # (no expanded margins) the sidecar declares the full image as the
+    # content rect (0..1). If the sidecar is missing, fall back to identity
+    # so landmarks resolve to direct full-image normalized coords.
+    meta_path = C.WORKING_IMAGE.with_suffix(".mapmeta.json")
 
-    if not layers_path.exists() or not meta_path.exists():
-        print("[C] canon JSON missing → falling back to centre-biased ROI")
+    if not layers_path.exists():
+        print("[C] canon layers JSON missing → falling back to centre-biased ROI")
         cx, cy = C.IMG_W // 2, int(C.IMG_H * 0.42)
         half = int(1200 / C.METERS_PER_PIXEL / 2)
         return (cx - half, cy - half // 2, cx + half, cy + half // 2)
 
     layers = json.loads(layers_path.read_text()).get("layers", {})
-    meta = json.loads(meta_path.read_text())
-    rect = meta.get("logicalContentRectNormalized") or {}
-    rx = float(rect.get("x", 0))
-    ry = float(rect.get("y", 0))
-    rw = float(rect.get("width", 1))
-    rh = float(rect.get("height", 1))
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text())
+        rect = meta.get("logicalContentRectNormalized") or {}
+        rx = float(rect.get("x", 0))
+        ry = float(rect.get("y", 0))
+        rw = float(rect.get("width", 1))
+        rh = float(rect.get("height", 1))
+        print(f"[C] mapmeta: rect=({rx:.4f},{ry:.4f},{rw:.4f},{rh:.4f}) from {meta_path.name}")
+    else:
+        rx, ry, rw, rh = 0.0, 0.0, 1.0, 1.0
+        print(f"[C] no mapmeta sidecar → identity rect (raw inner-content map)")
 
     xs: list[float] = []
     ys: list[float] = []

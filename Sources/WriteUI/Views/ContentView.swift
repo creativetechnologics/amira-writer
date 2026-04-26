@@ -13,6 +13,7 @@ struct ContentView: View {
     @AppStorage("novotro.write.showInspector") private var showInspector: Bool = true
     @AppStorage("novotro.write.showScratchpad") private var showScratchpad: Bool = true
     @AppStorage("novotro.write.showLyricIterations") private var showLyricIterations: Bool = true
+    @AppStorage("novotro.write.showCards") private var showCards: Bool = true
     @AppStorage("novotro.write.lyricIterationSlot") private var selectedLyricIterationSlot: Int = 1
     @AppStorage("novotro.write.showSummaries") private var showSummaries: Bool = false
     @AppStorage("novotro.write.sidebarVisible") private var showSidebar: Bool = true
@@ -140,6 +141,8 @@ struct ContentView: View {
                         ) {
                             store.showDirections.toggle()
                         }
+                        .help("Show Direction")
+                        .accessibilityLabel("Show Direction")
                         ScriptMarkupToolbarButton(
                             systemImage: "film",
                             color: store.storyboardingMarkupColor,
@@ -148,6 +151,8 @@ struct ContentView: View {
                         ) {
                             store.showStoryboarding.toggle()
                         }
+                        .help("Show Action")
+                        .accessibilityLabel("Show Action")
                         ScriptMarkupToolbarButton(
                             systemImage: "video",
                             color: store.animateMarkupColor,
@@ -156,6 +161,8 @@ struct ContentView: View {
                         ) {
                             store.showAnimateDirections.toggle()
                         }
+                        .help("Show Camera")
+                        .accessibilityLabel("Show Camera")
                         if let badgeLabel = store.collaborationBadgeLabel {
                             OperaChromeStatusBadge(
                                 title: badgeLabel,
@@ -182,6 +189,15 @@ struct ContentView: View {
                                 showScratchpad.toggle()
                             }
                         }
+                        OperaChromeActionButton(
+                            systemImage: "rectangle.stack",
+                            isSelected: showCards
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showCards.toggle()
+                            }
+                        }
+                        .help("Show Script Cards")
                         OperaChromeActionButton(systemImage: "list.bullet.rectangle") {
                             openWindow(id: GlobalChangeLogWindowView.windowID)
                         }
@@ -193,6 +209,7 @@ struct ContentView: View {
                         store: store,
                         showScratchpad: showScratchpad,
                         showLyricIterations: showLyricIterations,
+                        showCards: showCards,
                         selectedLyricIterationSlot: lyricIterationSelection.wrappedValue
                     )
                     OperaChromeDivider()

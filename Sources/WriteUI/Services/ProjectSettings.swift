@@ -3,12 +3,12 @@ import Foundation
 /// Project-level settings stored inside the OWP bundle as JSON.
 /// Syncs between machines via SyncThing alongside the project data.
 struct ProjectSettingsData: Codable {
-    // MARK: - Markup Visibility
+    // MARK: - Direction / Action / Camera Visibility
     var showDirections: Bool?
     var showStoryboarding: Bool?
     var showAnimateDirections: Bool?
 
-    // MARK: - Markup Colors
+    // MARK: - Direction / Action / Camera Colors
     var directionMarkupColorHex: String?
     var storyboardingMarkupColorHex: String?
     var animateMarkupColorHex: String?

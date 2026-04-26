@@ -40,7 +40,7 @@ struct StoryboardURLButton: View {
         .buttonStyle(.plain)
         .popover(isPresented: $showPopover, arrowEdge: .bottom) {
             let url = StoryboardAPIServer.shared?.currentURL()
-                ?? URL(string: "http://127.0.0.1:\(StoryboardAPIServer.port)")!
+                ?? StoryboardAPIServer.currentConfiguredURL()
             StoryboardStatusView(url: url)
         }
     }

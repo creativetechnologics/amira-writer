@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
 import ProjectKit
 
@@ -15,6 +16,7 @@ struct ContentView: View {
     @AppStorage("novotro.score.inspector.width") private var inspectorWidth: Double = 360
 
     @State private var pianoRollController: PianoRollViewController?
+    @State private var spacebarMonitor: Any?
 
     private var projectTitle: String {
         store.projectURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
@@ -140,6 +142,8 @@ struct ContentView: View {
             }
         }
         .background(OperaChromeTheme.workspaceBackground)
+        .onAppear(perform: installSpacebarMonitor)
+        .onDisappear(perform: removeSpacebarMonitor)
     }
 
 
@@ -157,6 +161,61 @@ struct ContentView: View {
             max(inspectorWidth - Double(delta), 250),
             600
         )
+    }
+
+    private func installSpacebarMonitor() {
+        guard spacebarMonitor == nil else { return }
+
+        spacebarMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let keyCode = event.keyCode
+            let modifierFlags = event.modifierFlags
+            let windowNumber = event.windowNumber
+
+            guard MainActor.assumeIsolated({
+                Self.shouldTogglePlayback(
+                    keyCode: keyCode,
+                    modifierFlags: modifierFlags,
+                    windowNumber: windowNumber
+                )
+            }) else { return event }
+
+            NotificationCenter.default.post(
+                name: ScoreAppSignals.spacebarPlayPauseNotification,
+                object: nil
+            )
+            return nil
+        }
+    }
+
+    private func removeSpacebarMonitor() {
+        if let spacebarMonitor {
+            NSEvent.removeMonitor(spacebarMonitor)
+            self.spacebarMonitor = nil
+        }
+    }
+
+    @MainActor
+    private static func shouldTogglePlayback(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        windowNumber: Int
+    ) -> Bool {
+        guard keyCode == 49 else { return false }
+
+        let mods = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods.contains(.command) || mods.contains(.control) || mods.contains(.option) {
+            return false
+        }
+
+        guard let window = NSApp.window(withWindowNumber: windowNumber),
+              window === NSApp.mainWindow else { return false }
+
+        if let responder = window.firstResponder,
+           responder is NSText || responder is NSTextView || responder is NSTextField {
+            return false
+        }
+
+        return true
     }
 }
 
@@ -297,7 +356,7 @@ struct ScoreSidebarView: View {
 
 @available(macOS 26.0, *)
 enum InspectorSectionID: String, CaseIterable, Identifiable {
-    case instruments, libretto, versions, files, export, suno
+    case instruments, export, libretto, versions, files, suno
 
     var id: String { rawValue }
 
@@ -329,7 +388,7 @@ struct ScoreInspectorView: View {
     @Bindable var store: ScoreStore
 
     @AppStorage("novotro.score.inspector.activeSection") private var activeSection: String = "instruments"
-    private let tabOrder: [InspectorSectionID] = [.instruments, .libretto, .versions, .files, .export, .suno]
+    private let tabOrder: [InspectorSectionID] = [.instruments, .export, .libretto, .versions, .files, .suno]
 
     private var selectedSection: Binding<InspectorSectionID> {
         Binding(
@@ -379,7 +438,7 @@ struct ScoreInspectorView: View {
         Group {
             if let file = store.selectedLibrettoFile {
                 ScrollView {
-                    Text(file.content)
+                    Text(SyllabificationService.extractLyrics(from: file.content))
                         .font(.body)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(8)

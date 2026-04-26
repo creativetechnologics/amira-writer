@@ -2,6 +2,9 @@ import SwiftUI
 import ProjectKit
 import UniformTypeIdentifiers
 
+private let propsWorkspaceSupportedExtensions: Set<String> = ["usdz", "glb", "obj", "fbx", "dae", "png", "jpg", "jpeg"]
+private let propsWorkspace3DExtensions: Set<String> = ["obj", "fbx", "dae", "usdz", "glb"]
+
 @available(macOS 26.0, *)
 public struct PropsWorkspace: View {
     @ObservedObject private var controller: AnimateWorkspaceController
@@ -13,6 +16,9 @@ public struct PropsWorkspace: View {
     public var body: some View {
         ZStack {
             PropsWorkspaceContent(store: controller.store)
+                .environment(\.unifiedImageFlipHandler) { path in
+                    controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
+                }
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
             if controller.isLoadingProject || controller.isSelectionRestorePending {
@@ -81,9 +87,6 @@ private struct PropsWorkspaceContent: View {
     @AppStorage("novotro.props.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
     @AppStorage("novotro.props.inspector.visible") private var inspectorVisible = true
     @AppStorage("novotro.props.inspector.width") private var inspectorWidth: Double = 320
-
-    private static let supportedExtensions: Set<String> = ["usdz", "glb", "obj", "fbx", "dae", "png", "jpg", "jpeg"]
-    private static let prop3DExtensions: Set<String> = ["obj", "fbx", "dae", "usdz", "glb"]
 
     var body: some View {
         Group {
@@ -298,7 +301,7 @@ private struct PropsWorkspaceContent: View {
             return contents
                 .filter { url in
                     let ext = url.pathExtension.lowercased()
-                    return Self.prop3DExtensions.contains(ext)
+                    return propsWorkspace3DExtensions.contains(ext)
                 }
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
                 .map { url in
@@ -429,7 +432,7 @@ private struct PropsWorkspaceContent: View {
                 guard let data = item as? Data,
                       let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
                 let ext = url.pathExtension.lowercased()
-                guard Self.supportedExtensions.contains(ext) else { return }
+                guard propsWorkspaceSupportedExtensions.contains(ext) else { return }
                 DispatchQueue.main.async {
                     copyFilesToObjectsDirectory(urls: [url], projectURL: projectURL)
                 }

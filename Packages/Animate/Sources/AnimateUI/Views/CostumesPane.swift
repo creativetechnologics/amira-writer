@@ -27,6 +27,20 @@ struct CostumesPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Costume Sets", systemImage: "tshirt")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    store.addCostumeReferenceSet(for: characterID)
+                } label: {
+                    Label("Add Costume", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
             if costumes.isEmpty {
                 emptyState
             } else {
@@ -44,7 +58,7 @@ struct CostumesPane: View {
         VStack(alignment: .leading, spacing: 8) {
             Label("No costumes defined yet", systemImage: "tshirt")
                 .font(.callout.weight(.medium))
-            Text("Open the Character Reference Workflow pane above to generate or import a master sheet. Default costume sets will be created automatically, then show up here for variation generation.")
+            Text("Add a costume set here, then generate or import sheet and pose variations for it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

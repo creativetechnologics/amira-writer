@@ -4381,7 +4381,8 @@ struct PlacesPageView: View {
                         prompt: draft.effectivePrompt,
                         model: draft.model,
                         aspectRatio: draft.aspectRatio,
-                        imageSize: draft.imageSize
+                        imageSize: draft.imageSize,
+                        kind: .map3DCapture
                     )
                     store.updateGeminiActivity(activityID, status: .completed,
                                                outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent)
