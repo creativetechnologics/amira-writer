@@ -33,6 +33,10 @@ Animate/shot-specs/<sceneID>/<shotID>.json
 Animate/reference-contracts/<sceneID>/<shotID>.json
 Animate/shot-frame-plans/<sceneID>/<shotID>.json
 Animate/shot-frame-plans/DryRuns/automation-frame-plans-latest.json
+Metadata/automation/minimax-scaffolds/<sceneID>/<artifactID>/
+  prompt.txt
+  response.txt        # execute mode only
+  scaffold.json
 ```
 
 Future phases will add:
@@ -70,6 +74,7 @@ GET  /automation/scenes/{sceneID}/effective-shot-specs
 POST /automation/references/resolve
 GET  /automation/references/{sceneID}/{shotID}
 POST /automation/frame-plans/dry-run
+POST /automation/minimax/scaffold
 POST /automation/frames/generate
 GET  /automation/generated-frames/{sceneID}/{shotID}/{moment}
 POST /automation/generated-frames/{sceneID}/{shotID}/{moment}/approval
@@ -88,6 +93,19 @@ POST /automation/generated-frames/{sceneID}/{shotID}/{moment}/approval
 ```
 
 The response includes the sidecar report path, effective specs, reference contracts, generated plan sets, estimated Vertex cost, and blockers. It performs zero paid generation.
+
+`POST /automation/minimax/scaffold` is the optional cheap LLM scaffolding layer. It is designed for MiniMax M2.7's strengths and weaknesses: the app supplies an explicit schema, scene facts, shot specs, reference roles, and available Image Intelligence captions/tags; MiniMax is asked to return strict JSON continuity data, not freeform prompts. Dry-run mode writes the prompt package for inspection and performs zero provider calls:
+
+```json
+{
+  "mode": "dry_run",
+  "scene": "first",
+  "model": "MiniMax-M2.7",
+  "write": true
+}
+```
+
+Execute mode is opt-in with `"mode":"execute"` and writes `prompt.txt`, `response.txt`, and `scaffold.json` under `Metadata/automation/minimax-scaffolds/`. The resulting scaffold is advisory and must pass deterministic validation before it is allowed to influence paid image generation.
 
 `POST /automation/frames/generate` defaults to no-spend preflight mode. Preflight returns planned `GeneratedFrameRecord` payloads for inspection but does not write generated-frame records or call Gemini:
 

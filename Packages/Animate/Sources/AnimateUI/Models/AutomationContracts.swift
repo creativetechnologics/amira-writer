@@ -7,6 +7,7 @@ enum AutomationArtifactKind: String, Codable, Sendable, Hashable, CaseIterable {
     case effectiveShotSpec = "effective_shot_spec"
     case referenceContract = "reference_contract"
     case shotFrameGenerationPlan = "shot_frame_generation_plan"
+    case miniMaxAutomationScaffold = "minimax_automation_scaffold"
     case generatedFrameRecord = "generated_frame_record"
     case videoTaskRecord = "video_task_record"
     case qaResult = "qa_result"
@@ -224,6 +225,102 @@ struct EffectiveShotSpec: Identifiable, Codable, Sendable, Hashable {
     var negativeGuardrails: [String]
     var prompt: String
     var blockers: [AutomationBlocker]
+}
+
+@available(macOS 26.0, *)
+struct MiniMaxAutomationReferenceBrief: Codable, Sendable, Hashable {
+    var role: String
+    var label: String
+    var path: String
+    var source: String
+    var shortCaption: String?
+    var retrievalTags: [String]
+    var entitiesJSON: String?
+    var sceneJSON: String?
+    var cameraJSON: String?
+    var styleJSON: String?
+}
+
+@available(macOS 26.0, *)
+struct MiniMaxAutomationShotInput: Codable, Sendable, Hashable {
+    var shotID: UUID
+    var shotIndex: Int
+    var shotName: String
+    var startFrame: Int
+    var endFrame: Int
+    var action: String
+    var cameraShot: String?
+    var shotIntent: String?
+    var focusCharacterSlug: String?
+    var characterSlugs: [String]
+    var backgroundName: String?
+    var promptSeed: String
+    var blockers: [AutomationBlocker]
+    var referenceBriefs: [MiniMaxAutomationReferenceBrief]
+}
+
+@available(macOS 26.0, *)
+struct MiniMaxAutomationScaffoldInput: Codable, Sendable, Hashable {
+    var sceneID: UUID
+    var sceneName: String
+    var projectRoot: String
+    var worldPeriod: String
+    var regionalWorldCues: String
+    var styleLock: String
+    var hardRules: [String]
+    var shots: [MiniMaxAutomationShotInput]
+}
+
+@available(macOS 26.0, *)
+struct MiniMaxAutomationScaffoldOutput: Codable, Sendable, Hashable {
+    struct SceneContinuity: Codable, Sendable, Hashable {
+        var timeOfDay: String
+        var geographyRules: [String]
+        var lightingRules: [String]
+        var forbiddenElements: [String]
+        var continuityPriorities: [String]
+    }
+
+    struct ShotOutput: Codable, Sendable, Hashable {
+        var shotID: String
+        var shotIndex: Int
+        var continuityIntent: String
+        var cameraGeometry: [String]
+        var characterRequirements: [String]
+        var costumeRequirements: [String]
+        var propVehicleRequirements: [String]
+        var referenceSelectionPlan: [String]
+        var cropOrExtractionCandidates: [String]
+        var generateOrEditRecommendation: String
+        var promptComponents: [String]
+        var qaChecks: [String]
+        var negativeGuardrails: [String]
+    }
+
+    var sceneContinuity: SceneContinuity
+    var shots: [ShotOutput]
+}
+
+@available(macOS 26.0, *)
+struct MiniMaxAutomationScaffoldArtifact: Identifiable, Codable, Sendable, Hashable {
+    static let currentSchemaVersion = 1
+    var schemaVersion: Int = Self.currentSchemaVersion
+    var id: UUID
+    var createdAt: Date
+    var provider: String
+    var model: String
+    var mode: String
+    var isDryRun: Bool
+    var sceneID: UUID
+    var sceneName: String
+    var input: MiniMaxAutomationScaffoldInput
+    var promptPath: String?
+    var responsePath: String?
+    var artifactPath: String?
+    var rawModelResponse: String?
+    var modelOutput: MiniMaxAutomationScaffoldOutput?
+    var blockers: [AutomationBlocker]
+    var errorMessage: String?
 }
 
 @available(macOS 26.0, *)

@@ -228,6 +228,10 @@ final class AnimateAPIRouter {
             await ensureProjectHydrated()
             return await automationFramePlansDryRunResponse(request)
         }
+        if request.method == "POST", request.path == "/automation/minimax/scaffold" {
+            await ensureProjectHydrated()
+            return await automationMiniMaxScaffoldResponse(request)
+        }
         if request.method == "POST", request.path == "/automation/frames/generate" {
             await ensureProjectHydrated()
             return await automationFramesGenerateResponse(request)
@@ -586,6 +590,48 @@ final class AnimateAPIRouter {
         }
     }
 
+    private func automationMiniMaxScaffoldResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        let body = request.jsonBody() ?? [:]
+        let mode = stringValue(body["mode"])?.lowercased() ?? "dry_run"
+        guard mode == "dry_run" || mode == "dry-run" || mode == "preview" || mode == "execute" else {
+            return .error(400, "Invalid mode '\(mode)'. Use dry_run or execute.")
+        }
+        let normalizedMode = mode == "execute" ? "execute" : "dry_run"
+        let model = stringValue(body["model"]) ?? "MiniMax-M2.7"
+        let writeSidecars = boolValue(body["write"]) ?? true
+
+        do {
+            let sceneFilter = try resolvedSceneFilter(stringValue(body["scene"]) ?? "first")
+            let matchedScenes = store.scenes.filter { scene in sceneFilter?.contains(scene.id) ?? false }
+            guard let scene = matchedScenes.first else {
+                return .error(404, "No scene matched MiniMax scaffold request.")
+            }
+            guard matchedScenes.count <= 1 else {
+                return .error(400, "MiniMax scaffold currently accepts one scene at a time.")
+            }
+            let scaffold = try await MiniMaxAutomationScaffoldService(store: store).build(
+                .init(
+                    scene: scene,
+                    projectRoot: projectRoot,
+                    mode: normalizedMode,
+                    model: model,
+                    writeSidecars: writeSidecars,
+                    apiKey: store.miniMaxAPIKey
+                )
+            )
+            return .okCodable(AutomationMiniMaxScaffoldPayload(
+                ok: scaffold.errorMessage == nil,
+                scaffoldPath: scaffold.artifactPath,
+                scaffold: scaffold
+            ))
+        } catch {
+            return .error(400, error.localizedDescription)
+        }
+    }
+
 
     private func automationFramesGenerateResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
         guard let projectRoot = store.fileOWPURL else {
@@ -859,6 +905,12 @@ final class AnimateAPIRouter {
         var ok: Bool
         var reportPath: String
         var report: AutomationDryRunReport
+    }
+
+    private struct AutomationMiniMaxScaffoldPayload: Codable, Sendable {
+        var ok: Bool
+        var scaffoldPath: String?
+        var scaffold: MiniMaxAutomationScaffoldArtifact
     }
 
     private struct AutomationGeneratedFramePayload: Codable, Sendable {

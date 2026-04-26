@@ -319,6 +319,7 @@ These Phase 0/1 endpoints are dry-run only. They read the loaded local project, 
 | `POST` | `/automation/references/resolve` | `{ "shotID": "...", "sceneID": "...?", "write": true }` | Resolve and optionally write a `ReferenceContract`; preserves pinned refs and keeps rejected refs from returning automatically |
 | `GET` | `/automation/references/{sceneID}/{shotID}` | — | Read an existing `ReferenceContract`, or preview a non-mutating resolve if none exists |
 | `POST` | `/automation/frame-plans/dry-run` | `{ "scene": "first" \| "all" \| 1 \| "<scene name/id>", "shotID": "...?", "model": "nano-banana-2", "imageSize": "4K", "write": true, "maxCostUSD": 25.0 }` | Write `EffectiveShotSpec`, `ReferenceContract`, and `ShotFrameGenerationPlanSet` sidecars plus a cost/blocker report |
+| `POST` | `/automation/minimax/scaffold` | `{ "mode": "dry_run", "scene": "first", "model": "MiniMax-M2.7", "write": true }` | Build a MiniMax-ready structured continuity scaffold prompt from scene specs, references, and available Image Intelligence metadata. Defaults to no-spend dry run; `mode:"execute"` calls MiniMax and writes prompt/response/scaffold sidecars. |
 | `POST` | `/automation/frames/generate` | `{ "mode": "preflight", "scene": "first", "moments": ["beginning"], "model": "nano-banana-2", "imageSize": "4K", "maxCostUSD": 25.0, "maxFrames": 12 }` | Preflight or execute plan-driven frame generation. Defaults to `preflight`; paid generation requires explicit `"mode":"execute"` and `maxCostUSD`. |
 | `GET` | `/automation/generated-frames/{sceneID}/{shotID}/{moment}` | — | Read the latest generated-frame record sidecar for `beginning`, `middle`, or `end` |
 | `POST` | `/automation/generated-frames/{sceneID}/{shotID}/{moment}/approval` | `{ "approvalStatus": "approved", "notes": "...", "rating": 5, "setAsSelectedFrame": true, "syncImageMetadata": true }` | Mark a generated frame approved/rejected/unapproved/needs_manual_review; approval can also select the frame in `Animate/Imagine/galleries.json` and update the image `.xmp` metadata |
@@ -336,6 +337,11 @@ curl -sS -X POST http://127.0.0.1:19849/automation/frame-plans/dry-run \
 curl -sS -X POST http://127.0.0.1:19849/automation/frames/generate \
   -H 'Content-Type: application/json' \
   -d '{"mode":"preflight","scene":"first","moments":["beginning"],"model":"nano-banana-2","imageSize":"4K","maxCostUSD":25,"maxFrames":12}' | jq
+
+# No-spend MiniMax scaffold preview. This writes prompt/scaffold sidecars but does not call MiniMax.
+curl -sS -X POST http://127.0.0.1:19849/automation/minimax/scaffold \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"dry_run","scene":"first","model":"MiniMax-M2.7","write":true}' | jq
 
 # After an execute run has created a generated-frame record, approve a frame.
 curl -sS -X POST http://127.0.0.1:19849/automation/generated-frames/<sceneID>/<shotID>/beginning/approval \

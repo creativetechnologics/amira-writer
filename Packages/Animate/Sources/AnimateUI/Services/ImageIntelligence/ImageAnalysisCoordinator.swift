@@ -223,6 +223,7 @@ public actor ImageAnalysisCoordinator {
         isRunning = true
 
         workerTask = Task { [weak self] in
+            try? await self?.recoverInterruptedRunningJobs()
             while !Task.isCancelled {
                 guard let self else { break }
                 do {
@@ -250,6 +251,32 @@ public actor ImageAnalysisCoordinator {
     }
 
     // MARK: - Processing
+
+    private func recoverInterruptedRunningJobs() async throws {
+        let now = Date().timeIntervalSince1970
+        let runningCount = (try await store.querySingle("""
+            SELECT COUNT(*) AS count
+            FROM image_analysis_jobs
+            WHERE status = ?
+        """, [JobStatus.running.rawValue])?["count"] as? Int) ?? 0
+        guard runningCount > 0 else { return }
+
+        try await store.exec("""
+            UPDATE image_analysis_jobs
+            SET status = ?,
+                available_at = ?,
+                updated_at = ?,
+                last_error_message = ?
+            WHERE status = ?
+        """, [
+            JobStatus.pending.rawValue,
+            now,
+            now,
+            "Recovered after interrupted app/worker shutdown",
+            JobStatus.running.rawValue
+        ])
+        log("Recovered \(runningCount) interrupted running image analysis job(s)")
+    }
 
     private func processNextBatch() async throws -> Int {
         guard geminiService != nil || vertexService != nil else {
