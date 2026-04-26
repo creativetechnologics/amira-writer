@@ -3276,9 +3276,13 @@ struct AnimatePageView: View {
                                 Text("Timing notes")
                                     .font(.caption2.weight(.semibold))
                                     .foregroundStyle(OperaChromeTheme.textSecondary)
-                                TextEditor(text: librettoPromptOverrideBinding(for: scene, keyPath: \.timingNotes))
+                                ResizablePromptEditor(
+                                    text: librettoPromptOverrideBinding(for: scene, keyPath: \.timingNotes),
+                                    persistenceID: "libretto.timingNotes",
+                                    minHeight: 58,
+                                    defaultHeight: 80
+                                )
                                     .font(.system(.caption, design: .monospaced))
-                                    .frame(minHeight: 58)
                                     .padding(6)
                                     .background(
                                         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -3290,9 +3294,13 @@ struct AnimatePageView: View {
                                 Text("Additional directing guidance")
                                     .font(.caption2.weight(.semibold))
                                     .foregroundStyle(OperaChromeTheme.textSecondary)
-                                TextEditor(text: librettoPromptOverrideBinding(for: scene, keyPath: \.directingGuidance))
+                                ResizablePromptEditor(
+                                    text: librettoPromptOverrideBinding(for: scene, keyPath: \.directingGuidance),
+                                    persistenceID: "libretto.directingGuidance",
+                                    minHeight: 58,
+                                    defaultHeight: 80
+                                )
                                     .font(.system(.caption, design: .monospaced))
-                                    .frame(minHeight: 58)
                                     .padding(6)
                                     .background(
                                         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -3304,9 +3312,13 @@ struct AnimatePageView: View {
                                 Text("Operator notes")
                                     .font(.caption2.weight(.semibold))
                                     .foregroundStyle(OperaChromeTheme.textSecondary)
-                                TextEditor(text: librettoPromptOverrideBinding(for: scene, keyPath: \.operatorNotes))
+                                ResizablePromptEditor(
+                                    text: librettoPromptOverrideBinding(for: scene, keyPath: \.operatorNotes),
+                                    persistenceID: "libretto.operatorNotes",
+                                    minHeight: 58,
+                                    defaultHeight: 80
+                                )
                                     .font(.system(.caption, design: .monospaced))
-                                    .frame(minHeight: 58)
                                     .padding(6)
                                     .background(
                                         RoundedRectangle(cornerRadius: 10, style: .continuous)

@@ -39,9 +39,13 @@ struct MotionGenerationPane: View {
             Text("Motion Prompt")
                 .font(.subheadline.weight(.semibold))
 
-            TextEditor(text: $promptText)
+            ResizablePromptEditor(
+                text: $promptText,
+                persistenceID: "motion.prompt",
+                minHeight: 60,
+                defaultHeight: 80
+            )
                 .font(.callout)
-                .frame(height: 60)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)

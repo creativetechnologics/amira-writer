@@ -135,9 +135,13 @@ struct CostumeSectionView: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.headline)
 
-                TextEditor(text: $localNotes)
+                ResizablePromptEditor(
+                    text: $localNotes,
+                    persistenceID: "costume.notes",
+                    minHeight: 86,
+                    defaultHeight: 100
+                )
                     .font(.callout)
-                    .frame(minHeight: 86)
                     .padding(8)
                     .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay {
@@ -215,9 +219,13 @@ struct CostumeSectionView: View {
             Text("\(costume.name) Sheet Prompt")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextEditor(text: $localSheetPrompt)
+            ResizablePromptEditor(
+                text: $localSheetPrompt,
+                persistenceID: "costume.sheetPrompt",
+                minHeight: 88,
+                defaultHeight: 130
+            )
                 .font(.callout)
-                .frame(minHeight: 88)
                 .padding(8)
                 .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {

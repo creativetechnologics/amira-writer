@@ -3028,12 +3028,16 @@ struct PlacesPageView: View {
             }
 
             ZStack(alignment: .topLeading) {
-                TextEditor(text: Binding(
-                    get: { normalizedImageGenerationPrompts(for: place)[selectedIndex] },
-                    set: { store.updatePlaceImageGenerationPrompt($0, promptIndex: selectedIndex, placeID: place.id) }
-                ))
+                ResizablePromptEditor(
+                    text: Binding(
+                        get: { normalizedImageGenerationPrompts(for: place)[selectedIndex] },
+                        set: { store.updatePlaceImageGenerationPrompt($0, promptIndex: selectedIndex, placeID: place.id) }
+                    ),
+                    persistenceID: "places.imageGenerationPrompt",
+                    minHeight: 180,
+                    defaultHeight: 220
+                )
                 .font(.callout)
-                .frame(minHeight: 180)
                 .padding(8)
                 .background(.background.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
@@ -3088,12 +3092,19 @@ struct PlacesPageView: View {
     }
 
     private func placeWorldbuildingEditor(title: String, text: Binding<String>, minHeight: CGFloat = 120) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let slug = title.lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        return VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.subheadline.weight(.semibold))
-            TextEditor(text: text)
+            ResizablePromptEditor(
+                text: text,
+                persistenceID: "places.worldbuilding.\(slug)",
+                minHeight: minHeight,
+                defaultHeight: max(minHeight, 140)
+            )
                 .font(.callout)
-                .frame(minHeight: minHeight)
                 .padding(8)
                 .background(.background.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {

@@ -294,9 +294,13 @@ struct GeminiGenerationPreflightSheet: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            TextEditor(text: instructionsBinding)
+            ResizablePromptEditor(
+                text: instructionsBinding,
+                persistenceID: "preflight.editInstructions",
+                minHeight: 70,
+                defaultHeight: 110
+            )
                 .font(.callout)
-                .frame(minHeight: 70)
                 .padding(8)
                 .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.accentColor.opacity(0.3)))
@@ -734,9 +738,13 @@ struct GeminiGenerationPreflightSheet: View {
                 Text(draft.wrappedValue.editInstructions == nil ? "Prompt" : "Base prompt (reference context)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: draft.prompt)
+                ResizablePromptEditor(
+                    text: draft.prompt,
+                    persistenceID: "preflight.draftPrompt.shared",
+                    minHeight: 110,
+                    defaultHeight: 150
+                )
                     .font(.callout)
-                    .frame(minHeight: 110)
                     .padding(8)
                     .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay {
@@ -889,9 +897,13 @@ struct GeminiGenerationPreflightSheet: View {
                 Text("Prompt")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: draft.prompt)
+                ResizablePromptEditor(
+                    text: draft.prompt,
+                    persistenceID: "preflight.draftPrompt.individual",
+                    minHeight: 110,
+                    defaultHeight: 150
+                )
                     .font(.callout)
-                    .frame(minHeight: 110)
                     .padding(8)
                     .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay {
@@ -962,7 +974,7 @@ struct GeminiGenerationPreflightSheet: View {
 
     @ViewBuilder
     private func referenceTile(path: String, onRemove: @escaping () -> Void) -> some View {
-        let fallback = resolvedAbsoluteURL(for: path)?.path
+        let fallback = resolvedReferenceURL(for: path)?.path
         UnifiedImageTile(
             path: path,
             resolvedPath: fallback,
@@ -1153,9 +1165,14 @@ struct GeminiGenerationPreflightSheet: View {
         }
     }
 
-    private func resolvedAbsoluteURL(for path: String) -> URL? {
+    private func resolvedReferenceURL(for path: String) -> URL? {
+        if let resolved = store.resolvedCharacterAssetURL(for: path) {
+            return resolved
+        }
+
         guard path.hasPrefix("/") else { return nil }
-        return URL(fileURLWithPath: path)
+        let url = URL(fileURLWithPath: path)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 }
 

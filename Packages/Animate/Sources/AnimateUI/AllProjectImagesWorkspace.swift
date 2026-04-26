@@ -2267,9 +2267,13 @@ private struct AllProjectImagesInspectorView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Adjustments")
                         .font(.system(size: 11, weight: .medium))
-                    TextEditor(text: $state.edit.adjustments)
+                    ResizablePromptEditor(
+                        text: $state.edit.adjustments,
+                        persistenceID: "allImages.editAdjustments",
+                        minHeight: 80,
+                        defaultHeight: 100
+                    )
                         .font(.system(size: 11))
-                        .frame(minHeight: 80, maxHeight: 140)
                         .overlay(
                             RoundedRectangle(cornerRadius: 5)
                                 .stroke(Color.secondary.opacity(0.25), lineWidth: 0.5)

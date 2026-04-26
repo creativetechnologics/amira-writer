@@ -810,9 +810,13 @@ struct ImagineScenesPageView: View {
             }
 
             HStack(spacing: 8) {
-                TextEditor(text: $generationPrompt)
+                ResizablePromptEditor(
+                    text: $generationPrompt,
+                    persistenceID: "scenes.generationPrompt",
+                    minHeight: 72,
+                    defaultHeight: 110
+                )
                     .font(.caption)
-                    .frame(height: generationPromptHeight)
                     .padding(4)
                     .background(.quaternary.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
 

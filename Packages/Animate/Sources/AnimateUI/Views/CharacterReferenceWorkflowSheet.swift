@@ -423,13 +423,17 @@ struct CharacterReferenceWorkflowSheet: View {
                 Text("Master Sheet Prompt")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: $localMasterPrompt)
+                ResizablePromptEditor(
+                    text: $localMasterPrompt,
+                    persistenceID: "characters.masterSheetPrompt",
+                    minHeight: 120,
+                    defaultHeight: 160
+                )
                     .onChange(of: localMasterPrompt) { _, newValue in
                         guard hasAppearedPrompts else { return }
                         scheduleMasterPromptSave(newValue)
                     }
                 .font(.callout)
-                .frame(minHeight: 120)
                 .padding(8)
                 .background(.background.opacity(0.85), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
@@ -562,13 +566,17 @@ struct CharacterReferenceWorkflowSheet: View {
                 Text("Head Sheet Prompt")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: $localHeadPrompt)
+                ResizablePromptEditor(
+                    text: $localHeadPrompt,
+                    persistenceID: "characters.headSheetPrompt",
+                    minHeight: 88,
+                    defaultHeight: 120
+                )
                     .onChange(of: localHeadPrompt) { _, newValue in
                         guard hasAppearedPrompts else { return }
                         scheduleHeadPromptSave(newValue)
                     }
                 .font(.callout)
-                .frame(minHeight: 88)
                 .padding(8)
                 .background(.background.opacity(0.85), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
