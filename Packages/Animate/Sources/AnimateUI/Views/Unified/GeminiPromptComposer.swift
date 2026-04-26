@@ -35,6 +35,9 @@ struct GeminiPromptComposer: View {
     }
 
     @State private var isDropTarget = false
+    /// Memo of NSImages keyed by URL. Loaded on a background thread the first
+    /// time a URL appears, never re-decoded on subsequent body recomputes.
+    @State private var thumbnailCache: [URL: NSImage] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -167,11 +170,9 @@ struct GeminiPromptComposer: View {
 
     @ViewBuilder
     private func referenceThumbnail(url: URL) -> some View {
-        let nsImage = NSImage(contentsOf: url)
-
         ZStack(alignment: .topTrailing) {
             Group {
-                if let nsImage {
+                if let nsImage = thumbnailCache[url] {
                     Image(nsImage: nsImage)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -187,9 +188,19 @@ struct GeminiPromptComposer: View {
             }
             .frame(width: 72, height: 72)
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            .task(id: url) {
+                if thumbnailCache[url] != nil { return }
+                let loaded = await Task.detached(priority: .userInitiated) {
+                    NSImage(contentsOf: url)
+                }.value
+                if let loaded {
+                    thumbnailCache[url] = loaded
+                }
+            }
 
             Button {
                 referenceURLs.removeAll { $0 == url }
+                thumbnailCache.removeValue(forKey: url)
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 14))
@@ -203,13 +214,19 @@ struct GeminiPromptComposer: View {
     }
 
     private func addImagesViaPanel() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.allowedContentTypes = [.image]
-        panel.title = "Choose Reference Images"
-        guard panel.runModal() == .OK else { return }
-        appendReferenceURLs(panel.urls)
+        // Defer the modal to the next runloop tick so the SwiftUI event cycle
+        // that triggered this tap can complete its layout/state pass first.
+        // Running the modal directly from a tap handler can cause SwiftUI to
+        // miss state updates queued in the same tick.
+        DispatchQueue.main.async {
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = false
+            panel.allowedContentTypes = [.image]
+            panel.title = "Choose Reference Images"
+            guard panel.runModal() == .OK else { return }
+            appendReferenceURLs(panel.urls)
+        }
     }
 
     private func appendReferenceURLs(_ urls: [URL]) {

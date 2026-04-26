@@ -766,6 +766,7 @@ function syncAddTypeUI() {
  * @param {boolean} save - whether to save current frame first
  */
 async function navigateTo(shotId, frame, save) {
+  cancelStrokeEndSave();
   if (save) await saveIfDirty();
 
   sidebarMode = 'scenes';
@@ -788,6 +789,7 @@ async function navigateTo(shotId, frame, save) {
 }
 
 async function navigateToPlaceTarget(type, id, save) {
+  cancelStrokeEndSave();
   if (save) await saveIfDirty();
 
   sidebarMode = 'places';
@@ -880,6 +882,13 @@ function buildFlatFrameList() {
 
 let strokeEndSaveTimer = null;
 
+function cancelStrokeEndSave() {
+  if (strokeEndSaveTimer) {
+    clearTimeout(strokeEndSaveTimer);
+    strokeEndSaveTimer = null;
+  }
+}
+
 function markDirty() {
   isDirty = true;
   setSaveStatus('unsaved');
@@ -898,11 +907,21 @@ function clearDirty() {
 }
 
 async function saveIfDirty() {
+  // Always cancel the pending stroke-end debounce — once we commit to a save
+  // (or a navigation calls us), there's no reason to let the timer fire later
+  // against potentially-different state.
+  cancelStrokeEndSave();
   if (!isDirty) return;
   if (sidebarMode === 'places' && !currentPlaceTarget) return;
   if (sidebarMode !== 'places' && !currentShotId) return;
   await performSave();
 }
+
+// The Fetch spec caps keepalive request bodies at 64 KB — and since our
+// PNGs routinely exceed that, blindly setting keepalive: true on a backgrounded
+// save would silently drop the body. Keep this just under the limit so we can
+// reliably fall back to a non-keepalive fetch when the page is still alive.
+const KEEPALIVE_MAX_BODY_BYTES = 60_000;
 
 async function performSave({ keepalive = false } = {}) {
   if (isSaving) return;
@@ -911,30 +930,56 @@ async function performSave({ keepalive = false } = {}) {
   isSaving = true;
   setSaveStatus('saving');
 
+  // Snapshot the destination at request-build time so a mid-flight shot/frame
+  // switch can't redirect the bytes we already exported.
+  const sidebarSnapshot = sidebarMode;
+  const placeSnapshot = currentPlaceTarget;
+  const shotSnapshot = currentShotId;
+  const frameSnapshot = currentFrame;
+
   try {
     const blob = await exportPNG();
-    const endpoint = sidebarMode === 'places'
-      ? placeSketchEndpoint(currentPlaceTarget.type, currentPlaceTarget.id)
-      : `/api/storyboard/${currentShotId}/${currentFrame}`;
+    const endpoint = sidebarSnapshot === 'places'
+      ? placeSketchEndpoint(placeSnapshot.type, placeSnapshot.id)
+      : `/api/storyboard/${shotSnapshot}/${frameSnapshot}`;
+    // keepalive bodies are capped at ~64 KB. PNG blobs of real drawings are
+    // always larger, so only set keepalive when the document is genuinely
+    // being torn down AND the blob is small enough to actually go out.
+    const oversized = blob.size > KEEPALIVE_MAX_BODY_BYTES;
+    const useKeepalive = keepalive && !oversized;
+    if (keepalive && oversized) {
+      console.warn(
+        '[storyboard] save during page-hide skipped keepalive — blob is',
+        blob.size, 'bytes (limit', KEEPALIVE_MAX_BODY_BYTES, ').',
+        'Falling back to a normal fetch; if the page is being unloaded the',
+        'browser may cancel it. The 5s autosave should already have caught it.'
+      );
+    }
     await apiFetch(endpoint, {
       method: 'PUT',
       headers: { 'Content-Type': 'image/png' },
       body: blob,
-      // keepalive lets the request survive page hide / app backgrounding
-      // without being canceled — critical for never losing a drawing.
-      keepalive,
+      keepalive: useKeepalive,
     });
-    clearDirty();
-    if (sidebarMode === 'places') {
-      const item = findPlaceTarget(currentPlaceTarget.type, currentPlaceTarget.id);
+    // Only mark this destination as clean if the user hasn't already moved on.
+    if (
+      sidebarMode === sidebarSnapshot &&
+      currentShotId === shotSnapshot &&
+      currentFrame === frameSnapshot &&
+      currentPlaceTarget?.id === placeSnapshot?.id
+    ) {
+      clearDirty();
+    }
+    if (sidebarSnapshot === 'places') {
+      const item = findPlaceTarget(placeSnapshot.type, placeSnapshot.id);
       if (item) item.hasSketch = true;
       renderSidebar();
     } else {
       // Update sidebar dot
-      updateShotBME(currentShotId, currentFrame, true);
+      updateShotBME(shotSnapshot, frameSnapshot, true);
       // Update local shots cache
-      const shot = shots.find((s) => s.shotId === currentShotId);
-      if (shot && shot.hasFrames) shot.hasFrames[currentFrame] = true;
+      const shot = shots.find((s) => s.shotId === shotSnapshot);
+      if (shot && shot.hasFrames) shot.hasFrames[frameSnapshot] = true;
     }
   } catch (err) {
     setSaveStatus('error');
@@ -961,14 +1006,19 @@ function startAutosave() {
 // backgrounded, tab closed, iPad locked, app switcher, etc. keepalive: true
 // lets the in-flight request finish even if the document is being unloaded.
 function installSaveOnExitHooks() {
+  // Synchronous reentrancy guard. `pagehide` and `visibilitychange→hidden`
+  // can both fire in the same task on iOS Safari; without this both would
+  // pass `isSaving === false` (which is only set after `await exportPNG()`)
+  // and double-save the same canvas.
+  let isFlushPending = false;
+
   const flush = () => {
-    if (!isDirty || isSaving) return;
-    // Cancel any pending debounced stroke-end save — we're saving now.
-    if (strokeEndSaveTimer) {
-      clearTimeout(strokeEndSaveTimer);
-      strokeEndSaveTimer = null;
-    }
-    performSave({ keepalive: true });
+    if (isFlushPending || !isDirty || isSaving) return;
+    isFlushPending = true;
+    cancelStrokeEndSave();
+    Promise.resolve(performSave({ keepalive: true })).finally(() => {
+      isFlushPending = false;
+    });
   };
 
   document.addEventListener('visibilitychange', () => {
@@ -976,8 +1026,21 @@ function installSaveOnExitHooks() {
   });
   window.addEventListener('pagehide', flush);
   window.addEventListener('beforeunload', flush);
-  // iOS Safari sometimes fires only `blur` when the user switches apps.
-  window.addEventListener('blur', flush);
+
+  // iOS Safari fires window `blur` for both real app-switches AND for
+  // intra-page focus changes (e.g., focusing the summary textarea). Defer
+  // by one tick and only flush if no element inside the document took focus
+  // — that's the difference between "user left" and "user tapped a textarea".
+  window.addEventListener('blur', () => {
+    setTimeout(() => {
+      if (document.hasFocus()) return;
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== document.documentElement) {
+        return; // intra-page focus transfer — not an exit signal
+      }
+      flush();
+    }, 0);
+  });
 }
 
 // ─── Summary editor ───────────────────────────────────────────────────────

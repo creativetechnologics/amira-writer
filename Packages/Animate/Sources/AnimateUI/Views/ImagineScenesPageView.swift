@@ -263,6 +263,15 @@ struct ImagineScenesPageView: View {
             .onChange(of: generationPrompt) { _, _ in
                 persistCurrentPrompt(debounced: true)
             }
+            .onChange(of: manualReferenceURLs) { _, urls in
+                // The composer is the source of truth for manual references.
+                // Keep the encoded GeminiImageService.ReferenceImage payload
+                // in sync so the plan-preview refresh key, the Generate
+                // button's preview summary, and any downstream consumer all
+                // see the live count + content immediately.
+                geminiReferenceImages = makeGeminiReferenceImages(from: urls.map(\.path))
+                refreshGenerationPlanPreview()
+            }
             .task(id: filteredMomentPathsKey) {
                 let paths = currentMomentPaths
                 let sortMode = gallerySortMode

@@ -39,14 +39,13 @@ private struct StoryboardFrameTile: View {
     let shotID: UUID
     let frame: StoryboardFrame
 
+    /// Decoded thumbnail. Loaded once via .task(id:) when the URL changes,
+    /// never re-decoded on subsequent body recomputes.
+    @State private var image: NSImage?
+
     private var imageURL: URL? {
         guard let root = projectRoot else { return nil }
         return ProjectPaths(root: root).shotStoryboardImage(sceneID: sceneID, shotID: shotID, frame: frame)
-    }
-
-    private var image: NSImage? {
-        guard let url = imageURL else { return nil }
-        return NSImage(contentsOf: url)
     }
 
     var body: some View {
@@ -78,6 +77,19 @@ private struct StoryboardFrameTile: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+        .task(id: imageURL) {
+            // Keys the load on the URL; SwiftUI re-runs this when the user
+            // selects a different shot/scene. Decode happens off the main
+            // actor so big PNGs don't block the strip from rendering.
+            guard let url = imageURL else {
+                image = nil
+                return
+            }
+            let loaded = await Task.detached(priority: .userInitiated) {
+                NSImage(contentsOf: url)
+            }.value
+            image = loaded
+        }
         // Tile is a drag source ONLY when there's an actual drawing on disk —
         // empty tiles shouldn't be draggable.
         .modifier(StoryboardTileDragModifier(imageURL: imageURL, hasImage: image != nil))
