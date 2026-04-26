@@ -406,6 +406,17 @@ struct CharacterReferenceWorkflowSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!store.canGenerateGeminiImagesImmediately)
+
+                if character.approvedMasterReferenceSheetVariant != nil {
+                    Button {
+                        let result = store.regenerateMasterReferenceSheetBackgroundRemoval(for: characterID)
+                        applyBackgroundRemovalResult(result, label: "master sheet")
+                    } label: {
+                        Label("Re-remove Background", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Re-run Vision foreground extraction on the approved master sheet and save it back as a transparent PNG.")
+                }
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -533,6 +544,17 @@ struct CharacterReferenceWorkflowSheet: View {
                         Label("Re-crop from Sheet", systemImage: "crop")
                     }
                     .buttonStyle(.bordered)
+                }
+
+                if character.headTurnaroundSlots.contains(where: { $0.approvedVariant != nil }) {
+                    Button {
+                        let result = store.regenerateHeadTurnaroundBackgroundRemoval(for: characterID)
+                        applyBackgroundRemovalResult(result, label: "head turnaround")
+                    } label: {
+                        Label("Re-remove Backgrounds", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Re-run Vision foreground extraction on every approved head pose and save them back as transparent PNGs.")
                 }
             }
 
@@ -1589,6 +1611,26 @@ struct CharacterReferenceWorkflowSheet: View {
                         "Reference image could not be resolved for batch submission: \(reference.path)"
                 ]
             )
+        }
+    }
+
+    private func applyBackgroundRemovalResult(
+        _ result: AnimateStore.BackgroundRemovalResult,
+        label: String
+    ) {
+        if result.attempted == 0 {
+            generationStatus = "No approved \(label) images to process."
+            return
+        }
+        if result.errors.isEmpty {
+            generationStatus = "Re-removed background on \(result.succeeded) \(label) image\(result.succeeded == 1 ? "" : "s")."
+            generationError = nil
+        } else if result.succeeded > 0 {
+            generationStatus = "Re-removed \(result.succeeded) of \(result.attempted) \(label) images."
+            generationError = result.errors.joined(separator: "\n")
+        } else {
+            generationStatus = nil
+            generationError = "Background removal failed for all \(label) images:\n" + result.errors.joined(separator: "\n")
         }
     }
 

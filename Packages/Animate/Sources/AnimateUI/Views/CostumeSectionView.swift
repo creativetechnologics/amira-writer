@@ -12,6 +12,9 @@ struct CostumeSectionView: View {
     @State private var localNotes: String = ""
     @State private var localSheetPrompt: String = ""
     @State private var hasAppeared = false
+    @State private var sheetPromptReferencePaths: [String] = []
+    @State private var sheetDropTargeted = false
+    @State private var newAccessoryName: String = ""
 
     // Generation state
     @State private var preflightDrafts: [GeminiGenerationDraft] = []
@@ -115,6 +118,7 @@ struct CostumeSectionView: View {
         VStack(alignment: .leading, spacing: 14) {
             costumeHeader
             sheetPromptSection
+            sheetReferenceDropZone
             sheetVariantsSection
             fullBodySlotsGrid
             accessoriesSection
@@ -181,6 +185,19 @@ struct CostumeSectionView: View {
                     .buttonStyle(.bordered)
                 }
 
+                if costume.approvedSheetVariant != nil
+                    || costume.fullBodySlots.contains(where: { $0.approvedVariant != nil })
+                    || costume.accessorySlots.contains(where: { $0.approvedVariant != nil }) {
+                    Button {
+                        let result = store.regenerateCostumeBackgroundRemoval(for: characterID, costumeID: costume.id)
+                        applyBackgroundRemovalResult(result)
+                    } label: {
+                        Label("Re-remove Backgrounds", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Re-run Vision foreground extraction on the costume sheet, full-body poses, and accessory variants — saves them back as transparent PNGs.")
+                }
+
                 Button(role: .destructive) {
                     store.removeCostumeReferenceSet(costume.id, for: characterID)
                 } label: {
@@ -207,6 +224,96 @@ struct CostumeSectionView: View {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(.quaternary.opacity(0.4))
                 }
+        }
+    }
+
+    private var sheetReferenceDropZone: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("\(costume.name) Sheet References")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("\(sheetPromptReferencePaths.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(.secondary.opacity(0.12), in: Capsule())
+                Spacer()
+                if !sheetPromptReferencePaths.isEmpty {
+                    Button {
+                        sheetPromptReferencePaths = []
+                    } label: {
+                        Label("Clear", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                }
+            }
+
+            if sheetPromptReferencePaths.isEmpty {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+                    .frame(minHeight: 76)
+                    .overlay {
+                        VStack(spacing: 5) {
+                            Image(systemName: "photo.badge.plus")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(sheetDropTargeted ? Color.accentColor : Color.secondary)
+                            Text("Drag images here to use as the only references for Generate Sheet.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.horizontal, 16)
+                    }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(sheetPromptReferencePaths, id: \.self) { path in
+                            let resolvedURL = store.resolvedCharacterAssetURL(for: path) ?? URL(fileURLWithPath: path)
+                            UnifiedImageTile(
+                                path: path,
+                                resolvedPath: resolvedURL.path,
+                                thumbnailSize: 84,
+                                isSelected: true,
+                                actions: UnifiedImageActions(
+                                    onShowInFinder: { showInFinder(at: path) },
+                                    onCopy: { copyImage(at: path) },
+                                    onQuickLook: { openQuickLook(for: [path], startingAt: 0) },
+                                    onRemoveFromCollection: {
+                                        sheetPromptReferencePaths.removeAll { $0 == path }
+                                    },
+                                    removeFromCollectionLabel: "Remove From Prompt"
+                                ),
+                                onTap: { store.imaginePreviewImagePath = path },
+                                onDoubleTap: { openQuickLook(for: [path], startingAt: 0) }
+                            )
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+        .padding(14)
+        .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(
+                    sheetDropTargeted ? Color.accentColor : Color.secondary.opacity(0.16),
+                    style: StrokeStyle(lineWidth: sheetDropTargeted ? 2 : 1, dash: sheetDropTargeted ? [7, 4] : [])
+                )
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            var merged = sheetPromptReferencePaths
+            var seen = Set(merged)
+            for path in urls.map({ $0.standardizedFileURL.path }) where seen.insert(path).inserted {
+                merged.append(path)
+            }
+            sheetPromptReferencePaths = merged
+            return !urls.isEmpty
+        } isTargeted: { targeted in
+            sheetDropTargeted = targeted
         }
     }
 
@@ -256,7 +363,7 @@ struct CostumeSectionView: View {
 
     @ViewBuilder
     private var fullBodySlotsGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)], spacing: 12) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 12)], spacing: 14) {
             ForEach(costume.fullBodySlots) { slot in
                 fullBodySlotCard(slot)
             }
@@ -264,6 +371,23 @@ struct CostumeSectionView: View {
     }
 
     @ViewBuilder
+    private func applyBackgroundRemovalResult(_ result: AnimateStore.BackgroundRemovalResult) {
+        if result.attempted == 0 {
+            generationStatus = "No approved costume images to process."
+            return
+        }
+        if result.errors.isEmpty {
+            generationStatus = "Re-removed background on \(result.succeeded) costume image\(result.succeeded == 1 ? "" : "s")."
+            generationError = nil
+        } else if result.succeeded > 0 {
+            generationStatus = "Re-removed \(result.succeeded) of \(result.attempted) costume images."
+            generationError = result.errors.joined(separator: "\n")
+        } else {
+            generationStatus = nil
+            generationError = "Background removal failed for all costume images:\n" + result.errors.joined(separator: "\n")
+        }
+    }
+
     private func fullBodySlotCard(_ slot: CharacterPoseSlot) -> some View {
         poseSlotCard(
             title: slot.title,
@@ -332,16 +456,27 @@ struct CostumeSectionView: View {
                 Label("Accessories", systemImage: "briefcase")
                     .font(.subheadline)
                 Spacer()
-                Button {
-                    prepareAccessoryBatchPlan(costume)
-                } label: {
-                    Label("Generate All Accessories", systemImage: "shippingbox")
-                }
-                .buttonStyle(.bordered)
-                .disabled(!store.canSubmitGeminiBatchJobs)
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 14)], spacing: 14) {
+            HStack(spacing: 8) {
+                TextField("Add accessory, prop, or carried item", text: $newAccessoryName)
+                    .textFieldStyle(.roundedBorder)
+                Button {
+                    addAccessorySlot()
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                .disabled(newAccessoryName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if costume.accessorySlots.isEmpty {
+                Text("No accessories yet. Add only the accessories this costume actually needs.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 12)], spacing: 14) {
                 ForEach(costume.accessorySlots) { slot in
                     accessorySlotCard(slot)
                 }
@@ -351,44 +486,54 @@ struct CostumeSectionView: View {
 
     @ViewBuilder
     private func accessorySlotCard(_ slot: CharacterAccessorySlot) -> some View {
-        poseSlotCard(
-            title: slot.title,
-            badge: "Accessory",
-            notes: slot.notes,
-            approvedVariant: slot.approvedVariant,
-            variants: slot.variants,
-            isGenerating: generatingActions.contains(.accessory(costumeID: costume.id, accessoryID: slot.id)),
-            onGenerate: { prepareAccessoryPlan(costumeID: costume.id, slot: slot) },
-            onImport: { importAccessoryVariant(costumeID: costume.id, slot: slot) },
-            onEditApproved: {
-                guard let approvedVariant = slot.approvedVariant else { return }
-                prepareAccessoryEditPlan(costumeID: costume.id, slot: slot, variant: approvedVariant)
-            },
-            onShowPromptApproved: {
-                guard let approvedVariant = slot.approvedVariant else { return }
-                showPromptPreview(title: "\(slot.title)", variant: approvedVariant)
-            },
-            onQuickLookApproved: {
-                openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: slot.approvedVariant?.id))
-            },
-            onEditVariant: { variantID in
-                guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
-                prepareAccessoryEditPlan(costumeID: costume.id, slot: slot, variant: variant)
-            },
-            onShowPromptVariant: { variantID in
-                guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
-                showPromptPreview(title: "\(slot.title) Variant", variant: variant)
-            },
-            onQuickLookVariant: { variantID in
-                openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: variantID))
-            },
-            onApprove: { variantID in
-                store.setApprovedAccessoryVariant(variantID, costumeID: costume.id, accessoryID: slot.id, for: characterID)
-            },
-            onDelete: { variantID in
-                store.removeAccessoryVariant(variantID, costumeID: costume.id, accessoryID: slot.id, for: characterID)
+        VStack(spacing: 6) {
+            poseSlotCard(
+                title: slot.title,
+                badge: "Accessory",
+                notes: slot.notes,
+                approvedVariant: slot.approvedVariant,
+                variants: slot.variants,
+                isGenerating: generatingActions.contains(.accessory(costumeID: costume.id, accessoryID: slot.id)),
+                onGenerate: { prepareAccessoryPlan(costumeID: costume.id, slot: slot) },
+                onImport: { importAccessoryVariant(costumeID: costume.id, slot: slot) },
+                onEditApproved: {
+                    guard let approvedVariant = slot.approvedVariant else { return }
+                    prepareAccessoryEditPlan(costumeID: costume.id, slot: slot, variant: approvedVariant)
+                },
+                onShowPromptApproved: {
+                    guard let approvedVariant = slot.approvedVariant else { return }
+                    showPromptPreview(title: "\(slot.title)", variant: approvedVariant)
+                },
+                onQuickLookApproved: {
+                    openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: slot.approvedVariant?.id))
+                },
+                onEditVariant: { variantID in
+                    guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                    prepareAccessoryEditPlan(costumeID: costume.id, slot: slot, variant: variant)
+                },
+                onShowPromptVariant: { variantID in
+                    guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                    showPromptPreview(title: "\(slot.title) Variant", variant: variant)
+                },
+                onQuickLookVariant: { variantID in
+                    openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: variantID))
+                },
+                onApprove: { variantID in
+                    store.setApprovedAccessoryVariant(variantID, costumeID: costume.id, accessoryID: slot.id, for: characterID)
+                },
+                onDelete: { variantID in
+                    store.removeAccessoryVariant(variantID, costumeID: costume.id, accessoryID: slot.id, for: characterID)
+                }
+            )
+
+            Button(role: .destructive) {
+                store.removeAccessorySlot(slot.id, costumeID: costume.id, for: characterID)
+            } label: {
+                Label("Remove Accessory", systemImage: "trash")
             }
-        )
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+        }
     }
 
     // MARK: - Pose Slot Card
@@ -429,19 +574,6 @@ struct CostumeSectionView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 4)
-            if hasApproved {
-                Button(action: onShowPromptApproved) {
-                    Image(systemName: "eye.circle")
-                }
-                .buttonStyle(.borderless)
-                .help("View Prompt")
-                Button(action: onEditApproved) {
-                    Image(systemName: "slider.horizontal.3")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .help("Edit")
-            }
             Button(action: onImport) {
                 Image(systemName: "arrow.down.doc")
             }
@@ -476,59 +608,118 @@ struct CostumeSectionView: View {
         onAdjustCrop: @escaping () -> Void = {},
         onAdjustCropVariant: @escaping (UUID) -> Void = { _ in }
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            poseSlotCardHeader(title: title, badge: badge, notes: notes)
-
-            approvedVariantThumbnail(
-                approvedVariant,
-                isGenerating: isGenerating,
-                statusText: generationStatus ?? "Generating…",
-                onEdit: onEditApproved,
-                onShowPrompt: onShowPromptApproved,
-                onAdjustCrop: onAdjustCrop
-            )
-            .onTapGesture(count: 2, perform: onQuickLookApproved)
-
-            poseSlotCardActionBar(
-                variantCount: variants.count,
-                hasApproved: approvedVariant != nil,
-                onGenerate: onGenerate,
-                onImport: onImport,
-                onEditApproved: onEditApproved,
-                onShowPromptApproved: onShowPromptApproved
-            )
-
+        VStack(alignment: .leading, spacing: 8) {
             if variants.isEmpty {
-                Text("No approved image yet.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                emptyPoseTile(title: title, isGenerating: isGenerating)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(variants) { variant in
-                            MiniVariantChip(
-                                store: store,
-                                variant: variant,
-                                isApproved: approvedVariant?.id == variant.id,
-                                onQuickLook: { onQuickLookVariant(variant.id) },
-                                onCopy: { copyImage(at: variant.imagePath) },
-                                onEdit: { onEditVariant(variant.id) },
-                                onShowPrompt: { onShowPromptVariant(variant.id) },
-                                onApprove: { onApprove(variant.id) },
-                                onDelete: { onDelete(variant.id) },
-                                onAdjustCrop: { onAdjustCropVariant(variant.id) }
-                            )
-                        }
-                    }
-                    .padding(.vertical, 2)
+                CharacterPoseVariantCarouselTile(
+                    store: store,
+                    title: title,
+                    variants: variants,
+                    approvedVariantID: approvedVariant?.id,
+                    isGenerating: isGenerating,
+                    statusText: generationStatus ?? "Generating…",
+                    onQuickLook: onQuickLookVariant,
+                    onCopy: { variant in copyImage(at: variant.imagePath) },
+                    onEdit: onEditVariant,
+                    onShowPrompt: onShowPromptVariant,
+                    onApprove: onApprove,
+                    onDelete: onDelete,
+                    onAdjustCrop: onAdjustCropVariant,
+                    onShowInFinder: { path in showInFinder(at: path) }
+                )
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+
+            HStack(spacing: 6) {
+                Button(action: onImport) { Label("Attach", systemImage: "arrow.down.doc") }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                Button(action: onGenerate) { Label("Generate", systemImage: "sparkles") }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                if approvedVariant != nil {
+                    Button(action: onEditApproved) { Label("Edit", systemImage: "wand.and.sparkles") }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    Button(action: onAdjustCrop) { Label("Crop", systemImage: "crop") }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
                 }
             }
+            .labelStyle(.iconOnly)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
-        .padding(14)
-        .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(.quaternary.opacity(0.35))
+    }
+
+    @ViewBuilder
+    private func emptyPoseTile(title: String, isGenerating: Bool) -> some View {
+        VStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.quaternary.opacity(0.16))
+                .frame(width: 132, height: 132)
+                .overlay {
+                    if isGenerating {
+                        generationOverlay(statusText: generationStatus ?? "Generating…")
+                    } else {
+                        Image(systemName: "photo")
+                            .font(.title2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(width: 132)
+        }
+    }
+
+    private func plainWorkflowVariantTile(
+        variant: CharacterLookDevelopmentVariant,
+        caption: String? = nil,
+        isApproved: Bool,
+        onQuickLook: @escaping () -> Void,
+        onCopy: @escaping () -> Void,
+        onEdit: @escaping () -> Void,
+        onShowPrompt: @escaping () -> Void,
+        onApprove: @escaping () -> Void,
+        onDelete: @escaping () -> Void,
+        onAdjustCrop: (() -> Void)? = nil
+    ) -> some View {
+        let resolvedURL = store.resolvedCharacterAssetURL(for: variant.imagePath)
+        return VStack(spacing: 5) {
+            UnifiedImageTile(
+                path: variant.imagePath,
+                resolvedPath: resolvedURL?.path,
+                thumbnailSize: 132,
+                isSelected: isApproved,
+                actions: UnifiedImageActions(
+                    onChooseAsMaster: onApprove,
+                    isMaster: isApproved,
+                    chooseAsMasterLabel: "Choose as Master",
+                    chosenAsMasterLabel: "Chosen",
+                    onShowPrompt: onShowPrompt,
+                    onShowInFinder: { showInFinder(at: variant.imagePath) },
+                    onCopy: onCopy,
+                    onQuickLook: onQuickLook,
+                    onEditWithGemini: onEdit,
+                    onAdjustCrop: onAdjustCrop,
+                    onRemoveFromCollection: onDelete,
+                    removeFromCollectionLabel: "Delete Variant"
+                ),
+                onTap: { store.imaginePreviewImagePath = variant.imagePath },
+                onDoubleTap: onQuickLook
+            )
+            if let caption, !caption.isEmpty {
+                Text(caption)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 132)
+            }
         }
     }
 
@@ -588,36 +779,35 @@ struct CostumeSectionView: View {
         _ variant: CharacterLookDevelopmentVariant?,
         isGenerating: Bool,
         statusText: String,
+        onQuickLook: @escaping () -> Void,
         onEdit: @escaping () -> Void,
         onShowPrompt: @escaping () -> Void,
         onAdjustCrop: @escaping () -> Void
     ) -> some View {
         Group {
             if let variant {
-                AsyncStoreThumbnailImage.rounded(
-                    store: store,
+                let resolvedURL = store.resolvedCharacterAssetURL(for: variant.imagePath)
+                UnifiedImageTile(
                     path: variant.imagePath,
-                    maxSize: 360,
-                    width: nil,
-                    height: 150,
-                    cornerRadius: 14
+                    resolvedPath: resolvedURL?.path,
+                    thumbnailSize: 150,
+                    sourceLabel: "Chosen",
+                    sourceSystemImage: "checkmark.circle.fill",
+                    isSelected: true,
+                    actions: UnifiedImageActions(
+                        onShowPrompt: onShowPrompt,
+                        onShowInFinder: { showInFinder(at: variant.imagePath) },
+                        onCopy: { copyImage(at: variant.imagePath) },
+                        onQuickLook: onQuickLook,
+                        onEditWithGemini: onEdit,
+                        onAdjustCrop: onAdjustCrop
+                    ),
+                    onTap: {
+                        store.imaginePreviewImagePath = variant.imagePath
+                    },
+                    onDoubleTap: onQuickLook
                 )
-                // Single-tap → Inspector Details; double-tap → Quick Look.
-                .onTapGesture(count: 2) {
-                    openQuickLook(for: [variant.imagePath], startingAt: 0)
-                }
-                .onTapGesture(count: 1) {
-                    store.imaginePreviewImagePath = variant.imagePath
-                }
-                .contextMenu {
-                    Button("View Prompt", systemImage: "eye.circle") { onShowPrompt() }
-                    Button("Edit", systemImage: "slider.horizontal.3") { onEdit() }
-                    Button("Show in Finder", systemImage: "folder") { showInFinder(at: variant.imagePath) }
-                    Button("Copy Image", systemImage: "doc.on.doc") { copyImage(at: variant.imagePath) }
-                    Divider()
-                    Button("Adjust Crop", systemImage: "crop") { onAdjustCrop() }
-                    Button("Quick Look", systemImage: "eye") { openQuickLook(for: [variant.imagePath], startingAt: 0) }
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay {
                     if isGenerating { generationOverlay(statusText: statusText) }
                 }
@@ -686,9 +876,6 @@ struct CostumeSectionView: View {
 
     private func prepareCostumeSheetPlan(_ costume: CharacterCostumeReferenceSet) {
         guard let character else { return }
-        let allPaths = store.fullBodySheetReferencePaths(for: character.id, costumeID: costume.id, limit: 8)
-        let masterPath = store.normalizedMasterSheetPath(for: character.id)
-        let prechecked: Set<String> = masterPath.map { [$0] } ?? []
         preflightDrafts = [
             GeminiGenerationDraft(
                 title: "\(costume.name) Sheet",
@@ -697,7 +884,7 @@ struct CostumeSectionView: View {
                 model: store.selectedGeminiModel,
                 aspectRatio: CharacterReferenceWorkflowCatalog.sectionSheetAspectRatio,
                 imageSize: CharacterReferenceWorkflowCatalog.sectionSheetImageSize,
-                referenceItems: referenceDrafts(from: allPaths, onlyPrecheck: prechecked)
+                referenceItems: referenceDrafts(from: sheetPromptReferencePaths)
             )
         ]
         pendingPlan = PendingGenerationPlan(
@@ -1061,6 +1248,13 @@ struct CostumeSectionView: View {
             aspectRatio: variant.aspectRatio,
             imageSize: variant.imageSize
         )
+    }
+
+    private func addAccessorySlot() {
+        let trimmedName = newAccessoryName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        store.addAccessorySlot(named: trimmedName, costumeID: costume.id, for: characterID)
+        newAccessoryName = ""
     }
 
     // MARK: - Image Utilities

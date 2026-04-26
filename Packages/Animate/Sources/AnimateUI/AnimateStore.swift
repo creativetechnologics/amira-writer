@@ -9893,6 +9893,95 @@ final class AnimateStore {
         save()
     }
 
+    // MARK: - Background Removal (Re-mask transparent PNGs)
+
+    struct BackgroundRemovalResult: Sendable {
+        let attempted: Int
+        let succeeded: Int
+        let errors: [String]
+
+        var isFullySuccessful: Bool {
+            errors.isEmpty && succeeded == attempted
+        }
+    }
+
+    /// Re-run Vision foreground extraction on the approved master sheet
+    /// variant for `characterID` and write a transparent-background PNG back
+    /// in place. Returns counts so the caller can surface a status string.
+    @discardableResult
+    func regenerateMasterReferenceSheetBackgroundRemoval(
+        for characterID: UUID
+    ) -> BackgroundRemovalResult {
+        guard let character = characters.first(where: { $0.id == characterID }),
+              let variant = character.approvedMasterReferenceSheetVariant,
+              let url = resolvedCharacterAssetURL(for: variant.imagePath) else {
+            return BackgroundRemovalResult(attempted: 0, succeeded: 0, errors: [])
+        }
+        return runBackgroundRemoval(at: [url])
+    }
+
+    /// Re-run background removal on every approved head-turnaround pose
+    /// variant for `characterID`. Slots without an approved variant are
+    /// skipped silently.
+    @discardableResult
+    func regenerateHeadTurnaroundBackgroundRemoval(
+        for characterID: UUID
+    ) -> BackgroundRemovalResult {
+        guard let character = characters.first(where: { $0.id == characterID }) else {
+            return BackgroundRemovalResult(attempted: 0, succeeded: 0, errors: [])
+        }
+        let urls: [URL] = character.headTurnaroundSlots.compactMap { slot in
+            guard let variant = slot.approvedVariant else { return nil }
+            return resolvedCharacterAssetURL(for: variant.imagePath)
+        }
+        return runBackgroundRemoval(at: urls)
+    }
+
+    /// Re-run background removal on every approved full-body variant of a
+    /// costume reference set.
+    @discardableResult
+    func regenerateCostumeBackgroundRemoval(
+        for characterID: UUID,
+        costumeID: UUID
+    ) -> BackgroundRemovalResult {
+        guard let character = characters.first(where: { $0.id == characterID }),
+              let costume = character.costumeReferenceSets.first(where: { $0.id == costumeID }) else {
+            return BackgroundRemovalResult(attempted: 0, succeeded: 0, errors: [])
+        }
+        var urls: [URL] = []
+        if let sheet = costume.approvedSheetVariant,
+           let url = resolvedCharacterAssetURL(for: sheet.imagePath) {
+            urls.append(url)
+        }
+        for slot in costume.fullBodySlots {
+            if let variant = slot.approvedVariant,
+               let url = resolvedCharacterAssetURL(for: variant.imagePath) {
+                urls.append(url)
+            }
+        }
+        for slot in costume.accessorySlots {
+            if let variant = slot.approvedVariant,
+               let url = resolvedCharacterAssetURL(for: variant.imagePath) {
+                urls.append(url)
+            }
+        }
+        return runBackgroundRemoval(at: urls)
+    }
+
+    private func runBackgroundRemoval(at urls: [URL]) -> BackgroundRemovalResult {
+        let outcome = ReferenceSheetBackgroundRemover.removeBackgrounds(at: urls)
+        for url in urls {
+            invalidateThumbnail(for: url.path)
+            ThumbnailBackgroundRemover.shared.evict(path: url.path)
+        }
+        let errors = outcome.errors.map { "\($0.0.lastPathComponent): \($0.1.localizedDescription)" }
+        return BackgroundRemovalResult(
+            attempted: urls.count,
+            succeeded: outcome.succeeded,
+            errors: errors
+        )
+    }
+
     private enum ReferenceSheetCropKind {
         case head
         case fullBody
