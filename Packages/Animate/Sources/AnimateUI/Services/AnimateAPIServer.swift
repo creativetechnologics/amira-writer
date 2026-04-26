@@ -204,6 +204,35 @@ final class AnimateAPIRouter {
     }
 
     func handle(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        if request.method == "GET", request.path == "/automation/project/summary" {
+            await ensureProjectHydrated()
+            return automationProjectSummaryResponse()
+        }
+        if request.method == "GET", let shotID = automationShotEffectiveSpecID(from: request.path) {
+            await ensureProjectHydrated()
+            return automationEffectiveShotSpecResponse(shotID: shotID)
+        }
+        if request.method == "GET", let sceneID = automationSceneEffectiveSpecsID(from: request.path) {
+            await ensureProjectHydrated()
+            return automationSceneEffectiveShotSpecsResponse(sceneID: sceneID)
+        }
+        if request.method == "POST", request.path == "/automation/references/resolve" {
+            await ensureProjectHydrated()
+            return automationReferenceResolveResponse(request)
+        }
+        if request.method == "GET", let ids = automationReferenceIDs(from: request.path) {
+            await ensureProjectHydrated()
+            return automationReferenceGetResponse(sceneID: ids.sceneID, shotID: ids.shotID)
+        }
+        if request.method == "POST", request.path == "/automation/frame-plans/dry-run" {
+            await ensureProjectHydrated()
+            return await automationFramePlansDryRunResponse(request)
+        }
+        if request.method == "POST", request.path == "/automation/frames/generate" {
+            await ensureProjectHydrated()
+            return await automationFramesGenerateResponse(request)
+        }
+
         switch (request.method, request.path) {
         case ("GET", "/health"):
             // /health reports current state without forcing a load.
@@ -382,6 +411,292 @@ final class AnimateAPIRouter {
         } catch {
             return .error(500, "Generation failed: \(error.localizedDescription)")
         }
+    }
+
+
+    // MARK: Automation Phase 0/1 API (dry-run only)
+
+    private func automationProjectSummaryResponse() -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        let summary = AutomationSourceResolver.projectSummary(store: store, projectRoot: projectRoot)
+        return .okCodable(summary)
+    }
+
+    private func automationEffectiveShotSpecResponse(shotID: UUID) -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        guard let located = locateShot(shotID: shotID) else {
+            return .error(404, "No shot matched \(shotID.uuidString).")
+        }
+        let spec = EffectiveShotSpecBuilder(store: store).build(
+            scene: located.scene,
+            shotIndex: located.shotIndex,
+            projectRoot: projectRoot
+        )
+        return .okCodable(spec)
+    }
+
+    private func automationSceneEffectiveShotSpecsResponse(sceneID: UUID) -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        guard let scene = store.scenes.first(where: { $0.id == sceneID }) else {
+            return .error(404, "No scene matched \(sceneID.uuidString).")
+        }
+        let builder = EffectiveShotSpecBuilder(store: store)
+        let specs = scene.shots.indices.map { index in
+            builder.build(scene: scene, shotIndex: index, projectRoot: projectRoot)
+        }
+        return .okCodable(specs)
+    }
+
+    private func automationReferenceResolveResponse(_ request: AnimateHTTPRequest) -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        let body = request.jsonBody() ?? [:]
+        guard let shotID = uuidValue(body["shotID"]) else {
+            return .error(400, "Missing required shotID.")
+        }
+        guard let located = locateShot(shotID: shotID) else {
+            return .error(404, "No shot matched \(shotID.uuidString).")
+        }
+        if let sceneID = uuidValue(body["sceneID"]), sceneID != located.scene.id {
+            return .error(400, "shotID does not belong to supplied sceneID.")
+        }
+        let writeSidecar = boolValue(body["write"]) ?? true
+        do {
+            let spec = EffectiveShotSpecBuilder(store: store).build(
+                scene: located.scene,
+                shotIndex: located.shotIndex,
+                projectRoot: projectRoot
+            )
+            let resolved = try ReferenceContractResolver(store: store).resolve(
+                spec: spec,
+                projectRoot: projectRoot,
+                write: writeSidecar
+            )
+            return .okCodable(AutomationReferenceResolvePayload(
+                ok: true,
+                referenceContractPath: resolved.url?.path,
+                referenceContract: resolved.contract
+            ))
+        } catch {
+            return .error(500, "Reference resolve failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func automationReferenceGetResponse(sceneID: UUID, shotID: UUID) -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        let resolver = ReferenceContractResolver(store: store)
+        if let contract = resolver.readExisting(sceneID: sceneID, shotID: shotID, projectRoot: projectRoot) {
+            return .okCodable(contract)
+        }
+        guard let located = locateShot(shotID: shotID), located.scene.id == sceneID else {
+            return .error(404, "No reference contract or matching shot found for scene/shot.")
+        }
+        do {
+            let spec = EffectiveShotSpecBuilder(store: store).build(scene: located.scene, shotIndex: located.shotIndex, projectRoot: projectRoot)
+            let resolved = try resolver.resolve(spec: spec, projectRoot: projectRoot, write: false)
+            return .okCodable(resolved.contract)
+        } catch {
+            return .error(500, "Reference get failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func automationFramePlansDryRunResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        let body = request.jsonBody() ?? [:]
+        let model = resolvedGeminiModel(from: stringValue(body["model"]))
+        let imageSize = stringValue(body["imageSize"]) ?? ShotFrameOpenMattePlan.defaultGeneratedImageSize
+        let maxCostUSD = doubleValue(body["maxCostUSD"])
+        let writeSidecars = boolValue(body["write"]) ?? true
+
+        do {
+            let sceneFilter = try resolvedSceneFilter(stringValue(body["scene"]))
+            let shotFilter = uuidValue(body["shotID"])
+            let summary = AutomationSourceResolver.projectSummary(store: store, projectRoot: projectRoot)
+            let specBuilder = EffectiveShotSpecBuilder(store: store)
+            let referenceResolver = ReferenceContractResolver(store: store)
+            let planBuilder = ShotFramePlanBuilder(store: store)
+            var results: [AutomationDryRunShotResult] = []
+            var allBlockers: [AutomationBlocker] = []
+
+            for scene in store.scenes where sceneFilter?.contains(scene.id) ?? true {
+                for index in scene.shots.indices {
+                    let shot = scene.shots[index]
+                    if let shotFilter, shot.id != shotFilter { continue }
+                    let spec = specBuilder.build(scene: scene, shotIndex: index, projectRoot: projectRoot)
+                    let specURL = writeSidecars ? try specBuilder.write(spec, projectRoot: projectRoot) : nil
+                    let resolved = try referenceResolver.resolve(spec: spec, projectRoot: projectRoot, write: writeSidecars)
+                    let planSet = planBuilder.buildPlans(spec: spec, contract: resolved.contract, projectRoot: projectRoot, imageSize: imageSize)
+                    let planURL = writeSidecars ? try planBuilder.write(planSet, projectRoot: projectRoot) : nil
+                    let shotCost = planSet.plans.reduce(0) { $0 + model.estimatedCost(for: $1.openMattePlan?.generatedImageSize ?? imageSize) }
+                    let blockers = spec.blockers + resolved.contract.blockers + planSet.plans.compactMap { plan -> AutomationBlocker? in
+                        plan.canExecute ? nil : .init(code: .blockedMissingEditSource, message: "\(plan.moment.rawValue) plan requires an edit source image that is not readable.", field: "shotFrameGenerationPlan.\(plan.moment.rawValue)")
+                    }
+                    allBlockers.append(contentsOf: blockers)
+                    results.append(
+                        AutomationDryRunShotResult(
+                            effectiveShotSpec: spec,
+                            effectiveShotSpecPath: specURL?.path,
+                            referenceContract: resolved.contract,
+                            referenceContractPath: resolved.url?.path,
+                            shotFrameGenerationPlanSet: planSet,
+                            shotFrameGenerationPlanPath: planURL?.path,
+                            estimatedVertexCostUSD: shotCost,
+                            blockers: blockers
+                        )
+                    )
+                    await Task.yield()
+                }
+            }
+
+            let totalCost = results.reduce(0) { $0 + $1.estimatedVertexCostUSD }
+            if let maxCostUSD, totalCost > maxCostUSD {
+                allBlockers.append(.init(code: .blockedCostCap, message: "Estimated Vertex cost $\(String(format: "%.4f", totalCost)) exceeds cap $\(String(format: "%.2f", maxCostUSD)).", field: "maxCostUSD"))
+            }
+            let report = AutomationDryRunReport(
+                model: model.rawValue,
+                imageSize: imageSize,
+                projectSummary: summary,
+                shots: results,
+                estimatedVertexCostUSD: totalCost,
+                blockers: allBlockers
+            )
+            let reportURL = try writeAutomationDryRunReport(report, projectRoot: projectRoot)
+            return .okCodable(AutomationFramePlansDryRunPayload(ok: true, reportPath: reportURL.path, report: report))
+        } catch {
+            return .error(400, error.localizedDescription)
+        }
+    }
+
+
+    private func automationFramesGenerateResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        let body = request.jsonBody() ?? [:]
+        let mode = (stringValue(body["mode"]) ?? "preflight").lowercased()
+        guard mode == "preflight" || mode == "execute" else {
+            return .error(400, "Invalid mode: \(mode). Use preflight or execute.")
+        }
+        let model = resolvedGeminiModel(from: stringValue(body["model"]))
+        let imageSize = stringValue(body["imageSize"]) ?? ShotFrameOpenMattePlan.defaultGeneratedImageSize
+        let maxCostUSD = doubleValue(body["maxCostUSD"])
+        let maxFrames = intValue(body["maxFrames"])
+        let shotID = uuidValue(body["shotID"])
+        do {
+            let sceneFilter = try resolvedSceneFilter(stringValue(body["scene"]))
+            let moments = try resolvedMoments(body["moments"])
+            let response = await AutomationFrameGenerationService(store: store).run(
+                projectRoot: projectRoot,
+                sceneFilter: sceneFilter,
+                shotFilter: shotID,
+                moments: moments,
+                model: model,
+                imageSize: imageSize,
+                mode: mode,
+                maxCostUSD: maxCostUSD,
+                maxFrames: maxFrames
+            )
+            return .okCodable(response)
+        } catch {
+            return .error(400, error.localizedDescription)
+        }
+    }
+
+    private func writeAutomationDryRunReport(_ report: AutomationDryRunReport, projectRoot: URL) throws -> URL {
+        let directory = AutomationSourceResolver.automationDirectory(projectRoot: projectRoot, component: "shot-frame-plans")
+            .appendingPathComponent("DryRuns", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("automation-frame-plans-latest.json")
+        try writeCodable(report, to: url)
+        return url
+    }
+
+    private func locateShot(shotID: UUID) -> (scene: AnimationScene, shotIndex: Int)? {
+        for scene in store.scenes {
+            if let index = scene.shots.firstIndex(where: { $0.id == shotID }) {
+                return (scene, index)
+            }
+        }
+        return nil
+    }
+
+    private func automationShotEffectiveSpecID(from path: String) -> UUID? {
+        let parts = path.split(separator: "/").map(String.init)
+        guard parts.count == 4, parts[0] == "automation", parts[1] == "shots", parts[3] == "effective-shot-spec" else { return nil }
+        return UUID(uuidString: parts[2])
+    }
+
+    private func automationSceneEffectiveSpecsID(from path: String) -> UUID? {
+        let parts = path.split(separator: "/").map(String.init)
+        guard parts.count == 4, parts[0] == "automation", parts[1] == "scenes", parts[3] == "effective-shot-specs" else { return nil }
+        return UUID(uuidString: parts[2])
+    }
+
+    private func automationReferenceIDs(from path: String) -> (sceneID: UUID, shotID: UUID)? {
+        let parts = path.split(separator: "/").map(String.init)
+        guard parts.count == 4, parts[0] == "automation", parts[1] == "references",
+              let sceneID = UUID(uuidString: parts[2]),
+              let shotID = UUID(uuidString: parts[3]) else { return nil }
+        return (sceneID, shotID)
+    }
+
+
+    private func resolvedMoments(_ raw: Any?) throws -> [ImagineShotMoment] {
+        guard let raw, !(raw is NSNull) else { return [.beginning] }
+        let values: [String]
+        if let string = raw as? String {
+            values = string
+                .split(separator: ",")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        } else if let strings = raw as? [String] {
+            values = strings
+        } else {
+            throw apiError("moments must be a string or string array.")
+        }
+        if values.contains(where: { $0.lowercased() == "all" }) {
+            return ImagineShotMoment.allCases
+        }
+        let moments = try values.map { value -> ImagineShotMoment in
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            switch normalized {
+            case "beginning", "begin", "start": return .beginning
+            case "middle", "mid": return .middle
+            case "end", "ending", "last": return .end
+            default: throw apiError("Invalid moment: \(value). Use beginning, middle, end, or all.")
+            }
+        }
+        var seen = Set<String>()
+        return moments.filter { seen.insert($0.rawValue).inserted }
+    }
+
+    private func uuidValue(_ value: Any?) -> UUID? {
+        if let uuid = value as? UUID { return uuid }
+        if let string = stringValue(value) { return UUID(uuidString: string) }
+        return nil
+    }
+
+    private struct AutomationReferenceResolvePayload: Codable, Sendable {
+        var ok: Bool
+        var referenceContractPath: String?
+        var referenceContract: ReferenceContract
+    }
+
+    private struct AutomationFramePlansDryRunPayload: Codable, Sendable {
+        var ok: Bool
+        var reportPath: String
+        var report: AutomationDryRunReport
     }
 
     // MARK: Image Intelligence API
@@ -1156,6 +1471,17 @@ struct AnimateHTTPResponse {
 
     static func okJSON(_ dict: [String: Any]) -> AnimateHTTPResponse {
         if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            return AnimateHTTPResponse(status: 200, body: json)
+        }
+        return AnimateHTTPResponse(status: 500, body: #"{"error":"failed to encode response"}"#)
+    }
+
+    static func okCodable<T: Encodable>(_ value: T) -> AnimateHTTPResponse {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(value),
            let json = String(data: data, encoding: .utf8) {
             return AnimateHTTPResponse(status: 200, body: json)
         }

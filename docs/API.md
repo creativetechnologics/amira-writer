@@ -307,6 +307,35 @@ The smoke test writes an auditable JSON record to:
 
 For agent-only runs on a machine without `gcloud`, a short-lived OAuth token can be supplied via `AMIRA_VERTEX_ACCESS_TOKEN_FILE`. The app still prefers `gcloud auth application-default print-access-token` from common install paths, including `~/google-cloud-sdk/bin/gcloud`.
 
+### Automation dry-run contracts
+
+These Phase 0/1 endpoints are dry-run only. They read the loaded local project, resolve canonical world context from `Places/places-world-context.json`, and write resumable sidecar artifacts for inspection. They do **not** call paid image/video providers.
+
+| Method | Path | Body | Purpose |
+|--------|------|------|---------|
+| `GET` | `/automation/project/summary` | — | Count scenes/shots/places/songs/character rigs and report canonical world-context source/duplicates ignored |
+| `GET` | `/automation/shots/{shotID}/effective-shot-spec` | — | Build one `EffectiveShotSpec` from `Scenes/scenes.json` and canonical project data |
+| `GET` | `/automation/scenes/{sceneID}/effective-shot-specs` | — | Build effective specs for every shot in one scene |
+| `POST` | `/automation/references/resolve` | `{ "shotID": "...", "sceneID": "...?", "write": true }` | Resolve and optionally write a `ReferenceContract`; preserves pinned refs and keeps rejected refs from returning automatically |
+| `GET` | `/automation/references/{sceneID}/{shotID}` | — | Read an existing `ReferenceContract`, or preview a non-mutating resolve if none exists |
+| `POST` | `/automation/frame-plans/dry-run` | `{ "scene": "first" \| "all" \| 1 \| "<scene name/id>", "shotID": "...?", "model": "nano-banana-2", "imageSize": "4K", "write": true, "maxCostUSD": 25.0 }` | Write `EffectiveShotSpec`, `ReferenceContract`, and `ShotFrameGenerationPlanSet` sidecars plus a cost/blocker report |
+| `POST` | `/automation/frames/generate` | `{ "mode": "preflight", "scene": "first", "moments": ["beginning"], "model": "nano-banana-2", "imageSize": "4K", "maxCostUSD": 25.0, "maxFrames": 12 }` | Preflight or execute plan-driven frame generation. Defaults to `preflight`; paid generation requires explicit `"mode":"execute"` and `maxCostUSD`. |
+
+Artifact paths are documented in [`Automation/README.md`](Automation/README.md).
+
+Example:
+
+```bash
+curl -sS -X POST http://127.0.0.1:19849/automation/frame-plans/dry-run \
+  -H 'Content-Type: application/json' \
+  -d '{"scene":"first","model":"nano-banana-2","imageSize":"4K","write":true}' | jq
+
+# No-spend frame-generation preflight. This plans sidecar records but does not call Gemini.
+curl -sS -X POST http://127.0.0.1:19849/automation/frames/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"preflight","scene":"first","moments":["beginning"],"model":"nano-banana-2","imageSize":"4K","maxCostUSD":25,"maxFrames":12}' | jq
+```
+
 ### Shot-frame planning and Vertex smoke testing
 
 | Method | Path | Body | Purpose |

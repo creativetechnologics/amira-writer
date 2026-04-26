@@ -15353,9 +15353,20 @@ final class AnimateStore {
     }
 
     func loadPlacesWorldContextBlocks(from animateDir: URL) -> PlacesWorldContextBlocks {
-        let url = ProjectPaths(root: animateDir.deletingLastPathComponent()).animate.appendingPathComponent("places-world-context.json")
-        guard FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
+        let paths = ProjectPaths(root: animateDir.deletingLastPathComponent())
+        let canonicalURL = paths.placesWorldContextJSON
+        if FileManager.default.fileExists(atPath: canonicalURL.path),
+           let data = try? Data(contentsOf: canonicalURL),
+           let decoded = try? JSONDecoder().decode(PlacesWorldContextBlocks.self, from: data) {
+            return decoded
+        }
+
+        // Legacy fallback only for projects that have not migrated yet. New
+        // automation must treat Places/places-world-context.json as canonical
+        // so stale Animate/ duplicates (including mid-2020s copies) do not win.
+        let legacyURL = paths.animate.appendingPathComponent("places-world-context.json")
+        guard FileManager.default.fileExists(atPath: legacyURL.path),
+              let data = try? Data(contentsOf: legacyURL),
               let decoded = try? JSONDecoder().decode(PlacesWorldContextBlocks.self, from: data) else {
             return .init()
         }
