@@ -1,16 +1,15 @@
 import SwiftUI
 import AppKit
+import ProjectKit
 
 @available(macOS 26.0, *)
 struct ImagineScenesPageView: View {
     private enum ReferencePickerMode: Identifiable {
         case gemini
-        case drawThingsSource
 
         var id: String {
             switch self {
             case .gemini: return "gemini"
-            case .drawThingsSource: return "drawThingsSource"
             }
         }
     }
@@ -39,17 +38,18 @@ struct ImagineScenesPageView: View {
     @State private var isGeneratingPrompt: Bool = false
     @State private var isGenerating: Bool = false
     @State private var generationError: String?
-    @State private var selectedDrawThingsModel: ImagineDrawThingsModel = .fluxKlein9B
     @State private var generationPromptHeight: CGFloat = 110
     @State private var generationPromptDragStartHeight: CGFloat?
-    @State private var useGemini: Bool = false
     @State private var geminiReferenceImages: [GeminiImageService.ReferenceImage] = []
     @State private var automaticReferenceImagePaths: [String] = []
     @State private var automaticReferenceStatus: String?
     @State private var cachedGenerationPlanPreview: ShotFrameGenerationPlan?
-    @State private var drawThingsSourceImagePath: String?
-    @State private var drawThingsDenoisingStrength: Double = 0.35
     @State private var activeReferencePicker: ReferencePickerMode?
+
+    // Gemini is the only generator on this page now; keep this as a constant
+    // so existing branches (refresh keys, plan preview, generate) keep
+    // compiling without ripping the whole flow apart.
+    private let useGemini: Bool = true
     @State private var isBulkRunningScene: Bool = false
     @State private var isBulkRunningAll: Bool = false
     @State private var isDryRunningShotPipeline: Bool = false
@@ -66,6 +66,9 @@ struct ImagineScenesPageView: View {
     @State private var galleryMetadataRevision: Int = 0
     @State private var filteredMomentPaths: [String] = []
 
+    @AppStorage("animate.scenes.middlePane.bottomHeight") private var middlePaneBottomHeight: Double = 280
+    private let splitHandleHeight: CGFloat = 8
+
     private var selectedScene: AnimationScene? { store.selectedScene }
     private var shots: [AnimationSceneShot] { selectedScene?.shots ?? [] }
 
@@ -78,12 +81,70 @@ struct ImagineScenesPageView: View {
         currentGallery?.paths(for: selectedMoment) ?? []
     }
 
+    private var currentShot: AnimationSceneShot? {
+        guard let scene = selectedScene,
+              let idx = store.imagineSelectedShotIndex,
+              idx >= 0, idx < scene.shots.count else { return nil }
+        return scene.shots[idx]
+    }
+
+    private var featuredFramePath: String? {
+        guard let scene = selectedScene,
+              let idx = store.imagineSelectedShotIndex else { return nil }
+        return store.imagineGallery(for: scene.id, shotIndex: idx)?.selectedPath(for: selectedMoment)
+    }
+
+    @ViewBuilder
+    private var featuredFrameLargeView: some View {
+        if let path = featuredFramePath, FileManager.default.fileExists(atPath: path),
+           let image = NSImage(contentsOfFile: path) {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(4/3, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.accentColor.opacity(0.5), lineWidth: 1.5)
+                )
+        } else {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.06))
+                .aspectRatio(4/3, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    VStack(spacing: 6) {
+                        Image(systemName: "photo.badge.plus")
+                            .font(.title3)
+                            .foregroundStyle(.tertiary)
+                        Text("Right-click a thumbnail to set as frame")
+                            .font(.caption2)
+                            .foregroundStyle(.quaternary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+        }
+    }
+
+    private func clampedBottomHeight(totalHeight: CGFloat) -> CGFloat {
+        let lower: CGFloat = 120
+        let upper = Swift.max(lower, totalHeight - 200 - splitHandleHeight)
+        return Swift.min(Swift.max(CGFloat(middlePaneBottomHeight), lower), upper)
+    }
+
+    private func resizeMiddleBottomPane(_ delta: CGFloat, totalHeight: CGFloat) {
+        let lower: CGFloat = 120
+        let upper = Swift.max(lower, totalHeight - 200 - splitHandleHeight)
+        let newVal = Swift.min(Swift.max(CGFloat(middlePaneBottomHeight) - delta, lower), upper)
+        middlePaneBottomHeight = Double(newVal)
+    }
+
     private var filteredMomentPathsKey: String {
         "\(currentMomentPaths.count)|\(gallerySortMode.rawValue)|\(galleryMinimumRating ?? 0)|\(galleryFlagFilter.rawValue)|\(galleryMetadataRevision)"
     }
 
     private var usesReferenceDrivenPromptStyle: Bool {
-        useGemini || drawThingsSourceImagePath != nil
+        true
     }
 
     private var currentStoredPrompt: String {
@@ -150,29 +211,9 @@ struct ImagineScenesPageView: View {
         if let scene = selectedScene {
             VStack(spacing: 0) {
                 shotTimeline(scene: scene)
-
-                // Bulk generation bar
                 bulkBar(scene: scene)
-
                 Divider()
-
-                HStack(spacing: 0) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            momentTabBar
-                            galleryFilterBar
-                            galleryGrid
-                        }
-                        .padding()
-                    }
-
-                    Divider()
-
-                    inspectorPane
-                }
-
-                Divider()
-                generationControls
+                middlePaneSplit(scene: scene)
             }
             .onChange(of: store.selectedSceneID) { _, _ in
                 store.imagineSelectedShotIndex = shots.isEmpty ? nil : 0
@@ -226,17 +267,21 @@ struct ImagineScenesPageView: View {
                         filtered = filtered.filter { (metadataByPath[$0]?.rating ?? 0) >= minRating }
                     }
 
+                    let modificationDates: [String: Date]
+                    switch sortMode {
+                    case .newest, .oldest:
+                        modificationDates = filtered.reduce(into: [:]) { result, path in
+                            result[path] = ((try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? .distantPast)
+                        }
+                    case .highestRated:
+                        modificationDates = [:]
+                    }
+
                     switch sortMode {
                     case .newest:
-                        filtered.sort {
-                            ((try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date) ?? .distantPast) >
-                            ((try? FileManager.default.attributesOfItem(atPath: $1)[.modificationDate] as? Date) ?? .distantPast)
-                        }
+                        filtered.sort { (modificationDates[$0] ?? .distantPast) > (modificationDates[$1] ?? .distantPast) }
                     case .oldest:
-                        filtered.sort {
-                            ((try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date) ?? .distantPast) <
-                            ((try? FileManager.default.attributesOfItem(atPath: $1)[.modificationDate] as? Date) ?? .distantPast)
-                        }
+                        filtered.sort { (modificationDates[$0] ?? .distantPast) < (modificationDates[$1] ?? .distantPast) }
                     case .highestRated:
                         filtered.sort { (metadataByPath[$0]?.rating ?? 0) > (metadataByPath[$1]?.rating ?? 0) }
                     }
@@ -261,7 +306,7 @@ struct ImagineScenesPageView: View {
             .sheet(item: $activeReferencePicker) { pickerMode in
                 UniversalImagePickerSheet(
                     store: store,
-                    maxSelections: pickerMode == .gemini ? 5 : 1,
+                    maxSelections: 5,
                     onConfirm: { selectedPaths in
                         activeReferencePicker = nil
                         handleSelectedReferenceImages(selectedPaths, mode: pickerMode)
@@ -428,36 +473,53 @@ struct ImagineScenesPageView: View {
             }
     }
 
-    // MARK: - Inspector Pane
+    // MARK: - Middle Pane Split
 
-    private var inspectorPane: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                UnifiedDetailsInspectorSection(
-                    selection: SceneShotImageSelection(
-                        path: previewImagePath,
-                        store: store,
-                        scene: selectedScene,
-                        shotIndex: store.imagineSelectedShotIndex,
-                        moment: selectedMoment,
-                        onSetRating: { rating in
-                            guard let path = previewImagePath else { return }
-                            setSceneShotImageRating(rating, path: path)
-                        },
-                        onToggleRejected: {
-                            guard let path = previewImagePath else { return }
-                            toggleSceneShotImageRejected(path)
-                        },
-                        onSetNotes: { notes in
-                            guard let path = previewImagePath else { return }
-                            setSceneShotImageNotes(notes, path: path)
-                        }
+    @ViewBuilder
+    private func middlePaneSplit(scene: AnimationScene) -> some View {
+        GeometryReader { proxy in
+            let totalHeight = proxy.size.height
+            let bottomHeight = clampedBottomHeight(totalHeight: totalHeight)
+            let topHeight = max(180, totalHeight - bottomHeight - splitHandleHeight)
+
+            // The featured frame is the first thing that should give up its
+            // height when the split handle is dragged down. Without an
+            // explicit cap, .aspectRatio(.fit) keeps it proportionally large
+            // and pushes the gallery off-screen.
+            let featuredFrameMaxHeight = max(120, min(440, topHeight * 0.5))
+
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        featuredFrameLargeView
+                            .frame(maxHeight: featuredFrameMaxHeight)
+                        momentTabBar
+                        galleryFilterBar
+                        galleryGrid
+                    }
+                    .padding()
+                }
+                .frame(height: topHeight)
+
+                OperaChromeSplitHandle(axis: .vertical, thickness: splitHandleHeight) { delta in
+                    resizeMiddleBottomPane(delta, totalHeight: totalHeight)
+                }
+
+                // Bottom region — fixed (no inner scroll). Storyboard strip
+                // sits directly above the Gemini generation pane.
+                VStack(alignment: .leading, spacing: 12) {
+                    SceneStoryboardDrawingsStrip(
+                        projectRoot: store.fileOWPURL,
+                        sceneID: scene.id,
+                        shot: currentShot
                     )
-                )
+                    generationControls
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .frame(height: bottomHeight)
             }
-            .padding()
         }
-        .frame(width: 280)
     }
 
     // MARK: - Moment Tab Bar
@@ -610,6 +672,7 @@ struct ImagineScenesPageView: View {
     private func galleryThumbnail(path: String) -> some View {
         let isSelected = previewImagePath == path
         let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+        let featuredMoment = featuredMoment(forPath: path)
 
         UnifiedImageTile(
             path: path,
@@ -631,13 +694,33 @@ struct ImagineScenesPageView: View {
                 isRejected: metadata?.isRejected ?? false,
                 onMoveToTrash: {
                     deleteConfirmationPath = path
-                }
+                },
+                onSetAsFrame: { moment in
+                    setFeaturedFrame(path: path, moment: moment)
+                },
+                featuredFrameMoment: featuredMoment
             ),
             onTap: {
                 previewImagePath = path
                 store.imaginePreviewImagePath = path
             }
         )
+    }
+
+    private func setFeaturedFrame(path: String, moment: ImagineShotMoment) {
+        guard let scene = selectedScene,
+              let idx = store.imagineSelectedShotIndex else { return }
+        store.setImagineSelectedPath(path, sceneID: scene.id, shotIndex: idx, moment: moment)
+    }
+
+    private func featuredMoment(forPath path: String) -> ImagineShotMoment? {
+        guard let scene = selectedScene,
+              let idx = store.imagineSelectedShotIndex,
+              let gallery = store.imagineGallery(for: scene.id, shotIndex: idx) else { return nil }
+        for moment in ImagineShotMoment.allCases where gallery.selectedPath(for: moment) == path {
+            return moment
+        }
+        return nil
     }
 
     // MARK: - Scene Shot Image Metadata
@@ -699,49 +782,31 @@ struct ImagineScenesPageView: View {
 
     private var generationControls: some View {
         VStack(spacing: 10) {
-            promptResizeHandle
-
             HStack(spacing: 12) {
-                Picker("Generator", selection: $useGemini) {
-                    Text("Draw Things").tag(false)
-                    Text("Gemini").tag(true)
+                Picker("Model", selection: $store.selectedGeminiModel) {
+                    ForEach(GeminiModel.allCases, id: \.self) { model in
+                        Text(model.displayName).tag(model)
+                    }
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 300)
+                .frame(maxWidth: 220)
+                .disabled(!store.geminiMasterSwitch)
 
-                if !useGemini {
-                    HStack(spacing: 6) {
-                        Text("Model")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(ImagineDrawThingsModel.fluxKlein9B.displayName)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(.quaternary.opacity(0.2), in: Capsule())
-                    }
-                    .frame(maxWidth: 220, alignment: .leading)
-                } else {
-                    Picker("Model", selection: $store.selectedGeminiModel) {
-                        ForEach(GeminiModel.allCases, id: \.self) { model in
-                            Text(model.displayName).tag(model)
-                        }
-                    }
-                    .frame(maxWidth: 200)
-                    .disabled(!store.geminiMasterSwitch)
-
-                    Button {
-                        activeReferencePicker = .gemini
-                    } label: {
-                        Label("\(geminiReferenceImages.count)/5 Refs", systemImage: "photo.on.rectangle.angled")
-                    }
-                    .controlSize(.small)
-                    .disabled(!store.geminiMasterSwitch)
+                Button {
+                    activeReferencePicker = .gemini
+                } label: {
+                    Label("\(geminiReferenceImages.count)/5 Refs", systemImage: "photo.on.rectangle.angled")
                 }
-            }
+                .controlSize(.small)
+                .disabled(!store.geminiMasterSwitch)
 
-            if !useGemini {
-                drawThingsReferenceSection
+                Spacer()
+
+                Button { generateImage() } label: {
+                    Label("Generate", systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .disabled(generationPrompt.isEmpty || isGenerating || isGeneratingPrompt || !store.geminiMasterSwitch)
             }
 
             HStack(spacing: 8) {
@@ -767,17 +832,10 @@ struct ImagineScenesPageView: View {
                         }
                         .controlSize(.small)
                     }
-
-                    Button { generateImage() } label: {
-                        Label("Generate", systemImage: "sparkles")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(generationPrompt.isEmpty || isGenerating || isGeneratingPrompt || (useGemini && !store.geminiMasterSwitch))
                 }
             }
 
-            if useGemini && !geminiReferenceImages.isEmpty {
+            if !geminiReferenceImages.isEmpty {
                 HStack(spacing: 6) {
                     Text("References:").font(.caption).foregroundStyle(.secondary)
                     ForEach(0..<geminiReferenceImages.count, id: \.self) { i in
@@ -789,11 +847,11 @@ struct ImagineScenesPageView: View {
                 }
             }
 
-            if useGemini, let plan = currentGenerationPlanPreview {
+            if let plan = currentGenerationPlanPreview {
                 generationPlanSummary(plan)
             }
 
-            if useGemini, let automaticReferenceStatus {
+            if let automaticReferenceStatus {
                 Text(automaticReferenceStatus)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -848,56 +906,6 @@ struct ImagineScenesPageView: View {
         )
         .accessibilityLabel("Resize prompt area")
         .help("Drag to resize the prompt editor.")
-    }
-
-    private var drawThingsReferenceSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Button {
-                    activeReferencePicker = .drawThingsSource
-                } label: {
-                    Label(
-                        drawThingsSourceImagePath == nil ? "0/1 Source" : "1/1 Source",
-                        systemImage: "photo"
-                    )
-                }
-                .controlSize(.small)
-
-                if let sourcePath = drawThingsSourceImagePath {
-                    Text(URL(fileURLWithPath: sourcePath).lastPathComponent)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-
-                    Button("Clear") {
-                        drawThingsSourceImagePath = nil
-                    }
-                    .controlSize(.mini)
-                } else {
-                    Text("Optional base image for Draw Things img2img. The result keeps the source image dimensions.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if drawThingsSourceImagePath != nil {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Reference Strength")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(String(format: "%.2f", drawThingsDenoisingStrength))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    Slider(value: $drawThingsDenoisingStrength, in: 0.15...0.75, step: 0.05)
-                    Text("Lower values preserve the source image more. Start around 0.30–0.40.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
     }
 
     // MARK: - Actions
@@ -1020,32 +1028,9 @@ struct ImagineScenesPageView: View {
                         generator: "gemini",
                         mode: plan.mode.rawValue
                     )
-                } else {
-                    let savedURLs = try await service.generateWithDrawThings(
-                        prompt: generationPrompt, model: selectedDrawThingsModel,
-                        config: store.drawThingsPlaceConfig, owpURL: owpURL,
-                        sceneSlug: sceneSlug, shotIndex: shotIndex, moment: selectedMoment,
-                        characters: drawThingsSourceImagePath == nil ? store.characters : [],
-                        sourceImageURL: drawThingsSourceImagePath.map { URL(fileURLWithPath: $0) },
-                        denoisingStrength: drawThingsDenoisingStrength
-                    )
-                    for savedURL in savedURLs {
-                        registerGeneratedShotImage(
-                            savedURL,
-                            scene: scene,
-                            shotIndex: shotIndex,
-                            moment: selectedMoment,
-                            generator: "drawthings",
-                            mode: drawThingsSourceImagePath == nil ? "generate" : "img2img"
-                        )
-                    }
                 }
             } catch {
-                if !useGemini {
-                    generationError = "Draw Things: \(error.localizedDescription) — Verify Draw Things is running with API enabled on port \(store.drawThingsPlaceConfig.apiPort)."
-                } else {
-                    generationError = error.localizedDescription
-                }
+                generationError = error.localizedDescription
             }
         }
     }
@@ -1114,8 +1099,6 @@ struct ImagineScenesPageView: View {
         case .gemini:
             geminiReferenceImages = makeGeminiReferenceImages(from: paths)
             refreshGenerationPlanPreview()
-        case .drawThingsSource:
-            drawThingsSourceImagePath = paths.first
         }
     }
 
@@ -1612,16 +1595,14 @@ struct SceneShotImageSelection: DetailedImageSelection {
             rows.append(("Resolution", resolution))
         }
 
-        // File size
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-           let size = attrs[.size] as? Int64 {
-            rows.append(("File Size", Self.byteFormatter.string(fromByteCount: size)))
-        }
-
-        // Created date
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-           let created = attrs[.creationDate] as? Date {
-            rows.append(("Created", created.formatted(date: .abbreviated, time: .shortened)))
+        // File attributes
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path) {
+            if let size = attrs[.size] as? Int64 {
+                rows.append(("File Size", Self.byteFormatter.string(fromByteCount: size)))
+            }
+            if let created = attrs[.creationDate] as? Date {
+                rows.append(("Created", created.formatted(date: .abbreviated, time: .shortened)))
+            }
         }
 
         rows.append(("Path", path))

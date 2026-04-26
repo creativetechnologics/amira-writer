@@ -67,15 +67,29 @@ enum ImageLibraryMetadataSidecarService {
         try? xml.data(using: .utf8)?.write(to: sidecarURL, options: .atomic)
     }
 
+    static func saveAsync(_ metadata: ImageLibraryReviewMetadata, forImagePath imagePath: String) {
+        Task.detached(priority: .utility) {
+            await ImageLibraryMetadataSidecarWriteQueue.shared.save(metadata, forImagePath: imagePath)
+        }
+    }
+
     static func sidecarURL(forImagePath imagePath: String) -> URL {
         URL(fileURLWithPath: imagePath).deletingPathExtension().appendingPathExtension("xmp")
     }
 
-    private static func extractTagValue(_ tagName: String, from xml: String) -> String? {
-        let pattern = "<(?:[A-Za-z0-9_\\-]+:)?\(tagName)>(.*?)</(?:[A-Za-z0-9_\\-]+:)?\(tagName)>"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
-            return nil
+    // Pre-compiled regex patterns keyed by tag name — avoids recompiling on every call.
+    private static let tagRegexes: [String: NSRegularExpression] = {
+        let tags = ["Rating", "IsRejected", "Notes", "UpdatedAt"]
+        var dict: [String: NSRegularExpression] = [:]
+        for tag in tags {
+            let pattern = "<(?:[A-Za-z0-9_\\-]+:)?\(tag)>(.*?)</(?:[A-Za-z0-9_\\-]+:)?\(tag)>"
+            dict[tag] = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
         }
+        return dict
+    }()
+
+    private static func extractTagValue(_ tagName: String, from xml: String) -> String? {
+        guard let regex = tagRegexes[tagName] else { return nil }
         let range = NSRange(xml.startIndex..<xml.endIndex, in: xml)
         guard let match = regex.firstMatch(in: xml, options: [], range: range),
               let valueRange = Range(match.range(at: 1), in: xml) else {
@@ -107,6 +121,15 @@ enum ImageLibraryMetadataSidecarService {
     }
 }
 
+@available(macOS 26.0, *)
+private actor ImageLibraryMetadataSidecarWriteQueue {
+    static let shared = ImageLibraryMetadataSidecarWriteQueue()
+
+    func save(_ metadata: ImageLibraryReviewMetadata, forImagePath imagePath: String) {
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: imagePath)
+    }
+}
+
 // MARK: - Shared State (observable across the 3 panes)
 
 /// Dedicated observable container for the Gemini "Edit Image" binding surface.
@@ -117,10 +140,17 @@ enum ImageLibraryMetadataSidecarService {
 @available(macOS 26.0, *)
 @Observable @MainActor
 final class AllProjectImagesEditState {
+    private static let aspectRatioKey = "amira.editGemini.aspectRatio.v1"
+    private static let imageSizeKey = "amira.editGemini.imageSize.v1"
+
     var adjustments: String = ""
     var model: GeminiModel = .flash
-    var aspectRatio: String = "1:1"
-    var imageSize: String = "1K"
+    var aspectRatio: String = UserDefaults.standard.string(forKey: aspectRatioKey) ?? "1:1" {
+        didSet { UserDefaults.standard.set(aspectRatio, forKey: Self.aspectRatioKey) }
+    }
+    var imageSize: String = UserDefaults.standard.string(forKey: imageSizeKey) ?? "1K" {
+        didSet { UserDefaults.standard.set(imageSize, forKey: Self.imageSizeKey) }
+    }
     var pendingDrafts: [GeminiGenerationDraft] = []
     var pendingPreflight: GeminiGenerationDraft? = nil
     var errorMessage: String? = nil
@@ -137,27 +167,42 @@ final class AllProjectImagesState {
         let sizeBytes: Int64?
     }
 
+    private struct RecordBuildContext: Equatable, Sendable {
+        let projectURL: URL?
+        let animateURL: URL?
+    }
+
     private struct RecordSeed: Equatable, Sendable {
         let id: String
         let path: String
-        let resolvedPath: String
         let source: AllProjectImagesSource
         let originLabel: String
         let groupLabel: String
+        let sceneID: UUID?
+        let shotID: UUID?
         let rating: Int?
         let isRejected: Bool
         let notes: String
         let supportsLibraryCuration: Bool
     }
 
-    private struct FilterCacheKey: Equatable {
+    private struct FilterCacheKey: Hashable {
         let buildSignature: Int
         let selectedSource: AllProjectImagesSource?
         let selectedGroupLabel: String?
+        let selectedSceneID: UUID?
+        let selectedShotID: UUID?
         let searchText: String
         let sortMode: AllProjectImagesSortMode
         let flagFilter: AllProjectImagesFlagFilter
         let minimumRating: Int?
+    }
+
+    private struct PrefetchSignatureCacheKey: Hashable {
+        let filterCacheKey: FilterCacheKey?
+        let contentRevision: Int
+        let roundedThumbnailSize: Int
+        let limit: Int
     }
 
     // Filter / selection
@@ -165,17 +210,35 @@ final class AllProjectImagesState {
         didSet {
             if oldValue != selectedSource {
                 selectedGroupLabel = nil
+                if selectedSource != .sceneShots {
+                    selectedSceneID = nil
+                    selectedShotID = nil
+                }
             }
         }
     }
     var selectedGroupLabel: String? = nil
+    var selectedSceneID: UUID? = nil {
+        didSet {
+            if selectedSceneID != oldValue {
+                selectedShotID = nil
+            }
+        }
+    }
+    var selectedShotID: UUID? = nil
     var selectedRecordID: String? = nil {
         didSet {
             if selectedRecordID != oldValue {
                 PerfSignposts.event(.inspectorSelection, "id=\(selectedRecordID ?? "nil")")
             }
+            if let selectedRecordID, !selectedRecordIDs.contains(selectedRecordID) {
+                selectedRecordIDs = [selectedRecordID]
+                lastSelectedRecordID = selectedRecordID
+            }
         }
     }
+    var selectedRecordIDs: Set<String> = []
+    var lastSelectedRecordID: String? = nil
     var sortMode: AllProjectImagesSortMode = .newest
     var thumbnailSize: CGFloat = 140
     var searchText: String = ""
@@ -193,17 +256,27 @@ final class AllProjectImagesState {
     // Memoized record set (rebuilt only when the path signature changes).
     var cachedAllRecords: [ProjectImageRecord] = []
     var lastBuildSignature: Int = -1
+    var isRebuilding: Bool = false
     private var pendingBuildSignature: Int = -1
     @ObservationIgnored private var seedsByID: [String: RecordSeed] = [:]
     @ObservationIgnored private var recordsByID: [String: ProjectImageRecord] = [:]
     @ObservationIgnored private var countsBySource: [AllProjectImagesSource: Int] = [:]
-    private var fileMetadataCache: [String: CachedFileMetadata] = [:]
+    @ObservationIgnored private var countsBySourceAndGroupLabel: [AllProjectImagesSource: [String: Int]] = [:]
+    @ObservationIgnored private var groupLabelsBySource: [AllProjectImagesSource: [String]] = [:]
+    @ObservationIgnored private var allGroupLabels: [String] = []
+    @ObservationIgnored private var countsBySceneID: [UUID: Int] = [:]
+    @ObservationIgnored private var countsByShotID: [UUID: Int] = [:]
+    @ObservationIgnored private var fileMetadataCache: [String: CachedFileMetadata] = [:]
     @ObservationIgnored private var filteredCacheKey: FilterCacheKey?
     @ObservationIgnored private var filteredCacheRecords: [ProjectImageRecord] = []
     @ObservationIgnored private var filteredRecordsByID: [String: ProjectImageRecord] = [:]
+    @ObservationIgnored private var contentRevision: Int = 0
+    @ObservationIgnored private var prefetchSignatureCache: [PrefetchSignatureCacheKey: String] = [:]
     @ObservationIgnored private var rebuildRequestID: Int = 0
     @ObservationIgnored private var rebuildTask: Task<Void, Never>?
     @ObservationIgnored private var lastProjectPath: String?
+    @ObservationIgnored private var characterRecoveryProjectPath: String?
+    @ObservationIgnored private var characterRecoveryTask: Task<Void, Never>?
 
     // MARK: - Aggregation
 
@@ -214,13 +287,27 @@ final class AllProjectImagesState {
     func recordsSignature(store: AnimateStore) -> Int {
         var h = 1469598103934665603 & Int.max
         func mix(_ v: Int) { h = (h ^ v) &* 1099511628211 }
+        func mixString(_ value: String) {
+            for scalar in value.unicodeScalars {
+                mix(Int(scalar.value))
+            }
+        }
         for p in store.backgrounds {
+            mixString(p.name)
             mix(p.imagePaths.count)
             mix(p.animatedImagePaths.count &<< 3)
+        }
+        for profile in store.placesWorkflowLibrary.landmarkProfiles {
+            mixString(profile.title)
+            mix(profile.primaryImagePath == nil ? 0 : 1)
+            mix((profile.exteriorImagePath == nil ? 0 : 1) &<< 1)
+            mix((profile.interiorImagePath == nil ? 0 : 1) &<< 2)
+            mix(profile.galleryImagePaths.count &<< 3)
         }
         mix(store.canvasGenerations.count &<< 7)
         mix(store.placesWorkflowLibrary.generatedImageRecords.count &<< 11)
         for c in store.characters {
+            mixString(c.name)
             mix(c.profileImagePath == nil ? 0 : 1)
             mix(c.inspirationImagePaths.count)
             mix((c.inspirationReferenceImagePath == nil ? 0 : 1) &<< 1)
@@ -238,8 +325,20 @@ final class AllProjectImagesState {
             mix(c.costumeReferenceSets.reduce(0) { $0 + $1.costumeReferenceImagePaths.count } &<< 24)
             mix(c.costumeReferenceSets.reduce(0) { $0 + $1.generatedVariationImagePaths.count } &<< 26)
         }
-        for (_, galleries) in store.imagineSceneGalleries {
-            for g in galleries {
+        for item in store.imageLibraryOrganizeItems {
+            mixString(item.category.rawValue)
+            mixString(item.id.uuidString)
+            mixString(item.title)
+            mix(item.imagePaths.count &<< 4)
+            mix(Int(item.updatedAt.timeIntervalSinceReferenceDate.rounded(.towardZero)) &<< 6)
+        }
+        for scene in store.scenes {
+            mixString(scene.name)
+            mix(scene.shots.count &<< 5)
+            for shot in scene.shots {
+                mixString(shot.name)
+            }
+            for g in store.imagineSceneGalleries[scene.id] ?? [] {
                 mix(g.beginningImagePaths.count)
                 mix(g.middleImagePaths.count &<< 2)
                 mix(g.endImagePaths.count &<< 4)
@@ -248,36 +347,81 @@ final class AllProjectImagesState {
         return h
     }
 
-    func requestRebuildIfNeeded(store: AnimateStore) {
-        let sig = recordsSignature(store: store)
-        let projectPath = store.owpURL?.standardizedFileURL.path
-        let isSameProject = projectPath == lastProjectPath
-        if isSameProject && (sig == lastBuildSignature || sig == pendingBuildSignature) { return }
+    /// Cheap body-safe trigger for the All Images rebuild task.
+    /// This intentionally avoids walking every image path / name on each
+    /// render; the expensive full signature check still happens inside
+    /// `requestRebuildIfNeeded(store:)`.
+    func recordsRefreshKey(store: AnimateStore) -> Int {
+        var h = 1469598103934665603 & Int.max
+        func mix(_ v: Int) { h = (h ^ v) &* 1099511628211 }
+        func mixString(_ value: String?) {
+            guard let value else { return }
+            for scalar in value.unicodeScalars {
+                mix(Int(scalar.value))
+            }
+        }
 
-        let rebuildSignpost = PerfSignposts.begin(
-            .allImagesRebuild,
-            "sig=\(sig) sameProject=\(isSameProject)"
-        )
-        pendingBuildSignature = sig
-        let seeds = buildRecordSeeds(store: store)
-        let previousSeedsByID = isSameProject ? seedsByID : [:]
-        let previousRecordsByID = isSameProject ? recordsByID : [:]
-        let metadataCache = isSameProject ? fileMetadataCache : [:]
+        mixString(store.owpURL?.standardizedFileURL.path)
+        mix(store.allImagesContentRevision)
+        return h
+    }
+
+    func requestRebuildIfNeeded(store: AnimateStore) {
         rebuildTask?.cancel()
         rebuildRequestID &+= 1
         let requestID = rebuildRequestID
+        if cachedAllRecords.isEmpty {
+            isRebuilding = true
+        }
 
-        rebuildTask = Task { [weak self] in
+        rebuildTask = Task { [weak self, weak store] in
+            await Task.yield()
+            guard let self, let store else {
+                return
+            }
+            if self.cachedAllRecords.isEmpty {
+                try? await Task.sleep(for: .milliseconds(20))
+            } else {
+                try? await Task.sleep(for: .milliseconds(60))
+            }
+            guard requestID == self.rebuildRequestID else {
+                return
+            }
+            let sig = self.recordsSignature(store: store)
+            let projectPath = store.owpURL?.standardizedFileURL.path
+            let isSameProject = projectPath == self.lastProjectPath
+            if isSameProject && (sig == self.lastBuildSignature || sig == self.pendingBuildSignature) {
+                self.isRebuilding = false
+                self.pendingBuildSignature = -1
+                self.rebuildTask = nil
+                return
+            }
+
+            let rebuildSignpost = PerfSignposts.begin(
+                .allImagesRebuild,
+                "sig=\(sig) sameProject=\(isSameProject)"
+            )
+            self.pendingBuildSignature = sig
+            let seeds = self.buildRecordSeeds(store: store)
+            let previousSeedsByID = isSameProject ? self.seedsByID : [:]
+            let previousRecordsByID = isSameProject ? self.recordsByID : [:]
+            let metadataCache = isSameProject ? self.fileMetadataCache : [:]
+            let buildContext = RecordBuildContext(
+                projectURL: store.fileOWPURL,
+                animateURL: store.animateURL
+            )
             let rebuiltSeedsByID = Dictionary(uniqueKeysWithValues: seeds.map { ($0.id, $0) })
             let rebuiltRecords = await Task.detached(priority: .utility) {
                 Self.buildRecordsIncrementally(
                     from: seeds,
+                    context: buildContext,
                     previousSeedsByID: previousSeedsByID,
                     previousRecordsByID: previousRecordsByID,
                     metadataCache: metadataCache
                 )
             }.value
             guard !Task.isCancelled else {
+                self.isRebuilding = false
                 PerfSignposts.end(.allImagesRebuild, token: rebuildSignpost)
                 return
             }
@@ -295,8 +439,19 @@ final class AllProjectImagesState {
                 )
                 self.pendingBuildSignature = -1
                 self.rebuildTask = nil
+                self.isRebuilding = false
                 PerfSignposts.end(.allImagesRebuild, token: rebuildSignpost)
             }
+        }
+    }
+
+    func requestCharacterRecoveryIfNeeded(store: AnimateStore) {
+        guard let projectPath = store.owpURL?.standardizedFileURL.path else { return }
+        guard characterRecoveryProjectPath != projectPath else { return }
+        characterRecoveryProjectPath = projectPath
+        characterRecoveryTask?.cancel()
+        characterRecoveryTask = Task { [weak store] in
+            await store?.recoverMissingPersistedCharactersIfNeededAsync()
         }
     }
 
@@ -311,14 +466,14 @@ final class AllProjectImagesState {
         recordsByID = rebuiltRecords.reduce(into: [:]) { partialResult, record in
             partialResult[record.id] = record
         }
-        countsBySource = rebuiltRecords.reduce(into: [:]) { partialResult, record in
-            partialResult[record.source, default: 0] += 1
-        }
+        rebuildAggregationCaches(from: rebuiltRecords)
         lastBuildSignature = signature
         lastProjectPath = projectPath
+        contentRevision &+= 1
         filteredCacheKey = nil
         filteredCacheRecords = []
         filteredRecordsByID = [:]
+        prefetchSignatureCache.removeAll(keepingCapacity: true)
         let rebuiltMetadata = rebuiltRecords.reduce(into: [String: CachedFileMetadata]()) { partialResult, record in
             guard !record.resolvedPath.isEmpty else { return }
             partialResult[record.resolvedPath] = CachedFileMetadata(
@@ -334,13 +489,18 @@ final class AllProjectImagesState {
            !availableGroupLabels.contains(selectedGroupLabel) {
             self.selectedGroupLabel = nil
         }
+        selectedRecordIDs = selectedRecordIDs.filter { recordsByID[$0] != nil }
+        if let lastSelectedRecordID, recordsByID[lastSelectedRecordID] == nil {
+            self.lastSelectedRecordID = nil
+        }
         if let selectedRecordID, recordsByID[selectedRecordID] == nil {
-            self.selectedRecordID = nil
+            self.selectedRecordID = selectedRecordIDs.first
         }
     }
 
     func updateReviewMetadata(for recordID: String, rating: Int?, isRejected: Bool, notes: String) {
         guard let index = cachedAllRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let existing = cachedAllRecords[index]
         let updated = ProjectImageRecord(
             id: cachedAllRecords[index].id,
             path: cachedAllRecords[index].path,
@@ -348,6 +508,16 @@ final class AllProjectImagesState {
             source: cachedAllRecords[index].source,
             originLabel: cachedAllRecords[index].originLabel,
             groupLabel: cachedAllRecords[index].groupLabel,
+            sceneID: cachedAllRecords[index].sceneID,
+            shotID: cachedAllRecords[index].shotID,
+            searchHaystack: Self.searchHaystack(
+                path: cachedAllRecords[index].path,
+                resolvedPath: cachedAllRecords[index].resolvedPath,
+                source: cachedAllRecords[index].source,
+                originLabel: cachedAllRecords[index].originLabel,
+                groupLabel: cachedAllRecords[index].groupLabel,
+                notes: notes
+            ),
             createdAt: cachedAllRecords[index].createdAt,
             sizeBytes: cachedAllRecords[index].sizeBytes,
             rating: rating,
@@ -357,9 +527,14 @@ final class AllProjectImagesState {
         )
         cachedAllRecords[index] = updated
         recordsByID[updated.id] = updated
+        if existing.source != updated.source || existing.groupLabel != updated.groupLabel {
+            rebuildAggregationCaches(from: cachedAllRecords)
+        }
+        contentRevision &+= 1
         filteredCacheKey = nil
         filteredCacheRecords = []
         filteredRecordsByID = [:]
+        prefetchSignatureCache.removeAll(keepingCapacity: true)
     }
 
     private func buildRecordSeeds(store: AnimateStore) -> [RecordSeed] {
@@ -376,7 +551,7 @@ final class AllProjectImagesState {
                 return
             }
 
-            let dedupeKey = "\(record.source.rawValue)|\(record.resolvedPath)"
+            let dedupeKey = "\(record.source.rawValue)|\(record.path.trimmingCharacters(in: .whitespacesAndNewlines))"
             if let existingIndex = dedupeIndexByKey[dedupeKey] {
                 if preferNewRecord {
                     records[existingIndex] = record
@@ -435,6 +610,34 @@ final class AllProjectImagesState {
                 notes: record.draftEditNotes,
                 store: store
             ), dedupeByResolvedPath: true, preferNewRecord: !isMap3D)
+        }
+
+        for profile in store.placesWorkflowLibrary.landmarkProfiles {
+            let title = profile.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? profile.kind.displayName
+                : profile.title
+            var seenLandmarkPaths = Set<String>()
+
+            func appendLandmarkSeed(rawPath: String?, role: String) {
+                guard let trimmedPath = rawPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !trimmedPath.isEmpty,
+                      seenLandmarkPaths.insert(trimmedPath).inserted else { return }
+                appendRecord(makeSeed(
+                    id: "landmark-\(profile.id.uuidString)-\(role)-\(trimmedPath)",
+                    path: trimmedPath,
+                    source: .landmarks,
+                    originLabel: "\(title) (\(role))",
+                    groupLabel: title,
+                    store: store
+                ), dedupeByResolvedPath: true)
+            }
+
+            appendLandmarkSeed(rawPath: profile.primaryImagePath, role: "main")
+            appendLandmarkSeed(rawPath: profile.exteriorImagePath, role: "exterior")
+            appendLandmarkSeed(rawPath: profile.interiorImagePath, role: "interior")
+            for path in profile.galleryImagePaths {
+                appendLandmarkSeed(rawPath: path, role: "gallery")
+            }
         }
 
         for gen in store.canvasGenerations {
@@ -575,8 +778,33 @@ final class AllProjectImagesState {
             }
         }
 
-        for (_, galleries) in store.imagineSceneGalleries {
-            for gallery in galleries {
+        for item in store.imageLibraryOrganizeItems {
+            let origin = item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? item.category.singularName
+                : item.title
+            let source = allImagesSource(for: item.category)
+            for path in item.imagePaths {
+                appendRecord(makeSeed(
+                    id: "organize-\(item.id.uuidString)-\(path)",
+                    path: path,
+                    source: source,
+                    originLabel: origin,
+                    groupLabel: origin,
+                    store: store
+                ), dedupeByResolvedPath: true)
+            }
+        }
+
+        for scene in store.scenes {
+            let sceneTitle = scene.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? URL(fileURLWithPath: scene.owpSongPath).deletingPathExtension().lastPathComponent
+                : scene.name
+            let shotsByID = Dictionary(uniqueKeysWithValues: scene.shots.map { ($0.id, $0) })
+            for gallery in store.imagineSceneGalleries[scene.id] ?? [] {
+                let shot = shotsByID[gallery.shotID]
+                let rawShotTitle = shot?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let fallbackShotIndex = (scene.shots.firstIndex(where: { $0.id == gallery.shotID }) ?? 0) + 1
+                let shotTitle = rawShotTitle.isEmpty ? "Shot \(fallbackShotIndex)" : rawShotTitle
                 for (moment, paths) in [
                     (ImagineShotMoment.beginning, gallery.beginningImagePaths),
                     (ImagineShotMoment.middle, gallery.middleImagePaths),
@@ -587,8 +815,10 @@ final class AllProjectImagesState {
                             id: "shot-\(gallery.id.uuidString)-\(moment.rawValue)-\(path)",
                             path: path,
                             source: .sceneShots,
-                            originLabel: "Shot (\(moment.rawValue))",
-                            groupLabel: "Shot",
+                            originLabel: "\(sceneTitle) · \(shotTitle) · \(moment.rawValue)",
+                            groupLabel: shotTitle,
+                            sceneID: scene.id,
+                            shotID: gallery.shotID,
                             store: store
                         ))
                     }
@@ -599,26 +829,36 @@ final class AllProjectImagesState {
         return records
     }
 
+    private func allImagesSource(for category: ImageLibraryOrganizeCategory) -> AllProjectImagesSource {
+        switch category {
+        case .costumes: return .costumes
+        case .props: return .props
+        case .vehicles: return .vehicles
+        }
+    }
+
     private func makeSeed(
         id: String,
         path: String,
         source: AllProjectImagesSource,
         originLabel: String,
         groupLabel: String,
+        sceneID: UUID? = nil,
+        shotID: UUID? = nil,
         rating: Int? = nil,
         isRejected: Bool = false,
         notes: String = "",
         supportsLibraryCuration: Bool = true,
         store: AnimateStore
     ) -> RecordSeed {
-        let resolved = store.resolvedCharacterAssetURL(for: path)?.path ?? path
         return RecordSeed(
             id: id,
             path: path,
-            resolvedPath: resolved,
             source: source,
             originLabel: originLabel,
             groupLabel: groupLabel,
+            sceneID: sceneID,
+            shotID: shotID,
             rating: rating,
             isRejected: isRejected,
             notes: notes,
@@ -626,50 +866,54 @@ final class AllProjectImagesState {
         )
     }
 
-    nonisolated private static func buildRecords(from seeds: [RecordSeed]) -> [ProjectImageRecord] {
-        var metadataCache: [String: CachedFileMetadata] = [:]
-        return seeds.map { seed in
-            buildRecord(from: seed, metadataCache: &metadataCache)
-        }
-    }
-
     nonisolated private static func buildRecordsIncrementally(
         from seeds: [RecordSeed],
+        context: RecordBuildContext,
         previousSeedsByID: [String: RecordSeed],
         previousRecordsByID: [String: ProjectImageRecord],
         metadataCache: [String: CachedFileMetadata]
     ) -> [ProjectImageRecord] {
         var mutableMetadataCache = metadataCache
-        return seeds.map { seed in
+        var records = seeds.map { seed in
             if previousSeedsByID[seed.id] == seed,
                let existing = previousRecordsByID[seed.id] {
                 return existing
             }
-            return buildRecord(from: seed, metadataCache: &mutableMetadataCache)
+            return buildRecord(from: seed, context: context, metadataCache: &mutableMetadataCache)
         }
+        var seenResolvedKeys = Set<String>()
+        records = records.filter { record in
+            seenResolvedKeys.insert("\(record.source.rawValue)|\(record.resolvedPath)").inserted
+        }
+        records.sort { (lhs, rhs) in
+            (lhs.createdAt ?? .distantPast) > (rhs.createdAt ?? .distantPast)
+        }
+        return records
     }
 
     nonisolated private static func buildRecord(
         from seed: RecordSeed,
+        context: RecordBuildContext,
         metadataCache: inout [String: CachedFileMetadata]
     ) -> ProjectImageRecord {
+        let resolvedPath = resolvedImagePath(for: seed.path, context: context)
         let metadata: CachedFileMetadata
-        if let cached = metadataCache[seed.resolvedPath] {
+        if let cached = metadataCache[resolvedPath] {
             metadata = cached
         } else {
-            let attrs = try? FileManager.default.attributesOfItem(atPath: seed.resolvedPath)
+            let attrs = try? FileManager.default.attributesOfItem(atPath: resolvedPath)
             metadata = CachedFileMetadata(
                 createdAt: (attrs?[.creationDate] as? Date) ?? (attrs?[.modificationDate] as? Date),
                 sizeBytes: (attrs?[.size] as? NSNumber)?.int64Value
             )
-            metadataCache[seed.resolvedPath] = metadata
+            metadataCache[resolvedPath] = metadata
         }
 
         let hasSeedMetadata = seed.rating != nil
             || seed.isRejected
             || !seed.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let sidecarMetadata = (seed.source == .places || !hasSeedMetadata)
-            ? ImageLibraryMetadataSidecarService.load(forImagePath: seed.resolvedPath)
+            ? ImageLibraryMetadataSidecarService.load(forImagePath: resolvedPath)
             : nil
         let mergedNotes = seed.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? (sidecarMetadata?.notes ?? "")
@@ -678,10 +922,20 @@ final class AllProjectImagesState {
         return ProjectImageRecord(
             id: seed.id,
             path: seed.path,
-            resolvedPath: seed.resolvedPath,
+            resolvedPath: resolvedPath,
             source: seed.source,
             originLabel: seed.originLabel,
             groupLabel: seed.groupLabel,
+            sceneID: seed.sceneID,
+            shotID: seed.shotID,
+            searchHaystack: searchHaystack(
+                path: seed.path,
+                resolvedPath: resolvedPath,
+                source: seed.source,
+                originLabel: seed.originLabel,
+                groupLabel: seed.groupLabel,
+                notes: mergedNotes
+            ),
             createdAt: metadata.createdAt,
             sizeBytes: metadata.sizeBytes,
             rating: seed.rating ?? sidecarMetadata?.rating,
@@ -689,6 +943,170 @@ final class AllProjectImagesState {
             notes: mergedNotes,
             supportsLibraryCuration: seed.supportsLibraryCuration
         )
+    }
+
+    nonisolated private static func resolvedImagePath(
+        for path: String,
+        context: RecordBuildContext
+    ) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return path }
+
+        let fileManager = FileManager.default
+        if !trimmed.hasPrefix("/"),
+           let projectURL = context.projectURL {
+            let projectRelativeURL = projectURL.appendingPathComponent(trimmed)
+            if fileManager.fileExists(atPath: projectRelativeURL.path) {
+                return projectRelativeURL.path
+            }
+        }
+
+        if !trimmed.hasPrefix("/"),
+           let animateURL = context.animateURL,
+           trimmed.hasPrefix("Animate/") {
+            let animateRelativeURL = animateURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(trimmed)
+            if fileManager.fileExists(atPath: animateRelativeURL.path) {
+                return animateRelativeURL.path
+            }
+        }
+
+        if !trimmed.hasPrefix("/"),
+           let animateURL = context.animateURL,
+           (trimmed.hasPrefix("characters/") || trimmed.hasPrefix("backgrounds/")) {
+            let animateRelativeURL = animateURL.appendingPathComponent(trimmed)
+            if fileManager.fileExists(atPath: animateRelativeURL.path) {
+                return animateRelativeURL.path
+            }
+        }
+
+        if let projectURL = context.projectURL,
+           let projectRelativePath = projectRelativeCharacterAssetPath(from: trimmed, projectURL: projectURL) {
+            let remappedURL = projectURL.appendingPathComponent(projectRelativePath)
+            if fileManager.fileExists(atPath: remappedURL.path) {
+                return remappedURL.path
+            }
+        }
+
+        if trimmed.hasPrefix("/") {
+            let candidateURL = URL(fileURLWithPath: trimmed)
+            if fileManager.fileExists(atPath: candidateURL.path) {
+                return candidateURL.path
+            }
+        }
+
+        return trimmed
+    }
+
+    nonisolated private static func projectRelativeCharacterAssetPath(
+        from path: String,
+        projectURL: URL
+    ) -> String? {
+        let normalizedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedPath.isEmpty else { return nil }
+
+        if !normalizedPath.hasPrefix("/") {
+            if normalizedPath.hasPrefix("Characters/") {
+                return normalizedPath
+            }
+            if normalizedPath.hasPrefix("Animate/") {
+                if normalizedPath.hasPrefix("Animate/characters/") {
+                    return "Characters/" + normalizedPath.dropFirst("Animate/characters/".count)
+                }
+                return normalizedPath
+            }
+            if normalizedPath.hasPrefix("characters/") {
+                return "Characters/" + normalizedPath.dropFirst("characters/".count)
+            }
+            if normalizedPath.hasPrefix("backgrounds/") {
+                return "Animate/" + normalizedPath
+            }
+            return normalizedPath
+        }
+
+        let standardizedAbsoluteURL = URL(fileURLWithPath: normalizedPath).standardizedFileURL
+        if let projectRelativePath = projectRelativePath(for: standardizedAbsoluteURL, projectURL: projectURL) {
+            return projectRelativePath
+        }
+
+        let standardizedAbsolutePath = standardizedAbsoluteURL.path
+        if let animateRange = standardizedAbsolutePath.range(of: "/Animate/") {
+            return "Animate/" + standardizedAbsolutePath[animateRange.upperBound...]
+        }
+
+        return nil
+    }
+
+    nonisolated private static func projectRelativePath(for url: URL, projectURL: URL) -> String? {
+        let absolutePath = url.standardizedFileURL.path
+        let projectPath = projectURL.standardizedFileURL.path
+        guard absolutePath == projectPath || absolutePath.hasPrefix(projectPath + "/") else {
+            return nil
+        }
+
+        let suffix = absolutePath.dropFirst(projectPath.count)
+        let trimmed = suffix.hasPrefix("/") ? String(suffix.dropFirst()) : String(suffix)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func rebuildAggregationCaches(from records: [ProjectImageRecord]) {
+        countsBySource.removeAll(keepingCapacity: true)
+        countsBySourceAndGroupLabel.removeAll(keepingCapacity: true)
+        groupLabelsBySource.removeAll(keepingCapacity: true)
+        allGroupLabels.removeAll(keepingCapacity: true)
+        countsBySceneID.removeAll(keepingCapacity: true)
+        countsByShotID.removeAll(keepingCapacity: true)
+
+        var groupedLabels: [AllProjectImagesSource: Set<String>] = [:]
+        for record in records {
+            countsBySource[record.source, default: 0] += 1
+            if let sceneID = record.sceneID {
+                countsBySceneID[sceneID, default: 0] += 1
+            }
+            if let shotID = record.shotID {
+                countsByShotID[shotID, default: 0] += 1
+            }
+            let normalizedGroupLabel = record.groupLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedGroupLabel.isEmpty else { continue }
+
+            countsBySourceAndGroupLabel[record.source, default: [:]][record.groupLabel, default: 0] += 1
+            groupedLabels[record.source, default: []].insert(record.groupLabel)
+        }
+
+        for (source, labels) in groupedLabels {
+            groupLabelsBySource[source] = labels.sorted {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            }
+        }
+
+        let all = groupedLabels.values.reduce(into: Set<String>()) { result, labels in
+            result.formUnion(labels)
+        }
+        allGroupLabels = all.sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+    }
+
+    nonisolated private static func searchHaystack(
+        path: String,
+        resolvedPath: String,
+        source: AllProjectImagesSource,
+        originLabel: String,
+        groupLabel: String,
+        notes: String
+    ) -> String {
+        [
+            path,
+            resolvedPath,
+            URL(fileURLWithPath: resolvedPath).lastPathComponent,
+            source.displayName,
+            originLabel,
+            groupLabel,
+            notes
+        ]
+        .joined(separator: "\n")
+        .lowercased()
     }
 
     // MARK: - Filter + Sort
@@ -699,62 +1117,81 @@ final class AllProjectImagesState {
             buildSignature: lastBuildSignature,
             selectedSource: selectedSource,
             selectedGroupLabel: selectedGroupLabel,
+            selectedSceneID: selectedSceneID,
+            selectedShotID: selectedShotID,
             searchText: query,
             sortMode: sortMode,
             flagFilter: flagFilter,
             minimumRating: minimumRating
         )
         if filteredCacheKey != cacheKey {
+            let usesAllNewestRecords = selectedSource == nil
+                && (selectedGroupLabel?.isEmpty ?? true)
+                && selectedSceneID == nil
+                && selectedShotID == nil
+                && query.isEmpty
+                && sortMode == .newest
+                && flagFilter == .all
+                && minimumRating == nil
             var records = cachedAllRecords
-            if let source = selectedSource {
-                records = records.filter { $0.source == source }
-            }
-            if let selectedGroupLabel, !selectedGroupLabel.isEmpty {
-                records = records.filter { $0.groupLabel == selectedGroupLabel }
-            }
-            switch flagFilter {
-            case .all:
-                break
-            case .unflagged:
-                records = records.filter { !$0.isRejected }
-            case .rejected:
-                records = records.filter(\.isRejected)
-            }
-            if let minimumRating {
-                records = records.filter { ($0.rating ?? 0) >= minimumRating }
-            }
-            if !query.isEmpty {
-                records = records.filter {
-                    $0.path.lowercased().contains(query)
-                        || $0.originLabel.lowercased().contains(query)
-                        || $0.notes.lowercased().contains(query)
+            if !usesAllNewestRecords {
+                if let source = selectedSource {
+                    records = records.filter { $0.source == source }
                 }
-            }
-            switch sortMode {
-            case .newest:
-                records.sort { (lhs, rhs) in
-                    (lhs.createdAt ?? .distantPast) > (rhs.createdAt ?? .distantPast)
+                if let selectedGroupLabel, !selectedGroupLabel.isEmpty {
+                    records = records.filter { $0.groupLabel == selectedGroupLabel }
                 }
-            case .oldest:
-                records.sort { (lhs, rhs) in
-                    (lhs.createdAt ?? .distantFuture) < (rhs.createdAt ?? .distantFuture)
-                }
-            case .name:
-                records.sort { (lhs, rhs) in
-                    (lhs.path as NSString).lastPathComponent
-                        .localizedCompare((rhs.path as NSString).lastPathComponent) == .orderedAscending
-                }
-            case .rating:
-                records.sort { lhs, rhs in
-                    if (lhs.rating ?? 0) != (rhs.rating ?? 0) {
-                        return (lhs.rating ?? 0) > (rhs.rating ?? 0)
+                if selectedSource == .sceneShots {
+                    if let selectedSceneID {
+                        records = records.filter { $0.sceneID == selectedSceneID }
                     }
-                    return (lhs.createdAt ?? .distantPast) > (rhs.createdAt ?? .distantPast)
+                    if let selectedShotID {
+                        records = records.filter { $0.shotID == selectedShotID }
+                    }
+                }
+                switch flagFilter {
+                case .all:
+                    break
+                case .unflagged:
+                    records = records.filter { !$0.isRejected }
+                case .rejected:
+                    records = records.filter(\.isRejected)
+                }
+                if let minimumRating {
+                    records = records.filter { ($0.rating ?? 0) >= minimumRating }
+                }
+                if !query.isEmpty {
+                    records = records.filter { $0.searchHaystack.contains(query) }
+                }
+                switch sortMode {
+                case .newest:
+                    // `cachedAllRecords` is already sorted newest-first by the
+                    // background rebuild. Filters preserve that order, so the
+                    // initial All Images view avoids a main-actor sort.
+                    break
+                case .oldest:
+                    records.sort { (lhs, rhs) in
+                        (lhs.createdAt ?? .distantFuture) < (rhs.createdAt ?? .distantFuture)
+                    }
+                case .name:
+                    records.sort { (lhs, rhs) in
+                        (lhs.path as NSString).lastPathComponent
+                            .localizedCompare((rhs.path as NSString).lastPathComponent) == .orderedAscending
+                    }
+                case .rating:
+                    records.sort { lhs, rhs in
+                        if (lhs.rating ?? 0) != (rhs.rating ?? 0) {
+                            return (lhs.rating ?? 0) > (rhs.rating ?? 0)
+                        }
+                        return (lhs.createdAt ?? .distantPast) > (rhs.createdAt ?? .distantPast)
+                    }
                 }
             }
             filteredCacheKey = cacheKey
             filteredCacheRecords = records
-            filteredRecordsByID = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+            filteredRecordsByID = usesAllNewestRecords
+                ? recordsByID
+                : Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
         }
         return filteredCacheRecords
     }
@@ -769,16 +1206,27 @@ final class AllProjectImagesState {
         countsBySource[source] ?? 0
     }
 
-    var availableGroupLabels: [String] {
-        let scopedRecords: [ProjectImageRecord]
-        if let selectedSource {
-            scopedRecords = cachedAllRecords.filter { $0.source == selectedSource }
-        } else {
-            scopedRecords = cachedAllRecords
+    func count(for source: AllProjectImagesSource, groupLabel: String) -> Int {
+        countsBySourceAndGroupLabel[source]?[groupLabel] ?? 0
+    }
+
+    func countForScene(_ sceneID: UUID) -> Int {
+        countsBySceneID[sceneID] ?? 0
+    }
+
+    func countForShot(_ shotID: UUID) -> Int {
+        countsByShotID[shotID] ?? 0
+    }
+
+    func groupLabels(for source: AllProjectImagesSource?) -> [String] {
+        if let source {
+            return groupLabelsBySource[source] ?? []
         }
-        return Array(Set(scopedRecords.map(\.groupLabel)))
-            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        return allGroupLabels
+    }
+
+    var availableGroupLabels: [String] {
+        groupLabels(for: selectedSource)
     }
 
     func ensureFilmstripSelection() {
@@ -799,10 +1247,53 @@ final class AllProjectImagesState {
         guard let selectedRecordID,
               let currentIndex = records.firstIndex(where: { $0.id == selectedRecordID }) else {
             self.selectedRecordID = records.first?.id
+            if let selectedRecordID { selectedRecordIDs = [selectedRecordID] }
             return
         }
         let clampedIndex = min(max(currentIndex + delta, 0), records.count - 1)
         self.selectedRecordID = records[clampedIndex].id
+        self.selectedRecordIDs = [records[clampedIndex].id]
+        self.lastSelectedRecordID = records[clampedIndex].id
+    }
+
+    func selectRecord(_ record: ProjectImageRecord, in records: [ProjectImageRecord], modifiers: GalleryClickEvent.Modifiers) {
+        switch modifiers {
+        case .command:
+            if selectedRecordIDs.contains(record.id) {
+                selectedRecordIDs.remove(record.id)
+                if selectedRecordID == record.id { selectedRecordID = selectedRecordIDs.first }
+            } else {
+                selectedRecordIDs.insert(record.id)
+                selectedRecordID = record.id
+                lastSelectedRecordID = record.id
+            }
+        case .shift:
+            guard let anchorID = lastSelectedRecordID,
+                  let anchorIndex = records.firstIndex(where: { $0.id == anchorID }),
+                  let targetIndex = records.firstIndex(where: { $0.id == record.id }) else {
+                selectedRecordIDs = [record.id]
+                selectedRecordID = record.id
+                lastSelectedRecordID = record.id
+                return
+            }
+            let range = min(anchorIndex, targetIndex)...max(anchorIndex, targetIndex)
+            selectedRecordIDs = Set(records[range].map(\.id))
+            selectedRecordID = record.id
+        case .none:
+            selectedRecordIDs = [record.id]
+            selectedRecordID = record.id
+            lastSelectedRecordID = record.id
+        }
+    }
+
+    func selectedRecordsForDrag(fallback record: ProjectImageRecord? = nil) -> [ProjectImageRecord] {
+        let selected = selectedRecordIDs.compactMap { recordsByID[$0] }
+        if !selected.isEmpty { return selected }
+        return record.map { [$0] } ?? []
+    }
+
+    func selectedDragURLs(fallback record: ProjectImageRecord? = nil) -> [URL] {
+        selectedRecordsForDrag(fallback: record).map { URL(fileURLWithPath: $0.resolvedPath) }
     }
 
     func prefetchPaths(limit: Int = 120) -> [String] {
@@ -810,8 +1301,25 @@ final class AllProjectImagesState {
     }
 
     func prefetchSignature(thumbnailSize: CGFloat, limit: Int = 120) -> String {
-        let ids = filteredRecords.prefix(limit).map(\.id).joined(separator: "|")
-        return "\(ids)#\(Int(thumbnailSize.rounded()))"
+        let cacheKey = PrefetchSignatureCacheKey(
+            filterCacheKey: filteredCacheKey,
+            contentRevision: contentRevision,
+            roundedThumbnailSize: Int(thumbnailSize.rounded()),
+            limit: limit
+        )
+        if let cached = prefetchSignatureCache[cacheKey] {
+            return cached
+        }
+
+        var hasher = Hasher()
+        hasher.combine(cacheKey.roundedThumbnailSize)
+        hasher.combine(limit)
+        for record in filteredRecords.prefix(limit) {
+            hasher.combine(record.id)
+        }
+        let signature = "\(hasher.finalize())"
+        prefetchSignatureCache[cacheKey] = signature
+        return signature
     }
 }
 
@@ -831,6 +1339,9 @@ public struct AllProjectImagesWorkspace: View {
                 store: controller.store,
                 state: controller.allProjectImagesState
             )
+                .environment(\.unifiedImageFlipHandler) { path in
+                    controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
+                }
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
             if controller.isLoadingProject || controller.isSelectionRestorePending {
@@ -1013,6 +1524,8 @@ private struct AllProjectImagesWorkspaceContent: View {
     private var centerPaneSubtitle: String {
         let shown = state.filteredRecords.count
         let total = state.cachedAllRecords.count
+        if total == 0, state.isRebuilding { return "Indexing images…" }
+        if state.isRebuilding { return "Refreshing index · \(shown) of \(total)" }
         if total == 0 { return "No images indexed" }
         if shown == total { return "\(total) image\(total == 1 ? "" : "s")" }
         return "\(shown) of \(total)"
@@ -1116,34 +1629,467 @@ private struct AllProjectImagesWorkspaceContent: View {
 private struct AllProjectImagesSidebarView: View {
     @Bindable var store: AnimateStore
     @Bindable var state: AllProjectImagesState
+    @State private var placesExpanded = true
+    @State private var landmarksExpanded = true
+    @State private var charactersExpanded = true
+    @State private var costumesExpanded = true
+    @State private var propsExpanded = true
+    @State private var vehiclesExpanded = true
+    @State private var scenesExpanded = true
+    @State private var expandedSceneIDs: Set<UUID> = []
+    @State private var addItemCategory: ImageLibraryOrganizeCategory?
+    @State private var addItemTitle = ""
 
     var body: some View {
-        List {
-            Section {
-                sidebarRow(
-                    title: "All",
-                    systemImage: "photo.on.rectangle.angled",
-                    count: state.cachedAllRecords.count,
-                    isSelected: state.selectedSource == nil
-                ) {
-                    state.selectedSource = nil
+        let landmarkProfiles = sortedLandmarkProfiles
+        let backgrounds = sortedBackgrounds
+        let characters = sortedCharacters
+
+        OperaChromeSidebarList {
+            sidebarRow(
+                title: "All",
+                systemImage: "photo.on.rectangle.angled",
+                count: state.cachedAllRecords.count,
+                isSelected: state.selectedSource == nil
+            ) {
+                state.selectedSource = nil
+            }
+
+            sidebarRow(
+                title: "Canvas",
+                systemImage: AllProjectImagesSource.canvas.systemImage,
+                count: state.count(for: .canvas),
+                isSelected: state.selectedSource == .canvas
+            ) {
+                state.selectedSource = .canvas
+            }
+
+            sidebarRow(
+                title: "Map 3D Captures",
+                systemImage: AllProjectImagesSource.map3dCaptures.systemImage,
+                count: state.count(for: .map3dCaptures),
+                isSelected: state.selectedSource == .map3dCaptures
+            ) {
+                state.selectedSource = .map3dCaptures
+            }
+
+            sidebarSectionLabel("Organize")
+
+            sidebarDisclosureHeader(
+                title: "Places",
+                systemImage: AllProjectImagesSource.places.systemImage,
+                count: state.count(for: .places),
+                isSelected: state.selectedSource == .places && state.selectedGroupLabel == nil,
+                isExpanded: placesExpanded,
+                indent: 0,
+                onSelect: {
+                    state.selectedSource = .places
+                    state.selectedGroupLabel = nil
+                },
+                onToggleExpansion: {
+                    placesExpanded.toggle()
+                }
+            )
+
+            if placesExpanded {
+                ForEach(backgrounds) { place in
+                    let groupLabel = place.name.isEmpty ? "Place" : place.name
+                    sidebarRow(
+                        title: place.name.isEmpty ? "Untitled Place" : place.name,
+                        systemImage: "mappin.and.ellipse",
+                        count: state.count(for: .places, groupLabel: groupLabel),
+                        isSelected: state.selectedSource == .places && state.selectedGroupLabel == groupLabel,
+                        indent: 14
+                    ) {
+                        state.selectedSource = .places
+                        state.selectedGroupLabel = groupLabel
+                    }
+                    .dropDestination(for: URL.self) { urls, _ in
+                        store.attachDroppedImagesToPlace(urls: dropURLs(urls), placeID: place.id, workflow: .photorealistic)
+                    }
                 }
             }
 
-            Section("Sources") {
-                ForEach(AllProjectImagesSource.allCases) { source in
+            sidebarDisclosureHeader(
+                title: "Landmarks",
+                systemImage: AllProjectImagesSource.landmarks.systemImage,
+                count: state.count(for: .landmarks),
+                isSelected: state.selectedSource == .landmarks && state.selectedGroupLabel == nil,
+                isExpanded: landmarksExpanded,
+                indent: 0,
+                onSelect: {
+                    state.selectedSource = .landmarks
+                    state.selectedGroupLabel = nil
+                },
+                onToggleExpansion: {
+                    landmarksExpanded.toggle()
+                }
+            )
+
+            if landmarksExpanded {
+                if landmarkProfiles.isEmpty {
+                    sidebarEmptyRow("No landmarks yet")
+                } else {
+                    ForEach(landmarkProfiles) { profile in
+                        let groupLabel = landmarkTitle(profile)
+                        sidebarRow(
+                            title: groupLabel,
+                            systemImage: "building.columns",
+                            count: state.count(for: .landmarks, groupLabel: groupLabel),
+                            isSelected: state.selectedSource == .landmarks && state.selectedGroupLabel == groupLabel,
+                            indent: 14
+                        ) {
+                            state.selectedSource = .landmarks
+                            state.selectedGroupLabel = groupLabel
+                        }
+                        .dropDestination(for: URL.self) { urls, _ in
+                            let accepted = store.attachDroppedImagesToLandmark(urls: dropURLs(urls), landmarkID: profile.id)
+                            if accepted {
+                                state.selectedSource = .landmarks
+                                state.selectedGroupLabel = groupLabel
+                            }
+                            return accepted
+                        }
+                    }
+                }
+            }
+
+            sidebarDisclosureHeader(
+                title: "Characters",
+                systemImage: AllProjectImagesSource.characters.systemImage,
+                count: state.count(for: .characters),
+                isSelected: state.selectedSource == .characters && state.selectedGroupLabel == nil,
+                isExpanded: charactersExpanded,
+                indent: 0,
+                onSelect: {
+                    state.selectedSource = .characters
+                    state.selectedGroupLabel = nil
+                },
+                onToggleExpansion: {
+                    charactersExpanded.toggle()
+                }
+            )
+
+            if charactersExpanded {
+                ForEach(characters) { character in
+                    let groupLabel = character.name.isEmpty ? "Character" : character.name
                     sidebarRow(
-                        title: source.displayName,
-                        systemImage: source.systemImage,
-                        count: state.count(for: source),
-                        isSelected: state.selectedSource == source
+                        title: character.name.isEmpty ? "Untitled Character" : character.name,
+                        systemImage: "person.crop.square",
+                        count: state.count(for: .characters, groupLabel: groupLabel),
+                        isSelected: state.selectedSource == .characters && state.selectedGroupLabel == groupLabel,
+                        indent: 14
                     ) {
-                        state.selectedSource = source
+                        state.selectedSource = .characters
+                        state.selectedGroupLabel = groupLabel
+                    }
+                    .dropDestination(for: URL.self) { urls, _ in
+                        let incoming = dropURLs(urls)
+                        for url in incoming { store.addInspirationImage(url.path, for: character.id) }
+                        return !incoming.isEmpty
+                    }
+                }
+            }
+
+            organizerCategorySection(
+                category: .costumes,
+                source: .costumes,
+                items: store.imageLibraryOrganizeItems(for: .costumes),
+                isExpanded: $costumesExpanded
+            )
+
+            organizerCategorySection(
+                category: .props,
+                source: .props,
+                items: store.imageLibraryOrganizeItems(for: .props),
+                isExpanded: $propsExpanded
+            )
+
+            organizerCategorySection(
+                category: .vehicles,
+                source: .vehicles,
+                items: store.imageLibraryOrganizeItems(for: .vehicles),
+                isExpanded: $vehiclesExpanded
+            )
+
+            sidebarDisclosureHeader(
+                title: "Scenes",
+                systemImage: AllProjectImagesSource.sceneShots.systemImage,
+                count: state.count(for: .sceneShots),
+                isSelected: state.selectedSource == .sceneShots && state.selectedGroupLabel == nil,
+                isExpanded: scenesExpanded,
+                indent: 0,
+                onSelect: {
+                    state.selectedSource = .sceneShots
+                    state.selectedGroupLabel = nil
+                    state.selectedSceneID = nil
+                    state.selectedShotID = nil
+                },
+                onToggleExpansion: {
+                    scenesExpanded.toggle()
+                }
+            )
+
+            if scenesExpanded {
+                ForEach(store.scenes) { scene in
+                    let isExpanded = expandedSceneIDs.contains(scene.id)
+                    sidebarDisclosureHeader(
+                        title: sceneTitle(scene),
+                        systemImage: "film",
+                        count: state.countForScene(scene.id),
+                        isSelected: state.selectedSource == .sceneShots
+                            && state.selectedSceneID == scene.id
+                            && state.selectedShotID == nil,
+                        isExpanded: isExpanded,
+                        indent: 14,
+                        onSelect: {
+                            state.selectedSource = .sceneShots
+                            state.selectedGroupLabel = nil
+                            state.selectedSceneID = scene.id
+                            state.selectedShotID = nil
+                            expandedSceneIDs.insert(scene.id)
+                        },
+                        onToggleExpansion: {
+                            if expandedSceneIDs.contains(scene.id) {
+                                expandedSceneIDs.remove(scene.id)
+                            } else {
+                                expandedSceneIDs.insert(scene.id)
+                            }
+                        }
+                    )
+
+                    if isExpanded {
+                        if scene.shots.isEmpty {
+                            sidebarEmptyRow("No shots yet", indent: 28)
+                        } else {
+                            ForEach(scene.shots) { shot in
+                                sidebarRow(
+                                    title: shotTitle(shot, in: scene),
+                                    systemImage: "rectangle.on.rectangle.angled",
+                                    count: state.countForShot(shot.id),
+                                    isSelected: state.selectedSource == .sceneShots && state.selectedShotID == shot.id,
+                                    indent: 28
+                                ) {
+                                    state.selectedSource = .sceneShots
+                                    state.selectedGroupLabel = nil
+                                    state.selectedSceneID = scene.id
+                                    state.selectedShotID = shot.id
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-        .listStyle(.sidebar)
+        .alert(addItemAlertTitle, isPresented: addItemAlertIsPresented) {
+            TextField("Name", text: $addItemTitle)
+            Button("Cancel", role: .cancel) {
+                addItemTitle = ""
+                addItemCategory = nil
+            }
+            Button("Add") {
+                if let addItemCategory {
+                    store.addImageLibraryOrganizeItem(category: addItemCategory, title: addItemTitle)
+                    state.selectedSource = source(for: addItemCategory)
+                    state.selectedGroupLabel = addItemTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                addItemTitle = ""
+                addItemCategory = nil
+            }
+            .disabled(addItemTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("Add a new item to track under All Images → Organize.")
+        }
+    }
+
+    private var addItemAlertTitle: String {
+        guard let addItemCategory else { return "Add Item" }
+        return "Add \(addItemCategory.singularName)"
+    }
+
+    private var addItemAlertIsPresented: Binding<Bool> {
+        Binding(
+            get: { addItemCategory != nil },
+            set: { isPresented in
+                if !isPresented {
+                    addItemCategory = nil
+                    addItemTitle = ""
+                }
+            }
+        )
+    }
+
+    private var sortedLandmarkProfiles: [PlaceLandmarkProfile] {
+        store.placesWorkflowLibrary.landmarkProfiles.sorted { lhs, rhs in
+            landmarkTitle(lhs).localizedCaseInsensitiveCompare(landmarkTitle(rhs)) == .orderedAscending
+        }
+    }
+
+    private var sortedBackgrounds: [BackgroundPlate] {
+        store.backgrounds.sorted { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private var sortedCharacters: [AnimationCharacter] {
+        store.characters.sorted { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    @ViewBuilder
+    private func organizerCategorySection(
+        category: ImageLibraryOrganizeCategory,
+        source: AllProjectImagesSource,
+        items: [ImageLibraryOrganizeItem],
+        isExpanded: Binding<Bool>
+    ) -> some View {
+        sidebarDisclosureHeader(
+            title: category.displayName,
+            systemImage: category.systemImage,
+            count: state.count(for: source),
+            isSelected: state.selectedSource == source && state.selectedGroupLabel == nil,
+            isExpanded: isExpanded.wrappedValue,
+            indent: 0,
+            onSelect: {
+                state.selectedSource = source
+                state.selectedGroupLabel = nil
+            },
+            onToggleExpansion: {
+                isExpanded.wrappedValue.toggle()
+            },
+            onAdd: {
+                addItemTitle = ""
+                addItemCategory = category
+                isExpanded.wrappedValue = true
+            }
+        )
+
+        if isExpanded.wrappedValue {
+            if items.isEmpty {
+                sidebarEmptyRow("No \(category.displayName.lowercased()) yet")
+            } else {
+                ForEach(items) { item in
+                    let groupLabel = item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? category.singularName
+                        : item.title
+                    sidebarRow(
+                        title: groupLabel,
+                        systemImage: category.systemImage,
+                        count: state.count(for: source, groupLabel: groupLabel),
+                        isSelected: state.selectedSource == source && state.selectedGroupLabel == groupLabel,
+                        indent: 14
+                    ) {
+                        state.selectedSource = source
+                        state.selectedGroupLabel = groupLabel
+                    }
+                    .dropDestination(for: URL.self) { urls, _ in
+                        store.attachDroppedImagesToImageLibraryOrganizeItem(
+                            urls: dropURLs(urls),
+                            itemID: item.id
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func source(for category: ImageLibraryOrganizeCategory) -> AllProjectImagesSource {
+        switch category {
+        case .costumes: return .costumes
+        case .props: return .props
+        case .vehicles: return .vehicles
+        }
+    }
+
+    private func landmarkTitle(_ profile: PlaceLandmarkProfile) -> String {
+        let title = profile.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? profile.kind.displayName : title
+    }
+
+    private func sceneTitle(_ scene: AnimationScene) -> String {
+        let title = scene.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty
+            ? URL(fileURLWithPath: scene.owpSongPath).deletingPathExtension().lastPathComponent
+            : title
+    }
+
+    private func shotTitle(_ shot: AnimationSceneShot, in scene: AnimationScene) -> String {
+        let title = shot.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty { return title }
+        let index = scene.shots.firstIndex(where: { $0.id == shot.id }) ?? 0
+        return "Shot \(index + 1)"
+    }
+
+    private func dropURLs(_ urls: [URL]) -> [URL] {
+        let selected = state.selectedDragURLs()
+        return selected.isEmpty ? urls : selected
+    }
+
+    @ViewBuilder
+    private func sidebarSectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 10.5, weight: .semibold))
+            .foregroundStyle(OperaChromeTheme.textTertiary)
+            .textCase(.uppercase)
+            .padding(.top, 4)
+            .padding(.bottom, 2)
+            .padding(.horizontal, 11)
+    }
+
+    @ViewBuilder
+    private func sidebarDisclosureHeader(
+        title: String,
+        systemImage: String,
+        count: Int,
+        isSelected: Bool,
+        isExpanded: Bool,
+        indent: CGFloat = 0,
+        onSelect: @escaping () -> Void,
+        onToggleExpansion: @escaping () -> Void,
+        onAdd: (() -> Void)? = nil
+    ) -> some View {
+        OperaChromeSidebarRow(isSelected: isSelected) {
+            HStack(spacing: 8) {
+                Button(action: onToggleExpansion) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onSelect) {
+                    HStack(spacing: 8) {
+                        Image(systemName: systemImage)
+                            .frame(width: 18)
+                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                        Text(title)
+                            .foregroundStyle(isSelected ? .primary : .secondary)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+
+                if let onAdd {
+                    Button(action: onAdd) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                            .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add \(title.dropLast(title.hasSuffix("s") ? 1 : 0))")
+                }
+
+                Text("\(count)")
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, indent)
+        }
     }
 
     @ViewBuilder
@@ -1152,26 +2098,37 @@ private struct AllProjectImagesSidebarView: View {
         systemImage: String,
         count: Int,
         isSelected: Bool,
+        indent: CGFloat = 0,
         onTap: @escaping () -> Void
     ) -> some View {
         Button(action: onTap) {
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .frame(width: 18)
-                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-                Text(title)
-                    .foregroundStyle(isSelected ? .primary : .secondary)
-                Spacer()
-                Text("\(count)")
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(.secondary)
+            OperaChromeSidebarRow(isSelected: isSelected) {
+                HStack(spacing: 8) {
+                    Image(systemName: systemImage)
+                        .frame(width: 18)
+                        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    Text(title)
+                        .lineLimit(1)
+                        .foregroundStyle(isSelected ? .primary : .secondary)
+                    Spacer()
+                    Text("\(count)")
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.leading, indent)
             }
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(
-            isSelected ? Color.accentColor.opacity(0.18) : Color.clear
-        )
+    }
+
+    @ViewBuilder
+    private func sidebarEmptyRow(_ title: String, indent: CGFloat = 14) -> some View {
+        OperaChromeSidebarRow {
+            Text(title)
+                .font(.system(size: 11.5))
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+                .padding(.leading, indent)
+        }
     }
 }
 
@@ -1251,6 +2208,10 @@ private struct AllProjectImagesInspectorView: View {
                             )
                         ) {
                             ProjectImageFileActionsSection(record: state.selectedRecord)
+                        }
+
+                        if let record = state.selectedRecord {
+                            InspectorImageIntelligenceSummary(store: store, resolvedPath: record.resolvedPath)
                         }
                     }
                     .padding()
@@ -1499,7 +2460,9 @@ func persistReviewUpdate(
     case .place(let placeID, let path):
         store.setPlaceImageRating(path: path, rating: rating ?? 0, placeID: placeID)
     case .generic:
-        break
+        if record.isRejected != isRejected {
+            store.setImageLibraryRejected(isRejected, for: record.path)
+        }
     }
 
     let metadata = ImageLibraryReviewMetadata(
@@ -1508,7 +2471,7 @@ func persistReviewUpdate(
         notes: notes,
         updatedAt: Date()
     )
-    ImageLibraryMetadataSidecarService.save(metadata, forImagePath: record.resolvedPath)
+    ImageLibraryMetadataSidecarService.saveAsync(metadata, forImagePath: record.resolvedPath)
     return metadata
 }
 
@@ -1606,7 +2569,8 @@ private struct AllProjectImageSelection: DetailedImageSelection {
             rows.append(("Image Type", characterContext.kind))
         }
 
-        if let metadata = candidatePaths.lazy.compactMap({ store.generationMetadata(for: $0) }).first {
+        let jsonMetadata = candidatePaths.lazy.compactMap({ store.generationMetadata(for: $0) }).first
+        if let metadata = jsonMetadata {
             if !metadata.model.isEmpty {
                 rows.append(("Model", metadata.model))
             }
@@ -1616,6 +2580,29 @@ private struct AllProjectImageSelection: DetailedImageSelection {
             }
             if !metadata.prompt.isEmpty {
                 rows.append(("Prompt", metadata.prompt))
+            }
+            if let cameraPose = metadata.cameraPose {
+                let parts = [
+                    "Yaw \(String(format: "%.1f", cameraPose.yawDegrees))°",
+                    "Pitch \(String(format: "%.1f", cameraPose.pitchDegrees))°",
+                    "Focal \(String(format: "%.0f", cameraPose.focalLengthMM))mm",
+                ]
+                rows.append(("Camera", parts.joined(separator: " • ")))
+            }
+            if let status = metadata.mapPlacementStatus {
+                rows.append(("Map Placement", status.rawValue))
+            }
+        }
+
+        // Fallback: read .prompt.txt sidecar if no prompt from .json
+        if jsonMetadata?.prompt.isEmpty != false {
+            let promptText: String? = candidatePaths.lazy.compactMap { path -> String? in
+                let url = URL(fileURLWithPath: path)
+                let promptURL = url.deletingPathExtension().appendingPathExtension("prompt.txt")
+                return try? String(contentsOf: promptURL, encoding: .utf8)
+            }.first
+            if let text = promptText, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                rows.append(("Prompt", text))
             }
         }
 
@@ -1648,6 +2635,139 @@ private struct AllProjectImageSelection: DetailedImageSelection {
 
     func setNotes(_ newValue: String) {
         onSetNotes(newValue)
+    }
+}
+
+// MARK: - Image Intelligence Summary (Details tab)
+
+/// Compact, read-only summary of Image Intelligence analysis data shown
+/// inline in the Details inspector tab, below the generation metadata.
+@available(macOS 26.0, *)
+struct InspectorImageIntelligenceSummary: View {
+    @Bindable var store: AnimateStore
+    let resolvedPath: String
+
+    @State private var metadata: ImageVisualMetadataRecord?
+    @State private var isIndexed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+
+            HStack {
+                Label("Image Intelligence", systemImage: "brain.head.profile")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if isIndexed {
+                    Text("Indexed")
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.15), in: Capsule())
+                        .foregroundStyle(.green)
+                } else {
+                    Text("Not Indexed")
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.15), in: Capsule())
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            if let md = metadata {
+                if let summary = md.summary, !summary.isEmpty {
+                    intelligenceRow("Summary", summary)
+                }
+                if let shortCaption = md.shortCaption, !shortCaption.isEmpty {
+                    intelligenceRow("Caption", shortCaption)
+                }
+                if let longCaption = md.longCaption, !longCaption.isEmpty {
+                    intelligenceRow("Long Caption", longCaption)
+                }
+                if let tags = parsedTags(from: md.retrievalJSON) {
+                    intelligenceRow("Tags", tags)
+                }
+                if let scene = md.sceneJSON, !scene.isEmpty {
+                    intelligenceRow("Scene", scene)
+                }
+                if let style = md.styleJSON, !style.isEmpty {
+                    intelligenceRow("Style", style)
+                }
+                if let entities = md.entitiesJSON, !entities.isEmpty {
+                    intelligenceRow("Entities", entities)
+                }
+                if let quality = md.qualityJSON, !quality.isEmpty {
+                    intelligenceRow("Quality", quality)
+                }
+                if let camera = md.cameraJSON, !camera.isEmpty {
+                    intelligenceRow("Camera", camera)
+                }
+                if let roles = md.assetRolesJSON, !roles.isEmpty {
+                    intelligenceRow("Asset Roles", roles)
+                }
+                if let confidence = md.confidenceJSON, !confidence.isEmpty {
+                    intelligenceRow("Confidence", confidence)
+                }
+                if let modelID = md.modelID, !modelID.isEmpty {
+                    intelligenceRow("Analysis Model", modelID)
+                }
+            } else if isIndexed {
+                Text("Indexed but no analysis data yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Not analyzed. Use the AI tab to queue analysis.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task(id: resolvedPath) {
+            let result = await store.imageIntelligenceRecordAndMetadata(for: resolvedPath)
+            guard !Task.isCancelled else { return }
+            isIndexed = result.isIndexed
+            metadata = result.metadata
+        }
+    }
+
+    @ViewBuilder
+    private func intelligenceRow(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+            Text(value)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func parsedTags(from json: String?) -> String? {
+        guard let json, !json.isEmpty,
+              let data = json.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) else {
+            return nil
+        }
+        if let array = parsed as? [String], !array.isEmpty {
+            return array.joined(separator: ", ")
+        }
+        if let dict = parsed as? [String: Any] {
+            let tags = dict.compactMap { key, value -> String? in
+                if let arr = value as? [String], !arr.isEmpty {
+                    return "\(key): \(arr.joined(separator: ", "))"
+                }
+                if let str = value as? String, !str.isEmpty {
+                    return "\(key): \(str)"
+                }
+                return nil
+            }
+            if !tags.isEmpty { return tags.joined(separator: "\n") }
+        }
+        return json
     }
 }
 
@@ -1996,14 +3116,18 @@ private struct InspectorImageIntelligenceTab: View {
             linkKind: .sceneShotImage,
             enqueueForAnalysis: true
         )
+        // Start the worker so the queued job actually gets processed.
+        store.startImageAnalysisWorker()
         await refresh()
     }
 
     @MainActor
     private func runBackfill() async {
+        lastBackfillReport = "Backfill running…"
         store.runImageIntelligenceBackfill(dryRun: false) { [self] report in
             Task { @MainActor in
                 lastBackfillReport = report.summary
+                await refresh()
             }
         }
     }

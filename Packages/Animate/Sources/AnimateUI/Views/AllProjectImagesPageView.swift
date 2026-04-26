@@ -7,6 +7,10 @@ import ProjectKit
 @available(macOS 26.0, *)
 enum AllProjectImagesSource: String, CaseIterable, Identifiable, Hashable, Sendable {
     case places
+    case landmarks
+    case costumes
+    case props
+    case vehicles
     case canvas
     case characters
     case sceneShots
@@ -17,9 +21,13 @@ enum AllProjectImagesSource: String, CaseIterable, Identifiable, Hashable, Senda
     var displayName: String {
         switch self {
         case .places: "Places"
+        case .landmarks: "Landmarks"
+        case .costumes: "Costumes"
+        case .props: "Props"
+        case .vehicles: "Vehicles"
         case .canvas: "Canvas"
         case .characters: "Characters"
-        case .sceneShots: "Scene Shots"
+        case .sceneShots: "Scenes"
         case .map3dCaptures: "Map 3D Captures"
         }
     }
@@ -27,6 +35,10 @@ enum AllProjectImagesSource: String, CaseIterable, Identifiable, Hashable, Senda
     var systemImage: String {
         switch self {
         case .places: "map"
+        case .landmarks: "building.columns"
+        case .costumes: "tshirt"
+        case .props: "shippingbox"
+        case .vehicles: "car"
         case .canvas: "paintpalette"
         case .characters: "person.2"
         case .sceneShots: "film.stack"
@@ -81,6 +93,9 @@ struct ProjectImageRecord: Identifiable, Hashable, Sendable {
     let source: AllProjectImagesSource
     let originLabel: String
     let groupLabel: String
+    let sceneID: UUID?
+    let shotID: UUID?
+    let searchHaystack: String
     let createdAt: Date?
     let sizeBytes: Int64?
     let rating: Int?
@@ -180,6 +195,7 @@ struct AllProjectImagesPageView: View {
     @FocusState private var filmstripKeyboardFocused: Bool
     @State private var isImportDropTarget = false
     @State private var gridColumnCount: Int = 1
+    @State private var searchTextInput: String = ""
 
     init(
         store: AnimateStore,
@@ -201,7 +217,7 @@ struct AllProjectImagesPageView: View {
             state.thumbnailSize = min(max(state.thumbnailSize, layout.thumbnailMin), layout.thumbnailMax)
         }
         .task(id: store.owpURL?.path) {
-            store.recoverMissingPersistedCharactersIfNeeded()
+            state.requestCharacterRecoveryIfNeeded(store: store)
         }
         .dropDestination(for: URL.self) { urls, _ in
             store.importDroppedImagesToUnattachedLibrary(urls: urls)
@@ -215,13 +231,15 @@ struct AllProjectImagesPageView: View {
                     .padding(8)
             }
         }
-        .task(id: state.recordsSignature(store: store)) {
+        .task(id: state.recordsRefreshKey(store: store)) {
             state.requestRebuildIfNeeded(store: store)
         }
         .task(id: prefetchKey) {
+            try? await Task.sleep(for: .milliseconds(displayMode == .filmstrip ? 220 : 120))
+            guard !Task.isCancelled else { return }
             let pixel = Int(state.thumbnailSize * 2)
             ImagineThumbnailCache.shared.prefetch(
-                paths: state.prefetchPaths(),
+                paths: state.prefetchPaths(limit: displayMode == .filmstrip ? 36 : 48),
                 maxPixelSize: pixel
             )
         }
@@ -232,12 +250,25 @@ struct AllProjectImagesPageView: View {
             }
         }
         .task(id: filmstripPreviewPrefetchKey) {
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
             let previewPaths = filmstripPreviewPrefetchPaths
             guard !previewPaths.isEmpty else { return }
             ImagineThumbnailCache.shared.prefetch(
                 paths: previewPaths,
-                maxPixelSize: 2200
+                maxPixelSize: 900
             )
+        }
+        .onAppear {
+            if searchTextInput != state.searchText {
+                searchTextInput = state.searchText
+            }
+        }
+        .task(id: searchTextInput) {
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            guard state.searchText != searchTextInput else { return }
+            state.searchText = searchTextInput
         }
         .onChange(of: state.selectedSource) { _, _ in
             if let selectedGroupLabel = state.selectedGroupLabel,
@@ -302,7 +333,7 @@ struct AllProjectImagesPageView: View {
 
             ratingFilterCapsule()
 
-            TextField("Filter by filename, source, path, or note", text: $state.searchText)
+            TextField("Filter by filename, source, path, or note", text: $searchTextInput)
                 .textFieldStyle(.roundedBorder)
 
             Spacer()
@@ -323,7 +354,7 @@ struct AllProjectImagesPageView: View {
     private var compactFilterBar: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                TextField("Filter images", text: $state.searchText)
+                TextField("Filter images", text: $searchTextInput)
                     .textFieldStyle(.roundedBorder)
 
                 if hasActiveFilters {
@@ -345,11 +376,11 @@ struct AllProjectImagesPageView: View {
                     }
                     .pickerStyle(.menu)
                     .labelsHidden()
-                    .frame(width: 74)
+                    .frame(width: 108)
                 }
 
                 compactControlBlock(title: "Page") {
-                    sourceFilterPicker(width: 82)
+                    sourceFilterPicker(width: 128)
                         .labelsHidden()
                 }
 
@@ -363,7 +394,7 @@ struct AllProjectImagesPageView: View {
 
             HStack(alignment: .top, spacing: 8) {
                 compactControlBlock(title: groupPickerTitle) {
-                    groupFilterPicker(width: 118)
+                    groupFilterPicker(width: 150)
                         .labelsHidden()
                 }
 
@@ -457,14 +488,19 @@ struct AllProjectImagesPageView: View {
             || state.minimumRating != nil
             || state.selectedSource != nil
             || state.selectedGroupLabel != nil
+            || state.selectedSceneID != nil
+            || state.selectedShotID != nil
     }
 
     private func clearFilters() {
+        searchTextInput = ""
         state.searchText = ""
         state.flagFilter = .all
         state.minimumRating = nil
         state.selectedSource = nil
         state.selectedGroupLabel = nil
+        state.selectedSceneID = nil
+        state.selectedShotID = nil
     }
 
     @ViewBuilder
@@ -495,6 +531,10 @@ struct AllProjectImagesPageView: View {
     private var groupPickerTitle: String {
         switch state.selectedSource {
         case .places: return "Place"
+        case .landmarks: return "Landmark"
+        case .costumes: return "Costume"
+        case .props: return "Prop"
+        case .vehicles: return "Vehicle"
         case .characters: return "Character"
         case .canvas: return "Canvas"
         case .sceneShots: return "Shot"
@@ -506,6 +546,10 @@ struct AllProjectImagesPageView: View {
     private var groupPickerTitlePlural: String {
         switch state.selectedSource {
         case .places: return "Places"
+        case .landmarks: return "Landmarks"
+        case .costumes: return "Costumes"
+        case .props: return "Props"
+        case .vehicles: return "Vehicles"
         case .characters: return "Characters"
         case .canvas: return "Canvas Items"
         case .sceneShots: return "Shots"
@@ -551,7 +595,19 @@ struct AllProjectImagesPageView: View {
     @ViewBuilder
     private var contentSection: some View {
         let records = state.filteredRecords
-        if records.isEmpty {
+        if records.isEmpty, state.isRebuilding {
+            VStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Indexing images…")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text("The gallery will fill in as soon as the background index is ready.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if records.isEmpty {
             VStack(spacing: 10) {
                 Image(systemName: "photo.on.rectangle")
                     .font(.system(size: 32))
@@ -564,53 +620,65 @@ struct AllProjectImagesPageView: View {
         } else if displayMode == .filmstrip {
             filmstripSection(records: records)
         } else {
-            ScrollView {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: state.thumbnailSize), spacing: layout.gridSpacing)],
-                    spacing: layout.gridSpacing
-                ) {
-                    ForEach(records) { record in
-                        thumbnailCell(for: record)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: state.thumbnailSize), spacing: layout.gridSpacing)],
+                        spacing: layout.gridSpacing
+                    ) {
+                        ForEach(records) { record in
+                            thumbnailCell(for: record, in: records)
+                                .id(record.id)
+                        }
+                    }
+                    .trackGridColumnCount($gridColumnCount, tileMinWidth: state.thumbnailSize, spacing: layout.gridSpacing)
+                    .padding(layout.gridPadding)
+                }
+                .focusable()
+                .focused($filmstripKeyboardFocused)
+                .focusEffectDisabled()
+                .onTapGesture {
+                    filmstripKeyboardFocused = true
+                }
+                .onKeyPress(.space) {
+                    toggleGridQuickLook()
+                }
+                .onKeyPress(.leftArrow) { navigateGrid(.left) }
+                .onKeyPress(.rightArrow) { navigateGrid(.right) }
+                .onKeyPress(.upArrow) { navigateGrid(.up) }
+                .onKeyPress(.downArrow) { navigateGrid(.down) }
+                .onKeyPress(.init("1")) { applyGridRating(1) }
+                .onKeyPress(.init("2")) { applyGridRating(2) }
+                .onKeyPress(.init("3")) { applyGridRating(3) }
+                .onKeyPress(.init("4")) { applyGridRating(4) }
+                .onKeyPress(.init("5")) { applyGridRating(5) }
+                .onKeyPress(.init(".")) { applyGridRating(5) }
+                .onKeyPress(.init("0")) { applyGridRating(nil) }
+                .onKeyPress(.init("x")) { toggleGridRejected() }
+                .onKeyPress(.init("X")) { toggleGridRejected() }
+                .onKeyPress(phases: .down) { press in
+                    handleGridRatingKeyPress(press)
+                }
+                .onKeyPress(.escape) {
+                    if QuickLookPreviewController.shared.isVisible {
+                        QuickLookPreviewController.shared.dismiss()
+                        return .handled
+                    }
+                    if state.selectedRecordID != nil {
+                        state.selectedRecordID = nil
+                        return .handled
+                    }
+                    return .ignored
+                }
+                // Keep the keyboard-selected thumbnail in view as the user
+                // arrow-keys around the grid; without this, selection can
+                // walk off the visible viewport.
+                .task(id: state.selectedRecordID) {
+                    guard let selectedID = state.selectedRecordID else { return }
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        proxy.scrollTo(selectedID, anchor: .center)
                     }
                 }
-                .trackGridColumnCount($gridColumnCount, tileMinWidth: state.thumbnailSize, spacing: layout.gridSpacing)
-                .padding(layout.gridPadding)
-            }
-            .focusable()
-            .focused($filmstripKeyboardFocused)
-            .focusEffectDisabled()
-            .onTapGesture {
-                filmstripKeyboardFocused = true
-            }
-            .onKeyPress(.space) {
-                toggleGridQuickLook()
-            }
-            .onKeyPress(.leftArrow) { navigateGrid(.left) }
-            .onKeyPress(.rightArrow) { navigateGrid(.right) }
-            .onKeyPress(.upArrow) { navigateGrid(.up) }
-            .onKeyPress(.downArrow) { navigateGrid(.down) }
-            .onKeyPress(.init("1")) { applyGridRating(1) }
-            .onKeyPress(.init("2")) { applyGridRating(2) }
-            .onKeyPress(.init("3")) { applyGridRating(3) }
-            .onKeyPress(.init("4")) { applyGridRating(4) }
-            .onKeyPress(.init("5")) { applyGridRating(5) }
-            .onKeyPress(.init(".")) { applyGridRating(5) }
-            .onKeyPress(.init("0")) { applyGridRating(nil) }
-            .onKeyPress(.init("x")) { toggleGridRejected() }
-            .onKeyPress(.init("X")) { toggleGridRejected() }
-            .onKeyPress(phases: .down) { press in
-                handleGridRatingKeyPress(press)
-            }
-            .onKeyPress(.escape) {
-                if QuickLookPreviewController.shared.isVisible {
-                    QuickLookPreviewController.shared.dismiss()
-                    return .handled
-                }
-                if state.selectedRecordID != nil {
-                    state.selectedRecordID = nil
-                    return .handled
-                }
-                return .ignored
             }
         }
     }
@@ -666,7 +734,7 @@ struct AllProjectImagesPageView: View {
                         .fill(.black.opacity(0.18))
                     AsyncResolvedImageView(
                         path: selectedRecord.resolvedPath,
-                        maxPixelSize: 2200,
+                        maxPixelSize: 1600,
                         contentMode: .fit
                     )
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -697,7 +765,7 @@ struct AllProjectImagesPageView: View {
 
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
+                    LazyHStack(spacing: 10) {
                         ForEach(records) { record in
                             UnifiedImageTile(
                                 path: record.path,
@@ -733,10 +801,13 @@ struct AllProjectImagesPageView: View {
                                     onToggleRejected: {
                                         toggleRejected(for: record)
                                     },
-                                    isRejected: record.isRejected
+                                    isRejected: record.isRejected,
+                                    onMoveToTrash: {
+                                        moveToTrash(record: record)
+                                    }
                                 ),
                                 onTap: {
-                                    state.selectedRecordID = record.id
+                                    state.selectRecord(record, in: records, modifiers: .none)
                                     filmstripKeyboardFocused = true
                                 }
                             )
@@ -798,8 +869,10 @@ struct AllProjectImagesPageView: View {
     }
 
     @ViewBuilder
-    private func thumbnailCell(for record: ProjectImageRecord) -> some View {
-        let isSelected = state.selectedRecordID == record.id
+    private func thumbnailCell(for record: ProjectImageRecord, in records: [ProjectImageRecord]) -> some View {
+        let isSelected = state.selectedRecordIDs.contains(record.id) || state.selectedRecordID == record.id
+        let selectedCount = state.selectedRecordIDs.count
+        let hasNotes = !record.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         UnifiedImageTile(
             path: record.path,
             resolvedPath: record.resolvedPath,
@@ -809,8 +882,10 @@ struct AllProjectImagesPageView: View {
             sourceSystemImage: record.source.systemImage,
             isSelected: isSelected,
             isRejected: record.isRejected,
-            hasNotes: !record.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            hasNotes: hasNotes,
             rating: record.rating,
+            showsSelectionCheckmark: selectedCount > 1,
+            selectedCount: selectedCount,
             actions: UnifiedImageActions(
                 onShowInFinder: {
                     NSWorkspace.shared.activateFileViewerSelecting(
@@ -840,13 +915,18 @@ struct AllProjectImagesPageView: View {
                 onToggleRejected: {
                     toggleRejected(for: record)
                 },
-                isRejected: record.isRejected
+                isRejected: record.isRejected,
+                onMoveToTrash: {
+                    moveToTrash(record: record)
+                }
             ),
             onTap: {
                 filmstripKeyboardFocused = true
-                state.selectedRecordID = record.id
+                let flags = NSEvent.modifierFlags
+                let modifiers: GalleryClickEvent.Modifiers = flags.contains(.command) ? .command : (flags.contains(.shift) ? .shift : .none)
+                state.selectRecord(record, in: records, modifiers: modifiers)
                 if QuickLookPreviewController.shared.isVisible,
-                   let index = state.filteredRecords.firstIndex(where: { $0.id == record.id }) {
+                   let index = records.firstIndex(where: { $0.id == record.id }) {
                     QuickLookPreviewController.shared.navigateTo(index: index)
                 }
             }
@@ -874,6 +954,14 @@ struct AllProjectImagesPageView: View {
             notes: record.notes
         )
         state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+    }
+
+    private func moveToTrash(record: ProjectImageRecord) {
+        if state.selectedRecordID == record.id {
+            state.selectedRecordID = nil
+        }
+        state.selectedRecordIDs.remove(record.id)
+        store.moveAnyProjectImageToTrash(path: record.path, resolvedPath: record.resolvedPath)
     }
 
     // MARK: - Inline edit (right-click → Edit with Gemini)
@@ -933,7 +1021,10 @@ struct AllProjectImagesPageView: View {
     // MARK: - Prefetch key
 
     private var prefetchKey: String {
-        state.prefetchSignature(thumbnailSize: state.thumbnailSize)
+        state.prefetchSignature(
+            thumbnailSize: state.thumbnailSize,
+            limit: displayMode == .filmstrip ? 36 : 48
+        )
     }
 
     private var displayMode: AllProjectImagesDisplayMode {
@@ -961,8 +1052,14 @@ struct AllProjectImagesPageView: View {
               let selectedIndex = records.firstIndex(where: { $0.id == selectedRecord.id }) else {
             return []
         }
-        let range = max(0, selectedIndex - 1)...min(records.count - 1, selectedIndex + 1)
-        return range.map { records[$0].resolvedPath }
+        var paths: [String] = []
+        if selectedIndex > 0 {
+            paths.append(records[selectedIndex - 1].resolvedPath)
+        }
+        if selectedIndex + 1 < records.count {
+            paths.append(records[selectedIndex + 1].resolvedPath)
+        }
+        return paths
     }
 
     private func filmstripSelectedRecord(from records: [ProjectImageRecord]) -> ProjectImageRecord? {
@@ -1052,9 +1149,8 @@ struct AllProjectImagesPageView: View {
             return .handled
         }
         let resolvedItems = records.enumerated().compactMap { index, record -> (Int, URL)? in
-            let url = store.resolvedCharacterAssetURL(for: record.path) ?? URL(fileURLWithPath: record.resolvedPath)
-            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-            return (index, url)
+            guard !record.resolvedPath.isEmpty else { return nil }
+            return (index, URL(fileURLWithPath: record.resolvedPath))
         }
         guard !resolvedItems.isEmpty else { return .ignored }
         let quickLookIndex = resolvedItems.firstIndex(where: { $0.0 == recordIndex }) ?? 0

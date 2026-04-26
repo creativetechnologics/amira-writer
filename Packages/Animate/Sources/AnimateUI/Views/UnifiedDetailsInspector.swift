@@ -302,6 +302,10 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
             initialValue: selection.notes,
             onCommit: { newValue in selection.setNotes(newValue) }
         )
+        // Recreate state when the selected image changes; without this two
+        // images that both have empty notes wouldn't trigger onChange(of:
+        // initialValue) and the user's typing would bleed across selections.
+        .id(selection.imageURL?.path ?? "no-selection")
     }
 
     // MARK: - Metadata
@@ -566,7 +570,7 @@ struct CharacterImageSelection: DetailedImageSelection {
         var rows: [(label: String, value: String)] = []
         if let metadata = store.generationMetadata(for: path) {
             if !metadata.prompt.isEmpty {
-                rows.append(("Prompt", String(metadata.prompt.prefix(120))))
+                rows.append(("Prompt", metadata.prompt))
             }
             rows.append(("Model", metadata.model))
             rows.append(("Size", "\(metadata.imageSize) • \(metadata.aspectRatio)"))

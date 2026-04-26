@@ -13,6 +13,15 @@ struct VariantPromptPreview: Identifiable, Hashable {
 }
 
 @available(macOS 26.0, *)
+private struct CharacterMasterImageItem: Identifiable, Hashable {
+    var id: String { path }
+    var path: String
+    var resolvedPath: String
+    var label: String
+    var systemImage: String
+}
+
+@available(macOS 26.0, *)
 struct CharacterReferenceWorkflowSheet: View {
     @Bindable var store: AnimateStore
     let characterID: UUID
@@ -31,6 +40,13 @@ struct CharacterReferenceWorkflowSheet: View {
     @State private var localMasterPrompt: String = ""
     @State private var localHeadPrompt: String = ""
     @State private var hasAppearedPrompts = false
+    @State private var masterPromptSaveTask: Task<Void, Never>?
+    @State private var headPromptSaveTask: Task<Void, Never>?
+    @State private var masterPromptDropTargeted = false
+    @State private var headSheetPromptReferencePaths: [String] = []
+    @State private var headSheetDropTargeted = false
+    @State private var masterSourceItems: [CharacterMasterImageItem] = []
+    @State private var masterSourceItemsCharacterID: UUID?
 
     enum WorkflowAction: Hashable {
         case masterSheet
@@ -80,13 +96,16 @@ struct CharacterReferenceWorkflowSheet: View {
             }
         }
         .frame(minWidth: 900, idealWidth: 1400, minHeight: 700)
-        .task {
+        .task(id: characterID) {
             store.seedCharacterReferenceWorkflowIfNeeded(for: characterID)
             if let char = store.characters.first(where: { $0.id == characterID }) {
                 localMasterPrompt = char.masterReferenceSheetPrompt
                 localHeadPrompt = char.headTurnaroundSheetPrompt
             }
             hasAppearedPrompts = true
+        }
+        .onDisappear {
+            flushPromptSaveTasks()
         }
         .sheet(item: $pendingPlan) { plan in
             GeminiGenerationPreflightSheet(
@@ -142,16 +161,18 @@ struct CharacterReferenceWorkflowSheet: View {
                 overviewSection(character)
                 masterReferenceSheetSection(character)
                 headTurnaroundSection(character)
-                costumesSection(character)
             }
         }
-        .task {
+        .task(id: characterID) {
             store.seedCharacterReferenceWorkflowIfNeeded(for: characterID)
             if let char = store.characters.first(where: { $0.id == characterID }) {
                 localMasterPrompt = char.masterReferenceSheetPrompt
                 localHeadPrompt = char.headTurnaroundSheetPrompt
             }
             hasAppearedPrompts = true
+        }
+        .onDisappear {
+            flushPromptSaveTasks()
         }
         .sheet(item: $pendingPlan) { plan in
             GeminiGenerationPreflightSheet(
@@ -231,6 +252,39 @@ struct CharacterReferenceWorkflowSheet: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+        }
+    }
+
+    private func scheduleMasterPromptSave(_ value: String) {
+        masterPromptSaveTask?.cancel()
+        let targetCharacterID = characterID
+        masterPromptSaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, targetCharacterID == characterID else { return }
+            store.updateMasterReferenceSheetPrompt(value, for: targetCharacterID)
+            masterPromptSaveTask = nil
+        }
+    }
+
+    private func scheduleHeadPromptSave(_ value: String) {
+        headPromptSaveTask?.cancel()
+        let targetCharacterID = characterID
+        headPromptSaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, targetCharacterID == characterID else { return }
+            store.updateHeadTurnaroundSheetPrompt(value, for: targetCharacterID)
+            headPromptSaveTask = nil
+        }
+    }
+
+    private func flushPromptSaveTasks() {
+        masterPromptSaveTask?.cancel()
+        headPromptSaveTask?.cancel()
+        masterPromptSaveTask = nil
+        headPromptSaveTask = nil
+        if hasAppearedPrompts {
+            store.updateMasterReferenceSheetPrompt(localMasterPrompt, for: characterID)
+            store.updateHeadTurnaroundSheetPrompt(localHeadPrompt, for: characterID)
         }
     }
 
@@ -361,7 +415,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 TextEditor(text: $localMasterPrompt)
                     .onChange(of: localMasterPrompt) { _, newValue in
                         guard hasAppearedPrompts else { return }
-                        store.updateMasterReferenceSheetPrompt(newValue, for: characterID)
+                        scheduleMasterPromptSave(newValue)
                     }
                 .font(.callout)
                 .frame(minHeight: 120)
@@ -373,39 +427,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Master Sheet Source Images")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        store.importInspirationImages(for: characterID)
-                    } label: {
-                        Label("Add Inspiration Images", systemImage: "plus")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    Text("These are the default images sent for master-sheet generation. The preflight pane can still add or remove more.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-
-                if character.inspirationImagePaths.isEmpty && character.inspirationReferenceImagePath == nil {
-                    Text("No inspiration images available yet.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(masterSheetSourceCandidates(for: character), id: \.self) { path in
-                                masterSheetSourceCard(character: character, path: path)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
-            }
+            masterPromptReferenceDropZone(character)
 
             if character.masterReferenceSheetVariants.isEmpty {
                 if generatingActions.contains(.masterSheet) {
@@ -521,7 +543,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 TextEditor(text: $localHeadPrompt)
                     .onChange(of: localHeadPrompt) { _, newValue in
                         guard hasAppearedPrompts else { return }
-                        store.updateHeadTurnaroundSheetPrompt(newValue, for: characterID)
+                        scheduleHeadPromptSave(newValue)
                     }
                 .font(.callout)
                 .frame(minHeight: 88)
@@ -532,6 +554,8 @@ struct CharacterReferenceWorkflowSheet: View {
                         .stroke(.quaternary.opacity(0.4))
                 }
             }
+
+            headSheetReferenceDropZone(character)
 
             if character.headTurnaroundSheetVariants.isEmpty {
                 workflowEmptyState(icon: "square.grid.2x2", message: "No head turnaround sheets yet. Generate or attach one, then choose the best sheet and the six cropped head poses will populate below.")
@@ -574,7 +598,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 }
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200, maximum: 280), spacing: 12)], spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 12)], spacing: 14) {
                 ForEach(character.headTurnaroundSlots) { slot in
                     poseSlotCard(
                         title: slot.title,
@@ -682,103 +706,129 @@ struct CharacterReferenceWorkflowSheet: View {
         onAdjustCrop: @escaping () -> Void = {},
         onAdjustCropVariant: @escaping (UUID) -> Void = { _ in }
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                    Text(notes)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                }
-                Spacer()
-                Text(badge)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.background.opacity(0.8), in: Capsule())
-            }
-
-            approvedVariantThumbnail(
-                approvedVariant,
-                isGenerating: isGenerating,
-                statusText: generationStatus ?? "Generating…",
-                onEdit: onEditApproved,
-                onShowPrompt: onShowPromptApproved,
-                onAdjustCrop: onAdjustCrop
-            )
-            .onTapGesture(count: 2, perform: onQuickLookApproved)
-            .onTapGesture(count: 1) {
-                if let path = approvedVariant?.imagePath {
-                    store.imaginePreviewImagePath = path
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            if variants.isEmpty {
+                emptyPoseTile(title: title, isGenerating: isGenerating)
+            } else {
+                CharacterPoseVariantCarouselTile(
+                    store: store,
+                    title: title,
+                    variants: variants,
+                    approvedVariantID: approvedVariant?.id,
+                    isGenerating: isGenerating,
+                    statusText: generationStatus ?? "Generating…",
+                    onQuickLook: onQuickLookVariant,
+                    onCopy: { variant in copyImage(at: variant.imagePath) },
+                    onEdit: onEditVariant,
+                    onShowPrompt: onShowPromptVariant,
+                    onApprove: onApprove,
+                    onDelete: onDelete,
+                    onAdjustCrop: onAdjustCropVariant,
+                    onShowInFinder: { path in showInFinder(at: path) }
+                )
+                .frame(maxWidth: .infinity, alignment: .center)
             }
 
             HStack(spacing: 6) {
-                Text("\(variants.count) variant\(variants.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 4)
-                if approvedVariant != nil {
-                    Button(action: onShowPromptApproved) {
-                        Image(systemName: "eye.circle")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("View Prompt")
-                    Button(action: onEditApproved) {
-                        Image(systemName: "slider.horizontal.3")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                    .help("Edit")
-                }
                 Button(action: onImport) {
-                    Image(systemName: "arrow.down.doc")
+                    Label("Attach", systemImage: "arrow.down.doc")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
-                .help("Upload")
+
                 Button(action: onGenerate) {
                     Label("Generate", systemImage: "sparkles")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .controlSize(.mini)
-            }
 
-            if variants.isEmpty {
-                Text("No approved image yet.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(variants) { variant in
-                            MiniVariantChip(
-                                store: store,
-                                variant: variant,
-                                isApproved: approvedVariant?.id == variant.id,
-                                onQuickLook: { onQuickLookVariant(variant.id) },
-                                onCopy: { copyImage(at: variant.imagePath) },
-                                onEdit: { onEditVariant(variant.id) },
-                                onShowPrompt: { onShowPromptVariant(variant.id) },
-                                onApprove: { onApprove(variant.id) },
-                                onDelete: { onDelete(variant.id) },
-                                onAdjustCrop: { onAdjustCropVariant(variant.id) }
-                            )
-                        }
+                if approvedVariant != nil {
+                    Button(action: onEditApproved) {
+                        Label("Edit", systemImage: "wand.and.sparkles")
                     }
-                    .padding(.vertical, 2)
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+
+                    Button(action: onAdjustCrop) {
+                        Label("Crop", systemImage: "crop")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
                 }
             }
+            .labelStyle(.iconOnly)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
-        .padding(14)
-        .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(.quaternary.opacity(0.35))
+    }
+
+    @ViewBuilder
+    private func emptyPoseTile(title: String, isGenerating: Bool) -> some View {
+        VStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.quaternary.opacity(0.16))
+                .frame(width: 132, height: 132)
+                .overlay {
+                    if isGenerating {
+                        generationOverlay(statusText: generationStatus ?? "Generating…")
+                    } else {
+                        Image(systemName: "photo")
+                            .font(.title2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(width: 132)
+        }
+    }
+
+    private func plainWorkflowVariantTile(
+        variant: CharacterLookDevelopmentVariant,
+        caption: String? = nil,
+        isApproved: Bool,
+        onQuickLook: @escaping () -> Void,
+        onCopy: @escaping () -> Void,
+        onEdit: @escaping () -> Void,
+        onShowPrompt: @escaping () -> Void,
+        onApprove: @escaping () -> Void,
+        onDelete: @escaping () -> Void,
+        onAdjustCrop: (() -> Void)? = nil
+    ) -> some View {
+        let resolvedURL = store.resolvedCharacterAssetURL(for: variant.imagePath)
+        return VStack(spacing: 5) {
+            UnifiedImageTile(
+                path: variant.imagePath,
+                resolvedPath: resolvedURL?.path,
+                thumbnailSize: 132,
+                isSelected: isApproved,
+                actions: UnifiedImageActions(
+                    onChooseAsMaster: onApprove,
+                    isMaster: isApproved,
+                    chooseAsMasterLabel: "Choose as Master",
+                    chosenAsMasterLabel: "Chosen",
+                    onShowPrompt: onShowPrompt,
+                    onShowInFinder: { showInFinder(at: variant.imagePath) },
+                    onCopy: onCopy,
+                    onQuickLook: onQuickLook,
+                    onEditWithGemini: onEdit,
+                    onAdjustCrop: onAdjustCrop,
+                    onRemoveFromCollection: onDelete,
+                    removeFromCollectionLabel: "Delete Variant"
+                ),
+                onTap: { store.imaginePreviewImagePath = variant.imagePath },
+                onDoubleTap: onQuickLook
+            )
+            if let caption, !caption.isEmpty {
+                Text(caption)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 132)
+            }
         }
     }
 
@@ -787,48 +837,34 @@ struct CharacterReferenceWorkflowSheet: View {
         _ variant: CharacterLookDevelopmentVariant?,
         isGenerating: Bool,
         statusText: String,
+        onQuickLook: @escaping () -> Void,
         onEdit: @escaping () -> Void,
         onShowPrompt: @escaping () -> Void,
         onAdjustCrop: @escaping () -> Void
     ) -> some View {
         if let variant {
-            AsyncStoreThumbnailImage.rounded(
-                store: store,
+            let resolvedURL = store.resolvedCharacterAssetURL(for: variant.imagePath)
+            UnifiedImageTile(
                 path: variant.imagePath,
-                maxSize: 360,
-                width: nil,
-                height: 150,
-                cornerRadius: 14
+                resolvedPath: resolvedURL?.path,
+                thumbnailSize: 150,
+                sourceLabel: "Chosen",
+                sourceSystemImage: "checkmark.circle.fill",
+                isSelected: true,
+                actions: UnifiedImageActions(
+                    onShowPrompt: onShowPrompt,
+                    onShowInFinder: { showInFinder(at: variant.imagePath) },
+                    onCopy: { copyImage(at: variant.imagePath) },
+                    onQuickLook: onQuickLook,
+                    onEditWithGemini: onEdit,
+                    onAdjustCrop: onAdjustCrop
+                ),
+                onTap: {
+                    store.imaginePreviewImagePath = variant.imagePath
+                },
+                onDoubleTap: onQuickLook
             )
-            // Single-tap surfaces this chosen pose image in Inspector Details.
-            // Double-tap opens Quick Look. SwiftUI disambiguates by count.
-            .onTapGesture(count: 2) {
-                openQuickLook(for: [variant.imagePath], startingAt: 0)
-            }
-            .onTapGesture(count: 1) {
-                store.imaginePreviewImagePath = variant.imagePath
-            }
-            .contextMenu {
-                Button("View Prompt", systemImage: "eye.circle") {
-                    onShowPrompt()
-                }
-                Button("Edit", systemImage: "slider.horizontal.3") {
-                    onEdit()
-                }
-                Button("Show in Finder", systemImage: "folder") {
-                    showInFinder(at: variant.imagePath)
-                }
-                Button("Copy Image", systemImage: "doc.on.doc") {
-                    copyImage(at: variant.imagePath)
-                }
-                Divider()
-                Button("Adjust Crop", systemImage: "crop") {
-                    onAdjustCrop()
-                }
-                Button("Quick Look", systemImage: "eye") {
-                    openQuickLook(for: [variant.imagePath], startingAt: 0)
-                }
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .overlay {
                 if isGenerating {
                     generationOverlay(statusText: statusText)
@@ -976,7 +1012,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 model: store.selectedGeminiModel,
                 aspectRatio: CharacterReferenceWorkflowCatalog.sectionSheetAspectRatio,
                 imageSize: CharacterReferenceWorkflowCatalog.sectionSheetImageSize,
-                referenceItems: referenceDrafts(from: store.headSheetReferencePaths(for: character.id, limit: 8))
+                referenceItems: referenceDrafts(from: headSheetPromptReferencePaths)
             )
         ]
         pendingPlan = PendingGenerationPlan(
@@ -992,6 +1028,10 @@ struct CharacterReferenceWorkflowSheet: View {
         let slots = character.headTurnaroundSlots.filter { $0.approvedVariant == nil }
         guard !slots.isEmpty else {
             generationStatus = "All head slots already have approved variants."
+            return
+        }
+        guard !references.isEmpty else {
+            generationError = "No reference images found for this character. Approve a master reference sheet (or add inspiration images) before generating head poses — otherwise Gemini has nothing to anchor identity to."
             return
         }
         let targetSlots = slots
@@ -1015,6 +1055,11 @@ struct CharacterReferenceWorkflowSheet: View {
 
     private func prepareHeadSlotPlan(_ slot: CharacterPoseSlot) {
         guard let character else { return }
+        let references = referenceDrafts(from: store.headReferencePaths(for: character.id, limit: 8))
+        guard !references.isEmpty else {
+            generationError = "No reference images found for this character. Approve a master reference sheet (or add inspiration images) before generating head poses."
+            return
+        }
         preflightDrafts = [
             GeminiGenerationDraft(
                 title: "Head • \(slot.title)",
@@ -1023,7 +1068,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 model: store.selectedGeminiModel,
                 aspectRatio: slot.recommendedAspectRatio,
                 imageSize: slot.recommendedImageSize,
-                referenceItems: referenceDrafts(from: store.headReferencePaths(for: character.id, limit: 8))
+                referenceItems: references
             )
         ]
         pendingPlan = PendingGenerationPlan(
@@ -1118,9 +1163,6 @@ struct CharacterReferenceWorkflowSheet: View {
 
     func prepareCostumeSheetPlan(_ costume: CharacterCostumeReferenceSet) {
         guard let character else { return }
-        let allPaths = store.fullBodySheetReferencePaths(for: character.id, costumeID: costume.id, limit: 8)
-        let masterPath = store.normalizedMasterSheetPath(for: character.id)
-        let prechecked: Set<String> = masterPath.map { [$0] } ?? []
         preflightDrafts = [
             GeminiGenerationDraft(
                 title: "\(costume.name) Sheet",
@@ -1129,7 +1171,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 model: store.selectedGeminiModel,
                 aspectRatio: CharacterReferenceWorkflowCatalog.sectionSheetAspectRatio,
                 imageSize: CharacterReferenceWorkflowCatalog.sectionSheetImageSize,
-                referenceItems: referenceDrafts(from: allPaths, onlyPrecheck: prechecked)
+                referenceItems: []
             )
         ]
         pendingPlan = PendingGenerationPlan(
@@ -1326,8 +1368,15 @@ struct CharacterReferenceWorkflowSheet: View {
                         }
                     }
 
+                    let activityID = store.registerGeminiActivity(
+                        kind: .immediate,
+                        title: pair.1.title,
+                        source: "Characters • \(character.name) • Reference Workflow"
+                    )
+
+                    let submittedPrompt = pair.1.effectivePrompt
                     let request = GeminiImageService.GenerationRequest(
-                        prompt: pair.1.prompt,
+                        prompt: submittedPrompt,
                         referenceImages: buildReferenceImages(from: pair.1.referenceItems),
                         model: pair.1.model,
                         aspectRatio: pair.1.aspectRatio,
@@ -1335,7 +1384,25 @@ struct CharacterReferenceWorkflowSheet: View {
                     )
 
                     store.logGeminiAPICall(endpoint: "image-generation", source: "CharacterReferenceWorkflowSheet.run()")
-                    let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
+                    let itemTask = Task<GeminiImageService.GenerationResult, Error> {
+                        try await service.generate(request: request, apiKey: store.geminiAPIKey)
+                    }
+                    store.attachGeminiActivityCancel(activityID) { itemTask.cancel() }
+
+                    let result: GeminiImageService.GenerationResult
+                    do {
+                        result = try await withTaskCancellationHandler {
+                            try await itemTask.value
+                        } onCancel: {
+                            itemTask.cancel()
+                        }
+                    } catch is CancellationError {
+                        store.updateGeminiActivity(activityID, status: .failed, errorMessage: "Canceled")
+                        throw CancellationError()
+                    } catch {
+                        store.updateGeminiActivity(activityID, status: .failed, errorMessage: error.localizedDescription)
+                        throw error
+                    }
 
                     switch pair.0 {
                     case .masterSheet:
@@ -1399,6 +1466,8 @@ struct CharacterReferenceWorkflowSheet: View {
                             imageSize: pair.1.imageSize
                         )
                     }
+
+                    store.updateGeminiActivity(activityID, status: .completed)
                 }
 
                 generationStatus = "Finished \(drafts.count) request\(drafts.count == 1 ? "" : "s")."
@@ -1585,8 +1654,392 @@ struct CharacterReferenceWorkflowSheet: View {
         )
     }
 
-    private func masterSheetSourceCandidates(for character: AnimationCharacter) -> [String] {
-        store.preferredInspirationReferencePaths(for: character)
+    private func masterPromptReferenceDropZone(_ character: AnimationCharacter) -> some View {
+        let selectedPaths = masterPromptReferencePaths(for: character)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Images Attached To This Prompt")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("\(selectedPaths.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(.secondary.opacity(0.12), in: Capsule())
+                Spacer()
+                if !selectedPaths.isEmpty {
+                    Button {
+                        store.setMasterReferenceSourceImagePaths([], for: characterID)
+                    } label: {
+                        Label("Clear", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                }
+            }
+
+            if selectedPaths.isEmpty {
+                masterPromptEmptyDropZone
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(selectedPaths, id: \.self) { path in
+                            masterPromptReferenceChip(path: path)
+                        }
+                        masterPromptAddChip
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+        .padding(14)
+        .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(
+                    masterPromptDropTargeted ? Color.accentColor : Color.secondary.opacity(0.16),
+                    style: StrokeStyle(lineWidth: masterPromptDropTargeted ? 2 : 1, dash: masterPromptDropTargeted ? [7, 4] : [])
+                )
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            addMasterPromptReferenceURLs(urls, for: character)
+        } isTargeted: { targeted in
+            masterPromptDropTargeted = targeted
+        }
+    }
+
+    private var masterPromptEmptyDropZone: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(Color.secondary.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+            .frame(minHeight: 92)
+            .overlay {
+                VStack(spacing: 6) {
+                    Image(systemName: "photo.badge.plus")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(masterPromptDropTargeted ? Color.accentColor : Color.secondary)
+                    Text("Drag images here from the character grid to add them to the prompt")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("The preflight pane will use these attached images as the master-sheet references.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+            }
+    }
+
+    private var masterPromptAddChip: some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(Color.secondary.opacity(0.42), style: StrokeStyle(lineWidth: 1.25, dash: [6, 4]))
+            .frame(width: 84, height: 84)
+            .overlay {
+                VStack(spacing: 4) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Drop")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.tertiary)
+            }
+    }
+
+    private func masterPromptReferenceChip(path: String) -> some View {
+        let resolvedURL = store.resolvedCharacterAssetURL(for: path)
+
+        return UnifiedImageTile(
+            path: path,
+            resolvedPath: resolvedURL?.path,
+            thumbnailSize: 84,
+            sourceLabel: "Prompt",
+            sourceSystemImage: "paperclip",
+            isSelected: true,
+            actions: UnifiedImageActions(
+                onShowInFinder: { showInFinder(at: path) },
+                onCopy: { copyImage(at: path) },
+                onQuickLook: { openQuickLook(for: [path], startingAt: 0) },
+                onRemoveFromCollection: {
+                    store.setMasterReferenceSourceInclusion(false, path: path, for: characterID)
+                },
+                removeFromCollectionLabel: "Remove From Prompt"
+            ),
+            onTap: {
+                store.imaginePreviewImagePath = path
+            },
+            onDoubleTap: {
+                openQuickLook(for: [path], startingAt: 0)
+            },
+            topTrailingOverlay: AnyView(
+                Button {
+                    store.setMasterReferenceSourceInclusion(false, path: path, for: characterID)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white, Color.black.opacity(0.62))
+                        .shadow(radius: 1)
+                }
+                .buttonStyle(.plain)
+                .padding(5)
+            )
+        )
+    }
+
+    private func headSheetReferenceDropZone(_ character: AnimationCharacter) -> some View {
+        promptReferenceDropZone(
+            title: "Head Turnaround Sheet References",
+            subtitle: "Drag images here to use as the only references for Generate Sheet.",
+            paths: headSheetPromptReferencePaths,
+            isTargeted: headSheetDropTargeted,
+            onClear: { headSheetPromptReferencePaths = [] },
+            onRemove: { path in headSheetPromptReferencePaths.removeAll { $0 == path } }
+        )
+        .dropDestination(for: URL.self) { urls, _ in
+            let matches = matchedCharacterImagePaths(for: urls, character: character)
+            let fallbackPaths = urls.compactMap { url -> String? in
+                let path = url.standardizedFileURL.path
+                guard FileManager.default.fileExists(atPath: path) else { return nil }
+                return path
+            }
+            let incoming = matches.isEmpty ? fallbackPaths : matches
+            guard !incoming.isEmpty else {
+                store.statusMessage = "Drop images from the character Library tab or existing image files."
+                return false
+            }
+
+            var merged = headSheetPromptReferencePaths.filter { resolvedReferenceURL(for: $0) != nil }
+            var seen = Set(merged)
+            for path in incoming where resolvedReferenceURL(for: path) != nil && seen.insert(path).inserted {
+                merged.append(path)
+            }
+            headSheetPromptReferencePaths = merged
+            store.statusMessage = "Attached \(incoming.count) head sheet reference image\(incoming.count == 1 ? "" : "s")."
+            return true
+        } isTargeted: { targeted in
+            headSheetDropTargeted = targeted
+        }
+    }
+
+    private func promptReferenceDropZone(
+        title: String,
+        subtitle: String,
+        paths: [String],
+        isTargeted: Bool,
+        onClear: @escaping () -> Void,
+        onRemove: @escaping (String) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("\(paths.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(.secondary.opacity(0.12), in: Capsule())
+                Spacer()
+                if !paths.isEmpty {
+                    Button(action: onClear) {
+                        Label("Clear", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                }
+            }
+
+            if paths.isEmpty {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+                    .frame(minHeight: 76)
+                    .overlay {
+                        VStack(spacing: 5) {
+                            Image(systemName: "photo.badge.plus")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(isTargeted ? Color.accentColor : Color.secondary)
+                            Text(subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.horizontal, 16)
+                    }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(paths, id: \.self) { path in
+                            let resolvedURL = resolvedReferenceURL(for: path)
+                            UnifiedImageTile(
+                                path: path,
+                                resolvedPath: resolvedURL?.path,
+                                thumbnailSize: 84,
+                                isSelected: true,
+                                actions: UnifiedImageActions(
+                                    onShowInFinder: { showInFinder(at: path) },
+                                    onCopy: { copyImage(at: path) },
+                                    onQuickLook: { openQuickLook(for: [path], startingAt: 0) },
+                                    onRemoveFromCollection: { onRemove(path) },
+                                    removeFromCollectionLabel: "Remove From Prompt"
+                                ),
+                                onTap: { store.imaginePreviewImagePath = path },
+                                onDoubleTap: { openQuickLook(for: [path], startingAt: 0) }
+                            )
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+        .padding(14)
+        .background(.background.opacity(0.72), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(
+                    isTargeted ? Color.accentColor : Color.secondary.opacity(0.16),
+                    style: StrokeStyle(lineWidth: isTargeted ? 2 : 1, dash: isTargeted ? [7, 4] : [])
+                )
+        }
+    }
+
+    private func masterPromptReferencePaths(for character: AnimationCharacter) -> [String] {
+        uniqueExistingCharacterPaths(character.masterReferenceSourceImagePaths, excludingRejectedFor: character)
+    }
+
+    private func buildMasterSourceItems(for character: AnimationCharacter) -> [CharacterMasterImageItem] {
+        var items: [CharacterMasterImageItem] = []
+        items.reserveCapacity(64)
+        var seenPaths: Set<String> = []
+        var seenResolvedPaths: Set<String> = []
+
+        func append(_ path: String?, label: String, systemImage: String) {
+            guard let path,
+                  let resolvedPath = store.resolvedCharacterAssetURL(for: path)?.path else {
+                return
+            }
+            let canonicalResolvedPath = URL(fileURLWithPath: resolvedPath).standardizedFileURL.path
+            guard seenPaths.insert(path).inserted,
+                  seenResolvedPaths.insert(canonicalResolvedPath).inserted else {
+                return
+            }
+            items.append(
+                CharacterMasterImageItem(
+                    path: path,
+                    resolvedPath: canonicalResolvedPath,
+                    label: label,
+                    systemImage: systemImage
+                )
+            )
+        }
+
+        func appendMany(_ paths: [String], label: String, systemImage: String) {
+            paths.forEach { append($0, label: label, systemImage: systemImage) }
+        }
+
+        append(character.profileImagePath, label: "Profile", systemImage: "person.crop.square")
+        append(character.inspirationReferenceImagePath, label: "Inspiration", systemImage: "sparkles")
+        appendMany(character.curatedInspirationImagePaths, label: "Curated", systemImage: "star.fill")
+        appendMany(character.inspirationImagePaths, label: "Inspiration", systemImage: "sparkles")
+        appendMany(character.referenceImagePaths, label: "Reference", systemImage: "photo")
+        appendMany(character.animatedImagePaths, label: "Animated", systemImage: "figure.walk.motion")
+        appendMany(character.masterReferenceSheetVariants.map(\.imagePath), label: "Master", systemImage: "rectangle.3.group")
+        append(character.approvedMasterReferenceSheetVariant?.imagePath, label: "Master", systemImage: "rectangle.3.group")
+        appendMany(character.headTurnaroundSheetVariants.map(\.imagePath), label: "Head", systemImage: "face.smiling")
+        append(character.approvedHeadTurnaroundSheetVariant?.imagePath, label: "Head", systemImage: "face.smiling")
+        appendMany(character.headTurnaroundSlots.flatMap { $0.variants.map(\.imagePath) }, label: "Pose", systemImage: "figure.stand")
+        appendMany(character.lookDevelopmentSlots.flatMap { $0.variants.map(\.imagePath) }, label: "Look", systemImage: "paintpalette")
+
+        for costume in character.costumeReferenceSets {
+            appendMany(costume.costumeReferenceImagePaths, label: "Costume", systemImage: "tshirt")
+            appendMany(costume.generatedVariationImagePaths, label: "Costume", systemImage: "tshirt")
+            appendMany(costume.sheetVariants.map(\.imagePath), label: "Costume", systemImage: "tshirt")
+            append(costume.approvedSheetVariant?.imagePath, label: "Costume", systemImage: "tshirt")
+            appendMany(costume.fullBodySlots.flatMap { $0.variants.map(\.imagePath) }, label: "Costume", systemImage: "tshirt")
+            appendMany(costume.accessorySlots.flatMap { $0.variants.map(\.imagePath) }, label: "Costume", systemImage: "tshirt")
+        }
+
+        return items
+    }
+
+    private func masterSourceIsRejected(
+        _ path: String,
+        character: AnimationCharacter,
+        includeStoreFallback: Bool = false
+    ) -> Bool {
+        if character.inspirationRejectedPaths.contains(path) {
+            return true
+        }
+        return includeStoreFallback ? store.imageLibraryIsRejected(for: path) : false
+    }
+
+    private func uniqueExistingCharacterPaths(
+        _ paths: [String],
+        excludingRejectedFor character: AnimationCharacter? = nil
+    ) -> [String] {
+        var ordered: [String] = []
+        var seen: Set<String> = []
+        ordered.reserveCapacity(paths.count)
+        for path in paths {
+            guard store.resolvedCharacterAssetURL(for: path) != nil,
+                  seen.insert(path).inserted else {
+                continue
+            }
+            if let character,
+               masterSourceIsRejected(path, character: character, includeStoreFallback: true) {
+                continue
+            }
+            ordered.append(path)
+        }
+        return ordered
+    }
+
+    private func addMasterPromptReferenceURLs(_ urls: [URL], for character: AnimationCharacter) -> Bool {
+        let matches = matchedCharacterImagePaths(for: urls, character: character)
+        guard !matches.isEmpty else {
+            store.statusMessage = "Drop images from this character grid to attach them to the prompt."
+            return false
+        }
+
+        addMasterPromptReferencePaths(matches, for: character)
+        return true
+    }
+
+    private func addMasterPromptReferencePaths(_ paths: [String], for character: AnimationCharacter) {
+        let allowedPaths = paths.filter { !masterSourceIsRejected($0, character: character, includeStoreFallback: true) }
+        guard !allowedPaths.isEmpty else {
+            store.statusMessage = "Rejected images can only be reviewed from All Images."
+            return
+        }
+
+        var merged = masterPromptReferencePaths(for: character)
+        var seen = Set(merged)
+        for path in allowedPaths where seen.insert(path).inserted {
+            merged.append(path)
+        }
+        store.setMasterReferenceSourceImagePaths(merged, for: characterID)
+        store.statusMessage = "Attached \(allowedPaths.count) image\(allowedPaths.count == 1 ? "" : "s") to the master prompt."
+    }
+
+    private func matchedCharacterImagePaths(for urls: [URL], character: AnimationCharacter) -> [String] {
+        var pathByResolvedPath: [String: String] = [:]
+        let items = buildMasterSourceItems(for: character)
+            .filter { !masterSourceIsRejected($0.path, character: character, includeStoreFallback: true) }
+        for item in items {
+            pathByResolvedPath[URL(fileURLWithPath: item.resolvedPath).standardizedFileURL.path] = item.path
+        }
+
+        var matches: [String] = []
+        var seenMatches: Set<String> = []
+        for url in urls {
+            let resolvedPath = url.standardizedFileURL.path
+            guard let path = pathByResolvedPath[resolvedPath],
+                  seenMatches.insert(path).inserted else {
+                continue
+            }
+            matches.append(path)
+        }
+        return matches
     }
 
     private func importExistingMasterSheet() {
@@ -1670,62 +2123,18 @@ struct CharacterReferenceWorkflowSheet: View {
         references
             .filter(\.isIncluded)
             .compactMap { reference in
-                let url = store.resolvedCharacterAssetURL(for: reference.path) ?? URL(fileURLWithPath: reference.path)
+                guard let url = resolvedReferenceURL(for: reference.path) else { return nil }
                 return GeminiImageService.referenceImage(from: url)
             }
     }
 
-    @ViewBuilder
-    private func masterSheetSourceCard(character: AnimationCharacter, path: String) -> some View {
-        let isIncluded = character.masterReferenceSourceImagePaths.contains(path) || character.curatedInspirationImagePaths.contains(path)
-
-        VStack(alignment: .leading, spacing: 8) {
-            AsyncStoreThumbnailImage.rounded(
-                store: store,
-                path: path,
-                maxSize: 132,
-                width: 132,
-                height: 132,
-                cornerRadius: 12,
-                placeholderOpacity: 0.2
-            )
-            .onTapGesture(count: 2) {
-                openQuickLook(for: [path], startingAt: 0)
-            }
-            .onTapGesture(count: 1) {
-                // Surface this source image in the Inspector Details pane.
-                store.imaginePreviewImagePath = path
-            }
-            .contextMenu {
-                Button("Show in Finder", systemImage: "folder") {
-                    showInFinder(at: path)
-                }
-                Button("Copy Image", systemImage: "doc.on.doc") {
-                    copyImage(at: path)
-                }
-                Button("Quick Look", systemImage: "eye") {
-                    openQuickLook(for: [path], startingAt: 0)
-                }
-            }
-
-            Toggle(isOn: Binding(
-                get: { isIncluded },
-                set: { store.setMasterReferenceSourceInclusion($0, path: path, for: characterID) }
-            )) {
-                // No filename caption, per Gary's "NO FILENAMES in any grid"
-                // rule (2026-04-17). The inclusion state is conveyed by the
-                // card's accent border + the checkbox state itself.
-                Text("Include").font(.caption2)
-            }
-            .toggleStyle(.checkbox)
-            .frame(width: 132, alignment: .leading)
+    private func resolvedReferenceURL(for path: String) -> URL? {
+        if let url = store.resolvedCharacterAssetURL(for: path) {
+            return url
         }
-        .padding(10)
-        .background(.background.opacity(0.78), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(isIncluded ? Color.accentColor : Color.secondary, lineWidth: isIncluded ? 2 : 1)
-        }
+        guard path.hasPrefix("/") else { return nil }
+        let url = URL(fileURLWithPath: path)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     func openQuickLook(
@@ -1780,190 +2189,38 @@ struct ReferenceVariantCard: View {
     let approvedLabel: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            thumbnail
-                .onTapGesture(count: 2, perform: onQuickLook)
-                .onTapGesture(count: 1) {
-                    // Surface this variant in the Inspector Details pane so
-                    // single-click selection mirrors the rest of the app.
-                    store.imaginePreviewImagePath = variant.imagePath
-                }
-                .contextMenu {
-                    Button("View Prompt", systemImage: "eye.circle") {
-                        onShowPrompt()
-                    }
-                    Button("Edit", systemImage: "slider.horizontal.3") {
-                        onEdit()
-                    }
-                    Button("Show in Finder", systemImage: "folder") {
-                        if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
-                        }
-                    }
-                    Button("Copy Image", systemImage: "doc.on.doc") {
-                        onCopy()
-                    }
-                    Button("Quick Look", systemImage: "eye") {
-                        onQuickLook()
-                    }
-                }
-
-            HStack(spacing: 6) {
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Spacer(minLength: 0)
-                Button {
-                    onShowPrompt()
-                } label: {
-                    Image(systemName: "eye.circle")
-                }
-                .buttonStyle(.borderless)
-                .help("View Prompt")
-            }
-
-            Text("\(variant.imageSize) • \(variant.aspectRatio)")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-
-            HStack {
-                Button(isApproved ? approvedLabel : approveLabel) {
-                    onApprove()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(isApproved)
-
-                Button("Edit") {
-                    onEdit()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Spacer()
-
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .help("Delete")
-            }
-        }
-        .frame(width: 220)
-        .padding(12)
-        .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(isApproved ? Color.green : Color.secondary, lineWidth: isApproved ? 2 : 1)
-        }
-    }
-
-    @ViewBuilder
-    private var thumbnail: some View {
-        AsyncStoreThumbnailImage.rounded(
-            store: store,
+        let resolvedURL = store.resolvedCharacterAssetURL(for: variant.imagePath)
+        UnifiedImageTile(
             path: variant.imagePath,
-            maxSize: 196,
-            width: 196,
-            height: 196,
-            cornerRadius: 14
+            resolvedPath: resolvedURL?.path,
+            thumbnailSize: 164,
+            isSelected: isApproved,
+            actions: UnifiedImageActions(
+                onChooseAsMaster: onApprove,
+                isMaster: isApproved,
+                chooseAsMasterLabel: approveLabel == "Choose" ? "Choose as Master" : approveLabel,
+                chosenAsMasterLabel: approvedLabel,
+                onShowPrompt: onShowPrompt,
+                onShowInFinder: {
+                    if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                },
+                onCopy: onCopy,
+                onQuickLook: onQuickLook,
+                onEditWithGemini: onEdit,
+                onRemoveFromCollection: onDelete,
+                removeFromCollectionLabel: "Delete Variant"
+            ),
+            onTap: {
+                store.imaginePreviewImagePath = variant.imagePath
+            },
+            onDoubleTap: onQuickLook
         )
     }
 }
 
-@available(macOS 26.0, *)
-struct MiniVariantChip: View {
-    @Bindable var store: AnimateStore
-    let variant: CharacterLookDevelopmentVariant
-    let isApproved: Bool
-    let onQuickLook: () -> Void
-    let onCopy: () -> Void
-    let onEdit: () -> Void
-    let onShowPrompt: () -> Void
-    let onApprove: () -> Void
-    let onDelete: () -> Void
-    let onAdjustCrop: () -> Void
 
-    var body: some View {
-        // Pass 4 (Gary): the thumbnail portion routes through
-        // UnifiedImageTile so decode/cache/radius match every other grid.
-        // The approve/edit/prompt/delete button row stays below — these
-        // are chip-specific verbs not present on generic image tiles. The
-        // green approval ring stays to communicate the distinct "chosen
-        // final pose" state (semantically different from normal selection).
-        let resolvedURL = store.resolvedCharacterAssetURL(for: variant.imagePath)
-        VStack(spacing: 4) {
-            UnifiedImageTile(
-                path: variant.imagePath,
-                resolvedPath: resolvedURL?.path,
-                thumbnailSize: 72,
-                actions: UnifiedImageActions(
-                    onShowPrompt: onShowPrompt,
-                    onShowInFinder: {
-                        if let url = store.resolvedCharacterAssetURL(for: variant.imagePath) {
-                            NSWorkspace.shared.activateFileViewerSelecting([url])
-                        }
-                    },
-                    onCopy: onCopy,
-                    onQuickLook: onQuickLook,
-                    onEditWithGemini: onEdit
-                ),
-                onTap: {
-                    // Surface this variant in the Inspector Details pane.
-                    store.imaginePreviewImagePath = variant.imagePath
-                },
-                onDoubleTap: onQuickLook,
-                bottomTrailingOverlay: isApproved
-                    ? AnyView(
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.green)
-                            .background(Circle().fill(.black.opacity(0.5)).padding(-2))
-                            .padding(4)
-                    )
-                    : nil
-            )
-            .overlay {
-                if isApproved {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.green.opacity(0.5), lineWidth: 2)
-                }
-            }
-
-            HStack(spacing: 3) {
-                Button(action: onApprove) {
-                    Image(systemName: "checkmark")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .disabled(isApproved)
-                .help(isApproved ? "Approved" : "Use")
-
-                Button(action: onEdit) {
-                    Image(systemName: "slider.horizontal.3")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .help("Edit")
-
-                Button(action: onShowPrompt) {
-                    Image(systemName: "eye")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.mini)
-                .help("View Prompt")
-
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .controlSize(.mini)
-                .help("Delete")
-            }
-        }
-    }
-}
 
 @available(macOS 26.0, *)
 struct VariantPromptPreviewSheet: View {
