@@ -860,7 +860,8 @@ struct AutomationFrameGenerationService {
                 "moment": moment.directoryName,
                 "generator": "gemini",
                 "mode": mode
-            ]
+            ],
+            analysisMode: .immediate
         )
     }
 }

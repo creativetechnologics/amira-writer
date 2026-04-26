@@ -70,6 +70,22 @@ enum UnattachedGeneratedImageKind: Sendable {
     }
 }
 
+@available(macOS 26.0, *)
+public enum ImageAssetAnalysisMode: Sendable {
+    /// Register the image and leave a durable job for the Image Intelligence
+    /// worker. This remains the default for imported/manual references.
+    case enqueue
+
+    /// Register the image, then immediately run Image Intelligence in a
+    /// detached background task. This is intended for newly generated images:
+    /// the generation call returns, the image is indexed, and analysis starts
+    /// without waiting for the long-running worker to be started.
+    case immediate
+
+    /// Register/link only.
+    case none
+}
+
 private struct PersistedPlacesScriptIndexSong: Codable, Sendable {
     let songPath: String
     let sceneName: String
@@ -950,16 +966,17 @@ final class AnimateStore {
                 await coordinator.configure(apiKey: imageAnalysisGeminiAPIKey)
                 await recoverStoryboardAnalysisQueue(projectRoot: projectURL)
 
-                // Auto-start the worker if there are pending jobs left
-                // from a previous session.
+                // Do not auto-start the worker at project open. Newly
+                // generated images can opt into immediate post-generation
+                // analysis, while old pending jobs remain inspectable and
+                // explicitly startable from the Image Intelligence controls/API.
                 let pending = try? await store.query(
                     "SELECT COUNT(*) as cnt FROM image_analysis_jobs WHERE status = 'pending'",
                     []
                 )
                 let pendingCount = (pending?.first?["cnt"] as? Int) ?? 0
                 if pendingCount > 0 {
-                    await coordinator.startWorker()
-                    AppLog.log("IMAGE_INTELLIGENCE", "Auto-started worker for \(pendingCount) pending job(s)")
+                    AppLog.log("IMAGE_INTELLIGENCE", "Image Intelligence has \(pendingCount) pending job(s); worker not auto-started.")
                 }
             } catch {
                 AppLog.log("IMAGE_INTELLIGENCE", "Failed to open image intelligence store: \(error.localizedDescription)")
@@ -1185,12 +1202,20 @@ final class AnimateStore {
         moment: String? = nil,
         workflow: String? = nil,
         context: [String: String] = [:],
-        enqueueForAnalysis: Bool = true
+        enqueueForAnalysis: Bool = true,
+        analysisMode: ImageAssetAnalysisMode? = nil
     ) {
         guard let store = imageIntelligenceStore else { return }
         let inspectionPath = URL(fileURLWithPath: path).standardizedFileURL.path
         let inspectionFilename = URL(fileURLWithPath: inspectionPath).lastPathComponent
         let coordinator = imageAnalysisCoordinator
+        let apiKey = imageAnalysisGeminiAPIKey
+        let resolvedAnalysisMode: ImageAssetAnalysisMode
+        if let analysisMode {
+            resolvedAnalysisMode = analysisMode
+        } else {
+            resolvedAnalysisMode = enqueueForAnalysis ? .enqueue : .none
+        }
 
         Task.detached(priority: .utility) {
             do {
@@ -1215,9 +1240,28 @@ final class AnimateStore {
                     workflow: workflow,
                     context: context
                 )
-                
-                if enqueueForAnalysis {
+
+                switch resolvedAnalysisMode {
+                case .enqueue:
                     try await coordinator?.enqueue(assetID: assetID)
+                case .immediate:
+                    guard let coordinator else { return }
+                    let completedRuns = try await store.querySingle("""
+                        SELECT id
+                        FROM image_analysis_runs
+                        WHERE image_asset_id = ?
+                          AND source_content_hash = ?
+                          AND status = 'completed'
+                        LIMIT 1
+                    """, [assetID, inspection.contentHashSHA256]) != nil
+                    guard !completedRuns else { return }
+                    await coordinator.configure(apiKey: apiKey)
+                    try await coordinator.analyzeAssetNow(
+                        assetID: assetID,
+                        reason: "post_generation_immediate"
+                    )
+                case .none:
+                    break
                 }
             } catch {
                 print("[AnimateStore] Failed to register image asset: \(error)")
@@ -8072,7 +8116,8 @@ final class AnimateStore {
                 "model": model.rawValue,
                 "aspectRatio": aspectRatio,
                 "imageSize": imageSize
-            ]
+            ],
+            analysisMode: .immediate
         )
         return storedPath
     }
@@ -8148,7 +8193,8 @@ final class AnimateStore {
                 "model": model.rawValue,
                 "aspectRatio": aspectRatio,
                 "imageSize": imageSize
-            ]
+            ],
+            analysisMode: .immediate
         )
         return storedPath
     }
@@ -8201,6 +8247,19 @@ final class AnimateStore {
         placesWorkflowLibrary.generatedImageRecords.append(record)
 
         scheduleDebouncedSave(writePlaces: true)
+        registerImageAsset(
+            path: storedURL.path,
+            linkKind: kind == .map3DCapture ? .map3DCapture : .canvasGeneration,
+            ownerID: record.id.uuidString,
+            workflow: kind.directoryName,
+            context: [
+                "prompt": prompt,
+                "model": model.rawValue,
+                "aspectRatio": aspectRatio,
+                "imageSize": imageSize
+            ],
+            analysisMode: .immediate
+        )
         return storedPath
     }
 
@@ -18542,7 +18601,8 @@ extension AnimateStore {
                 "model": gen.model.rawValue,
                 "aspectRatio": gen.aspectRatio,
                 "imageSize": gen.imageSize
-            ]
+            ],
+            analysisMode: .immediate
         )
     }
 

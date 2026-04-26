@@ -49,13 +49,19 @@ The Image Intelligence subsystem analyzes images in the Amira Writer / Opera app
 ### Data Flow
 
 ```
-Image Save → registerImageAsset() → ImageIntelligenceStore
-                                    ↓
-                              ImageAnalysisCoordinator
-                                    ↓
-                         GeminiImageAnalysisService
-                                    ↓
-                              Store Results
+Generated image save → registerImageAsset(analysisMode: .immediate)
+                                      ↓
+                                ImageIntelligenceStore
+                                      ↓
+                         ImageAnalysisCoordinator.analyzeAssetNow()
+                                      ↓
+                       Gemini / Vertex visual analysis + embeddings
+                                      ↓
+                                Store Results
+
+Imported/manual reference save → registerImageAsset(analysisMode: .enqueue)
+                                      ↓
+                           durable queue job for explicit worker runs
 ```
 
 ## Configuration
@@ -181,6 +187,9 @@ All phases are complete:
 - Does not use XMP/generation sidecars as primary source
 - Local SQLite only (no external vector DB)
 - No third-party Swift packages added
+- Newly generated images run Image Intelligence immediately in a detached
+  background task; imported/manual references remain queued for explicit worker
+  runs.
 
 ## Future Enhancements
 

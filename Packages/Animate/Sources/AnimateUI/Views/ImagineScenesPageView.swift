@@ -1472,7 +1472,8 @@ struct ImagineScenesPageView: View {
                 "moment": moment.directoryName,
                 "generator": generator,
                 "mode": mode
-            ]
+            ],
+            analysisMode: .immediate
         )
     }
 

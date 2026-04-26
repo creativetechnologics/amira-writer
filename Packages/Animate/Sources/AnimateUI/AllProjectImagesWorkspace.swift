@@ -3202,10 +3202,8 @@ private struct InspectorImageIntelligenceTab: View {
         store.registerImageAsset(
             path: record.resolvedPath,
             linkKind: .sceneShotImage,
-            enqueueForAnalysis: true
+            analysisMode: .immediate
         )
-        // Start the worker so the queued job actually gets processed.
-        store.startImageAnalysisWorker()
         await refresh()
     }
 
