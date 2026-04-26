@@ -320,6 +320,8 @@ These Phase 0/1 endpoints are dry-run only. They read the loaded local project, 
 | `GET` | `/automation/references/{sceneID}/{shotID}` | — | Read an existing `ReferenceContract`, or preview a non-mutating resolve if none exists |
 | `POST` | `/automation/frame-plans/dry-run` | `{ "scene": "first" \| "all" \| 1 \| "<scene name/id>", "shotID": "...?", "model": "nano-banana-2", "imageSize": "4K", "write": true, "maxCostUSD": 25.0 }` | Write `EffectiveShotSpec`, `ReferenceContract`, and `ShotFrameGenerationPlanSet` sidecars plus a cost/blocker report |
 | `POST` | `/automation/frames/generate` | `{ "mode": "preflight", "scene": "first", "moments": ["beginning"], "model": "nano-banana-2", "imageSize": "4K", "maxCostUSD": 25.0, "maxFrames": 12 }` | Preflight or execute plan-driven frame generation. Defaults to `preflight`; paid generation requires explicit `"mode":"execute"` and `maxCostUSD`. |
+| `GET` | `/automation/generated-frames/{sceneID}/{shotID}/{moment}` | — | Read the latest generated-frame record sidecar for `beginning`, `middle`, or `end` |
+| `POST` | `/automation/generated-frames/{sceneID}/{shotID}/{moment}/approval` | `{ "approvalStatus": "approved", "notes": "...", "rating": 5, "setAsSelectedFrame": true, "syncImageMetadata": true }` | Mark a generated frame approved/rejected/unapproved/needs_manual_review; approval can also select the frame in `Animate/Imagine/galleries.json` and update the image `.xmp` metadata |
 
 Artifact paths are documented in [`Automation/README.md`](Automation/README.md).
 
@@ -334,6 +336,11 @@ curl -sS -X POST http://127.0.0.1:19849/automation/frame-plans/dry-run \
 curl -sS -X POST http://127.0.0.1:19849/automation/frames/generate \
   -H 'Content-Type: application/json' \
   -d '{"mode":"preflight","scene":"first","moments":["beginning"],"model":"nano-banana-2","imageSize":"4K","maxCostUSD":25,"maxFrames":12}' | jq
+
+# After an execute run has created a generated-frame record, approve a frame.
+curl -sS -X POST http://127.0.0.1:19849/automation/generated-frames/<sceneID>/<shotID>/beginning/approval \
+  -H 'Content-Type: application/json' \
+  -d '{"approvalStatus":"approved","rating":5,"setAsSelectedFrame":true,"syncImageMetadata":true}' | jq
 ```
 
 ### Shot-frame planning and Vertex smoke testing

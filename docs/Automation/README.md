@@ -71,6 +71,8 @@ POST /automation/references/resolve
 GET  /automation/references/{sceneID}/{shotID}
 POST /automation/frame-plans/dry-run
 POST /automation/frames/generate
+GET  /automation/generated-frames/{sceneID}/{shotID}/{moment}
+POST /automation/generated-frames/{sceneID}/{shotID}/{moment}/approval
 ```
 
 `POST /automation/frame-plans/dry-run` accepts a body like:
@@ -104,6 +106,12 @@ The response includes the sidecar report path, effective specs, reference contra
 Paid generation is intentionally gated. It only runs when `mode` is exactly `execute`, Gemini generation is enabled, and `maxCostUSD` is present and high enough for the planned frame count. Execute mode writes a generated-frame record before each provider call, then updates it with output/prompt/response/plan sidecar paths after success or a visible failure state after error. Beginning/middle/end plans still use 4:3 open-matte generation with the configured 16:9 extraction / 21:9 final-delivery crop metadata.
 
 Continuity behavior is conservative: beginning frames can generate from references; middle/end frames may edit from a readable prior generated frame when the plan resolver can see one. If continuity requires an edit source and none exists, the frame record is blocked with `blocked_missing_edit_source` instead of silently paying for a disconnected generation.
+
+Generated-frame approvals are durable and local. The approval endpoint updates the generated-frame record sidecar and can optionally sync with existing manual review surfaces:
+
+- approved frames can be set as the selected beginning/middle/end frame in `Animate/Imagine/galleries.json`
+- rejected frames can be marked rejected in the image `.xmp` sidecar and cleared if they were selected
+- approval does not run generation, video upload, or QA
 
 ## Reference status behavior
 

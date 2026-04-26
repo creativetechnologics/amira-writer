@@ -232,6 +232,14 @@ final class AnimateAPIRouter {
             await ensureProjectHydrated()
             return await automationFramesGenerateResponse(request)
         }
+        if request.method == "GET", let ids = automationGeneratedFrameIDs(from: request.path), !ids.isApproval {
+            await ensureProjectHydrated()
+            return automationGeneratedFrameGetResponse(sceneID: ids.sceneID, shotID: ids.shotID, moment: ids.moment)
+        }
+        if request.method == "POST", let ids = automationGeneratedFrameIDs(from: request.path), ids.isApproval {
+            await ensureProjectHydrated()
+            return automationGeneratedFrameApprovalResponse(request, sceneID: ids.sceneID, shotID: ids.shotID, moment: ids.moment)
+        }
 
         switch (request.method, request.path) {
         case ("GET", "/health"):
@@ -613,6 +621,137 @@ final class AnimateAPIRouter {
         }
     }
 
+    private func automationGeneratedFrameGetResponse(sceneID: UUID, shotID: UUID, moment: ImagineShotMoment) -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        guard let record = readFrameRecord(projectRoot: projectRoot, sceneID: sceneID, shotID: shotID, moment: moment) else {
+            return .error(404, "No generated-frame record found for \(sceneID.uuidString)/\(shotID.uuidString)/\(moment.directoryName).")
+        }
+        let recordURL = generatedFrameRecordURL(projectRoot: projectRoot, sceneID: sceneID, shotID: shotID, moment: moment)
+        let selectedPath = store.imagineGallery(for: sceneID, shotIndex: record.shotIndex)?.selectedPath(for: moment)
+        return .okCodable(AutomationGeneratedFramePayload(
+            ok: true,
+            recordPath: recordURL.path,
+            record: record,
+            imageMetadataPath: record.outputPath.map { ImageLibraryMetadataSidecarService.sidecarURL(forImagePath: $0).path },
+            selectedFramePath: selectedPath
+        ))
+    }
+
+    private func automationGeneratedFrameApprovalResponse(
+        _ request: AnimateHTTPRequest,
+        sceneID: UUID,
+        shotID: UUID,
+        moment: ImagineShotMoment
+    ) -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        guard var record = readFrameRecord(projectRoot: projectRoot, sceneID: sceneID, shotID: shotID, moment: moment) else {
+            return .error(404, "No generated-frame record found for \(sceneID.uuidString)/\(shotID.uuidString)/\(moment.directoryName).")
+        }
+
+        let body = request.jsonBody() ?? [:]
+        let approvalStatus = (stringValue(body["approvalStatus"]) ?? stringValue(body["status"]) ?? "approved")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard ["approved", "rejected", "unapproved", "needs_manual_review"].contains(approvalStatus) else {
+            return .error(400, "Invalid approvalStatus: \(approvalStatus). Use approved, rejected, unapproved, or needs_manual_review.")
+        }
+
+        let notes = stringValue(body["notes"])
+        let syncImageMetadata = boolValue(body["syncImageMetadata"]) ?? true
+        let setAsSelectedFrame = boolValue(body["setAsSelectedFrame"]) ?? (approvalStatus == "approved")
+        let rating = intValue(body["rating"]).map { min(max($0, 1), 5) }
+
+        if approvalStatus == "approved" {
+            guard let outputPath = record.outputPath, FileManager.default.fileExists(atPath: outputPath) else {
+                return .error(400, "Cannot approve a generated-frame record without a readable outputPath.")
+            }
+        }
+
+        record.approvalStatus = approvalStatus
+        record.approvalNotes = notes
+        record.approvalUpdatedAt = Date()
+        record.updatedAt = Date()
+
+        var selectedPath: String?
+        var imageMetadataPath: String?
+        if let outputPath = record.outputPath {
+            if syncImageMetadata {
+                var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: outputPath)
+                    ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+                switch approvalStatus {
+                case "approved":
+                    metadata.isRejected = false
+                    metadata.visualStyle = .animated
+                    if let rating { metadata.rating = rating }
+                case "rejected":
+                    metadata.isRejected = true
+                    if let rating { metadata.rating = rating }
+                default:
+                    if let rating { metadata.rating = rating }
+                }
+                if let notes {
+                    metadata.notes = notes
+                }
+                metadata.updatedAt = Date()
+                ImageLibraryMetadataSidecarService.save(metadata, forImagePath: outputPath)
+            }
+            imageMetadataPath = ImageLibraryMetadataSidecarService.sidecarURL(forImagePath: outputPath).path
+
+            if setAsSelectedFrame || approvalStatus == "rejected" {
+                syncImagineSelectedFrame(record: record, moment: moment, outputPath: outputPath, approvalStatus: approvalStatus, setAsSelectedFrame: setAsSelectedFrame)
+                selectedPath = store.imagineGallery(for: sceneID, shotIndex: record.shotIndex)?.selectedPath(for: moment)
+            }
+        }
+
+        do {
+            try writeFrameRecord(record, projectRoot: projectRoot)
+            let recordURL = generatedFrameRecordURL(projectRoot: projectRoot, sceneID: sceneID, shotID: shotID, moment: moment)
+            return .okCodable(AutomationGeneratedFramePayload(
+                ok: true,
+                recordPath: recordURL.path,
+                record: record,
+                imageMetadataPath: imageMetadataPath,
+                selectedFramePath: selectedPath
+            ))
+        } catch {
+            return .error(500, "Could not write generated-frame approval: \(error.localizedDescription)")
+        }
+    }
+
+    private func syncImagineSelectedFrame(
+        record: GeneratedFrameRecord,
+        moment: ImagineShotMoment,
+        outputPath: String,
+        approvalStatus: String,
+        setAsSelectedFrame: Bool
+    ) {
+        guard let scene = store.scenes.first(where: { $0.id == record.sceneID }),
+              record.shotIndex >= 0,
+              record.shotIndex < scene.shots.count,
+              scene.shots[record.shotIndex].id == record.shotID else { return }
+        var galleries = store.imagineSceneGalleries[record.sceneID]
+        if galleries == nil || galleries?.count != scene.shots.count {
+            galleries = scene.shots.map { ImagineSceneShotGallery(shotID: $0.id, sceneID: scene.id) }
+        }
+        guard var resolvedGalleries = galleries else { return }
+        var gallery = resolvedGalleries[record.shotIndex]
+        if !gallery.paths(for: moment).contains(outputPath) {
+            gallery.appendPath(outputPath, for: moment)
+        }
+        if approvalStatus == "approved", setAsSelectedFrame {
+            gallery.setSelectedPath(outputPath, for: moment)
+        } else if approvalStatus == "rejected", gallery.selectedPath(for: moment) == outputPath {
+            gallery.setSelectedPath(nil, for: moment)
+        }
+        resolvedGalleries[record.shotIndex] = gallery
+        store.imagineSceneGalleries[record.sceneID] = resolvedGalleries
+        store.saveImagineGalleries()
+    }
+
     private func writeAutomationDryRunReport(_ report: AutomationDryRunReport, projectRoot: URL) throws -> URL {
         let directory = AutomationSourceResolver.automationDirectory(projectRoot: projectRoot, component: "shot-frame-plans")
             .appendingPathComponent("DryRuns", isDirectory: true)
@@ -651,6 +790,29 @@ final class AnimateAPIRouter {
         return (sceneID, shotID)
     }
 
+    private func automationGeneratedFrameIDs(from path: String) -> (sceneID: UUID, shotID: UUID, moment: ImagineShotMoment, isApproval: Bool)? {
+        let parts = path.split(separator: "/").map(String.init)
+        guard (parts.count == 5 || parts.count == 6),
+              parts[0] == "automation",
+              parts[1] == "generated-frames",
+              let sceneID = UUID(uuidString: parts[2]),
+              let shotID = UUID(uuidString: parts[3]),
+              let moment = momentValue(parts[4]) else { return nil }
+        if parts.count == 6 {
+            guard parts[5] == "approval" else { return nil }
+            return (sceneID, shotID, moment, true)
+        }
+        return (sceneID, shotID, moment, false)
+    }
+
+    private func momentValue(_ raw: String) -> ImagineShotMoment? {
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "beginning", "begin", "start": return .beginning
+        case "middle", "mid": return .middle
+        case "end", "ending", "last": return .end
+        default: return nil
+        }
+    }
 
     private func resolvedMoments(_ raw: Any?) throws -> [ImagineShotMoment] {
         guard let raw, !(raw is NSNull) else { return [.beginning] }
@@ -697,6 +859,14 @@ final class AnimateAPIRouter {
         var ok: Bool
         var reportPath: String
         var report: AutomationDryRunReport
+    }
+
+    private struct AutomationGeneratedFramePayload: Codable, Sendable {
+        var ok: Bool
+        var recordPath: String
+        var record: GeneratedFrameRecord
+        var imageMetadataPath: String?
+        var selectedFramePath: String?
     }
 
     // MARK: Image Intelligence API

@@ -868,6 +868,15 @@ func writeFrameRecord(_ record: GeneratedFrameRecord, projectRoot: URL) throws {
 }
 
 @available(macOS 26.0, *)
+func readFrameRecord(projectRoot: URL, sceneID: UUID, shotID: UUID, moment: ImagineShotMoment) -> GeneratedFrameRecord? {
+    let url = generatedFrameRecordURL(projectRoot: projectRoot, sceneID: sceneID, shotID: shotID, moment: moment)
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return try? decoder.decode(GeneratedFrameRecord.self, from: data)
+}
+
+@available(macOS 26.0, *)
 func sceneSlug(for scene: AnimationScene) -> String {
     scene.name.lowercased().replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "/", with: "-")
 }

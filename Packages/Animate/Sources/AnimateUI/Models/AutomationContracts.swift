@@ -356,6 +356,8 @@ struct GeneratedFrameRecord: Identifiable, Codable, Sendable, Hashable {
     var outputPath: String?
     var referencePaths: [String]
     var approvalStatus: String
+    var approvalNotes: String?
+    var approvalUpdatedAt: Date?
     var errorMessage: String?
     var blockers: [AutomationBlocker]
 
@@ -381,6 +383,8 @@ struct GeneratedFrameRecord: Identifiable, Codable, Sendable, Hashable {
         outputPath: String? = nil,
         referencePaths: [String] = [],
         approvalStatus: String = "unapproved",
+        approvalNotes: String? = nil,
+        approvalUpdatedAt: Date? = nil,
         errorMessage: String? = nil,
         blockers: [AutomationBlocker] = []
     ) {
@@ -405,6 +409,8 @@ struct GeneratedFrameRecord: Identifiable, Codable, Sendable, Hashable {
         self.outputPath = outputPath
         self.referencePaths = referencePaths
         self.approvalStatus = approvalStatus
+        self.approvalNotes = approvalNotes
+        self.approvalUpdatedAt = approvalUpdatedAt
         self.errorMessage = errorMessage
         self.blockers = blockers
     }
