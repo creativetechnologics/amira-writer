@@ -70,7 +70,7 @@ struct StoryboardStatusView: View {
         }
         .padding(14)
         .frame(width: 240)
-        .task { qrImage = makeQR(for: url.absoluteString) }
+        .task(id: url.absoluteString) { qrImage = makeQR(for: url.absoluteString) }
     }
 
     private func makeQR(for string: String) -> NSImage? {

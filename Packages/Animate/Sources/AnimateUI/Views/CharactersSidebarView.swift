@@ -64,9 +64,6 @@ struct CharactersSidebarView: View {
                 }
             )
         }
-        .task(id: store.owpURL?.path) {
-            store.recoverMissingPersistedCharactersIfNeeded()
-        }
     }
 
     @ViewBuilder

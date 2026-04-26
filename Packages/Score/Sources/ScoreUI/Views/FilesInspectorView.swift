@@ -11,8 +11,9 @@ struct FilesInspectorView: View {
     @Bindable var store: ScoreStore
 
     @State private var expandedSections: Set<FileSection> = [.audioClips, .soundFonts]
+    @State private var cachedFilesBySection: [FileSection: [ProjectFile]] = [:]
 
-    enum FileSection: String, CaseIterable, Identifiable {
+    enum FileSection: String, CaseIterable, Identifiable, Sendable {
         case songFiles = "Song Files"
         case soundFonts = "SoundFonts"
         case audioClips = "Audio Clips"
@@ -28,6 +29,69 @@ struct FilesInspectorView: View {
             case .exports: return "square.and.arrow.up"
             }
         }
+    }
+
+    private struct FileDiscoveryContext: Hashable, Sendable {
+        struct SongAssetSnapshot: Hashable, Sendable {
+            let id: UUID
+            let relativePath: String
+        }
+
+        struct SoundFontMappingSnapshot: Hashable, Sendable {
+            let key: String
+            let displayName: String
+            let sf2Path: String?
+        }
+
+        struct AudioClipSnapshot: Hashable, Sendable {
+            let id: UUID
+            let displayName: String
+            let filePath: String
+            let startTick: Int
+            let durationTicks: Int
+        }
+
+        let projectPath: String?
+        let selectedSongID: UUID?
+        let selectedSongRelativePath: String?
+        let songAssets: [SongAssetSnapshot]
+        let soundFontMappings: [SoundFontMappingSnapshot]
+        let audioClips: [AudioClipSnapshot]
+        let fullMixExportStatus: String
+    }
+
+    private enum FileTone: Sendable {
+        case blue
+        case secondary
+        case purple
+        case orange
+        case red
+        case cyan
+        case green
+
+        var color: Color {
+            switch self {
+            case .blue: return .blue
+            case .secondary: return .secondary
+            case .purple: return .purple
+            case .orange: return .orange
+            case .red: return .red
+            case .cyan: return .cyan
+            case .green: return .green
+            }
+        }
+    }
+
+    private struct DiscoveredFile: Hashable, Sendable {
+        let name: String
+        let path: String
+        let icon: String
+        let tone: FileTone
+        let detail: String?
+        let isDraggable: Bool
+        let isRemovable: Bool
+        let fileSize: Int64?
+        let clipID: UUID?
     }
 
     var body: some View {
@@ -86,6 +150,9 @@ struct FilesInspectorView: View {
             .padding(.bottom, 4)
         }
         .padding(.vertical, 4)
+        .task(id: discoveryContext) {
+            await refreshFileCache(for: discoveryContext)
+        }
     }
 
     // MARK: - Section Views
@@ -225,120 +292,195 @@ struct FilesInspectorView: View {
     // MARK: - File Discovery
 
     private func filesForSection(_ section: FileSection) -> [ProjectFile] {
-        switch section {
-        case .songFiles:
-            return discoverSongFiles()
-        case .soundFonts:
-            return discoverSoundFonts()
-        case .audioClips:
-            return discoverAudioClips()
-        case .exports:
-            return discoverExports()
+        cachedFilesBySection[section] ?? []
+    }
+
+    private var discoveryContext: FileDiscoveryContext {
+        let projectPath = store.projectURL?.standardizedFileURL.path
+        let selectedSongID = store.selectedMidiID
+        let selectedSongRelativePath = selectedSongID.flatMap { id in
+            store.songAssets.first(where: { $0.id == id })?.relativePath
+        }
+        let songAssets = store.songAssets.map {
+            FileDiscoveryContext.SongAssetSnapshot(id: $0.id, relativePath: $0.relativePath)
+        }
+        let soundFontMappings = store.instrumentMappings
+            .sorted(by: { $0.key < $1.key })
+            .map { key, mapping in
+                FileDiscoveryContext.SoundFontMappingSnapshot(
+                    key: key,
+                    displayName: mapping.displayName,
+                    sf2Path: mapping.sf2Path
+                )
+            }
+        let audioClips = store.pianoRollAudioClips.map {
+            FileDiscoveryContext.AudioClipSnapshot(
+                id: $0.id,
+                displayName: $0.displayName,
+                filePath: $0.filePath,
+                startTick: $0.startTick,
+                durationTicks: $0.durationTicks
+            )
+        }
+
+        return FileDiscoveryContext(
+            projectPath: projectPath,
+            selectedSongID: selectedSongID,
+            selectedSongRelativePath: selectedSongRelativePath,
+            songAssets: songAssets,
+            soundFontMappings: soundFontMappings,
+            audioClips: audioClips,
+            fullMixExportStatus: store.fullMixExportStatus
+        )
+    }
+
+    private func refreshFileCache(for context: FileDiscoveryContext) async {
+        let discovered = await Task.detached(priority: .utility) {
+            Self.discoverFiles(for: context)
+        }.value
+
+        await MainActor.run {
+            guard self.discoveryContext == context else { return }
+            self.cachedFilesBySection = Self.makeProjectFiles(from: discovered)
         }
     }
 
-    private func discoverSongFiles() -> [ProjectFile] {
-        var files: [ProjectFile] = []
+    nonisolated private static func makeProjectFiles(from discovered: [FileSection: [DiscoveredFile]]) -> [FileSection: [ProjectFile]] {
+        Dictionary(uniqueKeysWithValues: discovered.map { section, files in
+            let projectFiles = files.map {
+                ProjectFile(
+                    name: $0.name,
+                    path: $0.path,
+                    icon: $0.icon,
+                    iconColor: $0.tone.color,
+                    detail: $0.detail,
+                    isDraggable: $0.isDraggable,
+                    isRemovable: $0.isRemovable,
+                    fileSize: $0.fileSize,
+                    clipID: $0.clipID
+                )
+            }
+            return (section, projectFiles)
+        })
+    }
+
+    nonisolated private static func discoverFiles(for context: FileDiscoveryContext) -> [FileSection: [DiscoveredFile]] {
+        [
+            .songFiles: discoverSongFiles(for: context),
+            .soundFonts: discoverSoundFonts(for: context),
+            .audioClips: discoverAudioClips(for: context),
+            .exports: discoverExports(for: context)
+        ]
+    }
+
+    nonisolated private static func discoverSongFiles(for context: FileDiscoveryContext) -> [DiscoveredFile] {
+        var files: [DiscoveredFile] = []
+        let projectURL = context.projectPath.map { URL(fileURLWithPath: $0) }
 
         // OWS song files from the project
-        for asset in store.songAssets {
-            let isSelected = asset.id == store.selectedMidiID
+        for asset in context.songAssets {
+            let isSelected = asset.id == context.selectedSongID
             let url: URL?
-            if let projectURL = store.projectURL {
+            if let projectURL {
                 url = projectURL.appendingPathComponent(asset.relativePath)
             } else {
-                url = store.projectURL  // standalone OWS
+                url = nil  // standalone OWS
             }
-            files.append(ProjectFile(
+            files.append(DiscoveredFile(
                 name: asset.relativePath.components(separatedBy: "/").last ?? asset.relativePath,
                 path: url?.path ?? "",
                 icon: isSelected ? "doc.fill" : "doc",
-                iconColor: isSelected ? .blue : .secondary,
+                tone: isSelected ? .blue : .secondary,
                 detail: isSelected ? "Active" : nil,
                 isDraggable: false,
                 isRemovable: false,
-                fileSize: url.flatMap { fileSize(at: $0) }
+                fileSize: url.flatMap { Self.fileSize(at: $0) },
+                clipID: nil
             ))
         }
         return files
     }
 
-    private func discoverSoundFonts() -> [ProjectFile] {
-        var files: [ProjectFile] = []
+    nonisolated private static func discoverSoundFonts(for context: FileDiscoveryContext) -> [DiscoveredFile] {
+        var files: [DiscoveredFile] = []
         var seen = Set<String>()
+        let fileManager = FileManager.default
 
         // Embedded SoundFonts from OWP bundle
-        if let projectURL = store.projectURL {
+        if let projectPath = context.projectPath {
+            let projectURL = URL(fileURLWithPath: projectPath)
             let sfDir = ProjectPaths(root: projectURL).soundFonts
-            if let contents = try? FileManager.default.contentsOfDirectory(
+            if let contents = try? fileManager.contentsOfDirectory(
                 at: sfDir, includingPropertiesForKeys: [.fileSizeKey]
             ) {
                 for url in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                     let ext = url.pathExtension.lowercased()
                     guard ["sf2", "sf3", "dls"].contains(ext) else { continue }
                     guard seen.insert(url.path).inserted else { continue }
-                    files.append(ProjectFile(
+                    files.append(DiscoveredFile(
                         name: url.lastPathComponent,
                         path: url.path,
                         icon: "waveform",
-                        iconColor: .purple,
+                        tone: .purple,
                         detail: "Embedded",
                         isDraggable: false,
                         isRemovable: false,
-                        fileSize: fileSize(at: url)
+                        fileSize: Self.fileSize(at: url),
+                        clipID: nil
                     ))
                 }
             }
         }
 
         // Referenced SoundFonts from instrument mappings (external)
-        for (_, mapping) in store.instrumentMappings.sorted(by: { $0.key < $1.key }) {
+        for mapping in context.soundFontMappings {
             if let sf2Path = mapping.sf2Path, !sf2Path.isEmpty, seen.insert(sf2Path).inserted {
                 let url = URL(fileURLWithPath: sf2Path)
-                let exists = FileManager.default.fileExists(atPath: sf2Path)
-                files.append(ProjectFile(
+                let exists = fileManager.fileExists(atPath: sf2Path)
+                files.append(DiscoveredFile(
                     name: url.lastPathComponent,
                     path: sf2Path,
                     icon: exists ? "waveform" : "exclamationmark.triangle",
-                    iconColor: exists ? .orange : .red,
+                    tone: exists ? .orange : .red,
                     detail: exists ? "External (\(mapping.displayName))" : "Missing!",
                     isDraggable: false,
                     isRemovable: false,
-                    fileSize: exists ? fileSize(at: url) : nil
+                    fileSize: exists ? Self.fileSize(at: url) : nil,
+                    clipID: nil
                 ))
             }
         }
         return files
     }
 
-    private func discoverAudioClips() -> [ProjectFile] {
-        store.pianoRollAudioClips.map { clip in
+    nonisolated private static func discoverAudioClips(for context: FileDiscoveryContext) -> [DiscoveredFile] {
+        context.audioClips.map { clip in
             let url = URL(fileURLWithPath: clip.filePath)
             let exists = FileManager.default.fileExists(atPath: clip.filePath)
             let tickInfo = "Tick \(clip.startTick)–\(clip.startTick + clip.durationTicks)"
-            return ProjectFile(
+            return DiscoveredFile(
                 name: clip.displayName,
                 path: clip.filePath,
                 icon: exists ? "waveform.circle.fill" : "exclamationmark.triangle",
-                iconColor: exists ? .cyan : .red,
+                tone: exists ? .cyan : .red,
                 detail: exists ? tickInfo : "File missing!",
                 isDraggable: true,
                 isRemovable: true,
-                fileSize: exists ? fileSize(at: url) : nil,
+                fileSize: exists ? Self.fileSize(at: url) : nil,
                 clipID: clip.id
             )
         }
     }
 
-    private func discoverExports() -> [ProjectFile] {
-        var files: [ProjectFile] = []
-        let songName = store.selectedMidiAsset.flatMap { asset -> String? in
-            let name = asset.relativePath.components(separatedBy: "/").last ?? ""
+    nonisolated private static func discoverExports(for context: FileDiscoveryContext) -> [DiscoveredFile] {
+        var files: [DiscoveredFile] = []
+        let songName = context.selectedSongRelativePath.flatMap { relativePath -> String? in
+            let name = relativePath.components(separatedBy: "/").last ?? ""
             return name.replacingOccurrences(of: ".ows", with: "")
         } ?? ""
 
         // Check Desktop export directory
-        let desktopExportDir = ScoreStore.preferredExportDirectory(projectURL: store.projectURL)
+        let desktopExportDir = preferredExportDirectory(projectPath: context.projectPath)
 
         if !songName.isEmpty {
             let songExportDir = desktopExportDir.appendingPathComponent(songName)
@@ -348,15 +490,16 @@ struct FilesInspectorView: View {
                 for url in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                     let ext = url.pathExtension.lowercased()
                     guard ["wav", "mp3", "aiff", "m4a"].contains(ext) else { continue }
-                    files.append(ProjectFile(
+                    files.append(DiscoveredFile(
                         name: url.lastPathComponent,
                         path: url.path,
                         icon: "square.and.arrow.up",
-                        iconColor: .green,
+                        tone: .green,
                         detail: "Exported",
                         isDraggable: true,
                         isRemovable: false,
-                        fileSize: fileSize(at: url)
+                        fileSize: Self.fileSize(at: url),
+                        clipID: nil
                     ))
                 }
             }
@@ -370,20 +513,35 @@ struct FilesInspectorView: View {
             for url in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 let ext = url.pathExtension.lowercased()
                 guard ["wav", "mp3"].contains(ext) else { continue }
-                files.append(ProjectFile(
+                files.append(DiscoveredFile(
                     name: url.lastPathComponent,
                     path: url.path,
                     icon: "sparkles",
-                    iconColor: .purple,
+                    tone: .purple,
                     detail: "Suno render",
                     isDraggable: true,
                     isRemovable: false,
-                    fileSize: fileSize(at: url)
+                    fileSize: Self.fileSize(at: url),
+                    clipID: nil
                 ))
             }
         }
 
         return files
+    }
+
+    nonisolated private static func preferredExportDirectory(projectPath: String?) -> URL {
+        if let projectPath {
+            return URL(fileURLWithPath: projectPath)
+                .appendingPathComponent("Exports", isDirectory: true)
+        }
+        let fileManager = FileManager.default
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        return appSupport
+            .appendingPathComponent("Amira Writer", isDirectory: true)
+            .appendingPathComponent("Exports", isDirectory: true)
     }
 
     // MARK: - Helpers
@@ -397,7 +555,7 @@ struct FilesInspectorView: View {
         }
     }
 
-    private func fileSize(at url: URL) -> Int64? {
+    nonisolated private static func fileSize(at url: URL) -> Int64? {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attrs[.size] as? Int64 else { return nil }
         return size

@@ -26,10 +26,11 @@ struct AsyncStoreThumbnailImage<Placeholder: View>: View {
     @State private var loadedImage: NSImage?
     @State private var loadedPath: String?
     @State private var loadedSize: CGFloat = 0
+    @State private var resolvedDragURL: URL?
 
     private var dragURL: URL? {
         guard let path else { return nil }
-        return store.resolvedCharacterAssetURL(for: path)
+        return resolvedDragURL
             ?? projectImageDragURL(forResolvedPath: path)
     }
 
@@ -54,11 +55,7 @@ struct AsyncStoreThumbnailImage<Placeholder: View>: View {
     }
 
     var body: some View {
-        // Resolve from cache first — NSCache lookups are effectively free.
-        // Only fall through to the async path on a miss, which then paints
-        // a placeholder and decodes off the main actor.
-        let cached = store.cachedThumbnailImage(for: path, maxSize: maxSize)
-        let displayImage: NSImage? = cached ?? (loadedPath == path && loadedSize == maxSize ? loadedImage : nil)
+        let displayImage: NSImage? = (loadedPath == path && loadedSize == maxSize) ? loadedImage : nil
 
         Group {
             if let image = displayImage {
@@ -74,21 +71,44 @@ struct AsyncStoreThumbnailImage<Placeholder: View>: View {
         }
         .modifier(ProjectImageFileDragModifier(url: dragURL))
         .task(id: "\(path ?? "")#\(Int(maxSize.rounded()))") {
-            // If we've already got it cached, nothing to do.
-            if store.cachedThumbnailImage(for: path, maxSize: maxSize) != nil {
+            let currentPath = path
+            let currentSize = maxSize
+
+            guard let currentPath else {
                 loadedImage = nil
-                loadedPath = path
-                loadedSize = maxSize
+                loadedPath = nil
+                loadedSize = 0
+                resolvedDragURL = nil
                 return
             }
-            let target = path
-            let size = maxSize
-            let loaded = await store.thumbnailImageAsync(for: target, maxSize: size)
+
+            resolvedDragURL = store.resolvedCharacterAssetURL(for: currentPath)
+                ?? projectImageDragURL(forResolvedPath: currentPath)
+
+            if Task.isCancelled {
+                return
+            }
+
+            if let cached = store.cachedThumbnailImage(for: currentPath, maxSize: currentSize) {
+                if Task.isCancelled {
+                    return
+                }
+                loadedImage = cached
+                loadedPath = currentPath
+                loadedSize = currentSize
+                return
+            }
+
+            loadedImage = nil
+            loadedPath = currentPath
+            loadedSize = currentSize
+
+            let loaded = await store.thumbnailImageAsync(for: currentPath, maxSize: currentSize)
             if Task.isCancelled { return }
-            if target == path && size == maxSize {
+            if currentPath == path && currentSize == maxSize {
                 loadedImage = loaded
-                loadedPath = target
-                loadedSize = size
+                loadedPath = currentPath
+                loadedSize = currentSize
             }
         }
     }

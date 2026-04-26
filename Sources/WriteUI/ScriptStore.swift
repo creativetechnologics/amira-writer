@@ -901,6 +901,8 @@ final class ScriptStore {
     private var lastKnownModDates: [String: Date] = [:]
     private var lastKnownFileSnapshots: [String: ProjectFileSnapshot] = [:]
     private var fileWatchWorkItem: DispatchWorkItem?
+    private var isFileWatchingActive = false
+    private var fileWatchGeneration: UInt64 = 0
     private var scratchpadSaveWorkItem: DispatchWorkItem?
     private var hydratedScenePaths: Set<String> = []
     private var hydratingScenePaths: Set<String> = []
@@ -1882,8 +1884,11 @@ final class ScriptStore {
     func startFileWatching() {
         stopFileWatching()
         guard fileProjectURL != nil else { return }
+        isFileWatchingActive = true
+        fileWatchGeneration &+= 1
+        let generation = fileWatchGeneration
         recordModDates()
-        scheduleFileCheck()
+        scheduleFileCheck(generation: generation)
     }
 
     func processExternalChangesNow() {
@@ -1891,15 +1896,25 @@ final class ScriptStore {
     }
 
     func stopFileWatching() {
+        isFileWatchingActive = false
+        fileWatchGeneration &+= 1
         fileWatchWorkItem?.cancel()
         fileWatchWorkItem = nil
     }
 
-    private func scheduleFileCheck() {
+    private func scheduleFileCheck(generation: UInt64) {
+        guard isFileWatchingActive,
+              fileWatchGeneration == generation,
+              fileProjectURL != nil else { return }
+
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            guard self.isFileWatchingActive,
+                  self.fileWatchGeneration == generation else { return }
             self.checkForExternalChanges()
-            self.scheduleFileCheck()
+            guard self.isFileWatchingActive,
+                  self.fileWatchGeneration == generation else { return }
+            self.scheduleFileCheck(generation: generation)
         }
         fileWatchWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.externalWatchInterval, execute: item)

@@ -637,11 +637,11 @@ struct ScoreApp: App {
             Divider()
             Button("Export Audio...") { store.exportFullMixToWavWithPanel() }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(store.pianoRollNotes.isEmpty || store.isExportingFullMix)
+                .disabled(store.pianoRollNotes.isEmpty || store.isExportingFullMix || store.isPresentingFullMixExportPanel)
             Button("Export Rehearsal Track...") { store.exportRehearsalTrackWithPanel() }
-                .disabled(store.pianoRollNotes.isEmpty || store.isExportingFullMix)
+                .disabled(store.pianoRollNotes.isEmpty || store.isExportingFullMix || store.isPresentingFullMixExportPanel)
             Button("Export Stems...") { store.exportStemsWithPanel() }
-                .disabled(store.pianoRollNotes.isEmpty || store.isExportingFullMix)
+                .disabled(store.pianoRollNotes.isEmpty || store.isExportingFullMix || store.isPresentingFullMixExportPanel)
         }
     }
 
@@ -718,9 +718,6 @@ struct ScoreApp: App {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    static let toggleInspectorNotification = Notification.Name("ToggleInspector")
-    static let spacebarPlayPauseNotification = Notification.Name("SpacebarPlayPause")
-
     private var keyMonitor: Any?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -758,18 +755,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installSpacebarMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.keyCode == 49 else { return event }
-            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if mods.contains(.command) || mods.contains(.control) || mods.contains(.option) {
-                return event
-            }
-            if let responder = event.window?.value(forKey: "firstResponder") as? NSResponder,
-               responder is NSTextView || responder is NSTextField {
-                return event
-            }
-            NotificationCenter.default.post(name: Self.spacebarPlayPauseNotification, object: nil)
+            let keyCode = event.keyCode
+            let modifierFlags = event.modifierFlags
+            let windowNumber = event.windowNumber
+
+            guard MainActor.assumeIsolated({
+                Self.shouldTogglePlayback(
+                    keyCode: keyCode,
+                    modifierFlags: modifierFlags,
+                    windowNumber: windowNumber
+                )
+            }) else { return event }
+            NotificationCenter.default.post(name: ScoreAppSignals.spacebarPlayPauseNotification, object: nil)
             return nil
         }
+    }
+
+    @MainActor
+    private static func shouldTogglePlayback(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        windowNumber: Int
+    ) -> Bool {
+        guard keyCode == 49 else { return false }
+
+        let mods = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods.contains(.command) || mods.contains(.control) || mods.contains(.option) {
+            return false
+        }
+
+        // Only handle space when the main Score workspace window owns the key event.
+        // This keeps sheets, dialogs, and other temporary UI in control of the key.
+        guard let window = NSApp.window(withWindowNumber: windowNumber),
+              window === NSApp.mainWindow else { return false }
+
+        if let responder = window.firstResponder {
+            if responder is NSText || responder is NSTextView || responder is NSTextField {
+                return false
+            }
+        }
+
+        return true
     }
 
     @MainActor
@@ -809,7 +835,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleInspector() {
-        NotificationCenter.default.post(name: Self.toggleInspectorNotification, object: nil)
+        NotificationCenter.default.post(name: ScoreAppSignals.toggleInspectorNotification, object: nil)
     }
 }
 

@@ -35,6 +35,21 @@ public final class ScoreWorkspaceController: ObservableObject {
         store.suspendBackgroundWork()
     }
 
+    public func resumeBackgroundWork() {
+        store.resumeBackgroundWork()
+    }
+
+    public var isPlaybackActive: Bool {
+        store.isPlaybackActivityActive
+    }
+
+    public func isProjectDisplayReady(_ projectURL: URL) -> Bool {
+        let normalizedPath = projectURL.standardizedFileURL.path
+        return loadedProjectPath == normalizedPath
+            && store.projectURL?.standardizedFileURL.path == normalizedPath
+            && !isLoadingProject
+    }
+
     public func save() {
         store.save()
     }

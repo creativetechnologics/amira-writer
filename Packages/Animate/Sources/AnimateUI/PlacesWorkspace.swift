@@ -12,6 +12,9 @@ public struct PlacesWorkspace: View {
     public var body: some View {
         ZStack {
             PlacesWorkspaceContent(store: controller.store)
+                .environment(\.unifiedImageFlipHandler) { path in
+                    controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
+                }
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
             if controller.isLoadingProject || controller.isSelectionRestorePending {

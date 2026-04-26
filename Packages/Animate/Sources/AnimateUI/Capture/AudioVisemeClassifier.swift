@@ -18,6 +18,9 @@ final class AudioVisemeClassifier: @unchecked Sendable {
 
     private let audioEngine = AVAudioEngine()
     private let fftSize = 1024
+    private let log2n: vDSP_Length
+    private let hanningWindow: [Float]
+    private let fftSetup: FFTSetup?
     private nonisolated(unsafe) var isRunning = false
 
     // Callback for each analysis frame
@@ -30,6 +33,18 @@ final class AudioVisemeClassifier: @unchecked Sendable {
     ) {
         self.sampleRate = sampleRate
         self.onVisemeWeights = onVisemeWeights
+        self.log2n = vDSP_Length(log2(Float(fftSize)))
+
+        var window = [Float](repeating: 0, count: fftSize)
+        vDSP_hann_window(&window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
+        self.hanningWindow = window
+        self.fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))
+    }
+
+    deinit {
+        if let fftSetup {
+            vDSP_destroy_fftsetup(fftSetup)
+        }
     }
 
     /// Start capturing and analyzing microphone audio.
@@ -78,28 +93,30 @@ final class AudioVisemeClassifier: @unchecked Sendable {
         // Compute power spectrum using vDSP
         var magnitudes = [Float](repeating: 0, count: fftSize / 2)
 
-        let log2n = vDSP_Length(log2(Float(fftSize)))
-        guard let fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else {
+        guard let fftSetup else {
             return [.rest: 1.0]
         }
-        defer { vDSP_destroy_fftsetup(fftSetup) }
 
         var realPart = [Float](repeating: 0, count: fftSize / 2)
         var imagPart = [Float](repeating: 0, count: fftSize / 2)
 
         // Apply Hanning window
         var windowed = [Float](repeating: 0, count: fftSize)
-        var window = [Float](repeating: 0, count: fftSize)
-        vDSP_hann_window(&window, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
-        vDSP_vmul(channelData, 1, window, 1, &windowed, 1, vDSP_Length(fftSize))
+        vDSP_vmul(channelData, 1, hanningWindow, 1, &windowed, 1, vDSP_Length(fftSize))
 
         // Convert to split complex and compute FFT
         windowed.withUnsafeBufferPointer { ptr in
             ptr.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: fftSize / 2) { complexPtr in
-                var splitComplex = DSPSplitComplex(realp: &realPart, imagp: &imagPart)
-                vDSP_ctoz(complexPtr, 2, &splitComplex, 1, vDSP_Length(fftSize / 2))
-                vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Forward))
-                vDSP_zvabs(&splitComplex, 1, &magnitudes, 1, vDSP_Length(fftSize / 2))
+                realPart.withUnsafeMutableBufferPointer { realPtr in
+                    imagPart.withUnsafeMutableBufferPointer { imagPtr in
+                        guard let realBase = realPtr.baseAddress,
+                              let imagBase = imagPtr.baseAddress else { return }
+                        var splitComplex = DSPSplitComplex(realp: realBase, imagp: imagBase)
+                        vDSP_ctoz(complexPtr, 2, &splitComplex, 1, vDSP_Length(fftSize / 2))
+                        vDSP_fft_zrip(fftSetup, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Forward))
+                        vDSP_zvabs(&splitComplex, 1, &magnitudes, 1, vDSP_Length(fftSize / 2))
+                    }
+                }
             }
         }
 
@@ -110,7 +127,10 @@ final class AudioVisemeClassifier: @unchecked Sendable {
             let highBin = min(magnitudes.count - 1, Int(highHz / binHz))
             guard lowBin <= highBin else { return 0 }
             var sum: Float = 0
-            vDSP_sve(Array(magnitudes[lowBin...highBin]), 1, &sum, vDSP_Length(highBin - lowBin + 1))
+            magnitudes.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else { return }
+                vDSP_sve(base.advanced(by: lowBin), 1, &sum, vDSP_Length(highBin - lowBin + 1))
+            }
             return sum / Float(highBin - lowBin + 1)
         }
 

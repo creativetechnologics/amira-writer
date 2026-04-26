@@ -106,9 +106,9 @@ actor VertexAIClient {
             process.terminationHandler = { proc in
                 let outData = (try? stdout.fileHandleForReading.readToEnd()) ?? Data()
                 let errData = (try? stderr.fileHandleForReading.readToEnd()) ?? Data()
-                let outStr = String(decoding: outData ?? Data(), as: UTF8.self)
+                let outStr = String(decoding: outData, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                let errStr = String(decoding: errData ?? Data(), as: UTF8.self)
+                let errStr = String(decoding: errData, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if proc.terminationStatus == 0, !outStr.isEmpty {
                     cont.resume(returning: outStr)
@@ -123,6 +123,23 @@ actor VertexAIClient {
                 cont.resume(throwing: VertexError.gcloudFailed(error.localizedDescription))
             }
         }
+    }
+}
+
+@available(macOS 26.0, *)
+actor VertexAIClientCache {
+    static let shared = VertexAIClientCache()
+
+    private var clientsByConfig: [String: VertexAIClient] = [:]
+
+    func client(projectID: String, region: String) -> VertexAIClient {
+        let key = "\(projectID)|\(region)"
+        if let existing = clientsByConfig[key] {
+            return existing
+        }
+        let created = VertexAIClient(projectID: projectID, region: region)
+        clientsByConfig[key] = created
+        return created
     }
 }
 

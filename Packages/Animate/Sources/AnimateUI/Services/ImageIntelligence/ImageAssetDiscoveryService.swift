@@ -68,6 +68,7 @@ public final class ImageAssetDiscoveryService {
         discoverCanvasGenerations(into: &assets)
         discoverCharacters(into: &assets)
         discoverSceneShots(into: &assets)
+        discoverStoryboardFrames(into: &assets)
 
         // Preserve multiple links to the same asset when they point at different owners/contexts.
         let deduplicated = Dictionary(grouping: assets) {
@@ -495,6 +496,49 @@ public final class ImageAssetDiscoveryService {
                             moment: "end"
                         ))
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - Storyboards
+
+    private func discoverStoryboardFrames(into assets: inout [DiscoveredAsset]) {
+        guard let projectURL = store.owpURL else { return }
+        let paths = ProjectPaths(root: projectURL)
+
+        for (sceneOrder, scene) in store.scenes.enumerated() {
+            let sceneID = scene.id.uuidString
+            let sceneName = scene.name
+
+            for (shotOrder, shot) in scene.shots.enumerated() {
+                let shotID = shot.id.uuidString
+                let shotName = shot.name
+
+                for frame in StoryboardFrame.allCases {
+                    let storyboardURL = paths.shotStoryboardImage(sceneID: scene.id, shotID: shot.id, frame: frame)
+                    guard let resolved = resolvePath(storyboardURL.path) else { continue }
+                    guard FileManager.default.fileExists(atPath: resolved) else { continue }
+
+                    let context: [String: String] = [
+                        "sceneID": sceneID,
+                        "sceneName": sceneName,
+                        "sceneOrder": String(sceneOrder),
+                        "shotID": shotID,
+                        "shotName": shotName,
+                        "shotOrder": String(shotOrder),
+                        "frame": frame.rawValue
+                    ]
+
+                    assets.append(DiscoveredAsset(
+                        resolvedPath: resolved,
+                        projectRelativePath: relativePath(resolved),
+                        linkKind: .storyboardFrame,
+                        ownerID: shotID,
+                        ownerParentID: sceneID,
+                        moment: frame.rawValue,
+                        context: context
+                    ))
                 }
             }
         }

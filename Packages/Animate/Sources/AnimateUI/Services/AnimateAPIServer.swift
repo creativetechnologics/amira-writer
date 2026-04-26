@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import ProjectKit
 
 // MARK: - AnimateAPIServer
 //
@@ -213,6 +214,46 @@ final class AnimateAPIRouter {
         case ("POST", "/places/generate"):
             await ensureProjectHydrated()
             return await generatePlaceResponse(request)
+        case ("GET", "/image-intelligence/status"):
+            await ensureProjectHydrated()
+            return await imageIntelligenceStatusResponse()
+        case ("POST", "/image-intelligence/configure"):
+            await ensureProjectHydrated()
+            return await configureImageIntelligenceResponse(request)
+        case ("POST", "/image-intelligence/backfill"):
+            await ensureProjectHydrated()
+            return await imageIntelligenceBackfillResponse(request)
+        case ("POST", "/image-intelligence/worker/start"):
+            await ensureProjectHydrated()
+            return await imageIntelligenceWorkerResponse(shouldStart: true)
+        case ("POST", "/image-intelligence/worker/stop"):
+            await ensureProjectHydrated()
+            return await imageIntelligenceWorkerResponse(shouldStart: false)
+        case ("POST", "/image-intelligence/queue/reset"):
+            await ensureProjectHydrated()
+            return await imageIntelligenceQueueResetResponse()
+        case ("GET", "/image-intelligence/jobs"):
+            await ensureProjectHydrated()
+            return await imageIntelligenceJobsResponse(request)
+        case ("GET", "/image-intelligence/logs"):
+            await ensureProjectHydrated()
+            return await imageIntelligenceLogsResponse(request)
+        case ("GET", "/image-intelligence/asset"):
+            await ensureProjectHydrated()
+            return await imageIntelligenceAssetResponse(request)
+        case ("POST", "/shot-frames/dry-run"):
+            await ensureProjectHydrated()
+            return await shotFrameDryRunResponse(request)
+        case ("POST", "/vertex/image-smoke"):
+            await ensureProjectHydrated()
+            return await vertexImageSmokeResponse(request)
+        case ("POST", "/map3d/regenerate"):
+            // No `ensureProjectHydrated()` — the pipeline reads canon JSON
+            // from disk, not from the AnimateStore, so a regen can run before
+            // any project is loaded.
+            return map3DRegenerateResponse()
+        case ("GET", "/map3d/regenerate/status"):
+            return map3DRegenerateStatusResponse()
         default:
             return AnimateHTTPResponse.error(404, "Unknown route: \(request.method) \(request.path)")
         }
@@ -342,6 +383,692 @@ final class AnimateAPIRouter {
             return .error(500, "Generation failed: \(error.localizedDescription)")
         }
     }
+
+    // MARK: Image Intelligence API
+
+    private func imageIntelligenceStatusResponse() async -> AnimateHTTPResponse {
+        let stats = await store.imageIntelligenceStats()
+        let backend = ImageAnalysisBackendStore.currentBackend()
+        let queue = await store.imageIntelligenceQueueSnapshot(limit: 20)
+        let logs = await store.imageIntelligenceRecentLogs(limit: 10)
+        let payload: [String: Any] = [
+            "ok": stats != nil,
+            "initialized": stats != nil,
+            "project": store.owpURL?.path ?? NSNull(),
+            "backend": backend.rawValue,
+            "backendDisplayName": backend.displayName,
+            "aiStudioAPIKeySet": !store.imageAnalysisGeminiAPIKey.isEmpty,
+            "vertexProjectID": ImageAnalysisBackendStore.currentVertexProjectID(),
+            "vertexRegion": ImageAnalysisBackendStore.currentVertexRegion(),
+            "worker": stats.map(workerStatsPayload) ?? NSNull(),
+            "recentJobs": queue.map(jobPayload),
+            "recentLogs": logs.map(logPayload)
+        ]
+        return .okJSON(payload)
+    }
+
+    private func configureImageIntelligenceResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        guard let body = request.jsonBody() else {
+            return .error(400, "Missing or malformed JSON body")
+        }
+
+        if let backendRaw = body["backend"] as? String,
+           !backendRaw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let normalized = backendRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let backend = ImageAnalysisBackend(rawValue: normalized) ??
+                    ImageAnalysisBackend.allCases.first(where: {
+                        $0.displayName.localizedCaseInsensitiveContains(normalized) ||
+                        normalized.localizedCaseInsensitiveContains($0.rawValue)
+                    }) else {
+                return .error(400, "Invalid backend: \(backendRaw) (use 'aiStudio' or 'vertex')")
+            }
+            ImageAnalysisBackendStore.setBackend(backend)
+        }
+
+        let vertexProjectID = stringValue(body["vertexProjectID"])
+            ?? stringValue(body["projectID"])
+            ?? ImageAnalysisBackendStore.currentVertexProjectID()
+        let vertexRegion = stringValue(body["vertexRegion"])
+            ?? stringValue(body["region"])
+            ?? ImageAnalysisBackendStore.currentVertexRegion()
+        ImageAnalysisBackendStore.setVertexSettings(
+            projectID: vertexProjectID,
+            region: vertexRegion.isEmpty ? "global" : vertexRegion
+        )
+
+        if let key = stringValue(body["aiStudioAPIKey"])
+            ?? stringValue(body["imageAnalysisGeminiAPIKey"])
+            ?? stringValue(body["geminiAPIKey"]) {
+            store.setImageAnalysisGeminiAPIKey(key)
+        } else {
+            store.refreshImageAnalysisConfiguration()
+        }
+
+        return await imageIntelligenceStatusResponse()
+    }
+
+    private func imageIntelligenceBackfillResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        let body = request.jsonBody() ?? [:]
+        let dryRun = boolValue(body["dryRun"]) ?? true
+        let maxBatchSize = intValue(body["maxBatchSize"]).flatMap { $0 > 0 ? $0 : nil }
+        let forceReanalysis = boolValue(body["forceReanalysis"]) ?? false
+        let enqueueExistingWithoutRuns = boolValue(body["enqueueExistingWithoutRuns"]) ?? true
+        let markMissingAssets = boolValue(body["markMissingAssets"]) ?? true
+        let startWorker = boolValue(body["startWorker"]) ?? false
+
+        let linkKinds: [ImageAssetLinkKind]?
+        do {
+            linkKinds = try parseLinkKinds(from: body["linkKinds"])
+        } catch {
+            return .error(400, error.localizedDescription)
+        }
+
+        guard let report = await store.imageIntelligenceBackfillReport(
+            dryRun: dryRun,
+            maxBatchSize: maxBatchSize,
+            forceReanalysis: forceReanalysis,
+            linkKinds: linkKinds,
+            enqueueExistingWithoutRuns: enqueueExistingWithoutRuns,
+            markMissingAssets: markMissingAssets
+        ) else {
+            return .error(500, "Image intelligence is not initialized for this project yet.")
+        }
+
+        if startWorker && !dryRun {
+            store.startImageAnalysisWorker()
+        }
+
+        let stats = await store.imageIntelligenceStats()
+        let payload: [String: Any] = [
+            "ok": true,
+            "report": backfillReportPayload(report),
+            "workerStarted": startWorker && !dryRun,
+            "worker": stats.map(workerStatsPayload) ?? NSNull()
+        ]
+        return .okJSON(payload)
+    }
+
+    private func imageIntelligenceWorkerResponse(shouldStart: Bool) async -> AnimateHTTPResponse {
+        if shouldStart {
+            store.startImageAnalysisWorker()
+        } else {
+            store.stopImageAnalysisWorker()
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+        return await imageIntelligenceStatusResponse()
+    }
+
+    private func imageIntelligenceQueueResetResponse() async -> AnimateHTTPResponse {
+        let message = await store.resetImageAnalysisQueue()
+        let stats = await store.imageIntelligenceStats()
+        return .okJSON([
+            "ok": true,
+            "message": message,
+            "worker": stats.map(workerStatsPayload) ?? NSNull()
+        ])
+    }
+
+    private func imageIntelligenceJobsResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        let limit = max(1, min(500, intValue(request.queryParams["limit"]) ?? 100))
+        let jobs = await store.imageIntelligenceQueueSnapshot(limit: limit)
+        return .okJSON([
+            "ok": true,
+            "limit": limit,
+            "jobs": jobs.map(jobPayload)
+        ])
+    }
+
+    private func imageIntelligenceLogsResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        let limit = max(1, min(500, intValue(request.queryParams["limit"]) ?? 100))
+        let logs = await store.imageIntelligenceRecentLogs(limit: limit)
+        return .okJSON([
+            "ok": true,
+            "limit": limit,
+            "logs": logs.map(logPayload)
+        ])
+    }
+
+    private func imageIntelligenceAssetResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        guard let path = request.queryParams["path"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty else {
+            return .error(400, "Missing required query parameter: path")
+        }
+
+        guard let record = await store.imageIntelligenceRecord(for: path) else {
+            return .error(404, "No image intelligence asset is registered for path: \(path)")
+        }
+
+        async let jobs = store.imageIntelligenceJobs(for: record.resolvedPath)
+        async let runs = store.imageIntelligenceRuns(for: record.resolvedPath)
+        async let metadata = store.imageIntelligenceLatestMetadata(for: record.resolvedPath)
+        let resolvedJobs = await jobs
+        let resolvedRuns = await runs
+        let resolvedMetadata = await metadata
+
+        return .okJSON([
+            "ok": true,
+            "asset": assetPayload(record),
+            "jobs": resolvedJobs.map(jobPayload),
+            "runs": resolvedRuns.map(runPayload),
+            "latestMetadata": resolvedMetadata.map(metadataPayload) ?? NSNull()
+        ])
+    }
+
+    // MARK: Shot-frame / Vertex agent API
+
+    private func shotFrameDryRunResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        let body = request.jsonBody() ?? [:]
+        let model = resolvedGeminiModel(from: stringValue(body["model"]))
+        let imageSize = stringValue(body["imageSize"])
+            ?? ShotFrameOpenMattePlan.defaultGeneratedImageSize
+
+        do {
+            let sceneFilter = try resolvedSceneFilter(stringValue(body["scene"]))
+            let planner = ShotFrameGenerationDryRunPlanner(store: store)
+            let report = await planner.buildReport(
+                scenes: store.scenes,
+                projectRoot: projectRoot,
+                sceneFilter: sceneFilter,
+                model: model,
+                imageSize: imageSize
+            )
+            let reportURL = try await planner.writeReportAsync(report, projectRoot: projectRoot)
+            return .okJSON([
+                "ok": true,
+                "reportURL": reportURL.path,
+                "model": report.model.rawValue,
+                "modelDisplayName": report.model.displayName,
+                "imageSize": report.imageSize,
+                "summary": dryRunSummaryPayload(report.summary)
+            ])
+        } catch {
+            return .error(400, error.localizedDescription)
+        }
+    }
+
+    private func vertexImageSmokeResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        let body = request.jsonBody() ?? [:]
+        let model = resolvedGeminiModel(from: stringValue(body["model"]))
+        let imageSize = stringValue(body["imageSize"])
+            ?? ShotFrameOpenMattePlan.defaultGeneratedImageSize
+        let aspectRatio = stringValue(body["aspectRatio"])
+            ?? ShotFrameOpenMattePlan.defaultGeneratedAspectRatio
+        let maxSpendUSD = doubleValue(body["maxSpendUSD"]) ?? 1.0
+        let estimatedCost = model.estimatedCost(for: imageSize)
+        guard estimatedCost <= maxSpendUSD else {
+            return .error(400, "Estimated Vertex cost $\(String(format: "%.4f", estimatedCost)) exceeds cap $\(String(format: "%.2f", maxSpendUSD)).")
+        }
+
+        let projectID = firstNonEmpty(
+            stringValue(body["vertexProjectID"]),
+            stringValue(body["projectID"]),
+            ProjectCredentialStore.shared.vertexProjectID(),
+            ImageGenBackendStore.currentVertexSettings().projectID
+        )
+        let region = firstNonEmpty(
+            stringValue(body["vertexRegion"]),
+            stringValue(body["region"]),
+            ProjectCredentialStore.shared.vertexRegion(),
+            ImageGenBackendStore.currentVertexSettings().region,
+            "global"
+        ) ?? "global"
+        guard let projectID, !projectID.isEmpty else {
+            return .error(400, "Missing Vertex project ID. Set it in Gemini Settings or pass vertexProjectID.")
+        }
+
+        let directory = ProjectPaths(root: projectRoot)
+            .animate
+            .appendingPathComponent("Imagine/VertexSmokeTests", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            return .error(500, "Could not create smoke-test directory: \(error.localizedDescription)")
+        }
+
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let stem = "vertex_api_smoke_\(timestamp)_\(model.rawValue)_\(imageSize)_\(aspectRatio.replacingOccurrences(of: ":", with: "x"))"
+        var smokeRecord = VertexImageSmokeTestRecord(
+            id: UUID(),
+            startedAt: Date(),
+            status: "running",
+            model: model.rawValue,
+            imageSize: imageSize,
+            aspectRatio: aspectRatio,
+            estimatedVertexCostUSD: estimatedCost,
+            chargedEstimatedCostUSD: 0,
+            maxSpendUSD: maxSpendUSD,
+            projectID: projectID,
+            region: region
+        )
+
+        do {
+            try Self.writeVertexImageSmokeTestRecord(smokeRecord, directory: directory, stem: stem)
+
+            let previousBackend = ImageGenBackendStore.currentBackend()
+            let previousVertexSettings = ImageGenBackendStore.currentVertexSettings()
+            ImageGenBackendStore.setBackend(.vertex)
+            ImageGenBackendStore.setVertexSettings(VertexSettings(projectID: projectID, region: region))
+            defer {
+                ImageGenBackendStore.setBackend(previousBackend)
+                ImageGenBackendStore.setVertexSettings(previousVertexSettings)
+            }
+
+            let prompt = [
+                "Generate one safe open-matte pipeline smoke-test image.",
+                "Subject: a cinematic alpine valley at sunrise with a river, distant mountains, and no people.",
+                "Composition: \(aspectRatio) open-matte source plate, extra clean environment around all edges, no captions, no text, no logos.",
+                "This is a technical validation frame for crop-controlled camera movement."
+            ].joined(separator: " ")
+
+            let result = try await GeminiImageService().generate(
+                request: GeminiImageService.GenerationRequest(
+                    prompt: prompt,
+                    model: model,
+                    aspectRatio: aspectRatio,
+                    imageSize: imageSize
+                ),
+                apiKey: ""
+            )
+
+            let imageURL = directory.appendingPathComponent("\(stem).png")
+            try result.imageData.write(to: imageURL, options: .atomic)
+            let promptURL = directory.appendingPathComponent("\(stem).prompt.txt")
+            try prompt.write(to: promptURL, atomically: true, encoding: .utf8)
+            smokeRecord.promptURL = promptURL.path
+            smokeRecord.imageURL = imageURL.path
+            if let textResponse = result.textResponse,
+               !textResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let responseURL = directory.appendingPathComponent("\(stem).response.txt")
+                try textResponse.write(to: responseURL, atomically: true, encoding: .utf8)
+                smokeRecord.responseURL = responseURL.path
+            }
+            smokeRecord.status = "succeeded"
+            smokeRecord.finishedAt = Date()
+            smokeRecord.chargedEstimatedCostUSD = estimatedCost
+            try Self.writeVertexImageSmokeTestRecord(smokeRecord, directory: directory, stem: stem)
+
+            return .okJSON([
+                "ok": true,
+                "record": smokeRecordPayload(smokeRecord),
+                "recordURL": directory.appendingPathComponent("\(stem).json").path,
+                "latestRecordURL": directory.appendingPathComponent("vertex_smoke_latest.json").path
+            ])
+        } catch {
+            smokeRecord.status = "failed"
+            smokeRecord.finishedAt = Date()
+            smokeRecord.errorMessage = error.localizedDescription
+            smokeRecord.chargedEstimatedCostUSD = 0
+            try? Self.writeVertexImageSmokeTestRecord(smokeRecord, directory: directory, stem: stem)
+            return .error(500, "Vertex image smoke test failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: Response payload helpers
+
+    private func workerStatsPayload(_ stats: ImageAnalysisCoordinator.WorkerStats) -> [String: Any] {
+        [
+            "totalJobs": stats.totalJobs,
+            "pendingJobs": stats.pendingJobs,
+            "runningJobs": stats.runningJobs,
+            "completedJobs": stats.completedJobs,
+            "failedJobs": stats.failedJobs,
+            "isRunning": stats.isRunning
+        ]
+    }
+
+    private func backfillReportPayload(_ report: ImageAnalysisBackfillService.BackfillReport) -> [String: Any] {
+        [
+            "totalDiscovered": report.totalDiscovered,
+            "alreadyRegistered": report.alreadyRegistered,
+            "newlyRegistered": report.newlyRegistered,
+            "missingAssets": report.missingAssets,
+            "queuedForAnalysis": report.queuedForAnalysis,
+            "errors": report.errors,
+            "errorCount": report.errors.count,
+            "isDryRun": report.isDryRun,
+            "summary": report.summary
+        ]
+    }
+
+    private func jobPayload(_ job: ImageAnalysisCoordinator.JobRecord) -> [String: Any] {
+        [
+            "id": job.id,
+            "imageAssetID": job.imageAssetID,
+            "status": job.status.rawValue,
+            "reason": job.reason,
+            "attemptCount": job.attemptCount,
+            "maxAttempts": job.maxAttempts,
+            "lastError": job.lastError ?? NSNull(),
+            "createdAt": isoString(job.createdAt),
+            "updatedAt": isoString(job.updatedAt)
+        ]
+    }
+
+    private func logPayload(_ log: ImageAnalysisCoordinator.LogEntry) -> [String: Any] {
+        [
+            "timestamp": isoString(log.timestamp),
+            "message": log.message
+        ]
+    }
+
+    private func assetPayload(_ asset: ImageAssetRecord) -> [String: Any] {
+        [
+            "id": asset.id,
+            "resolvedPath": asset.resolvedPath,
+            "projectRelativePath": asset.projectRelativePath ?? NSNull(),
+            "filename": asset.filename ?? NSNull(),
+            "mimeType": asset.mimeType ?? NSNull(),
+            "width": asset.width ?? NSNull(),
+            "height": asset.height ?? NSNull(),
+            "aspectRatio": asset.aspectRatio ?? NSNull(),
+            "fileSizeBytes": asset.fileSizeBytes ?? NSNull(),
+            "contentHashSHA256": asset.contentHashSHA256 ?? NSNull(),
+            "isMissing": asset.isMissing,
+            "createdAt": isoString(asset.createdAt),
+            "updatedAt": isoString(asset.updatedAt),
+            "lastSeenAt": isoString(asset.lastSeenAt)
+        ]
+    }
+
+    private func runPayload(_ run: ImageAnalysisRunRecord) -> [String: Any] {
+        [
+            "id": run.id,
+            "imageAssetID": run.imageAssetID,
+            "reason": run.reason ?? NSNull(),
+            "status": run.status,
+            "startedAt": run.startedAt.map(isoString) ?? NSNull(),
+            "completedAt": run.completedAt.map(isoString) ?? NSNull(),
+            "errorCode": run.errorCode ?? NSNull(),
+            "errorMessage": run.errorMessage ?? NSNull(),
+            "createdAt": isoString(run.createdAt),
+            "updatedAt": isoString(run.updatedAt)
+        ]
+    }
+
+    private func metadataPayload(_ metadata: ImageVisualMetadataRecord) -> [String: Any] {
+        [
+            "id": metadata.id,
+            "imageAssetID": metadata.imageAssetID,
+            "analysisRunID": metadata.analysisRunID ?? NSNull(),
+            "summary": metadata.summary ?? NSNull(),
+            "shortCaption": metadata.shortCaption ?? NSNull(),
+            "longCaption": metadata.longCaption ?? NSNull(),
+            "assetRolesJSON": metadata.assetRolesJSON ?? NSNull(),
+            "entitiesJSON": metadata.entitiesJSON ?? NSNull(),
+            "sceneJSON": metadata.sceneJSON ?? NSNull(),
+            "cameraJSON": metadata.cameraJSON ?? NSNull(),
+            "styleJSON": metadata.styleJSON ?? NSNull(),
+            "qualityJSON": metadata.qualityJSON ?? NSNull(),
+            "retrievalJSON": metadata.retrievalJSON ?? NSNull(),
+            "confidenceJSON": metadata.confidenceJSON ?? NSNull(),
+            "rawModelJSON": metadata.rawModelJSON ?? NSNull(),
+            "modelID": metadata.modelID ?? NSNull(),
+            "createdAt": isoString(metadata.createdAt),
+            "updatedAt": isoString(metadata.updatedAt)
+        ]
+    }
+
+    private func dryRunSummaryPayload(_ summary: ShotFrameGenerationDryRunSummary) -> [String: Any] {
+        [
+            "totalFrames": summary.totalFrames,
+            "generateFrames": summary.generateFrames,
+            "editFrames": summary.editFrames,
+            "executableFrames": summary.executableFrames,
+            "missingSourceFallbackFrames": summary.missingSourceFallbackFrames,
+            "automaticReferenceCount": summary.automaticReferenceCount,
+            "openMatteFrames": summary.openMatteFrames,
+            "estimatedVertexCostUSD": summary.estimatedVertexCostUSD
+        ]
+    }
+
+    private func smokeRecordPayload(_ record: VertexImageSmokeTestRecord) -> [String: Any] {
+        [
+            "id": record.id.uuidString,
+            "startedAt": isoString(record.startedAt),
+            "finishedAt": record.finishedAt.map(isoString) ?? NSNull(),
+            "status": record.status,
+            "model": record.model,
+            "imageSize": record.imageSize,
+            "aspectRatio": record.aspectRatio,
+            "estimatedVertexCostUSD": record.estimatedVertexCostUSD,
+            "chargedEstimatedCostUSD": record.chargedEstimatedCostUSD,
+            "maxSpendUSD": record.maxSpendUSD,
+            "projectID": record.projectID,
+            "region": record.region,
+            "imageURL": record.imageURL ?? NSNull(),
+            "promptURL": record.promptURL ?? NSNull(),
+            "responseURL": record.responseURL ?? NSNull(),
+            "errorMessage": record.errorMessage ?? NSNull()
+        ]
+    }
+
+    // MARK: Parsing helpers
+
+    private func parseLinkKinds(from raw: Any?) throws -> [ImageAssetLinkKind]? {
+        let values: [String]
+        if raw == nil || raw is NSNull {
+            return nil
+        } else if let strings = raw as? [String] {
+            values = strings
+        } else if let string = raw as? String {
+            values = string
+                .split(separator: ",")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        } else {
+            throw apiError("linkKinds must be a string array or comma-separated string.")
+        }
+
+        var kinds: [ImageAssetLinkKind] = []
+        for value in values {
+            guard let kind = ImageAssetLinkKind(rawValue: value) else {
+                throw apiError("Invalid link kind: \(value).")
+            }
+            kinds.append(kind)
+        }
+        return kinds.isEmpty ? nil : kinds
+    }
+
+    private func resolvedGeminiModel(from raw: String?) -> GeminiModel {
+        let normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if normalized == "pro" || normalized.contains("pro") {
+            return .pro
+        }
+        if normalized == "flash" ||
+            normalized.contains("banana-2") ||
+            normalized.contains("banana_2") ||
+            normalized.contains("nanobanana2") ||
+            normalized.contains("nano banana 2") {
+            return .flash
+        }
+        return raw.flatMap(GeminiModel.init(rawValue:)) ?? .flash
+    }
+
+    private func resolvedSceneFilter(_ raw: String?) throws -> Set<UUID>? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              raw.lowercased() != "all" else {
+            return nil
+        }
+        if raw.lowercased() == "first" {
+            guard let first = store.scenes.first else { return [] }
+            return [first.id]
+        }
+        if let uuid = UUID(uuidString: raw),
+           store.scenes.contains(where: { $0.id == uuid }) {
+            return [uuid]
+        }
+        if let index = Int(raw),
+           index > 0,
+           index <= store.scenes.count {
+            return [store.scenes[index - 1].id]
+        }
+        if let scene = store.scenes.first(where: { scene in
+            scene.name.localizedCaseInsensitiveContains(raw) ||
+                scene.owpSongPath.localizedCaseInsensitiveContains(raw)
+        }) {
+            return [scene.id]
+        }
+        throw apiError("No scene matched '\(raw)'.")
+    }
+
+    private func firstNonEmpty(_ values: String?...) -> String? {
+        values
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    private func stringValue(_ value: Any?) -> String? {
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        return nil
+    }
+
+    private func intValue(_ value: Any?) -> Int? {
+        if let int = value as? Int { return int }
+        if let number = value as? NSNumber { return number.intValue }
+        if let string = value as? String { return Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        return nil
+    }
+
+    private func doubleValue(_ value: Any?) -> Double? {
+        if let double = value as? Double { return double }
+        if let number = value as? NSNumber { return number.doubleValue }
+        if let string = value as? String { return Double(string.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        return nil
+    }
+
+    private func boolValue(_ value: Any?) -> Bool? {
+        if let bool = value as? Bool { return bool }
+        if let number = value as? NSNumber { return number.boolValue }
+        if let string = value as? String {
+            switch string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "yes", "1", "on": return true
+            case "false", "no", "0", "off": return false
+            default: return nil
+            }
+        }
+        return nil
+    }
+
+    private func isoString(_ date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    private func apiError(_ message: String) -> NSError {
+        NSError(domain: "AnimateAPIRouter", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: message
+        ])
+    }
+
+    private struct VertexImageSmokeTestRecord: Codable, Sendable {
+        var schemaVersion: Int = 1
+        var id: UUID
+        var startedAt: Date
+        var finishedAt: Date?
+        var status: String
+        var model: String
+        var imageSize: String
+        var aspectRatio: String
+        var estimatedVertexCostUSD: Double
+        var chargedEstimatedCostUSD: Double
+        var maxSpendUSD: Double
+        var projectID: String
+        var region: String
+        var imageURL: String?
+        var promptURL: String?
+        var responseURL: String?
+        var errorMessage: String?
+    }
+
+    nonisolated private static func writeVertexImageSmokeTestRecord(
+        _ record: VertexImageSmokeTestRecord,
+        directory: URL,
+        stem: String
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(record)
+        try data.write(to: directory.appendingPathComponent("\(stem).json"), options: .atomic)
+        try data.write(to: directory.appendingPathComponent("vertex_smoke_latest.json"), options: .atomic)
+    }
+
+    // MARK: - 3D map regeneration
+
+    /// POST /map3d/regenerate — kicks off the 6-phase pipeline at
+    /// `Scripts/3d-map-pipeline/run_all.sh` if no job is in flight. Returns
+    /// 202 Accepted with the job_id, or 409 Conflict if a job is already
+    /// running. The work proceeds asynchronously; clients poll
+    /// `GET /map3d/regenerate/status` for progress.
+    private func map3DRegenerateResponse() -> AnimateHTTPResponse {
+        let snapshotBefore = Map3DPipelineRunner.shared.snapshot()
+        if snapshotBefore.state == .running {
+            var payload = encodeMap3DSnapshot(snapshotBefore)
+            payload["error"] = "A 3D map regeneration is already in flight."
+            return AnimateHTTPResponse(
+                status: 409,
+                body: jsonString(payload) ?? #"{"error":"already running"}"#
+            )
+        }
+        let result = Map3DPipelineRunner.shared.start()
+        let snapshot = Map3DPipelineRunner.shared.snapshot()
+        var payload = encodeMap3DSnapshot(snapshot)
+        payload["accepted"] = result.started
+        return AnimateHTTPResponse(
+            status: 202,
+            body: jsonString(payload) ?? #"{"error":"failed to encode response"}"#
+        )
+    }
+
+    /// GET /map3d/regenerate/status — returns the current pipeline runner
+    /// snapshot. Always 200 even when no job has ever run (state="idle").
+    private func map3DRegenerateStatusResponse() -> AnimateHTTPResponse {
+        let snapshot = Map3DPipelineRunner.shared.snapshot()
+        return AnimateHTTPResponse.okJSON(encodeMap3DSnapshot(snapshot))
+    }
+
+    private func encodeMap3DSnapshot(_ snapshot: Map3DPipelineRunner.Snapshot) -> [String: Any] {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var payload: [String: Any] = [
+            "state": snapshot.state.rawValue,
+            "tail_log": snapshot.tailLog
+        ]
+        if let id = snapshot.jobId {
+            payload["job_id"] = id.uuidString
+        }
+        if let phase = snapshot.currentPhase {
+            payload["current_phase"] = phase
+        }
+        if let started = snapshot.startedAt {
+            payload["started_at"] = iso.string(from: started)
+        }
+        if let finished = snapshot.finishedAt {
+            payload["finished_at"] = iso.string(from: finished)
+        }
+        if let error = snapshot.errorMessage {
+            payload["error"] = error
+        }
+        return payload
+    }
+
+    private func jsonString(_ payload: [String: Any]) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else { return nil }
+        return json
+    }
 }
 
 // MARK: - AnimateHTTPRequest
@@ -448,9 +1175,11 @@ struct AnimateHTTPResponse {
         let statusText: String
         switch status {
         case 200: statusText = "OK"
+        case 202: statusText = "Accepted"
         case 400: statusText = "Bad Request"
         case 404: statusText = "Not Found"
         case 405: statusText = "Method Not Allowed"
+        case 409: statusText = "Conflict"
         case 413: statusText = "Payload Too Large"
         case 500: statusText = "Internal Server Error"
         default: statusText = "Error"

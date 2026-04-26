@@ -19,6 +19,7 @@ struct AnimateApp: App {
             ContentView(store: store)
                 .task {
                     await restoreLastProjectIfNeeded()
+                    Self.installMap3DSourceTreeOverride()
                     AnimateAPIServer.startIfNeeded(store: store)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: AnimateAppSignals.openFileNotification)) { notification in
@@ -83,6 +84,33 @@ struct AnimateApp: App {
             return
         }
         store.restoreLastProject()
+    }
+
+    /// Points `Map3DResourceLocator`'s env-var override at the source-tree
+    /// viewer directory whenever it exists on disk. This is what makes the
+    /// in-app "Regenerate" button feel live: the pipeline writes fresh assets
+    /// into `Scripts/3d-map-pipeline/viewer/`, the WKWebView reload picks
+    /// them up from there, and no rebuild of the bundled `Resources/` copy
+    /// is required.
+    ///
+    /// `setenv()` mutates the C environment that `ProcessInfo.environment`
+    /// reads each time it's accessed, so the override takes effect for any
+    /// subsequent call to `Map3DResourceLocator.indexURL()` — including the
+    /// one triggered when the user opens the Places → 3D Map tab.
+    @MainActor
+    private static func installMap3DSourceTreeOverride() {
+        // Don't clobber an explicit user-set override.
+        if let existing = ProcessInfo.processInfo.environment["AMIRA_MAP3D_DIR"],
+           !existing.isEmpty {
+            return
+        }
+        let viewerDir = Map3DPipelineRunner.viewerDir
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: viewerDir.path, isDirectory: &isDir),
+              isDir.boolValue else {
+            return
+        }
+        setenv("AMIRA_MAP3D_DIR", viewerDir.path, 1)
     }
 
     @MainActor

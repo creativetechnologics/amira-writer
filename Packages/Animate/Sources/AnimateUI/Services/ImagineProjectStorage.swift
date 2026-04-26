@@ -123,6 +123,26 @@ struct ImagineProjectStorage {
         return outputURL
     }
 
+    static func saveGeneratedImageAsync(
+        _ imageData: Data,
+        owpURL: URL,
+        sceneSlug: String,
+        shotIndex: Int,
+        moment: ImagineShotMoment,
+        filePrefix: String = "gen"
+    ) async throws -> URL {
+        try await Task.detached(priority: .utility) {
+            try saveGeneratedImage(
+                imageData,
+                owpURL: owpURL,
+                sceneSlug: sceneSlug,
+                shotIndex: shotIndex,
+                moment: moment,
+                filePrefix: filePrefix
+            )
+        }.value
+    }
+
     // MARK: - Finder Integration
 
     static func revealInFinder(_ path: String) {

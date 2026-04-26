@@ -372,7 +372,7 @@ enum CharacterReferenceWorkflowCatalog {
                     notes: "\(name) full-body turnaround pose."
                 )
             },
-            accessorySlots: defaultAccessorySlots(characterName: characterName, costumeName: name, costumeNotes: notes)
+            accessorySlots: []
         )
     }
 
@@ -381,41 +381,7 @@ enum CharacterReferenceWorkflowCatalog {
         costumeName: String,
         costumeNotes: String
     ) -> [CharacterAccessorySlot] {
-        [
-            CharacterAccessorySlot(
-                key: "\(slug(from: costumeName))-accessory-bag",
-                title: "Field Bag",
-                prompt: accessoryPrompt(
-                    title: "field bag or satchel",
-                    characterName: characterName,
-                    costumeName: costumeName,
-                    costumeNotes: costumeNotes
-                ),
-                notes: "Primary satchel / pouch reference."
-            ),
-            CharacterAccessorySlot(
-                key: "\(slug(from: costumeName))-accessory-gloves",
-                title: "Gloves / Hands",
-                prompt: accessoryPrompt(
-                    title: "gloves and hands",
-                    characterName: characterName,
-                    costumeName: costumeName,
-                    costumeNotes: costumeNotes
-                ),
-                notes: "Handwear and hand silhouette reference."
-            ),
-            CharacterAccessorySlot(
-                key: "\(slug(from: costumeName))-accessory-prop",
-                title: "Primary Prop",
-                prompt: accessoryPrompt(
-                    title: "primary prop",
-                    characterName: characterName,
-                    costumeName: costumeName,
-                    costumeNotes: costumeNotes
-                ),
-                notes: "Prop / tool / handheld item reference."
-            ),
-        ]
+        []
     }
 
     static func headPrompt(for pose: CharacterReferencePose, characterName: String) -> String {

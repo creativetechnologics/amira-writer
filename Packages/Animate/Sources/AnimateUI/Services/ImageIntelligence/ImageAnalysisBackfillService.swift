@@ -31,17 +31,23 @@ public actor ImageAnalysisBackfillService {
         public let maxBatchSize: Int?
         public let forceReanalysis: Bool
         public let linkKinds: [ImageAssetLinkKind]?
+        public let enqueueExistingWithoutRuns: Bool
+        public let markMissingAssets: Bool
 
         public init(
             dryRun: Bool = false,
             maxBatchSize: Int? = nil,
             forceReanalysis: Bool = false,
-            linkKinds: [ImageAssetLinkKind]? = nil
+            linkKinds: [ImageAssetLinkKind]? = nil,
+            enqueueExistingWithoutRuns: Bool = false,
+            markMissingAssets: Bool = true
         ) {
             self.dryRun = dryRun
             self.maxBatchSize = maxBatchSize
             self.forceReanalysis = forceReanalysis
             self.linkKinds = linkKinds
+            self.enqueueExistingWithoutRuns = enqueueExistingWithoutRuns
+            self.markMissingAssets = markMissingAssets
         }
     }
 
@@ -99,8 +105,15 @@ public actor ImageAnalysisBackfillService {
                         )
                     }
 
-                    if !options.dryRun && options.forceReanalysis {
-                        try await coordinator?.enqueue(assetID: existing.id, reason: "backfill")
+                    let shouldQueueExisting = try await shouldQueueExistingAsset(
+                        existing.id,
+                        options: options
+                    )
+                    if !options.dryRun && shouldQueueExisting {
+                        try await coordinator?.enqueue(
+                            assetID: existing.id,
+                            reason: options.forceReanalysis ? "backfill" : "backfill_missing_analysis"
+                        )
                         queuedForAnalysis += 1
                     }
 
@@ -147,7 +160,7 @@ public actor ImageAnalysisBackfillService {
 
         // Mark missing assets
         let missingCount: Int
-        if !options.dryRun {
+        if !options.dryRun && options.markMissingAssets && options.linkKinds == nil {
             missingCount = (try? await store.markMissingAssets(notSeenSince: startedAt)) ?? 0
         } else {
             missingCount = 0
@@ -167,5 +180,31 @@ public actor ImageAnalysisBackfillService {
     /// Quick report without modifying anything.
     public func dryRunReport(linkKinds: [ImageAssetLinkKind]? = nil) async -> BackfillReport {
         await backfill(options: BackfillOptions(dryRun: true, linkKinds: linkKinds))
+    }
+
+    private func shouldQueueExistingAsset(
+        _ assetID: String,
+        options: BackfillOptions
+    ) async throws -> Bool {
+        guard options.forceReanalysis || options.enqueueExistingWithoutRuns else {
+            return false
+        }
+        if options.forceReanalysis {
+            return true
+        }
+
+        guard let coordinator else {
+            return false
+        }
+
+        let runs = try await store.runsForAsset(assetID)
+        if !runs.isEmpty {
+            return false
+        }
+
+        let jobs = try await coordinator.jobsForAsset(assetID)
+        return !jobs.contains { job in
+            job.status == .pending || job.status == .running
+        }
     }
 }

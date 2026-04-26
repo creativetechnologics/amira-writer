@@ -8,6 +8,7 @@ final class ExpressionBatchService {
 
     struct ExpressionBatchItem: Identifiable, Sendable {
         var id: UUID = UUID()
+        var presetID: String
         var emotionName: String
         var prompt: String
         var isQueued: Bool = true
@@ -31,7 +32,25 @@ final class ExpressionBatchService {
                 character: character
             )
             return ExpressionBatchItem(
+                presetID: CharacterReferenceWorkflowCatalog.slug(from: emotionName),
                 emotionName: emotionName,
+                prompt: prompt
+            )
+        }
+    }
+
+    static func buildBatch(
+        for character: AnimationCharacter,
+        presets: [EmotionLibrary.ExpressionPreset]
+    ) -> [ExpressionBatchItem] {
+        presets.map { preset in
+            let prompt = buildExpressionPrompt(
+                emotionName: preset.displayName,
+                character: character
+            )
+            return ExpressionBatchItem(
+                presetID: preset.id,
+                emotionName: preset.displayName,
                 prompt: prompt
             )
         }
@@ -121,7 +140,7 @@ final class ExpressionBatchService {
     static func runBatch(
         items: [ExpressionBatchItem],
         character: AnimationCharacter,
-        referenceImagePaths: [String],
+        referenceImagePaths: [String] = [],
         store: AnimateStore,
         onProgress: @MainActor (Int, Int, String?) -> Void
     ) async throws -> [ExpressionBatchResult] {
@@ -129,20 +148,15 @@ final class ExpressionBatchService {
             throw error
         }
         let apiKey = store.geminiAPIKey
-        guard let animateURL = store.animateURL else {
-            throw ExpressionBatchError.noProject
+        guard store.animateURL != nil else { throw ExpressionBatchError.noProject }
+        guard let frontNeutral = character.headTurnaroundSlots.first(where: { $0.pose == .frontNeutral })?.approvedVariant else {
+            throw ExpressionBatchError.noFrontNeutralReference
         }
-
-        // Build reference images from paths
-        let referenceImages: [GeminiImageService.ReferenceImage] = referenceImagePaths.compactMap { path in
-            let url = store.resolvedCharacterAssetURL(for: path) ?? URL(fileURLWithPath: path)
-            return GeminiImageService.referenceImage(from: url)
+        let referenceURL = store.resolvedCharacterAssetURL(for: frontNeutral.imagePath)
+            ?? URL(fileURLWithPath: frontNeutral.imagePath)
+        guard let referenceImage = GeminiImageService.referenceImage(from: referenceURL) else {
+            throw ExpressionBatchError.noFrontNeutralReference
         }
-
-        let outputDir = ProjectPaths(root: animateURL.deletingLastPathComponent())
-            .characterFolder(slug: character.assetFolderSlug)
-            .appendingPathComponent("expressions")
-        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
         let service = GeminiImageService()
         let queuedItems = items.filter(\.isQueued)
@@ -153,21 +167,27 @@ final class ExpressionBatchService {
 
             let request = GeminiImageService.GenerationRequest(
                 prompt: item.prompt,
-                referenceImages: referenceImages,
-                model: .flash,  // Nano Banana 2
+                referenceImages: [referenceImage],
+                model: store.selectedGeminiModel,
                 aspectRatio: "1:1",
-                imageSize: "1K"
+                imageSize: "2K"
             )
 
             do {
                 store.logGeminiAPICall(endpoint: "image-generation", source: "ExpressionBatchService")
                 let result = try await service.generate(request: request, apiKey: apiKey)
 
-                let filename = "\(item.emotionName.lowercased().replacingOccurrences(of: " ", with: "-")).png"
-                let outputURL = outputDir.appendingPathComponent(filename)
-                try result.imageData.write(to: outputURL, options: .atomic)
+                let variant = try store.storeExpressionVariant(
+                    result.imageData,
+                    presetID: item.presetID,
+                    displayName: item.emotionName,
+                    prompt: item.prompt,
+                    model: store.selectedGeminiModel,
+                    for: character.id,
+                    referencePath: frontNeutral.imagePath
+                )
 
-                results.append(ExpressionBatchResult(emotionName: item.emotionName, imagePath: outputURL.path))
+                results.append(ExpressionBatchResult(emotionName: item.emotionName, imagePath: variant?.imagePath))
             } catch {
                 results.append(ExpressionBatchResult(emotionName: item.emotionName, error: error.localizedDescription))
             }
@@ -181,12 +201,14 @@ final class ExpressionBatchService {
         case noAPIKey
         case geminiBlocked
         case noProject
+        case noFrontNeutralReference
 
         var errorDescription: String? {
             switch self {
             case .noAPIKey: "Gemini API key is not set."
             case .geminiBlocked: "Gemini API calls are blocked. Enable Gemini API Calls in Inspector > Tools."
             case .noProject: "No project is open."
+            case .noFrontNeutralReference: "Choose a Head Turnaround Grid → Front Neutral image before generating expressions."
             }
         }
     }

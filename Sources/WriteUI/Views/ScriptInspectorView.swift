@@ -13,7 +13,6 @@ enum InspectorSectionID: String, CaseIterable, Identifiable, Sendable {
     case versionHistory
     case sunoLyrics
     case synopsis
-    case llm
 
     var id: String { rawValue }
 
@@ -24,7 +23,6 @@ enum InspectorSectionID: String, CaseIterable, Identifiable, Sendable {
         case .versionHistory: return "Version History"
         case .sunoLyrics: return "Suno Lyrics"
         case .synopsis: return "Synopsis"
-        case .llm: return "LLM"
         }
     }
 
@@ -35,7 +33,6 @@ enum InspectorSectionID: String, CaseIterable, Identifiable, Sendable {
         case .versionHistory: return "clock.arrow.counterclockwise"
         case .sunoLyrics: return "music.note"
         case .synopsis: return "doc.plaintext"
-        case .llm: return "bubble.left.and.text.bubble.right"
         }
     }
 }
@@ -47,11 +44,14 @@ struct ScriptInspectorView: View {
     @Bindable var store: ScriptStore
     @AppStorage("novotro.write.inspector.activeTab") private var activeTab: String = InspectorSectionID.synopsis.rawValue
 
-    private let tabOrder: [InspectorSectionID] = [.synopsis, .llm, .tools, .notes, .versionHistory, .sunoLyrics]
+    private let tabOrder: [InspectorSectionID] = [.synopsis, .tools, .notes, .versionHistory, .sunoLyrics]
 
     private var selectedTab: Binding<InspectorSectionID> {
         Binding(
-            get: { InspectorSectionID(rawValue: activeTab) ?? .synopsis },
+            get: {
+                let parsed = InspectorSectionID(rawValue: activeTab) ?? .synopsis
+                return tabOrder.contains(parsed) ? parsed : .synopsis
+            },
             set: { activeTab = $0.rawValue }
         )
     }
@@ -66,7 +66,7 @@ struct ScriptInspectorView: View {
             sectionContent(for: sectionID)
         } 
         .onAppear {
-            if InspectorSectionID(rawValue: activeTab) == nil {
+            if !tabOrder.contains(InspectorSectionID(rawValue: activeTab) ?? .synopsis) {
                 activeTab = InspectorSectionID.synopsis.rawValue
             }
         }
@@ -90,8 +90,6 @@ struct ScriptInspectorView: View {
             SunoLyricsSectionContent(store: store)
         case .synopsis:
             SynopsisSectionView(store: store)
-        case .llm:
-            LLMInspectorView(store: store)
         }
     }
 }
@@ -144,21 +142,21 @@ struct ToolsSectionContent: View {
             }
 
             markupToggleRow(
-                title: "Show Directions",
+                title: "Show Direction",
                 systemImage: "camera.metering.spot",
                 isOn: $store.showDirections,
                 color: directionColorBinding
             )
 
             markupToggleRow(
-                title: "Show Storyboarding",
+                title: "Show Action",
                 systemImage: "film",
                 isOn: $store.showStoryboarding,
                 color: storyboardingColorBinding
             )
 
             markupToggleRow(
-                title: "Show Animate",
+                title: "Show Camera",
                 systemImage: "video",
                 isOn: $store.showAnimateDirections,
                 color: animateColorBinding
@@ -185,8 +183,8 @@ struct ToolsSectionContent: View {
 
                     HStack(spacing: 16) {
                         statItem(label: "Lines", value: "\(lineCount(libretto.content))")
-                        statItem(label: "Dirs", value: "\(DirectionParser.directionRanges(in: libretto.content).count)")
-                        statItem(label: "Anim", value: "\(AnimatePromptParser.promptRanges(in: libretto.content).count)")
+                        statItem(label: "Direction", value: "\(DirectionParser.directionRanges(in: libretto.content).count)")
+                        statItem(label: "Camera", value: "\(AnimatePromptParser.promptRanges(in: libretto.content).count)")
                     }
                 }
             } else {
@@ -197,11 +195,11 @@ struct ToolsSectionContent: View {
 
             Divider()
 
-            // Renumber Directions button
+            // Renumber Direction button
             Button {
                 renumberActiveDirections()
             } label: {
-                Label("Renumber Directions", systemImage: "arrow.up.arrow.down")
+                Label("Renumber Direction", systemImage: "arrow.up.arrow.down")
                     .font(.system(size: 11))
             }
             .buttonStyle(.plain)

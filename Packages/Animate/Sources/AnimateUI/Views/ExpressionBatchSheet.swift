@@ -151,9 +151,7 @@ struct ExpressionBatchSheet: View {
     }
 
     private func loadBatchItems() {
-        // Get all emotion displayNames from the preset library
-        let emotionNames = EmotionLibrary.presets.map(\.displayName)
-        batchItems = ExpressionBatchService.buildBatch(for: character, emotions: emotionNames)
+        batchItems = ExpressionBatchService.buildBatch(for: character, presets: EmotionLibrary.presets)
     }
 
     private func runBatch() {
@@ -166,7 +164,6 @@ struct ExpressionBatchSheet: View {
                 results = try await ExpressionBatchService.runBatch(
                     items: batchItems,
                     character: character,
-                    referenceImagePaths: character.referenceImagePaths,
                     store: store,
                     onProgress: { current, total, message in
                         progressCurrent = current

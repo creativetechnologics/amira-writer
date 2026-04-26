@@ -49,6 +49,12 @@
   - This installs locally, then deploys to both `gary@Garys-Laptop.local:~/Applications/` and `gary@Garys-MacBook.local:~/Applications/` by default.
   - Use `--local-only` to skip remote deployment when needed.
 
+## App Control Permission Boundary
+
+- Agents are allowed to launch, quit, relaunch, and otherwise control the Amira Writer/Opera application **on Garys-Server** when needed for builds, validation, API availability, or server-side testing.
+- Agents are **not** allowed to launch, quit, relaunch, kill, or otherwise control applications on **Garys-Laptop** unless Gary explicitly approves that action in the current session.
+- If Gary is testing from the laptop, treat the laptop app as user-controlled; update the server-side bundle and ask Gary to relaunch or test the synced copy himself.
+
 ## Handoff Docs
 
 - Start with `README.md`.

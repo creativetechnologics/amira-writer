@@ -52,6 +52,7 @@ struct ImagineCharactersPageView: View {
     @State private var hasShownFocusHighlight = false
     @State private var galleryColumnCount: Int = 1
     @State private var pendingGallerySaveTask: Task<Void, Never>?
+    @State private var deferredPromptSaveTask: Task<Void, Never>?
     private let gallerySaveDebounceNanoseconds: UInt64 = 300_000_000
 
     /// Transient in-session multi-selection — the yellow ring around
@@ -109,7 +110,14 @@ struct ImagineCharactersPageView: View {
     }
 
     private var galleryFilter: GalleryFilter {
-        get { GalleryFilter(rawValue: galleryFilterRawValue) ?? .all }
+        get {
+            switch GalleryFilter(rawValue: galleryFilterRawValue) ?? .all {
+            case .rejected, .hidden:
+                return .all
+            case let filter:
+                return filter
+            }
+        }
         nonmutating set { galleryFilterRawValue = newValue.rawValue }
     }
 
@@ -219,7 +227,11 @@ struct ImagineCharactersPageView: View {
                 Text(inspirationGenerationErrorMessage ?? "Unknown error.")
             }
             .onChange(of: store.selectedCharacterID) { _, _ in
-                store.saveCharacterPromptEdits()
+                scheduleDeferredCharacterPromptSave()
+            }
+            .onDisappear {
+                deferredPromptSaveTask?.cancel()
+                deferredPromptSaveTask = nil
             }
         } else {
             VStack(spacing: 8) {
@@ -235,6 +247,16 @@ struct ImagineCharactersPageView: View {
     }
 
     // MARK: - Character Header
+
+    private func scheduleDeferredCharacterPromptSave() {
+        deferredPromptSaveTask?.cancel()
+        deferredPromptSaveTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            store.saveCharacterPromptEdits()
+            deferredPromptSaveTask = nil
+        }
+    }
 
     @ViewBuilder
     private func characterHeader(_ character: AnimationCharacter) -> some View {
@@ -318,18 +340,11 @@ struct ImagineCharactersPageView: View {
             }
 
             // Selection status bar
-            if !yellowSelection.isEmpty || !character.inspirationRejectedPaths.isEmpty {
+            if !yellowSelection.isEmpty {
                 HStack(spacing: 8) {
-                    if !yellowSelection.isEmpty {
-                        Text("\(yellowSelection.count) selected")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.yellow)
-                    }
-                    if !character.inspirationRejectedPaths.isEmpty {
-                        Text("\(character.inspirationRejectedPaths.count) rejected")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("\(yellowSelection.count) selected")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.yellow)
                     Spacer()
                     Text(keyboardShortcutHint)
                         .font(.caption2)
@@ -586,12 +601,6 @@ struct ImagineCharactersPageView: View {
                     isSelected: galleryFilter == .unreviewed
                 ) { galleryFilter = .unreviewed }
                 .help("Show only unreviewed images")
-
-                galleryFilterButton(
-                    systemImage: GalleryFilter.rejected.systemImage,
-                    isSelected: galleryFilter == .rejected || galleryFilter == .hidden
-                ) { galleryFilter = .rejected }
-                .help("Show only rejected images")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -676,8 +685,11 @@ struct ImagineCharactersPageView: View {
     }
 
     private func isPathVisibleInGallery(_ path: String) -> Bool {
-        let selectionKey = gallerySelectionKey(for: path)
         guard let character = store.selectedCharacter else { return true }
+
+        if character.inspirationRejectedPaths.contains(path) {
+            return false
+        }
 
         // Rating filter: images below the minimum are hidden regardless of
         // flag filter. 0 = don't apply this filter.
@@ -692,9 +704,7 @@ struct ImagineCharactersPageView: View {
         case .unreviewed:
             return !character.reviewedInspirationImagePaths.contains(path)
         case .rejected, .hidden:
-            // Legacy `.hidden` persisted values redirect to rejected — the
-            // two concepts were unified on 2026-04-16.
-            return character.inspirationRejectedPaths.contains(path)
+            return false
         case .gemini:
             // `.gemini` filter pill was retired when the persistent
             // Gemini-reference set was replaced by the transient
@@ -1246,7 +1256,6 @@ struct ImagineCharactersPageView: View {
         // the unified overlay slots; the right-click menu
         // routes through `UnifiedImageContextMenuContent` with wardrobe
         // presets folded into `extraGeminiGenerateEntries`.
-        let selectionKey = gallerySelectionKey(for: path)
         let resolvedPath = resolvedGalleryAssetPath(for: path)
         let isYellowSelected = yellowSelection.contains(path)
         let isFocused = index == focusedIndex

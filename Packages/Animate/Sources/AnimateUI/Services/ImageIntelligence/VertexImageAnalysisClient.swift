@@ -5,7 +5,7 @@ import Foundation
 @available(macOS 26.0, *)
 actor VertexImageAnalysisClient {
 
-    public enum VertexAnalysisError: Error, Sendable, Equatable {
+    public enum VertexAnalysisError: LocalizedError, Sendable, Equatable {
         case gcloudNotFound
         case gcloudFailed(String)
         case missingConfig(String)
@@ -14,10 +14,10 @@ actor VertexImageAnalysisClient {
         case invalidResponse
         case decodingError(String)
 
-        public var localizedDescription: String {
+        public var errorDescription: String? {
             switch self {
             case .gcloudNotFound:
-                return "gcloud CLI not found. Install: brew install --cask google-cloud-sdk"
+                return "gcloud CLI not found. Install: brew install --cask google-cloud-sdk, or install Google Cloud SDK at ~/google-cloud-sdk/bin/gcloud."
             case .gcloudFailed(let msg):
                 return "gcloud failed: \(msg)"
             case .missingConfig(let msg):
@@ -87,13 +87,17 @@ actor VertexImageAnalysisClient {
         tokenAcquiredAt = nil
     }
 
-    private static let gcloudPaths = [
-        "/opt/homebrew/bin/gcloud",
-        "/usr/local/bin/gcloud",
-        "/usr/bin/gcloud",
-    ]
-
     private static func fetchTokenViaGcloud() async throws -> String {
+        if let token = accessTokenFromEnvironment() {
+            return token
+        }
+
+        let gcloudPaths = [
+            "/opt/homebrew/bin/gcloud",
+            "/usr/local/bin/gcloud",
+            "/usr/bin/gcloud",
+            "\(NSHomeDirectory())/google-cloud-sdk/bin/gcloud",
+        ]
         let path = gcloudPaths.first { FileManager.default.isExecutableFile(atPath: $0) }
         guard let binary = path else { throw VertexAnalysisError.gcloudNotFound }
         return try await withCheckedThrowingContinuation { cont in
@@ -116,8 +120,28 @@ actor VertexImageAnalysisClient {
                     cont.resume(throwing: VertexAnalysisError.gcloudFailed(errStr.isEmpty ? "exit \(proc.terminationStatus)" : errStr))
                 }
             }
-            try? proc.run()
+            do {
+                try proc.run()
+            } catch {
+                cont.resume(throwing: VertexAnalysisError.gcloudFailed(error.localizedDescription))
+            }
         }
+    }
+
+    private static func accessTokenFromEnvironment() -> String? {
+        let environment = ProcessInfo.processInfo.environment
+        if let tokenFile = environment["AMIRA_VERTEX_ACCESS_TOKEN_FILE"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !tokenFile.isEmpty,
+           let data = try? Data(contentsOf: URL(fileURLWithPath: tokenFile)),
+           let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty {
+            return token
+        }
+        if let token = environment["AMIRA_VERTEX_ACCESS_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty {
+            return token
+        }
+        return nil
     }
 
     // MARK: - URLs
@@ -146,7 +170,7 @@ actor VertexImageAnalysisClient {
 
     // MARK: - Visual Analysis
 
-    public func analyzeImage(imageData: Data, mimeType: String = "image/png") async throws -> GeminiImageAnalysisService.VisualAnalysisResult {
+    public func analyzeImage(imageData: Data, mimeType: String = "image/png", retryCount: Int = 0) async throws -> GeminiImageAnalysisService.VisualAnalysisResult {
         guard !config.projectID.isEmpty else {
             throw VertexAnalysisError.missingConfig("project ID is empty")
         }
@@ -166,11 +190,10 @@ actor VertexImageAnalysisClient {
             ["inlineData": ["mimeType": mimeType, "data": base64Image]]
         ]
         let requestBody: [String: Any] = [
-            "contents": [["parts": parts]],
+            "contents": [["role": "user", "parts": parts]],
             "generationConfig": [
                 "responseMimeType": "application/json",
-                "responseSchema": analysisSchema,
-                "thinkingLevel": "low"
+                "responseSchema": analysisSchema
             ]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
@@ -182,8 +205,11 @@ actor VertexImageAnalysisClient {
         }
 
         if httpResponse.statusCode == 401 {
+            guard retryCount < 1 else {
+                throw VertexAnalysisError.httpError(401, "Authentication failed after retry")
+            }
             invalidateToken()
-            return try await analyzeImage(imageData: imageData, mimeType: mimeType)
+            return try await analyzeImage(imageData: imageData, mimeType: mimeType, retryCount: retryCount + 1)
         }
 
         if httpResponse.statusCode == 429 {
@@ -208,7 +234,7 @@ actor VertexImageAnalysisClient {
         try await embedContent(text: text)
     }
 
-    private func embedContent(text: String? = nil, imageBase64: String? = nil, mimeType: String? = nil) async throws -> GeminiImageAnalysisService.EmbeddingResult {
+    private func embedContent(text: String? = nil, imageBase64: String? = nil, mimeType: String? = nil, retryCount: Int = 0) async throws -> GeminiImageAnalysisService.EmbeddingResult {
         guard !config.projectID.isEmpty else {
             throw VertexAnalysisError.missingConfig("project ID is empty")
         }
@@ -230,10 +256,7 @@ actor VertexImageAnalysisClient {
             parts.append(["inlineData": ["mimeType": mime, "data": b64]])
         }
 
-        let requestBody: [String: Any] = [
-            "model": "models/\(config.embeddingModelID)",
-            "content": ["parts": parts]
-        ]
+        let requestBody: [String: Any] = ["content": ["parts": parts]]
         request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
         let (data, response) = try await urlSession.data(for: request)
@@ -243,8 +266,11 @@ actor VertexImageAnalysisClient {
         }
 
         if httpResponse.statusCode == 401 {
+            guard retryCount < 1 else {
+                throw VertexAnalysisError.httpError(401, "Authentication failed after retry")
+            }
             invalidateToken()
-            return try await embedContent(text: text, imageBase64: imageBase64, mimeType: mimeType)
+            return try await embedContent(text: text, imageBase64: imageBase64, mimeType: mimeType, retryCount: retryCount + 1)
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {

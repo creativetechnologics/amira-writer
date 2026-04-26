@@ -1199,6 +1199,12 @@ final class PianoRollViewController: NSViewController {
             tempoLane.tempoEvents = store.pianoRollTempoEvents
         }
 
+        tempoLane.onTempoPaintFinished = { [weak self, weak tempoLane] in
+            guard let self else { return }
+            simplifyPaintedTempoEvents()
+            tempoLane?.tempoEvents = store.pianoRollTempoEvents
+        }
+
         // Tempo: right-click on existing marker to delete it
         tempoLane.onTempoDeleted = { [weak self] eventIndex in
             guard let self else { return }
@@ -2414,6 +2420,58 @@ final class PianoRollViewController: NSViewController {
     }
 
     // MARK: - Tempo Math
+
+    private func simplifyPaintedTempoEvents() {
+        guard !store.pianoRollTempoEvents.isEmpty else { return }
+
+        let minSpacingTicks = max(1, store.ticksPerQuarter / 4)
+        let bpmTolerance = 0.25
+
+        var byTick: [Int: TempoPoint] = [:]
+        for event in store.pianoRollTempoEvents {
+            let tick = max(0, event.tick)
+            byTick[tick] = TempoPoint(tick: tick, bpm: max(20, min(300, event.bpm)))
+        }
+
+        var sorted = byTick.values.sorted { $0.tick < $1.tick }
+        if sorted.first?.tick != 0 {
+            sorted.insert(TempoPoint(tick: 0, bpm: store.tempoBPM), at: 0)
+        }
+
+        var simplified: [TempoPoint] = []
+        simplified.reserveCapacity(sorted.count)
+
+        for event in sorted {
+            guard let last = simplified.last else {
+                simplified.append(event)
+                continue
+            }
+
+            let sameBPM = abs(last.bpm - event.bpm) <= bpmTolerance
+            if sameBPM {
+                continue
+            }
+
+            // If two adjacent painted points landed very close together and the
+            // newer point is only a tiny correction, keep the later one and
+            // collapse the earlier slot. This keeps accidental dense jitter out
+            // while preserving deliberate ramps at the 1/16-note paint grid.
+            if event.tick - last.tick < minSpacingTicks,
+               simplified.count > 1,
+               abs(last.bpm - event.bpm) <= 1.0 {
+                simplified[simplified.count - 1] = event
+            } else {
+                simplified.append(event)
+            }
+        }
+
+        guard simplified != store.pianoRollTempoEvents else { return }
+        store.pianoRollTempoEvents = simplified
+        if let first = simplified.first, first.tick == 0 {
+            store.tempoBPM = first.bpm
+        }
+        store.isDirty = true
+    }
 
     private func normalizedTempoEvents(maxTick: Int) -> [TempoPoint] {
         var events = store.pianoRollTempoEvents

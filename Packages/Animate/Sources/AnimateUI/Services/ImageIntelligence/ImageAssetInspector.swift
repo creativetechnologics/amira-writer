@@ -11,8 +11,20 @@ public enum ImageAssetInspector {
         let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: path) else { return nil }
 
-        let data = try Data(contentsOf: url)
-        let hash = SHA256.hash(data: data)
+        let fileHandle = try FileHandle(forReadingFrom: url)
+        defer { try? fileHandle.close() }
+
+        var hasher = SHA256()
+        let chunkSize = 256 * 1024
+
+        while true {
+            guard let chunk = try fileHandle.read(upToCount: chunkSize), !chunk.isEmpty else {
+                break
+            }
+            hasher.update(data: chunk)
+        }
+
+        let hash = hasher.finalize()
         return hash.compactMap { String(format: "%02x", $0) }.joined()
     }
 

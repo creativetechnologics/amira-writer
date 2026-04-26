@@ -1927,6 +1927,8 @@ final class VelocityLaneView: NSView {
     private var isDragPainting = false
     /// Collects (noteID, velocity) pairs during a drag-paint for batch commit on mouseUp.
     private var dragPaintChanges: [(UUID, Int)] = []
+    private var lastDragPaintPoint: NSPoint?
+    private var lastAppliedVelocityByNoteID: [UUID: Int] = [:]
 
     // Velocity curve painting state (Alt+drag)
     private var isLinePainting = false
@@ -2092,10 +2094,12 @@ final class VelocityLaneView: NSView {
 
         isDragPainting = false
         dragPaintChanges = []
+        lastDragPaintPoint = location
+        lastAppliedVelocityByNoteID = [:]
 
         if let note = noteAtPoint(location) {
             dragNoteID = note.id
-            applyVelocity(at: location, for: note.id)
+            applyVelocity(at: location, for: note.id, recordForBatch: false)
         }
     }
 
@@ -2110,21 +2114,20 @@ final class VelocityLaneView: NSView {
 
         guard dragNoteID != nil else { return }
 
-        // Find whichever note the cursor is currently over and paint its
-        // velocity to the cursor's Y position. This lets the user click a
-        // velocity dot and then sweep left/right to repaint all velocities.
-        if let noteUnderCursor = noteAtPoint(location) {
-            isDragPainting = true
-            let velocity = velocityAtY(location.y)
-            // Update via the single-note callback for immediate visual feedback
-            onVelocityChanged?(noteUnderCursor.id, velocity)
-            // Collect for batch commit — use latest velocity for each note
-            if let existing = dragPaintChanges.firstIndex(where: { $0.0 == noteUnderCursor.id }) {
-                dragPaintChanges[existing].1 = velocity
-            } else {
-                dragPaintChanges.append((noteUnderCursor.id, velocity))
+        let previousPoint = lastDragPaintPoint
+        let targets = velocityStrokeTargets(from: previousPoint, to: location)
+
+        if targets.isEmpty, let dragNoteID, abs((previousPoint?.x ?? location.x) - location.x) < 4 {
+            // Pure vertical drags should still adjust the originally clicked bar.
+            applyVelocity(at: location, for: dragNoteID)
+        } else {
+            for target in targets {
+                let syntheticPoint = NSPoint(x: target.stemX, y: target.y)
+                applyVelocity(at: syntheticPoint, for: target.note.id)
             }
         }
+
+        lastDragPaintPoint = location
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -2142,6 +2145,8 @@ final class VelocityLaneView: NSView {
         dragNoteID = nil
         isDragPainting = false
         dragPaintChanges = []
+        lastDragPaintPoint = nil
+        lastAppliedVelocityByNoteID = [:]
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -2191,13 +2196,84 @@ final class VelocityLaneView: NSView {
         return max(1, min(127, Int((fraction * 127).rounded())))
     }
 
-    private func applyVelocity(at point: NSPoint, for noteID: UUID) {
-        let height = bounds.height
-        let maxBarHeight = height - 8
-        // Invert y: top = high velocity, bottom = low velocity
-        let fraction = max(0, min(1, (height - point.y - 4) / maxBarHeight))
-        let newVelocity = max(1, min(127, Int((fraction * 127).rounded())))
+    private func applyVelocity(at point: NSPoint, for noteID: UUID, recordForBatch: Bool = true) {
+        let newVelocity = velocityAtY(point.y)
+        guard lastAppliedVelocityByNoteID[noteID] != newVelocity else { return }
+
+        lastAppliedVelocityByNoteID[noteID] = newVelocity
+        if let index = notes.firstIndex(where: { $0.id == noteID }) {
+            notes[index].velocity = newVelocity
+        } else {
+            setNeedsDisplay(bounds)
+        }
         onVelocityChanged?(noteID, newVelocity)
+
+        guard recordForBatch else { return }
+        isDragPainting = true
+        if let existing = dragPaintChanges.firstIndex(where: { $0.0 == noteID }) {
+            dragPaintChanges[existing].1 = newVelocity
+        } else {
+            dragPaintChanges.append((noteID, newVelocity))
+        }
+    }
+
+    private func stemX(for note: PianoRollNote) -> CGFloat {
+        let safePPT = max(pixelsPerTick, 0.000_01)
+        return keyboardOffset + CGFloat(note.startTick) * safePPT - scrollOffset
+    }
+
+    private func velocityStrokeTargets(
+        from startPoint: NSPoint?,
+        to endPoint: NSPoint
+    ) -> [(note: PianoRollNote, stemX: CGFloat, y: CGFloat)] {
+        guard let startPoint else {
+            return noteAtStem(nearX: endPoint.x).map { [($0.note, $0.stemX, endPoint.y)] } ?? []
+        }
+
+        let startX = startPoint.x
+        let endX = endPoint.x
+        let minX = min(startX, endX) - 5
+        let maxX = max(startX, endX) + 5
+
+        var targets: [(note: PianoRollNote, stemX: CGFloat, y: CGFloat)] = []
+        for note in notes {
+            let x = stemX(for: note)
+            guard x >= minX && x <= maxX else { continue }
+            let t = abs(endX - startX) > 0.5
+                ? max(0, min(1, (x - startX) / (endX - startX)))
+                : 1
+            let y = startPoint.y + (endPoint.y - startPoint.y) * t
+            targets.append((note, x, y))
+        }
+
+        if targets.isEmpty,
+           let nearest = noteAtStem(nearX: endPoint.x) {
+            targets.append((nearest.note, nearest.stemX, endPoint.y))
+        }
+
+        if endX < startX {
+            targets.sort { $0.stemX > $1.stemX }
+        } else {
+            targets.sort { $0.stemX < $1.stemX }
+        }
+        return targets
+    }
+
+    private func noteAtStem(nearX pointX: CGFloat) -> (note: PianoRollNote, stemX: CGFloat)? {
+        let tolerance: CGFloat = 8
+        var best: (note: PianoRollNote, stemX: CGFloat, distance: CGFloat)?
+
+        for note in notes {
+            let x = stemX(for: note)
+            let distance = abs(pointX - x)
+            guard distance <= tolerance else { continue }
+            if best == nil || distance < best!.distance {
+                best = (note, x, distance)
+            }
+        }
+
+        guard let best else { return nil }
+        return (best.note, best.stemX)
     }
 
     private func noteAtPoint(_ point: NSPoint) -> PianoRollNote? {
@@ -2361,6 +2437,10 @@ final class TempoLaneView: NSView {
     /// between that tick and the next beat so the painted value fills the whole beat.
     /// Params: (snappedTick, beatTicks, bpm).
     var onTempoPainted: ((Int, Int, Double) -> Void)?
+
+    /// Called after a tempo drag/paint stroke so the controller can collapse
+    /// redundant points once, instead of simplifying on every mouse move.
+    var onTempoPaintFinished: (() -> Void)?
 
     // Paintbrush paint state — last beat tick painted to avoid duplicate events during drag
     private var lastPaintedTick: Int = -1
@@ -2584,34 +2664,33 @@ final class TempoLaneView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 0 else { return }
+        lastPaintedTick = -1
+        // Freeze the BPM range at the start of every tempo stroke so dragging
+        // left/right follows the user's mouse path instead of rescaling the Y
+        // axis while new points are created.
+        frozenRange = dynamicTempoRange
+
         if currentTool == .paintbrush {
-            lastPaintedTick = -1
-            // Freeze the BPM range at the start of a paint stroke so the Y axis
-            // stays stable — prevents dynamic rescaling from warping the ramp.
-            frozenRange = dynamicTempoRange
-            paintAt(event: event)
+            paintAt(event: event, quantumTicks: max(1, ticksPerQuarter))
             return
         }
-        // Select tool: click on a bar to start dragging its BPM
+
+        // Select/draw tool: paint tempo under the cursor. This avoids the old
+        // behavior where the drag locked to one bar and could only move up/down.
         if currentTool == .select || currentTool == .draw {
-            let location = convert(event.locationInWindow, from: nil)
-            if let index = barIndex(at: location.x) {
-                selectDragBarIndex = index
-                frozenRange = dynamicTempoRange
-            }
+            paintAt(event: event, quantumTicks: fineTempoPaintQuantumTicks)
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
         if currentTool == .paintbrush {
-            paintAt(event: event)
+            paintAt(event: event, quantumTicks: max(1, ticksPerQuarter))
             return
         }
-        // Select/draw tool: drag to change BPM of the clicked bar
-        if let index = selectDragBarIndex {
-            let location = convert(event.locationInWindow, from: nil)
-            let newBPM = max(20, min(300, bpmForY(location.y)))
-            onTempoChanged?(index, newBPM)
+
+        if currentTool == .select || currentTool == .draw {
+            paintAt(event: event, quantumTicks: fineTempoPaintQuantumTicks)
         }
     }
 
@@ -2619,6 +2698,7 @@ final class TempoLaneView: NSView {
         lastPaintedTick = -1
         selectDragBarIndex = nil
         frozenRange = nil
+        onTempoPaintFinished?()
         // Redraw with dynamic range now that painting/dragging is done
         setNeedsDisplay(bounds)
     }
@@ -2645,24 +2725,29 @@ final class TempoLaneView: NSView {
     /// of new discrete steps — FL Studio paintbrush style.
     /// Clears sub-beat events between this beat and the next so the painted BPM
     /// fills the entire beat duration.
-    private func paintAt(event: NSEvent) {
+    private var fineTempoPaintQuantumTicks: Int {
+        max(1, ticksPerQuarter / 4)
+    }
+
+    private func paintAt(event: NSEvent, quantumTicks: Int) {
         let location = convert(event.locationInWindow, from: nil)
         let safePPT = max(pixelsPerTick, 0.000_01)
-        let beatTicks = max(1, ticksPerQuarter)
+        let paintTicks = max(1, quantumTicks)
 
-        // Snap to nearest beat boundary
+        // Snap to a fixed grid so the stroke follows horizontal mouse movement
+        // without creating an unbounded number of tempo points.
         let rawTick = max(0, Int(((location.x - keyboardOffset + scrollOffset) / safePPT).rounded()))
-        let snappedTick = (rawTick / beatTicks) * beatTicks
+        let snappedTick = (rawTick / paintTicks) * paintTicks
 
-        // Only fire once per beat to avoid flooding the store with duplicate updates
+        // Only fire once per grid slot to avoid flooding the store with duplicates.
         guard snappedTick != lastPaintedTick else { return }
         lastPaintedTick = snappedTick
 
         let bpm = max(20, min(300, bpmForY(location.y)))
 
         // Use the atomic paint callback: sets BPM at snappedTick and clears
-        // all events between snappedTick and snappedTick+beatTicks.
-        onTempoPainted?(snappedTick, beatTicks, bpm)
+        // all events between snappedTick and snappedTick+paintTicks.
+        onTempoPainted?(snappedTick, paintTicks, bpm)
     }
 }
 

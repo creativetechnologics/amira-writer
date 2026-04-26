@@ -18,11 +18,13 @@ The Image Intelligence subsystem analyzes images in the Amira Writer / Opera app
    - Location: `.novotro/image-intelligence.sqlite`
    - Tables: image_assets, image_asset_links, image_analysis_runs, image_visual_metadata, image_tags, image_tag_assignments, image_embeddings, image_analysis_jobs, image_qc_flags
 
-2. **GeminiImageAnalysisService** - REST API client
+2. **GeminiImageAnalysisService** / **VertexImageAnalysisClient** - REST API clients
    - Base URL: `https://generativelanguage.googleapis.com`
+   - Vertex Base URL: `https://aiplatform.googleapis.com`
    - Visual model: `gemini-3-flash-preview`
    - Embedding model: `gemini-embedding-2`
    - Separate API key from image generation
+   - Vertex auth uses `gcloud auth application-default print-access-token`; common GUI-safe paths include `~/google-cloud-sdk/bin/gcloud`
 
 3. **ImageAnalysisCoordinator** - Job queue and worker
    - Persistent SQLite-backed queue
@@ -105,6 +107,23 @@ store.startImageAnalysisWorker()
 store.stopImageAnalysisWorker()
 ```
 
+### Headless Vertex Smoke Test
+
+Analyze exactly one existing project image without draining the persistent batch queue:
+
+```bash
+.build/debug/Animate --image-intelligence-smoke \
+  --project "/path/to/Amira - A Modern Opera" \
+  --image "/path/to/existing-project-image.png" \
+  --max-spend 1.00
+```
+
+The smoke test persists visual metadata, retrieval tags, tag assignments, and two embeddings for the selected image, then writes:
+
+```text
+<project>/Animate/ImageIntelligenceSmokeTests/image_intelligence_smoke_latest.json
+```
+
 ### Search
 
 ```swift
@@ -156,7 +175,7 @@ All phases are complete:
 
 ## Constraints
 
-- Uses Gemini Developer API only (NOT Vertex AI)
+- Supports AI Studio and Vertex AI backends
 - Separate API key from image generation
 - Does not overwrite manual curation fields
 - Does not use XMP/generation sidecars as primary source

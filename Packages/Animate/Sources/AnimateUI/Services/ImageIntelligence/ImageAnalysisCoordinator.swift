@@ -148,6 +148,45 @@ public actor ImageAnalysisCoordinator {
         return rows.compactMap { parseJobRecord($0) }
     }
 
+    /// Cancel any jobs that can keep the image-analysis queue stuck. Completed
+    /// analysis history is preserved, while pending/running jobs become
+    /// re-queueable by the next backfill or manual reanalysis.
+    public func resetQueue(reason: String = "Reset from settings") async throws -> Int {
+        stopWorker()
+
+        let countRow = try await store.querySingle("""
+            SELECT COUNT(*) AS count
+            FROM image_analysis_jobs
+            WHERE status IN (?, ?)
+        """, [JobStatus.pending.rawValue, JobStatus.running.rawValue])
+        let affectedCount = countRow?["count"] as? Int ?? 0
+
+        guard affectedCount > 0 else {
+            log("Image analysis queue reset requested; no pending or running jobs found")
+            return 0
+        }
+
+        let now = Date().timeIntervalSince1970
+        try await store.exec("""
+            UPDATE image_analysis_jobs
+            SET status = ?,
+                finished_at = ?,
+                updated_at = ?,
+                last_error_message = ?
+            WHERE status IN (?, ?)
+        """, [
+            JobStatus.cancelled.rawValue,
+            now,
+            now,
+            reason,
+            JobStatus.pending.rawValue,
+            JobStatus.running.rawValue
+        ])
+
+        log("Reset image analysis queue; cancelled \(affectedCount) pending/running job(s)")
+        return affectedCount
+    }
+
     // MARK: - Worker
 
     public func startWorker() {
@@ -234,6 +273,11 @@ public actor ImageAnalysisCoordinator {
             } catch {
                 // Handle failure
                 let errorMessage = error.localizedDescription
+                try? await markRecentRunningRunsFailed(
+                    assetID: assetID,
+                    since: now - 1,
+                    error: error
+                )
                 let shouldRetry = attemptCount < 2 // max 3 attempts (0, 1, 2)
 
                 if shouldRetry {
@@ -256,7 +300,50 @@ public actor ImageAnalysisCoordinator {
         return jobs.count
     }
 
-    private func processJob(jobID: String, assetID: String, vertexService: VertexImageAnalysisClient) async throws {
+    /// Analyze a single registered asset immediately, bypassing the persistent
+    /// queue. Used by agent/operator smoke tests so one Vertex-backed image can
+    /// be validated without draining any existing project batch queue.
+    public func analyzeAssetNow(assetID: String, reason: String = "direct") async throws {
+        let startedAt = Date().timeIntervalSince1970
+        do {
+            switch backend {
+            case .aiStudio:
+                guard let geminiService else {
+                    throw GeminiImageAnalysisService.AnalysisError.noAPIKey
+                }
+                try await processJob(
+                    jobID: "direct-\(UUID().uuidString)",
+                    assetID: assetID,
+                    geminiService: geminiService,
+                    reason: reason
+                )
+            case .vertex:
+                guard let vertexService else {
+                    throw VertexImageAnalysisClient.VertexAnalysisError.missingConfig("project ID / region not configured")
+                }
+                try await processJob(
+                    jobID: "direct-\(UUID().uuidString)",
+                    assetID: assetID,
+                    vertexService: vertexService,
+                    reason: reason
+                )
+            }
+        } catch {
+            try? await markRecentRunningRunsFailed(
+                assetID: assetID,
+                since: startedAt - 1,
+                error: error
+            )
+            throw error
+        }
+    }
+
+    private func processJob(
+        jobID: String,
+        assetID: String,
+        vertexService: VertexImageAnalysisClient,
+        reason: String = "automatic"
+    ) async throws {
         guard let asset = try await store.assetByID(assetID) else {
             throw GeminiImageAnalysisService.AnalysisError.invalidImage
         }
@@ -276,7 +363,7 @@ public actor ImageAnalysisCoordinator {
                 started_at, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
-            runID, assetID, asset.contentHashSHA256, "automatic", "running",
+            runID, assetID, asset.contentHashSHA256, reason, "running",
             "gemini-3-flash-preview", "gemini-embedding-2", 3072,
             now, now, now
         ])
@@ -308,6 +395,14 @@ public actor ImageAnalysisCoordinator {
             "gemini-3-flash-preview",
             now, now
         ])
+
+        try await persistTags(
+            for: assetID,
+            runID: runID,
+            analysisResult: analysisResult,
+            confidence: analysisResult.confidence.overall,
+            timestamp: now
+        )
 
         let imageEmbedding = try await vertexService.embedImage(imageData: imageData)
         let imageVectorData = imageEmbedding.vector.withUnsafeBufferPointer { Data(buffer: $0) }
@@ -353,7 +448,12 @@ public actor ImageAnalysisCoordinator {
         log("Completed job \(jobID) for asset \(assetID) via Vertex AI")
     }
 
-    private func processJob(jobID: String, assetID: String, geminiService: GeminiImageAnalysisService) async throws {
+    private func processJob(
+        jobID: String,
+        assetID: String,
+        geminiService: GeminiImageAnalysisService,
+        reason: String = "automatic"
+    ) async throws {
         // Get asset
         guard let asset = try await store.assetByID(assetID) else {
             throw GeminiImageAnalysisService.AnalysisError.invalidImage
@@ -378,7 +478,7 @@ public actor ImageAnalysisCoordinator {
                 started_at, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
-            runID, assetID, asset.contentHashSHA256, "automatic", "running",
+            runID, assetID, asset.contentHashSHA256, reason, "running",
             "gemini-3-flash-preview", "gemini-embedding-2", 3072,
             now, now, now
         ])
@@ -412,6 +512,14 @@ public actor ImageAnalysisCoordinator {
             "gemini-3-flash-preview",
             now, now
         ])
+
+        try await persistTags(
+            for: assetID,
+            runID: runID,
+            analysisResult: analysisResult,
+            confidence: analysisResult.confidence.overall,
+            timestamp: now
+        )
 
         // Generate image embedding
         let imageEmbedding = try await geminiService.embedImage(imageData: imageData)
@@ -568,5 +676,135 @@ public actor ImageAnalysisCoordinator {
     private func computeNorm(_ vector: [Float]) -> Float {
         let sumOfSquares = vector.reduce(0.0) { $0 + $1 * $1 }
         return sqrt(sumOfSquares)
+    }
+
+    private func markRecentRunningRunsFailed(
+        assetID: String,
+        since startedAt: TimeInterval,
+        error: Error
+    ) async throws {
+        let now = Date().timeIntervalSince1970
+        let message = error.localizedDescription
+        let code = String(describing: type(of: error))
+        try await store.exec("""
+            UPDATE image_analysis_runs
+            SET status = ?,
+                error_code = ?,
+                error_message = ?,
+                completed_at = ?,
+                updated_at = ?
+            WHERE image_asset_id = ?
+              AND status = ?
+              AND started_at >= ?
+        """, [
+            "failed",
+            code,
+            message,
+            now,
+            now,
+            assetID,
+            "running",
+            startedAt
+        ])
+    }
+
+    private func persistTags(
+        for assetID: String,
+        runID: String,
+        analysisResult: GeminiImageAnalysisService.VisualAnalysisResult,
+        confidence: Double,
+        timestamp now: TimeInterval
+    ) async throws {
+        try await persistTags(
+            analysisResult.retrievalTags,
+            category: "retrieval",
+            source: "model_retrieval",
+            assetID: assetID,
+            runID: runID,
+            confidence: confidence,
+            timestamp: now
+        )
+        try await persistTags(
+            analysisResult.assetRoles,
+            category: "asset_role",
+            source: "model_asset_role",
+            assetID: assetID,
+            runID: runID,
+            confidence: confidence,
+            timestamp: now
+        )
+    }
+
+    private func persistTags(
+        _ rawTags: [String],
+        category: String,
+        source: String,
+        assetID: String,
+        runID: String,
+        confidence: Double,
+        timestamp now: TimeInterval
+    ) async throws {
+        var seen = Set<String>()
+        for rawTag in rawTags {
+            let displayName = rawTag.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !displayName.isEmpty else { continue }
+            let slug = Self.slugify(displayName)
+            guard !slug.isEmpty, seen.insert(slug).inserted else { continue }
+
+            let tagID: String
+            if let row = try await store.querySingle(
+                "SELECT id FROM image_tags WHERE slug = ? LIMIT 1",
+                [slug]
+            ), let existingID = row["id"] as? String {
+                tagID = existingID
+                try await store.exec("""
+                    UPDATE image_tags
+                    SET display_name = ?,
+                        category = COALESCE(category, ?),
+                        updated_at = ?
+                    WHERE id = ?
+                """, [displayName, category, now, tagID])
+            } else {
+                tagID = UUID().uuidString
+                try await store.exec("""
+                    INSERT INTO image_tags (
+                        id, slug, display_name, category, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, [tagID, slug, displayName, category, now, now])
+            }
+
+            try await store.exec("""
+                INSERT OR REPLACE INTO image_tag_assignments (
+                    id, image_asset_id, tag_id, analysis_run_id,
+                    source, confidence, is_negative, created_at, updated_at
+                ) VALUES (
+                    COALESCE((
+                        SELECT id FROM image_tag_assignments
+                        WHERE image_asset_id = ?
+                          AND tag_id = ?
+                          AND analysis_run_id = ?
+                    ), ?),
+                    ?, ?, ?, ?, ?, ?, ?, ?
+                )
+            """, [
+                assetID, tagID, runID, UUID().uuidString,
+                assetID, tagID, runID, source, confidence, 0, now, now
+            ])
+        }
+    }
+
+    private static func slugify(_ value: String) -> String {
+        var output = ""
+        var previousWasDash = false
+        for scalar in value.lowercased().unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                output.unicodeScalars.append(scalar)
+                previousWasDash = false
+            } else if !previousWasDash {
+                output.append("-")
+                previousWasDash = true
+            }
+        }
+        return output.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 }
