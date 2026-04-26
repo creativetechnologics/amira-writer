@@ -50,8 +50,6 @@ struct ImagineScenesPageView: View {
     // so existing branches (refresh keys, plan preview, generate) keep
     // compiling without ripping the whole flow apart.
     private let useGemini: Bool = true
-    @State private var isBulkRunningScene: Bool = false
-    @State private var isBulkRunningAll: Bool = false
     @State private var isDryRunningShotPipeline: Bool = false
     @State private var bulkProgressMessage: String?
     @State private var dryRunSummaryMessage: String?
@@ -1369,36 +1367,14 @@ struct ImagineScenesPageView: View {
 
     private func bulkBar(scene: AnimationScene) -> some View {
         HStack(spacing: 8) {
-            if isBulkRunningScene || isBulkRunningAll || isDryRunningShotPipeline {
+            if isDryRunningShotPipeline {
                 ProgressView().controlSize(.small)
-                Text(bulkProgressMessage ?? (isDryRunningShotPipeline ? "Planning shot frame pipeline…" : "Generating…"))
+                Text(bulkProgressMessage ?? "Planning shot frame pipeline…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
-                if isBulkRunningScene || isBulkRunningAll {
-                    Button(role: .destructive) {
-                        store.imagineBulkRunProgress.isCancelled = true
-                    } label: {
-                        Label("Cancel", systemImage: "stop.fill")
-                    }
-                    .controlSize(.small)
-                }
             } else {
-                Button {
-                    bulkGenerateScene(scene)
-                } label: {
-                    Label("Bulk: This Scene", systemImage: "photo.stack")
-                }
-                .controlSize(.small)
-
-                Button {
-                    bulkGenerateAllScenes()
-                } label: {
-                    Label("Bulk: All Scenes", systemImage: "film.stack")
-                }
-                .controlSize(.small)
-
                 Button {
                     dryRunShotFramePipeline(scene)
                 } label: {
@@ -1413,38 +1389,12 @@ struct ImagineScenesPageView: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
-                } else {
-                    let cfg = store.imagineBulkRunConfig
-                    Text("\(cfg.batchSize)×\(cfg.repeatsPerPrompt) per moment")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
                 }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.bar)
-    }
-
-    private func bulkGenerateScene(_ scene: AnimationScene) {
-        isBulkRunningScene = true
-        var config = store.imagineBulkRunConfig
-        config.sceneFilter = [scene.id]
-
-        Task {
-            defer { isBulkRunningScene = false; bulkProgressMessage = nil }
-            let service = ImagineGenerationService()
-            try? await service.runBulk(
-                config: config,
-                scenes: store.scenes,
-                store: store,
-                onProgress: { progress in
-                    bulkProgressMessage = "\(progress.completedImages)/\(progress.totalImages) — \(progress.currentMoment.rawValue)"
-                    store.imagineBulkRunProgress = progress
-                }
-            )
-            store.refreshImagineGalleryFromDisk(sceneID: scene.id)
-        }
     }
 
     private func dryRunShotFramePipeline(_ scene: AnimationScene) {
@@ -1472,26 +1422,6 @@ struct ImagineScenesPageView: View {
             } catch {
                 generationError = "Dry run failed to save report: \(error.localizedDescription)"
             }
-        }
-    }
-
-    private func bulkGenerateAllScenes() {
-        isBulkRunningAll = true
-        var config = store.imagineBulkRunConfig
-        config.sceneFilter = nil
-
-        Task {
-            defer { isBulkRunningAll = false; bulkProgressMessage = nil }
-            let service = ImagineGenerationService()
-            try? await service.runBulk(
-                config: config,
-                scenes: store.scenes,
-                store: store,
-                onProgress: { progress in
-                    bulkProgressMessage = "\(progress.currentSceneName) S\(progress.currentShotIndex + 1) \(progress.currentMoment.rawValue) — \(progress.completedImages)/\(progress.totalImages)"
-                    store.imagineBulkRunProgress = progress
-                }
-            )
         }
     }
 

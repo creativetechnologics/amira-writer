@@ -286,8 +286,6 @@ final class AnimateStore {
         }
     }
     private var imagineGalleryRefreshGenerationByScene: [UUID: Int] = [:]
-    var imagineBulkRunConfig: ImagineBulkRunConfig = .init()
-    var imagineBulkRunProgress: ImagineBulkRunProgress = .init()
     static let geminiMasterSwitchDefaultsKey = "animate.geminiMasterSwitch"
     var geminiMasterSwitch: Bool = (UserDefaults.standard.object(forKey: "animate.geminiMasterSwitch") as? Bool) ?? true {
         didSet {
@@ -461,7 +459,6 @@ final class AnimateStore {
     var placesWorldMapCanonLibrary: PlacesWorldMapCanonLibrary = .init()
     private var placesWorldMapCanonRawPayload: [String: Any] = [:]
     private var placesGeneratedReviewStateLibrary: GeneratedBackgroundReviewStateLibrary = .init()
-    var drawThingsPlaceConfig: DrawThingsPlaceConfig = .init()
     var selectedGeneratedBackgroundRecordID: UUID?
     private var generatedBackgroundFingerprintCache: [String: (snapshot: AnimateExternalFileSnapshot, digest: String)] = [:]
     private var generatedBackgroundLibraryNeedsRefresh = false
@@ -880,7 +877,6 @@ final class AnimateStore {
     @ObservationIgnored private var isHydratingGeminiSettings = false
     @ObservationIgnored private var isHydratingMiniMaxSettings = false
     @ObservationIgnored private var isHydratingViduSettings = false
-    @ObservationIgnored private var isHydratingDrawThingsPlacesConfig = false
     @ObservationIgnored private var isHydratingPlacesWorkflowLibrary = false
 
     // MARK: - Track Resolution Cache
@@ -1952,25 +1948,6 @@ final class AnimateStore {
 
     func clearViduAPIKey() {
         viduAPIKey = ""
-    }
-
-    private func normalizedDrawThingsPlacesConfig(_ config: DrawThingsPlaceConfig) -> DrawThingsPlaceConfig {
-        var normalized = config
-        normalized.steps = max(4, min(normalized.steps, 8))
-        return normalized
-    }
-
-    private func hydrateDrawThingsPlacesConfig(_ config: DrawThingsPlaceConfig) {
-        isHydratingDrawThingsPlacesConfig = true
-        drawThingsPlaceConfig = normalizedDrawThingsPlacesConfig(config)
-        isHydratingDrawThingsPlacesConfig = false
-    }
-
-    func updateDrawThingsPlacesConfig(_ config: DrawThingsPlaceConfig) {
-        let normalized = normalizedDrawThingsPlacesConfig(config)
-        guard drawThingsPlaceConfig != normalized else { return }
-        drawThingsPlaceConfig = normalized
-        save(writePlaces: true)
     }
 
     func sceneRequirement(for sceneID: UUID?) -> PlacesScriptSceneRequirement? {
@@ -6262,10 +6239,6 @@ final class AnimateStore {
             }
             imageLibraryOrganizeItems = loadImageLibraryOrganizeItems(from: animateDir)
 
-            hydrateDrawThingsPlacesConfig(
-                ProjectDatabaseBridge.loadDrawThingsPlacesConfigFromDisk(projectURL: effectiveProjectURL) ?? .init()
-            )
-
             // 4. Load saved scene data from disk
             let savedScenesBySongPath = result.savedScenes
             NSLog("[Animate] openOWP: %d saved scenes loaded, %d songs discovered",
@@ -6737,10 +6710,6 @@ final class AnimateStore {
                 self.placesWorldMapCanonRawPayload = canonPayload
                 self.placesWorldMapCanonLibrary = worldMapCanonLibrary
                 self.placesGeneratedReviewStateLibrary = reviewStateLibrary
-                try ProjectDatabaseBridge.saveDrawThingsPlacesConfigToDisk(
-                    drawThingsPlaceConfig,
-                    projectURL: effectiveProjectURL
-                )
             }
             // geminiMasterSwitch is persisted at user-level via UserDefaults (see
             // declaration). No per-project save needed.
@@ -15063,151 +15032,6 @@ final class AnimateStore {
             activityIDs: activityIDs,
             storedPaths: storedPaths
         )
-    }
-
-    func generateDrawThingsPlaceImage(for placeID: UUID) {
-        guard !generatingPlaceIDs.contains(placeID),
-              let place = backgrounds.first(where: { $0.id == placeID }) else {
-            return
-        }
-
-        let sceneNames = sceneReferences(for: placeID).map(\.sceneName)
-        let promptSegments = drawThingsPlacePrompt(for: place, sceneNames: sceneNames)
-
-        let service = DrawThingsPlaceGenerationService()
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(PlacesScriptIndexService.fileStem(for: place.name))-\(UUID().uuidString).png")
-
-        generatingPlaceIDs.insert(placeID)
-        placeGenerationStatusByID[placeID] = "Generating…"
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer { self.generatingPlaceIDs.remove(placeID) }
-
-            do {
-                try await service.generateImage(
-                    prompt: promptSegments,
-                    config: self.drawThingsPlaceConfig,
-                    outputURL: tempURL
-                )
-                self.addImageToPlace(from: tempURL, placeID: placeID)
-                self.placeGenerationStatusByID[placeID] = "Generated \(tempURL.lastPathComponent)"
-                self.statusMessage = "Generated image for \(place.name)"
-                try? FileManager.default.removeItem(at: tempURL)
-            } catch {
-                self.placeGenerationStatusByID[placeID] = error.localizedDescription
-                self.statusMessage = "Place generation failed for \(place.name): \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func drawThingsPlacePrompt(for place: BackgroundPlate, sceneNames: [String]) -> String {
-        let cueText = ([place.promptSupportText, place.locationCategory] + sceneNames)
-            .joined(separator: " ")
-            .lowercased()
-        let visualNotes = sanitizedPlaceVisualNotes(place.promptSupportText)
-
-        return [
-            drawThingsPlaceConfig.promptPrefix.trimmingCharacters(in: .whitespacesAndNewlines),
-            "Create a cinematic background plate written entirely as plain-language visual description.",
-            drawThingsPlaceEnvironmentDescription(for: cueText, category: place.locationCategory),
-            drawThingsPlaceLightingDescription(for: cueText),
-            visualNotes.isEmpty ? "" : "Additional visible design cues: \(visualNotes).",
-            "Describe architecture, terrain, materials, atmosphere, camera distance, and time of day in concrete visual terms.",
-            "Do not mention place names, scene titles, script references, character names, or any internal project labels.",
-            "No characters, no text, no lettering, no logos; focus on the environment only.",
-            drawThingsPlaceConfig.promptSuffix.trimmingCharacters(in: .whitespacesAndNewlines)
-        ]
-        .filter { !$0.isEmpty }
-        .joined(separator: " ")
-    }
-
-    private func drawThingsPlaceEnvironmentDescription(for cueText: String, category: String) -> String {
-        let lowerCategory = category.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-
-        if cueText.contains("briefing") {
-            return "A modest functional interior meeting room with worn plaster walls, practical furniture, grounded documentary realism, and no decorative fantasy styling."
-        }
-        if cueText.contains("clinic") {
-            return "A modest district clinic with restrained medical furnishings, worn plaster, practical surfaces, believable real-world wear, and grounded documentary realism."
-        }
-        if cueText.contains("gathering") || cueText.contains("communal") {
-            return "A communal meeting space with simple seating, practical floor coverings, worn plaster or mud-brick surfaces, and everyday lived-in materials."
-        }
-        if cueText.contains("home") || cueText.contains("house") {
-            return "A modest lived-in home setting with practical household objects, worn plaster, layered textiles, and intimate human-scale detail."
-        }
-        if cueText.contains("bridge") {
-            return "A grounded river crossing with a readable bridge structure, dusty approaches, weathered construction materials, and the river clearly placed in frame."
-        }
-        if cueText.contains("market") {
-            return "A dusty village market with practical stalls, muted fabric shade, rough plaster storefronts, everyday goods, and layered real materials."
-        }
-        if cueText.contains("grave") || cueText.contains("memorial") {
-            return "A quiet memorial setting with muted earth tones, weathered markers, restrained solemn atmosphere, and grounded real-world detail."
-        }
-        if cueText.contains("river") || cueText.contains("riverside") || cueText.contains("riverbank") {
-            return "A river-edge environment with visible water, rocky or sandy banks, sparse vegetation, dusty footpaths, and grounded terrain detail."
-        }
-        if cueText.contains("ridge") || cueText.contains("overlook") || cueText.contains("valley") {
-            return "A dry valley overlook with dusty slopes, layered terrain depth, distant settlement detail, and grounded mountainous geography."
-        }
-        if cueText.contains("street") || cueText.contains("road") || cueText.contains("lane") || cueText.contains("courtyard") || cueText.contains("doorway") {
-            return "A dusty village exterior with packed earth, rough plaster walls, practical doors, muted tones, and believable lived-in wear."
-        }
-        if cueText.contains("interior") || cueText.contains("room") || cueText.contains("inside") || lowerCategory.contains("interior") {
-            return "A grounded interior environment with practical architecture, believable wear, restrained decoration, and documentary realism."
-        }
-        if lowerCategory.contains("exterior") {
-            return "A grounded exterior environment with believable architecture, terrain, weathering, and restrained documentary realism."
-        }
-        return "A grounded real-world environment with believable architecture, restrained materials, readable spatial depth, and documentary-style realism."
-    }
-
-    private func drawThingsPlaceLightingDescription(for cueText: String) -> String {
-        if cueText.contains("pre-dawn") {
-            return "Lighting: cool pre-dawn blue light, dim ambient contrast, quiet atmosphere, and soft low-angle illumination."
-        }
-        if cueText.contains("dawn") || cueText.contains("sunrise") || cueText.contains("early morning") {
-            return "Lighting: early morning light with soft warm highlights, long shadows, clean air, and gentle low-angle sun."
-        }
-        if cueText.contains("late morning") || cueText.contains("morning") {
-            return "Lighting: clear late-morning daylight with realistic sun direction, natural contrast, and grounded neutral color."
-        }
-        if cueText.contains("midday") || cueText.contains("noon") {
-            return "Lighting: bright overhead daylight with crisp shadows, strong realism, and restrained color saturation."
-        }
-        if cueText.contains("late afternoon") || cueText.contains("golden hour") || cueText.contains("sunset") {
-            return "Lighting: warm late-afternoon sunlight with longer shadows, dusty atmosphere, and cinematic golden highlights."
-        }
-        if cueText.contains("dusk") || cueText.contains("blue hour") || cueText.contains("evening") {
-            return "Lighting: dim dusk or blue-hour light with cool ambient tones, practical glow where appropriate, and restrained contrast."
-        }
-        if cueText.contains("night") || cueText.contains("lamplight") {
-            return "Lighting: low night illumination with localized practical light, deep shadows, and believable dark-value control."
-        }
-        return "Lighting: grounded naturalistic light with believable shadow direction, realistic atmosphere, and a restrained cinematic finish."
-    }
-
-    private func sanitizedPlaceVisualNotes(_ raw: String) -> String {
-        raw
-            .replacingOccurrences(of: "\n", with: " ")
-            .components(separatedBy: CharacterSet(charactersIn: ".;"))
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .filter { fragment in
-                let lower = fragment.lowercased()
-                return !lower.contains("scene")
-                    && !lower.contains("script")
-                    && !lower.contains("song")
-                    && !lower.contains("assignment")
-                    && !lower.contains("appears")
-                    && !lower.contains("int.")
-                    && !lower.contains("ext.")
-            }
-            .prefix(2)
-            .joined(separator: ". ")
     }
 
     /// Returns camera shot types required for a given place based on scenes that use it.

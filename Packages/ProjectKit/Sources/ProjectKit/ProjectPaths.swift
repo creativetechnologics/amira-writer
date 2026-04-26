@@ -274,11 +274,6 @@ public struct ProjectPaths: Sendable {
         places.appendingPathComponent("places.people_briefs.json")
     }
 
-    /// `<project>/Places/draw-things-places.json`  (Wave D: moved from Animate/)
-    public var drawThingsPlacesJSON: URL {
-        places.appendingPathComponent("draw-things-places.json")
-    }
-
     /// `<project>/Animate/character-package-selections.json`
     public var animateCharacterPackageSelectionsJSON: URL {
         animate.appendingPathComponent("character-package-selections.json")
@@ -292,11 +287,6 @@ public struct ProjectPaths: Sendable {
     /// `<project>/Scenes/imagine/gemini-switch.json`  (auto-follows `animateImagine` repoint)
     public var animateGeminiSwitchJSON: URL {
         animateImagine.appendingPathComponent("gemini-switch.json")
-    }
-
-    /// `<project>/Places/drawThingsPlacesConfig.json`  (Wave D: moved from Animate/)
-    public var animateDrawThingsPlacesConfigJSON: URL {
-        places.appendingPathComponent("drawThingsPlacesConfig.json")
     }
 
     // MARK: - Animate subdirectories
@@ -491,6 +481,31 @@ public struct ProjectPaths: Sendable {
     public func shotStoryboardImage(sceneID: UUID, shotID: UUID, frame: StoryboardFrame) -> URL {
         shotStoryboardDir(sceneID: sceneID, shotID: shotID)
             .appendingPathComponent("\(frame.rawValue).png")
+    }
+
+    /// `<project>/Scenes/<sceneID>/storyboards/<shotID>/<frame>.analysis.json`
+    public func shotStoryboardAnalysisJSON(sceneID: UUID, shotID: UUID, frame: StoryboardFrame) -> URL {
+        shotStoryboardSidecarURL(sceneID: sceneID, shotID: shotID, frame: frame, suffix: "analysis.json")
+    }
+
+    /// `<project>/Scenes/<sceneID>/storyboards/<shotID>/<frame>.strokes.json`
+    public func shotStoryboardStrokesJSON(sceneID: UUID, shotID: UUID, frame: StoryboardFrame) -> URL {
+        shotStoryboardSidecarURL(sceneID: sceneID, shotID: shotID, frame: frame, suffix: "strokes.json")
+    }
+
+    /// `<project>/Scenes/<sceneID>/storyboards/<shotID>/<frame>.anchors.json`
+    public func shotStoryboardAnchorsJSON(sceneID: UUID, shotID: UUID, frame: StoryboardFrame) -> URL {
+        shotStoryboardSidecarURL(sceneID: sceneID, shotID: shotID, frame: frame, suffix: "anchors.json")
+    }
+
+    private func shotStoryboardSidecarURL(
+        sceneID: UUID,
+        shotID: UUID,
+        frame: StoryboardFrame,
+        suffix: String
+    ) -> URL {
+        shotStoryboardDir(sceneID: sceneID, shotID: shotID)
+            .appendingPathComponent("\(frame.rawValue).\(suffix)")
     }
 
     // MARK: - Songs per-song lyric iterations

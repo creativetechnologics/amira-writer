@@ -177,26 +177,6 @@ enum ProjectDatabaseBridge {
         return manifest
     }
 
-    // MARK: - 3D Registry (archived — types moved to _archived_3d, excluded from build)
-    // These methods are no longer callable; callers in PlacesPageView have been updated.
-    // Kept as stubs to preserve method signatures if 3D pipeline is re-enabled later.
-
-    static func loadDrawThingsPlacesConfigFromDisk(projectURL: URL) -> DrawThingsPlaceConfig? {
-        let fileURL = ProjectPaths(root: projectURL).animateDrawThingsPlacesConfigJSON
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? configuredDecoder().decode(DrawThingsPlaceConfig.self, from: data)
-    }
-
-    static func saveDrawThingsPlacesConfigToDisk(_ config: DrawThingsPlaceConfig, projectURL: URL) throws {
-        let fileURL = ProjectPaths(root: projectURL).animateDrawThingsPlacesConfigJSON
-        try FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let data = try configuredEncoder().encode(config)
-        try data.write(to: fileURL)
-    }
-
     static func loadAnimatedLookPromptFromDisk(projectURL: URL) -> String? {
         struct Payload: Codable {
             var prompt: String

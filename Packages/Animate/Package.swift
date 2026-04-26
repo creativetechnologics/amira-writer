@@ -28,6 +28,7 @@ let package = Package(
             path: "Sources/AnimateUI",
             exclude: [
                 "_archived_3d",
+                "_archived_drawthings",
                 "Services/ImageIntelligence/README.md"
             ],
             resources: [

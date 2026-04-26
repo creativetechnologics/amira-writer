@@ -14,15 +14,17 @@ struct GlobalSettingsSheet: View {
     @Bindable var store: AnimateStore
     let onDismiss: () -> Void
 
+    @ObservedObject private var storyboardStatus = StoryboardServerStatusModel.shared
     @AppStorage("animate.features.map3dEnabled") private var map3dEnabled: Bool = true
     @AppStorage(AnimatedLookPromptSettings.masterPromptDefaultsKey) private var masterAnimatedLookPrompt = ""
 
     @State private var selectedTab: Tab = .general
     @State private var showAPISettings = false
-    @State private var drawThingsStatus: String?
-    @State private var drawThingsStatusIcon: String = "network"
     @State private var vertexCreditRemainingDraft = ""
+    @State private var storyboardPortDraft = ""
+    @State private var storyboardURLCopied = false
     @FocusState private var vertexCreditFieldFocused: Bool
+    @FocusState private var storyboardPortFieldFocused: Bool
 
     enum Tab: String, CaseIterable {
         case general = "General"
@@ -71,11 +73,16 @@ struct GlobalSettingsSheet: View {
         .frame(width: 680, height: 640)
         .onAppear {
             syncVertexCreditRemainingDraft()
+            syncStoryboardPortDraft()
             masterAnimatedLookPrompt = AnimatedLookPromptSettings.loadMasterPrompt()
         }
         .onChange(of: store.vertexCreditRemainingUSD) { _, _ in
             guard !vertexCreditFieldFocused else { return }
             syncVertexCreditRemainingDraft()
+        }
+        .onChange(of: storyboardStatus.port) { _, _ in
+            guard !storyboardPortFieldFocused else { return }
+            syncStoryboardPortDraft()
         }
         .onChange(of: masterAnimatedLookPrompt) { _, newValue in
             store.persistProjectAnimatedLookPrompt(newValue)
@@ -141,6 +148,8 @@ struct GlobalSettingsSheet: View {
                         .foregroundStyle(.tertiary)
                 }
             }
+
+            storyboardServerCard
         }
     }
 
@@ -208,47 +217,6 @@ struct GlobalSettingsSheet: View {
             }
 
             vertexCreditCard
-
-            sectionCard(
-                title: "Draw Things",
-                subtitle: "Local Stable Diffusion server for bulk generation."
-            ) {
-                VStack(alignment: .leading, spacing: 8) {
-                    LabeledContent("Host") {
-                        TextField("http://127.0.0.1", text: Binding(
-                            get: { store.drawThingsPlaceConfig.apiHost },
-                            set: { newValue in
-                                var updated = store.drawThingsPlaceConfig
-                                updated.apiHost = newValue
-                                store.updateDrawThingsPlacesConfig(updated)
-                            }
-                        ))
-                        .font(.caption.monospaced())
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 180)
-                    }
-                    LabeledContent("Port") {
-                        TextField("7860", value: Binding(
-                            get: { store.drawThingsPlaceConfig.apiPort },
-                            set: { newValue in
-                                var updated = store.drawThingsPlaceConfig
-                                updated.apiPort = newValue
-                                store.updateDrawThingsPlacesConfig(updated)
-                            }
-                        ), format: IntegerFormatStyle<Int>().grouping(.never))
-                        .font(.caption.monospaced())
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 80)
-                    }
-
-                    Button {
-                        checkDrawThingsConnection()
-                    } label: {
-                        Label(drawThingsStatus ?? "Check Connection", systemImage: drawThingsStatusIcon)
-                    }
-                    .controlSize(.small)
-                }
-            }
         }
         .sheet(isPresented: $showAPISettings) {
             GeminiSettingsSheet(
@@ -338,6 +306,105 @@ struct GlobalSettingsSheet: View {
         syncVertexCreditRemainingDraft()
     }
 
+    private var storyboardServerCard: some View {
+        sectionCard(
+            title: "iPad storyboard server",
+            subtitle: "Local LAN page for drawing storyboard frames on the iPad. Port changes restart this small server immediately."
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Label(storyboardStatus.statusText, systemImage: storyboardStatus.statusSymbolName)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(storyboardStatusColor)
+                    Spacer()
+                    Text(storyboardStatus.displayURL.absoluteString)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(storyboardStatus.displayURL.absoluteString, forType: .string)
+                        storyboardURLCopied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                            storyboardURLCopied = false
+                        }
+                    } label: {
+                        Label(storyboardURLCopied ? "Copied" : "Copy URL",
+                              systemImage: storyboardURLCopied ? "checkmark" : "doc.on.doc")
+                    }
+                    .controlSize(.small)
+                }
+
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Port")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    TextField("\(StoryboardAPIServer.defaultPort)", text: $storyboardPortDraft)
+                        .font(.caption.monospacedDigit())
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                        .focused($storyboardPortFieldFocused)
+                    Button("Apply") {
+                        applyStoryboardPortDraft()
+                    }
+                    .controlSize(.small)
+                    .disabled(!canApplyStoryboardPortDraft)
+                    Button("Default") {
+                        storyboardPortDraft = "\(StoryboardAPIServer.defaultPort)"
+                        storyboardPortFieldFocused = false
+                        StoryboardAPIServer.setConfiguredPort(Int(StoryboardAPIServer.defaultPort))
+                        syncStoryboardPortDraft()
+                    }
+                    .controlSize(.small)
+                    Spacer()
+                    Text("Allowed: \(StoryboardAPIServer.allowedPortRange.lowerBound)–\(StoryboardAPIServer.allowedPortRange.upperBound)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    private var storyboardStatusColor: Color {
+        switch storyboardStatus.state {
+        case .live:
+            return .green
+        case .starting:
+            return .orange
+        case .failed:
+            return .red
+        case .stopped:
+            return .secondary
+        }
+    }
+
+    private var parsedStoryboardPortDraft: Int? {
+        let cleaned = storyboardPortDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value = Int(cleaned),
+              StoryboardAPIServer.allowedPortRange.contains(value) else {
+            return nil
+        }
+        return value
+    }
+
+    private var canApplyStoryboardPortDraft: Bool {
+        guard let parsedStoryboardPortDraft else { return false }
+        return parsedStoryboardPortDraft != Int(storyboardStatus.port)
+    }
+
+    private func syncStoryboardPortDraft() {
+        storyboardPortDraft = "\(storyboardStatus.port)"
+    }
+
+    private func applyStoryboardPortDraft() {
+        guard let parsedStoryboardPortDraft else { return }
+        storyboardPortFieldFocused = false
+        StoryboardAPIServer.setConfiguredPort(parsedStoryboardPortDraft)
+        syncStoryboardPortDraft()
+    }
+
     private func apiKeyStatusRow(_ name: String, configured: Bool) -> some View {
         HStack {
             Text(name)
@@ -346,42 +413,6 @@ struct GlobalSettingsSheet: View {
             Text(configured ? "Configured" : "Not set")
                 .font(.caption)
                 .foregroundStyle(configured ? .green : .red)
-        }
-    }
-
-    private func checkDrawThingsConnection() {
-        drawThingsStatus = "Checking…"
-        drawThingsStatusIcon = "arrow.triangle.2.circlepath"
-        let config = store.drawThingsPlaceConfig
-        guard var components = URLComponents(string: config.apiHost) else {
-            drawThingsStatus = "Invalid host"
-            drawThingsStatusIcon = "xmark.circle.fill"
-            return
-        }
-        if components.scheme == nil { components.scheme = "http" }
-        components.port = config.apiPort
-        components.path = "/sdapi/v1/options"
-        guard let url = components.url else {
-            drawThingsStatus = "Invalid URL"
-            drawThingsStatusIcon = "xmark.circle.fill"
-            return
-        }
-        Task {
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 5
-            do {
-                let (_, response) = try await URLSession.shared.data(for: request)
-                if let http = response as? HTTPURLResponse, http.statusCode == 200 {
-                    drawThingsStatus = "Connected"
-                    drawThingsStatusIcon = "checkmark.circle.fill"
-                } else {
-                    drawThingsStatus = "Error (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))"
-                    drawThingsStatusIcon = "xmark.circle.fill"
-                }
-            } catch {
-                drawThingsStatus = "Offline — \(error.localizedDescription)"
-                drawThingsStatusIcon = "xmark.circle.fill"
-            }
         }
     }
 

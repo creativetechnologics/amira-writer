@@ -35,10 +35,6 @@ final class PlacesPersistenceTests: XCTestCase {
                 )
             ]
         )
-        store.drawThingsPlaceConfig = DrawThingsPlaceConfig(
-            apiHost: "http://example.local",
-            apiPort: 9000
-        )
         return (store, placeID)
     }
 
@@ -69,11 +65,6 @@ final class PlacesPersistenceTests: XCTestCase {
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: animateDir.appendingPathComponent("places.json").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: animateDir.appendingPathComponent("places-workflow.json").path))
-        XCTAssertFalse(
-            FileManager.default.fileExists(
-                atPath: projectURL.appendingPathComponent("animate/drawThingsPlacesConfig.json").path
-            )
-        )
     }
 
     func testExplicitPlaceSaveWritesPlacesSidecarsAndPreservesPlaceIDs() throws {
@@ -93,10 +84,6 @@ final class PlacesPersistenceTests: XCTestCase {
         let workflowData = try Data(contentsOf: animateDir.appendingPathComponent("places-workflow.json"))
         let workflow = try JSONDecoder().decode(PlacesWorkflowLibrary.self, from: workflowData)
         XCTAssertEqual(workflow.masterMapImagePath, "Animate/backgrounds/master-map.png")
-
-        let config = try XCTUnwrap(ProjectDatabaseBridge.loadDrawThingsPlacesConfigFromDisk(projectURL: projectURL))
-        XCTAssertEqual(config.apiHost, "http://example.local")
-        XCTAssertEqual(config.apiPort, 9000)
     }
 
     func testExplicitPlaceSavePersistsWorldbuildingWorkflowAndAngleMetadata() throws {

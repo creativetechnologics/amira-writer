@@ -23,6 +23,9 @@ struct InspectorView: View {
     @State private var selectedShotPresetID: UUID?
     @State private var shotPresetNameDraft = ""
     @State private var shotPresetNotesDraft = ""
+    @State private var characterLibraryState = AllProjectImagesState()
+    @State private var sceneLibraryState = AllProjectImagesState()
+    @State private var placeLibraryState = AllProjectImagesState()
 
     private struct SyncedVariantPreview: Identifiable {
         var partName: String
@@ -33,7 +36,7 @@ struct InspectorView: View {
     }
 
     private enum InspectorTab: String, Identifiable {
-        case details, assets, properties, gemini, llm, batch
+        case details, library, assets, properties, gemini
 
         var id: String { rawValue }
     }
@@ -42,68 +45,189 @@ struct InspectorView: View {
     var body: some View {
         VStack(spacing: 0) {
             SharedInspectorTabBar(selection: selectedTabBinding, items: tabItems)
-
             Divider()
+            tabBody
+        }
+    }
 
-            // Effective tab: if an older persisted value (.properties) is
-            // still stored, fall back to Details so we never dispatch to a
-            // hidden tab.
-            let effectiveTab: String = {
-                if selectedTab == InspectorTab.properties.rawValue {
-                    return InspectorTab.details.rawValue
-                }
-                return selectedTab
-            }()
+    private var effectiveTab: InspectorTab {
+        if selectedTab == InspectorTab.properties.rawValue {
+            return .details
+        }
+        guard let parsed = InspectorTab(rawValue: selectedTab),
+              tabItems.contains(where: { $0.value == parsed }) else {
+            return .details
+        }
+        return parsed
+    }
 
-            if effectiveTab == InspectorTab.batch.rawValue, currentPage == .characters {
-                batchQueueContent
-            } else if effectiveTab == InspectorTab.details.rawValue {
-                detailsContent
-            } else if effectiveTab == InspectorTab.assets.rawValue {
-                assetsContent
-            } else if effectiveTab == InspectorTab.gemini.rawValue, currentPage == .places {
-                inspectorScrollContainer { PlaceGeminiBatchInspectorSection(store: store) }
-            } else if effectiveTab == InspectorTab.llm.rawValue {
-                AnimateLLMInspectorView(store: store)
-            } else {
-                detailsContent
+    @ViewBuilder
+    private var tabBody: some View {
+        switch effectiveTab {
+        case .library:
+            libraryContent
+        case .details:
+            detailsContent
+        case .assets:
+            assetsContent
+        case .gemini:
+            geminiContent
+        case .properties:
+            detailsContent
+        }
+    }
+
+    @ViewBuilder
+    private var libraryContent: some View {
+        switch currentPage {
+        case .characters:
+            inspectorScrollContainer {
+                CharacterImageLibraryInspectorSection(store: store, state: characterLibraryState)
+            }
+        case .scenes:
+            inspectorScrollContainer {
+                SceneImageLibraryInspectorSection(store: store, state: sceneLibraryState)
+            }
+        case .places:
+            inspectorScrollContainer {
+                PlaceImageLibraryInspectorSection(store: store, state: placeLibraryState)
+            }
+        case .props, .script, .animate, .timeline:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var geminiContent: some View {
+        if currentPage == .places {
+            inspectorScrollContainer { PlaceGeminiBatchInspectorSection(store: store) }
+        } else {
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var detailsContent: some View {
+        detailsContentInner
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var detailsContentInner: some View {
+        switch currentPage {
+        case .places:
+            placesDetails
+        case .characters:
+            charactersDetails
+        case .props:
+            propsDetails
+        case .scenes:
+            scenesDetails
+        case .script, .animate:
+            AnimatePageView(
+                store: store,
+                workspaceState: animateWorkspaceState,
+                presentation: .assets
+            )
+        case .timeline:
+            inspectorScrollContainer { timelineInspector }
+        }
+    }
+
+    private var placesDetails: some View {
+        let placeSel = PlaceImageSelection(store: store)
+        return inspectorScrollContainer {
+            UnifiedDetailsInspectorSection(selection: placeSel) {
+                PlaceDetailsExtraActionsSection(store: store)
+            }
+            if let path = placeSel.imageURL?.path {
+                InspectorImageIntelligenceSummary(store: store, resolvedPath: path)
             }
         }
     }
 
-    private var detailsContent: some View {
-        Group {
-            switch currentPage {
-            case .places:
-                inspectorScrollContainer {
-                    UnifiedDetailsInspectorSection(selection: PlaceImageSelection(store: store)) {
-                        PlaceDetailsExtraActionsSection(store: store)
-                    }
-                }
-            case .characters:
-                inspectorScrollContainer {
-                    UnifiedDetailsInspectorSection(selection: CharacterImageSelection(store: store))
-                }
-            case .props:
-                inspectorScrollContainer {
-                    UnifiedDetailsInspectorSection(selection: PropImageSelection(store: store))
-                }
-            case .script, .animate:
-                AnimatePageView(
-                    store: store,
-                    workspaceState: animateWorkspaceState,
-                    presentation: .assets
-                )
-            case .timeline:
-                assetsContent
+    private var charactersDetails: some View {
+        let sel = CharacterImageSelection(store: store)
+        return inspectorScrollContainer {
+            UnifiedDetailsInspectorSection(selection: sel)
+            if let path = sel.imageURL?.path {
+                InspectorImageIntelligenceSummary(store: store, resolvedPath: path)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var propsDetails: some View {
+        let sel = PropImageSelection(store: store)
+        return inspectorScrollContainer {
+            UnifiedDetailsInspectorSection(selection: sel)
+            if let path = sel.imageURL?.path {
+                InspectorImageIntelligenceSummary(store: store, resolvedPath: path)
+            }
+        }
+    }
+
+    private var scenesDetails: some View {
+        let sel = currentSceneShotSelection
+        return inspectorScrollContainer {
+            UnifiedDetailsInspectorSection(selection: sel)
+            if let path = sel.imageURL?.path {
+                InspectorImageIntelligenceSummary(store: store, resolvedPath: path)
+            }
+        }
+    }
+
+    private var currentSceneShotSelection: SceneShotImageSelection {
+        SceneShotImageSelection(
+            path: store.imaginePreviewImagePath,
+            store: store,
+            scene: store.selectedScene,
+            shotIndex: store.imagineSelectedShotIndex,
+            moment: store.imagineSelectedMoment,
+            onSetRating: { rating in
+                guard let path = store.imaginePreviewImagePath else { return }
+                InspectorView.applyRating(rating, path: path)
+            },
+            onToggleRejected: {
+                guard let path = store.imaginePreviewImagePath else { return }
+                InspectorView.toggleRejected(path: path)
+            },
+            onSetNotes: { notes in
+                guard let path = store.imaginePreviewImagePath else { return }
+                InspectorView.applyNotes(notes, path: path)
+            }
+        )
+    }
+
+    private static func applyRating(_ rating: Int?, path: String) {
+        var meta = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+        meta.rating = rating
+        meta.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(meta, forImagePath: path)
+    }
+
+    private static func toggleRejected(path: String) {
+        var meta = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+        meta.isRejected.toggle()
+        meta.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(meta, forImagePath: path)
+    }
+
+    private static func applyNotes(_ notes: String, path: String) {
+        var meta = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+        meta.notes = notes
+        meta.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(meta, forImagePath: path)
     }
 
     private var selectedTabBinding: Binding<InspectorTab> {
         Binding(
-            get: { InspectorTab(rawValue: selectedTab) ?? .details },
+            get: {
+                let parsed = InspectorTab(rawValue: selectedTab) ?? .details
+                return tabItems.contains(where: { $0.value == parsed }) ? parsed : .details
+            },
             set: { selectedTab = $0.rawValue }
         )
     }
@@ -112,72 +236,90 @@ struct InspectorView: View {
         var items: [SharedInspectorTabItem<InspectorTab>] = [
             SharedInspectorTabItem(value: .details, title: "Details", systemImage: "info.circle")
         ]
-        if currentPage == .places {
+        switch currentPage {
+        case .characters:
+            items.append(SharedInspectorTabItem(value: .library, title: "Library", systemImage: "photo.stack"))
+        case .scenes:
+            items.append(SharedInspectorTabItem(value: .library, title: "Library", systemImage: "photo.stack"))
+        case .places:
+            items.append(SharedInspectorTabItem(value: .library, title: "Library", systemImage: "photo.stack"))
             items.append(SharedInspectorTabItem(value: .assets, title: "Assets", systemImage: "photo.stack"))
             items.append(SharedInspectorTabItem(value: .gemini, title: "Gemini", systemImage: "sparkles"))
-        } else {
+        case .props, .script, .animate, .timeline:
             items.append(SharedInspectorTabItem(value: .assets, title: "Assets", systemImage: "shippingbox.fill"))
-            items.append(SharedInspectorTabItem(value: .llm, title: "LLM", systemImage: "bubble.left.and.text.bubble.right"))
-        }
-        if currentPage == .characters {
-            items.append(SharedInspectorTabItem(value: .batch, title: "Batch", systemImage: "tray.full"))
         }
         return items
     }
 
+    @ViewBuilder
     private var assetsContent: some View {
-        Group {
-            switch currentPage {
-            case .script, .animate:
-                AnimatePageView(
-                    store: store,
-                    workspaceState: animateWorkspaceState,
-                    presentation: .assets
-                )
-            case .places:
-                inspectorScrollContainer { PlaceAssetsInspectorSection(store: store) }
-            case .characters, .props, .timeline:
-                propertiesContent
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        assetsContentInner
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder
+    private var assetsContentInner: some View {
+        switch currentPage {
+        case .script, .animate:
+            AnimatePageView(
+                store: store,
+                workspaceState: animateWorkspaceState,
+                presentation: .assets
+            )
+        case .places:
+            inspectorScrollContainer { PlaceAssetsInspectorSection(store: store) }
+        case .characters:
+            inspectorScrollContainer { characterInspector }
+        case .props:
+            inspectorScrollContainer { propsInspector }
+        case .timeline:
+            inspectorScrollContainer { timelineInspector }
+        case .scenes:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
     private var propertiesContent: some View {
-        Group {
-            switch currentPage {
-            case .script, .animate:
-                AnimatePageView(
-                    store: store,
-                    workspaceState: animateWorkspaceState,
-                    presentation: AnimatePageView.Presentation.inspector
-                )
-            case .characters:
-                inspectorScrollContainer { characterInspector }
-            case .places:
-                inspectorScrollContainer { placeInspector }
-            case .props:
-                inspectorScrollContainer { propsInspector }
-            case .timeline:
-                inspectorScrollContainer { timelineInspector }
+        propertiesContentInner
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onAppear {
+                syncSceneTemplateDrafts()
+                syncTimelineCueDrafts()
+                syncShotPresetDrafts()
             }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear {
-            syncSceneTemplateDrafts()
-            syncTimelineCueDrafts()
-            syncShotPresetDrafts()
-        }
-        .onChange(of: store.currentFrame) { _, _ in
-            syncTimelineCueDrafts()
-        }
-        .onChange(of: store.selectedCharacterID) { _, _ in
-            syncTimelineCueDrafts()
-        }
-        .onChange(of: store.selectedSceneID) { _, _ in
-            syncSceneTemplateDrafts()
-            syncTimelineCueDrafts()
-            syncShotPresetDrafts()
+            .onChange(of: store.currentFrame) { _, _ in
+                syncTimelineCueDrafts()
+            }
+            .onChange(of: store.selectedCharacterID) { _, _ in
+                syncTimelineCueDrafts()
+            }
+            .onChange(of: store.selectedSceneID) { _, _ in
+                syncSceneTemplateDrafts()
+                syncTimelineCueDrafts()
+                syncShotPresetDrafts()
+            }
+    }
+
+    @ViewBuilder
+    private var propertiesContentInner: some View {
+        switch currentPage {
+        case .script, .animate:
+            AnimatePageView(
+                store: store,
+                workspaceState: animateWorkspaceState,
+                presentation: AnimatePageView.Presentation.inspector
+            )
+        case .characters:
+            inspectorScrollContainer { characterInspector }
+        case .places:
+            inspectorScrollContainer { placeInspector }
+        case .props:
+            inspectorScrollContainer { propsInspector }
+        case .timeline:
+            inspectorScrollContainer { timelineInspector }
+        case .scenes:
+            EmptyView()
         }
     }
 
@@ -240,34 +382,18 @@ struct InspectorView: View {
 
     @ViewBuilder
     private var characterInspector: some View {
-        if let character = store.selectedCharacter {
-            VStack(alignment: .leading, spacing: 12) {
-                characterRigSection(character)
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Characters", systemImage: "person.2")
+                .font(.headline)
 
-                Divider()
-
-                characterPackageInspectorSection(character)
-
-                Divider()
-
-                canvasRenderInspectorSection(character)
-
-                Divider()
-
-                characterActionsInspectorSection(character)
-
-                if !character.parts.isEmpty {
-                    Divider()
-
-                    angleCoverageInspectorSection(character)
-                }
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Characters", systemImage: "person.2")
-                    .font(.headline)
-
-                Text("Select a character to view properties.")
+            if let character = store.selectedCharacter {
+                Text(character.name)
+                    .font(.subheadline.weight(.semibold))
+                Text("Use the Characters page for the current reference, costume, and start/end-frame animation workflow. Legacy rig/package/canvas-render actions are no longer exposed here.")
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+            } else {
+                Text("Select a character to inspect image details.")
                     .foregroundStyle(.secondary)
                     .font(.callout)
             }
@@ -570,228 +696,6 @@ struct InspectorView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-    }
-
-    // MARK: - Batch Queue
-
-    private var batchQueueContent: some View {
-        inspectorScrollContainer {
-            VStack(alignment: .leading, spacing: 12) {
-                Label(
-                    store.geminiQueue.isEmpty
-                        ? "Batch Queue"
-                        : "\(store.geminiQueue.count) item\(store.geminiQueue.count == 1 ? "" : "s") queued",
-                    systemImage: "tray.full"
-                )
-                .font(.headline)
-
-                if store.geminiQueue.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Add items to the batch queue from the character reference workflow or the 3D production preview.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(.vertical, 8)
-                } else {
-                    ForEach(store.geminiQueue) { item in
-                        HStack(alignment: .top, spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.characterName)
-                                    .font(.callout.weight(.semibold))
-                                    .lineLimit(1)
-                                Text(item.draftTitle)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                if let outputRootRelativePath = item.outputRootRelativePath {
-                                    Text(outputRootRelativePath)
-                                        .font(.system(size: 10, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                            }
-                            Spacer()
-                            Button {
-                                store.removeGeminiQueueItem(item.id)
-                            } label: {
-                                Image(systemName: "trash")
-                                    .foregroundStyle(.red)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Remove from queue")
-                        }
-                        .padding(8)
-                        .background(.quaternary.opacity(0.16), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-
-                    Divider()
-
-                    if let batchError = store.geminiBatchGenerationAvailabilityError {
-                        Text(batchError)
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    HStack(spacing: 8) {
-                        Button("Submit All") {
-                            submitBatchQueue()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(!store.canSubmitGeminiBatchJobs)
-
-                        Button("Clear Queue") {
-                            store.clearGeminiQueue()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-            }
-        }
-    }
-
-    private func submitBatchQueue() {
-        guard !store.geminiQueue.isEmpty,
-              let animateURL = store.animateURL else { return }
-        if let batchError = store.geminiBatchGenerationAvailabilityError {
-            store.statusMessage = batchError
-            return
-        }
-
-        let queueSnapshot = store.geminiQueue
-
-        let grouped = Dictionary(grouping: queueSnapshot, by: \.groupingKey)
-
-        Task { @MainActor in
-            for (_, items) in grouped {
-                guard let firstItem = items.first else { continue }
-                let formatter = DateFormatter()
-                formatter.locale = Locale(identifier: "en_US_POSIX")
-                formatter.timeZone = TimeZone(secondsFromGMT: 0)
-                formatter.dateFormat = "yyyyMMdd'T'HHmmssSSS'Z'"
-                let stamp = formatter.string(from: Date())
-
-                let character = firstItem.characterID.flatMap { id in
-                    store.characters.first(where: { $0.id == id })
-                }
-                let outputRoot: URL
-                let batchName: String
-                let batchSlug: String
-
-                if let character {
-                    let resolvedSlug = firstItem.characterSlug ?? character.assetFolderSlug
-                    outputRoot = ProjectPaths(root: animateURL.deletingLastPathComponent())
-                        .characterFolder(slug: resolvedSlug)
-                        .appendingPathComponent("batch-queue-batches")
-                        .appendingPathComponent("\(stamp)-queue")
-                    batchName = character.name
-                    batchSlug = resolvedSlug
-                } else {
-                    let relativeRoot = firstItem.outputRootRelativePath?.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                    outputRoot = animateURL
-                        .appendingPathComponent(relativeRoot?.isEmpty == false ? relativeRoot! : "3d/generation-queue-batches")
-                        .appendingPathComponent("\(stamp)-queue")
-                    batchName = firstItem.characterName
-                    batchSlug = sanitizedBatchSlug(from: relativeRoot ?? firstItem.characterName)
-                }
-
-                do {
-                    let promptRequests = try items.map { item in
-                        let slug = item.draftTitle
-                            .lowercased()
-                            .replacingOccurrences(of: " ", with: "-")
-                            .replacingOccurrences(of: "•", with: "")
-                            .replacingOccurrences(of: "  ", with: "-")
-
-                        let referencePaths: [String] = try item.draft.includedReferenceItems.map { ref in
-                            if let resolvedURL = store.resolvedCharacterAssetURL(for: ref.path) {
-                                return resolvedURL.path
-                            }
-                            let candidate = URL(fileURLWithPath: ref.path)
-                            if FileManager.default.fileExists(atPath: candidate.path) {
-                                return candidate.path
-                            }
-                            throw NSError(
-                                domain: "BatchQueue",
-                                code: 1,
-                                userInfo: [NSLocalizedDescriptionKey: "Reference image could not be resolved: \(ref.path)"]
-                            )
-                        }
-
-                        return GeminiBatchSubmissionPlan.PromptRequest(
-                            id: slug,
-                            title: item.draftTitle,
-                            prompt: item.draft.prompt,
-                            referencePaths: referencePaths
-                        )
-                    }
-
-                    let firstDraft = items.first!.draft
-                    let submissionPlan = GeminiBatchSubmissionPlan(
-                        characterName: batchName,
-                        characterSlug: batchSlug,
-                        displayName: "\(batchSlug)-queue-\(stamp.lowercased())",
-                        model: firstDraft.model,
-                        aspectRatio: firstDraft.aspectRatio,
-                        imageSize: firstDraft.imageSize,
-                        outputRoot: outputRoot,
-                        prompts: promptRequests
-                    )
-
-                    let service = GeminiBatchService()
-                    let submission = try await service.submit(plan: submissionPlan, apiKey: store.geminiAPIKey)
-                    try service.launchWatchdog(metadataPath: submission.metadataPath, apiKey: store.geminiAPIKey)
-
-                    if let characterID = firstItem.characterID {
-                        store.registerInspirationBatchJob(
-                            CharacterInspirationBatchJob(
-                                title: "Batch Queue (\(items.count) items)",
-                                batchName: submission.batchName,
-                                metadataPath: submission.metadataPath.path,
-                                outputRootPath: submission.outputRoot.path,
-                                state: submission.state,
-                                promptCount: submission.promptCount,
-                                submittedAt: submission.submittedAt
-                            ),
-                            for: characterID
-                        )
-                        store.refreshInspirationBatchJobs()
-                    } else {
-                        store.statusMessage = "Submitted pipeline batch with \(items.count) item\(items.count == 1 ? "" : "s") to \(submission.outputRoot.lastPathComponent)"
-                    }
-                    // Remove only this group's items from the queue after successful submission
-                    for item in items {
-                        store.removeGeminiQueueItem(item.id)
-                    }
-                } catch {
-                    // Re-queue items on failure so the user doesn't lose them
-                    for item in items {
-                        store.addToGeminiQueue(
-                            characterID: item.characterID,
-                            characterName: item.characterName,
-                            draftTitle: item.draftTitle,
-                            draft: item.draft,
-                            characterSlug: item.characterSlug,
-                            outputRootRelativePath: item.outputRootRelativePath
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    private func sanitizedBatchSlug(from value: String) -> String {
-        let slug = value
-            .lowercased()
-            .replacingOccurrences(of: " ", with: "-")
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: "_", with: "-")
-            .replacingOccurrences(of: "--", with: "-")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return slug.isEmpty ? "pipeline" : slug
     }
 
     // MARK: - Animate Inspector
@@ -1778,19 +1682,6 @@ struct InspectorView: View {
         )
     }
 
-    private func drawThingsBinding<Value>(
-        _ keyPath: WritableKeyPath<DrawThingsPlaceConfig, Value>
-    ) -> Binding<Value> {
-        Binding(
-            get: { store.drawThingsPlaceConfig[keyPath: keyPath] },
-            set: { newValue in
-                var updated = store.drawThingsPlaceConfig
-                updated[keyPath: keyPath] = newValue
-                store.updateDrawThingsPlacesConfig(updated)
-            }
-        )
-    }
-
     @ViewBuilder
     private func labeledTextField(
         _ title: String,
@@ -2621,6 +2512,145 @@ struct PlaceGeneratedImageDetailsInspectorSection: View {
         guard let url = store.resolvedCharacterAssetURL(for: path)
             ?? (path.hasPrefix("/") ? URL(fileURLWithPath: path) : nil) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+}
+
+@available(macOS 26.0, *)
+private struct CharacterImageLibraryInspectorSection: View {
+    @Bindable var store: AnimateStore
+    @Bindable var state: AllProjectImagesState
+
+    private var selectedCharacter: AnimationCharacter? {
+        store.selectedCharacter
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if selectedCharacter == nil {
+                ContentUnavailableView(
+                    "No Character Selected",
+                    systemImage: "person.crop.square",
+                    description: Text("Select a character to view their image library.")
+                )
+                .padding()
+            } else {
+                AllProjectImagesPageView(
+                    store: store,
+                    state: state,
+                    layout: .canvasSidebar
+                )
+                .frame(minHeight: 520)
+            }
+        }
+        .task(id: librarySelectionSignature) {
+            configureLibraryFilter()
+        }
+    }
+
+    private var librarySelectionSignature: String {
+        [
+            store.owpURL?.path ?? "",
+            selectedCharacter?.id.uuidString ?? "",
+            selectedCharacter?.name ?? ""
+        ].joined(separator: "|")
+    }
+
+    private func configureLibraryFilter() {
+        guard let selectedCharacter else { return }
+        state.selectedSource = .characters
+        state.selectedGroupLabel = selectedCharacter.name.isEmpty ? "Character" : selectedCharacter.name
+        state.thumbnailSize = 92
+        state.flagFilter = .all
+    }
+}
+
+@available(macOS 26.0, *)
+private struct SceneImageLibraryInspectorSection: View {
+    @Bindable var store: AnimateStore
+    @Bindable var state: AllProjectImagesState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if store.selectedScene == nil {
+                ContentUnavailableView(
+                    "No Scene Selected",
+                    systemImage: "film.stack",
+                    description: Text("Select a scene to browse its image library.")
+                )
+                .padding()
+            } else {
+                AllProjectImagesPageView(
+                    store: store,
+                    state: state,
+                    layout: .canvasSidebar
+                )
+                .frame(minHeight: 520)
+            }
+        }
+        .task(id: librarySignature) {
+            configureFilter()
+        }
+    }
+
+    private var librarySignature: String {
+        [
+            store.owpURL?.path ?? "",
+            store.selectedScene?.id.uuidString ?? "",
+            store.selectedScene?.name ?? ""
+        ].joined(separator: "|")
+    }
+
+    private func configureFilter() {
+        guard let scene = store.selectedScene else { return }
+        state.selectedSource = .sceneShots
+        state.selectedGroupLabel = scene.name.isEmpty ? "Scene" : scene.name
+        state.thumbnailSize = 92
+        state.flagFilter = .all
+    }
+}
+
+@available(macOS 26.0, *)
+private struct PlaceImageLibraryInspectorSection: View {
+    @Bindable var store: AnimateStore
+    @Bindable var state: AllProjectImagesState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if store.selectedPlace == nil {
+                ContentUnavailableView(
+                    "No Place Selected",
+                    systemImage: "map",
+                    description: Text("Select a place to browse its image library.")
+                )
+                .padding()
+            } else {
+                AllProjectImagesPageView(
+                    store: store,
+                    state: state,
+                    layout: .canvasSidebar
+                )
+                .frame(minHeight: 520)
+            }
+        }
+        .task(id: librarySignature) {
+            configureFilter()
+        }
+    }
+
+    private var librarySignature: String {
+        [
+            store.owpURL?.path ?? "",
+            store.selectedPlace?.id.uuidString ?? "",
+            store.selectedPlace?.name ?? ""
+        ].joined(separator: "|")
+    }
+
+    private func configureFilter() {
+        guard let place = store.selectedPlace else { return }
+        state.selectedSource = .places
+        state.selectedGroupLabel = place.name.isEmpty ? "Place" : place.name
+        state.thumbnailSize = 92
+        state.flagFilter = .all
     }
 }
 

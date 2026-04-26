@@ -12,6 +12,7 @@ public final class AnimateWorkspaceController: ObservableObject {
         state.thumbnailSize = 84
         return state
     }()
+    let canvasFormState = CanvasFormState()
     private var loadedProjectPath: String?
     private var loadRequestID: UInt64 = 0
     /// Most recent project URL the host has selected. Written from Opera's
@@ -26,7 +27,7 @@ public final class AnimateWorkspaceController: ObservableObject {
     @Published public private(set) var selectedScenePath: String?
     @Published public private(set) var isSelectionRestorePending = false
 
-    public init() {
+    public init(startServers: Bool = true) {
         store.disableExternalFileWatch = true
         _ = RunPodMouthSyncService.shared
         RunPodMouthSyncService.shared.setActiveAnimateURL(store.animateURL)
@@ -35,18 +36,20 @@ public final class AnimateWorkspaceController: ObservableObject {
         saveIndicator = store.saveIndicator
         observeSaveIndicator()
         observeSelectionPath()
-        // Loopback HTTP API for external agents (curated Places generation, etc.).
-        // Idempotent; safe if the shell re-inits or AnimateApp runs standalone.
-        AnimateAPIServer.startIfNeeded(store: store)
-        // Let the API hydrate the active project on demand, bypassing Opera's
-        // lazy mode-switch gate. `apiHostProjectURL` is refreshed from the shell.
-        AnimateAPIServer.projectActivator = { [weak self] in
-            guard let self else { return }
-            guard let url = self.apiHostProjectURL else { return }
-            _ = await self.ensureProjectLoaded(url)
+        if startServers {
+            // Loopback HTTP API for external agents (curated Places generation, etc.).
+            // Idempotent; safe if the shell re-inits or AnimateApp runs standalone.
+            AnimateAPIServer.startIfNeeded(store: store)
+            // Let the API hydrate the active project on demand, bypassing Opera's
+            // lazy mode-switch gate. `apiHostProjectURL` is refreshed from the shell.
+            AnimateAPIServer.projectActivator = { [weak self] in
+                guard let self else { return }
+                guard let url = self.apiHostProjectURL else { return }
+                _ = await self.ensureProjectLoaded(url)
+            }
+            // LAN HTTP server for the iPad storyboard drawing tool (port 19850).
+            StoryboardAPIServer.startIfNeeded(workspace: self)
         }
-        // LAN HTTP server for the iPad storyboard drawing tool (port 19850).
-        StoryboardAPIServer.startIfNeeded(workspace: self)
     }
 
     /// Called by the Opera shell whenever the active project URL changes so
@@ -57,9 +60,6 @@ public final class AnimateWorkspaceController: ObservableObject {
     }
 
     public var isDirty: Bool { store.saveIndicator == .unsavedChanges }
-
-    public var drawThingsHost: String { store.drawThingsPlaceConfig.apiHost }
-    public var drawThingsPort: Int { store.drawThingsPlaceConfig.apiPort }
 
     /// Whether any RunPod-backed Animate workflow currently has an active pod.
     public var isRunPodActive: Bool {
@@ -79,6 +79,19 @@ public final class AnimateWorkspaceController: ObservableObject {
 
     public func suspendBackgroundWork() {
         store.suspendBackgroundWork()
+    }
+
+    public func resumeBackgroundWork() {
+        store.resumeBackgroundWork()
+    }
+
+    public func isProjectDisplayReady(_ projectURL: URL) -> Bool {
+        let normalizedPath = projectURL.standardizedFileURL.path
+        return loadedProjectPath == normalizedPath
+            && store.owpURL?.standardizedFileURL.path == normalizedPath
+            && !store.isLoadingProject
+            && !isLoadingProject
+            && store.loadErrorMessage == nil
     }
 
     public func save() {
@@ -105,6 +118,11 @@ public final class AnimateWorkspaceController: ObservableObject {
     /// Returns the storyboard URL button for the title bar.
     public func storyboardURLButtonView() -> some View {
         StoryboardURLButton()
+    }
+
+    /// Returns the compact storyboard/iPad server status pill for Opera's title bar.
+    public func storyboardServerStatusIndicatorView() -> some View {
+        StoryboardServerIndicatorView()
     }
 
     // Note: AllProjectImages is now dispatched from `OperaShellView` as a
@@ -141,6 +159,7 @@ public final class AnimateWorkspaceController: ObservableObject {
             activeProjectPath = normalizedPath
             RunPodMouthSyncService.shared.setActiveAnimateURL(store.animateURL)
             store.resumeBackgroundWork()
+            allProjectImagesState.requestRebuildIfNeeded(store: store)
             return nil
         }
 
@@ -176,6 +195,7 @@ public final class AnimateWorkspaceController: ObservableObject {
             loadedProjectPath = normalizedPath
             activeProjectPath = normalizedPath
             RunPodMouthSyncService.shared.setActiveAnimateURL(store.animateURL)
+            allProjectImagesState.requestRebuildIfNeeded(store: store)
             return nil
         }
 
@@ -211,6 +231,338 @@ public final class AnimateWorkspaceController: ObservableObject {
         }
     }
 
+    /// CLI/debug entrypoint for the Imagine beginning/middle/end dry-run planner.
+    /// Stringly typed so the standalone Animate executable can call it without
+    /// exposing internal AnimateUI planning models as public API.
+    public func runShotFrameGenerationDryRun(
+        sceneFilter: String?,
+        modelName: String?,
+        imageSize: String?
+    ) async throws -> [String: String] {
+        guard let projectRoot = store.fileOWPURL else {
+            throw cliError("No project is loaded.")
+        }
+
+        let model = resolvedGeminiModel(from: modelName)
+        let resolvedImageSize = imageSize?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? imageSize!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ShotFrameOpenMattePlan.defaultGeneratedImageSize
+        let sceneFilterSet = try resolvedSceneFilter(sceneFilter)
+        let planner = ShotFrameGenerationDryRunPlanner(store: store)
+        let report = await planner.buildReport(
+            scenes: store.scenes,
+            projectRoot: projectRoot,
+            sceneFilter: sceneFilterSet,
+            model: model,
+            imageSize: resolvedImageSize
+        )
+        let reportURL = try await planner.writeReportAsync(report, projectRoot: projectRoot)
+        return [
+            "reportURL": reportURL.path,
+            "totalFrames": "\(report.totalFrames)",
+            "generateFrames": "\(report.generateFrames)",
+            "editFrames": "\(report.editFrames)",
+            "openMatteFrames": "\(report.openMatteFrames)",
+            "automaticReferenceCount": "\(report.automaticReferenceCount)",
+            "estimatedVertexCostUSD": String(format: "%.4f", report.estimatedVertexCostUSD),
+            "model": report.model.rawValue,
+            "imageSize": report.imageSize
+        ]
+    }
+
+    /// Small paid Vertex smoke-test hook for agent/operator use. It does not
+    /// launch or control the GUI app; it only uses the same Gemini service and
+    /// local Vertex attempt/credit ledger as the app.
+    public func runVertexImageSmokeTest(
+        projectID providedProjectID: String?,
+        region providedRegion: String?,
+        modelName: String?,
+        imageSize: String?,
+        aspectRatio: String?,
+        maxSpendUSD: Double
+    ) async throws -> [String: String] {
+        guard let projectRoot = store.fileOWPURL else {
+            throw cliError("No project is loaded.")
+        }
+
+        let model = resolvedGeminiModel(from: modelName)
+        let resolvedImageSize = imageSize?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? imageSize!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ShotFrameOpenMattePlan.defaultGeneratedImageSize
+        let resolvedAspectRatio = aspectRatio?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? aspectRatio!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ShotFrameOpenMattePlan.defaultGeneratedAspectRatio
+        let estimatedCost = model.estimatedCost(for: resolvedImageSize)
+        guard estimatedCost <= maxSpendUSD else {
+            throw cliError("Estimated Vertex cost $\(String(format: "%.4f", estimatedCost)) exceeds cap $\(String(format: "%.2f", maxSpendUSD)).")
+        }
+
+        let projectID = firstNonEmpty(
+            providedProjectID,
+            ProjectCredentialStore.shared.vertexProjectID(),
+            ImageGenBackendStore.currentVertexSettings().projectID
+        )
+        let region = firstNonEmpty(
+            providedRegion,
+            ProjectCredentialStore.shared.vertexRegion(),
+            ImageGenBackendStore.currentVertexSettings().region,
+            "global"
+        )
+        guard let projectID, !projectID.isEmpty else {
+            throw cliError("Missing Vertex project ID. Set it in API Settings or pass --vertex-project <id>.")
+        }
+
+        let directory = ProjectPaths(root: projectRoot)
+            .animate
+            .appendingPathComponent("Imagine/VertexSmokeTests", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let stem = "vertex_smoke_\(timestamp)_\(model.rawValue)_\(resolvedImageSize)_\(resolvedAspectRatio.replacingOccurrences(of: ":", with: "x"))"
+        var smokeRecord = VertexImageSmokeTestRecord(
+            id: UUID(),
+            startedAt: Date(),
+            status: "running",
+            model: model.rawValue,
+            imageSize: resolvedImageSize,
+            aspectRatio: resolvedAspectRatio,
+            estimatedVertexCostUSD: estimatedCost,
+            chargedEstimatedCostUSD: 0,
+            maxSpendUSD: maxSpendUSD,
+            projectID: projectID,
+            region: region ?? "global"
+        )
+        try Self.writeVertexImageSmokeTestRecord(smokeRecord, directory: directory, stem: stem)
+
+        let previousBackend = ImageGenBackendStore.currentBackend()
+        let previousVertexSettings = ImageGenBackendStore.currentVertexSettings()
+        ImageGenBackendStore.setBackend(.vertex)
+        ImageGenBackendStore.setVertexSettings(VertexSettings(projectID: projectID, region: region ?? "global"))
+        defer {
+            ImageGenBackendStore.setBackend(previousBackend)
+            ImageGenBackendStore.setVertexSettings(previousVertexSettings)
+        }
+
+        let prompt = [
+            "Generate one safe open-matte pipeline smoke-test image.",
+            "Subject: a cinematic alpine valley at sunrise with a river, distant mountains, and no people.",
+            "Composition: \(resolvedAspectRatio) open-matte source plate, extra clean environment around all edges, no captions, no text, no logos.",
+            "This is a technical validation frame for crop-controlled camera movement."
+        ].joined(separator: " ")
+
+        do {
+            let result = try await GeminiImageService().generate(
+                request: GeminiImageService.GenerationRequest(
+                    prompt: prompt,
+                    model: model,
+                    aspectRatio: resolvedAspectRatio,
+                    imageSize: resolvedImageSize
+                ),
+                apiKey: ""
+            )
+
+            let imageURL = directory.appendingPathComponent("\(stem).png")
+            try result.imageData.write(to: imageURL, options: .atomic)
+            let promptURL = directory.appendingPathComponent("\(stem).prompt.txt")
+            try prompt.write(to: promptURL, atomically: true, encoding: .utf8)
+            smokeRecord.promptURL = promptURL.path
+            smokeRecord.imageURL = imageURL.path
+            if let textResponse = result.textResponse,
+               !textResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let responseURL = directory.appendingPathComponent("\(stem).response.txt")
+                try textResponse.write(to: responseURL, atomically: true, encoding: .utf8)
+                smokeRecord.responseURL = responseURL.path
+            }
+            smokeRecord.status = "succeeded"
+            smokeRecord.finishedAt = Date()
+            smokeRecord.chargedEstimatedCostUSD = estimatedCost
+            try Self.writeVertexImageSmokeTestRecord(smokeRecord, directory: directory, stem: stem)
+
+            return [
+                "imageURL": imageURL.path,
+                "recordURL": directory.appendingPathComponent("\(stem).json").path,
+                "latestRecordURL": directory.appendingPathComponent("vertex_smoke_latest.json").path,
+                "estimatedVertexCostUSD": String(format: "%.4f", estimatedCost),
+                "chargedEstimatedCostUSD": String(format: "%.4f", estimatedCost),
+                "model": model.rawValue,
+                "imageSize": resolvedImageSize,
+                "aspectRatio": resolvedAspectRatio,
+                "projectID": projectID,
+                "region": region ?? "global"
+            ]
+        } catch {
+            smokeRecord.status = "failed"
+            smokeRecord.finishedAt = Date()
+            smokeRecord.errorMessage = error.localizedDescription
+            smokeRecord.chargedEstimatedCostUSD = 0
+            try? Self.writeVertexImageSmokeTestRecord(smokeRecord, directory: directory, stem: stem)
+            throw error
+        }
+    }
+
+    /// Paid, single-image Vertex smoke test for the Image Intelligence
+    /// recognition/tagging pipeline. This bypasses the persistent batch queue
+    /// and analyzes exactly one existing image, then writes an auditable
+    /// project-local record.
+    public func runImageIntelligenceSmokeTest(
+        imagePath providedImagePath: String?,
+        projectID providedProjectID: String?,
+        region providedRegion: String?,
+        maxSpendUSD: Double
+    ) async throws -> [String: String] {
+        guard let projectRoot = store.fileOWPURL else {
+            throw cliError("No project is loaded.")
+        }
+
+        let estimatedCost = 0.05
+        guard estimatedCost <= maxSpendUSD else {
+            throw cliError("Estimated Vertex cost $\(String(format: "%.4f", estimatedCost)) exceeds cap $\(String(format: "%.2f", maxSpendUSD)).")
+        }
+
+        let projectID = firstNonEmpty(
+            providedProjectID,
+            ProjectCredentialStore.shared.vertexProjectID(),
+            ImageAnalysisBackendStore.currentVertexProjectID()
+        )
+        let region = firstNonEmpty(
+            providedRegion,
+            ProjectCredentialStore.shared.vertexRegion(),
+            ImageAnalysisBackendStore.currentVertexRegion(),
+            "global"
+        )
+        guard let projectID, !projectID.isEmpty else {
+            throw cliError("Missing Vertex project ID. Set it in API Settings or pass --vertex-project <id>.")
+        }
+
+        let imagePath = try resolvedImageIntelligenceSmokeImage(
+            providedImagePath,
+            projectRoot: projectRoot
+        )
+
+        let directory = ProjectPaths(root: projectRoot)
+            .animate
+            .appendingPathComponent("ImageIntelligenceSmokeTests", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let stem = "image_intelligence_smoke_\(timestamp)"
+        var smokeRecord = ImageIntelligenceSmokeTestRecord(
+            id: UUID(),
+            startedAt: Date(),
+            status: "running",
+            imagePath: imagePath,
+            estimatedVertexCostUSD: estimatedCost,
+            chargedEstimatedCostUSD: 0,
+            maxSpendUSD: maxSpendUSD,
+            projectID: projectID,
+            region: region ?? "global"
+        )
+        try Self.writeImageIntelligenceSmokeTestRecord(smokeRecord, directory: directory, stem: stem)
+
+        let previousBackend = ImageAnalysisBackendStore.currentBackend()
+        let previousProjectID = ImageAnalysisBackendStore.currentVertexProjectID()
+        let previousRegion = ImageAnalysisBackendStore.currentVertexRegion()
+        ImageAnalysisBackendStore.setBackend(.vertex)
+        ImageAnalysisBackendStore.setVertexSettings(projectID: projectID, region: region ?? "global")
+        defer {
+            ImageAnalysisBackendStore.setBackend(previousBackend)
+            ImageAnalysisBackendStore.setVertexSettings(projectID: previousProjectID, region: previousRegion)
+            store.refreshImageAnalysisConfiguration()
+        }
+
+        do {
+            try await waitForImageIntelligenceReady()
+            let result = try await store.analyzeImageIntelligenceAssetNow(
+                path: imagePath,
+                linkKind: .canvasGeneration,
+                reason: "vertex_smoke_test"
+            )
+
+            smokeRecord.status = "succeeded"
+            smokeRecord.finishedAt = Date()
+            smokeRecord.chargedEstimatedCostUSD = estimatedCost
+            smokeRecord.result = result
+            try Self.writeImageIntelligenceSmokeTestRecord(smokeRecord, directory: directory, stem: stem)
+
+            var payload = result
+            payload["recordURL"] = directory.appendingPathComponent("\(stem).json").path
+            payload["latestRecordURL"] = directory.appendingPathComponent("image_intelligence_smoke_latest.json").path
+            payload["estimatedVertexCostUSD"] = String(format: "%.4f", estimatedCost)
+            payload["chargedEstimatedCostUSD"] = String(format: "%.4f", estimatedCost)
+            payload["projectID"] = projectID
+            payload["region"] = region ?? "global"
+            return payload
+        } catch {
+            smokeRecord.status = "failed"
+            smokeRecord.finishedAt = Date()
+            smokeRecord.errorMessage = error.localizedDescription
+            smokeRecord.chargedEstimatedCostUSD = 0
+            try? Self.writeImageIntelligenceSmokeTestRecord(smokeRecord, directory: directory, stem: stem)
+            throw error
+        }
+    }
+
+    private struct VertexImageSmokeTestRecord: Codable, Sendable {
+        var schemaVersion: Int = 1
+        var id: UUID
+        var startedAt: Date
+        var finishedAt: Date?
+        var status: String
+        var model: String
+        var imageSize: String
+        var aspectRatio: String
+        var estimatedVertexCostUSD: Double
+        var chargedEstimatedCostUSD: Double
+        var maxSpendUSD: Double
+        var projectID: String
+        var region: String
+        var imageURL: String?
+        var promptURL: String?
+        var responseURL: String?
+        var errorMessage: String?
+    }
+
+    private struct ImageIntelligenceSmokeTestRecord: Codable, Sendable {
+        var schemaVersion: Int = 1
+        var id: UUID
+        var startedAt: Date
+        var finishedAt: Date?
+        var status: String
+        var imagePath: String
+        var estimatedVertexCostUSD: Double
+        var chargedEstimatedCostUSD: Double
+        var maxSpendUSD: Double
+        var projectID: String
+        var region: String
+        var result: [String: String]?
+        var errorMessage: String?
+    }
+
+    nonisolated private static func writeVertexImageSmokeTestRecord(
+        _ record: VertexImageSmokeTestRecord,
+        directory: URL,
+        stem: String
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(record)
+        try data.write(to: directory.appendingPathComponent("\(stem).json"), options: .atomic)
+        try data.write(to: directory.appendingPathComponent("vertex_smoke_latest.json"), options: .atomic)
+    }
+
+    nonisolated private static func writeImageIntelligenceSmokeTestRecord(
+        _ record: ImageIntelligenceSmokeTestRecord,
+        directory: URL,
+        stem: String
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(record)
+        try data.write(to: directory.appendingPathComponent("\(stem).json"), options: .atomic)
+        try data.write(to: directory.appendingPathComponent("image_intelligence_smoke_latest.json"), options: .atomic)
+    }
+
     /// Explicitly reload Animate/scenes.json from disk, refreshing authored shot data.
     public func reloadScenesFromDisk() {
         store.reloadScenesFromDisk()
@@ -221,6 +573,100 @@ public final class AnimateWorkspaceController: ObservableObject {
         store.scenes.map { scene in
             (id: scene.id, songPath: scene.owpSongPath, hasAudio: !(scene.defaultAudioPath ?? "").isEmpty)
         }
+    }
+
+    private func resolvedGeminiModel(from raw: String?) -> GeminiModel {
+        let normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if normalized == "pro" || normalized.contains("pro") {
+            return .pro
+        }
+        if normalized == "flash" || normalized.contains("flash") || normalized.contains("banana") {
+            return .flash
+        }
+        return raw.flatMap(GeminiModel.init(rawValue:)) ?? store.selectedGeminiModel
+    }
+
+    private func resolvedSceneFilter(_ raw: String?) throws -> Set<UUID>? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              raw.lowercased() != "all" else {
+            return nil
+        }
+        if raw.lowercased() == "first" {
+            guard let first = store.scenes.first else { return [] }
+            return [first.id]
+        }
+        if let uuid = UUID(uuidString: raw),
+           store.scenes.contains(where: { $0.id == uuid }) {
+            return [uuid]
+        }
+        if let index = Int(raw),
+           index > 0,
+           index <= store.scenes.count {
+            return [store.scenes[index - 1].id]
+        }
+        if let scene = store.scenes.first(where: { scene in
+            scene.name.localizedCaseInsensitiveContains(raw) ||
+                scene.owpSongPath.localizedCaseInsensitiveContains(raw)
+        }) {
+            return [scene.id]
+        }
+        throw cliError("No scene matched '\(raw)'.")
+    }
+
+    private func firstNonEmpty(_ values: String?...) -> String? {
+        values
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    private func waitForImageIntelligenceReady() async throws {
+        for _ in 0..<60 {
+            if await store.imageIntelligenceStats() != nil {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        throw cliError("Image Intelligence SQLite store did not become ready within 6 seconds.")
+    }
+
+    private func resolvedImageIntelligenceSmokeImage(
+        _ rawPath: String?,
+        projectRoot: URL
+    ) throws -> String {
+        if let rawPath = rawPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawPath.isEmpty {
+            let url = URL(fileURLWithPath: rawPath).standardizedFileURL
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw cliError("Smoke-test image does not exist: \(url.path)")
+            }
+            return url.path
+        }
+
+        let supportedExtensions: Set<String> = ["png", "jpg", "jpeg", "webp"]
+        guard let enumerator = FileManager.default.enumerator(
+            at: projectRoot,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            throw cliError("Could not scan project for an image.")
+        }
+
+        for case let url as URL in enumerator {
+            guard supportedExtensions.contains(url.pathExtension.lowercased()) else { continue }
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+            guard values?.isRegularFile == true,
+                  (values?.fileSize ?? 0) > 0 else { continue }
+            return url.standardizedFileURL.path
+        }
+
+        throw cliError("No existing project image found for Image Intelligence smoke test.")
+    }
+
+    private func cliError(_ message: String) -> NSError {
+        NSError(domain: "AnimateWorkspaceController.CLI", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: message
+        ])
     }
 
     private func observeSaveIndicator() {
@@ -265,6 +711,9 @@ public struct AnimateWorkspace: View {
     public var body: some View {
         ZStack {
             AnimateWorkspaceContent(store: controller.store)
+                .environment(\.unifiedImageFlipHandler) { path in
+                    controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
+                }
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
             if controller.isLoadingProject || controller.isSelectionRestorePending {
@@ -536,8 +985,13 @@ private struct AnimateViduInspectorView: View {
 
             if let fg = shot.shotFrameGeneration {
                 VStack(alignment: .leading, spacing: 4) {
-                    statusRow(label: "First frame", ready: fg.firstFrameImagePath != nil)
-                    statusRow(label: "Last frame", ready: fg.lastFrameImagePath != nil)
+                    // Read begin/end frames from the Imagine gallery
+                    let sceneID = store.selectedScene?.id
+                    let shotIndex = store.selectedScene?.shots.firstIndex(where: { $0.id == shot.id }) ?? -1
+                    let gallery = (sceneID != nil && shotIndex >= 0) ? store.imagineGallery(for: sceneID!, shotIndex: shotIndex) : nil
+
+                    statusRow(label: "Begin frame", ready: gallery?.selectedBeginningPath != nil)
+                    statusRow(label: "End frame", ready: gallery?.selectedEndPath != nil)
                     statusRow(label: "Video output", ready: fg.viduOutputPath != nil)
 
                     if let videoPath = fg.viduOutputPath {
@@ -549,7 +1003,7 @@ private struct AnimateViduInspectorView: View {
                     }
                 }
             } else {
-                Text("No generation data yet. Use the production strip to set up first/last frames and generate video.")
+                Text("No generation data yet. Use the production strip to set up begin/end frames and generate video.")
                     .font(.system(size: 11))
                     .foregroundStyle(OperaChromeTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

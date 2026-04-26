@@ -67,11 +67,22 @@ enum OperaMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Whether this mode appears as a button in the main sidebar tab bar.
-    /// Canvas is accessed via the paint-palette toolbar button, not the sidebar.
-    var isSidebarVisible: Bool {
-        self != .canvas
+    /// Legacy compatibility mode; hidden from navigation and surfaced as All Images.
+    var navigationMode: OperaMode {
+        self == .props ? .allImages : self
     }
+
+    static let sidebarModes: [OperaMode] = [
+        .write,
+        .score,
+        .mix,
+        .characters,
+        .places,
+        .scenes,
+        .animate,
+        .allImages
+    ]
+
 }
 
 enum OperaShellSignals {
@@ -236,6 +247,7 @@ struct OperaShellView: View {
     @State private var workspacePrewarmTask: Task<Void, Never>?
     @State private var sceneSelectionByProjectPath: [String: String] = [:]
     @State private var pendingSceneSelectionRestores: [OperaMode: PendingSceneSelectionRestore] = [:]
+    @State private var mountedCharacterImageModes: Set<OperaMode> = []
 
     // Sidebar visibility (per-mode, shared with each mode's ContentView via same AppStorage key)
     @AppStorage("novotro.write.sidebarVisible") private var writeSidebarVisible: Bool = true
@@ -243,7 +255,6 @@ struct OperaShellView: View {
     @AppStorage("novotro.animate.sidebarVisible") private var animateSidebarVisible: Bool = true
     @AppStorage("novotro.characters.sidebarVisible") private var charactersSidebarVisible: Bool = true
     @AppStorage("novotro.places.sidebarVisible") private var placesSidebarVisible: Bool = true
-    @AppStorage("novotro.props.sidebarVisible") private var propsSidebarVisible: Bool = true
     @AppStorage("novotro.mix.sidebarVisible") private var mixSidebarVisible: Bool = true
     @AppStorage("novotro.imagine.sidebarVisible") private var imagineSidebarVisible: Bool = true
     @AppStorage("novotro.allImages.sidebarVisible") private var allImagesSidebarVisible: Bool = true
@@ -255,7 +266,6 @@ struct OperaShellView: View {
     @AppStorage("novotro.animate.showInspector") private var animateInspectorVisible: Bool = true
     @AppStorage("novotro.characters.showInspector") private var charactersInspectorVisible: Bool = true
     @AppStorage("novotro.places.showInspector") private var placesInspectorVisible: Bool = true
-    @AppStorage("novotro.props.inspector.visible") private var propsInspectorVisible: Bool = true
     @AppStorage("novotro.mix.inspector.visible") private var mixInspectorVisible: Bool = true
     @AppStorage("novotro.imagine.showInspector") private var imagineInspectorVisible: Bool = true
     @AppStorage("novotro.allImages.showInspector") private var allImagesInspectorVisible: Bool = true
@@ -267,6 +277,10 @@ struct OperaShellView: View {
     private static let animateClusterModes: Set<OperaMode> = [
         .scenes, .characters, .places, .props, .animate, .allImages, .canvas
     ]
+
+    private var currentMode: OperaMode {
+        renderedMode.navigationMode
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -341,12 +355,8 @@ struct OperaShellView: View {
                     case "scenes": selectedMode = .scenes
                     case "characters": selectedMode = .characters
                     case "places": selectedMode = .places
-                    case "props": selectedMode = .props
+                    case "props": selectedMode = .allImages
                     case "animate": selectedMode = .animate
-                    case "diag-drawthings":
-                        let host = animateController.drawThingsHost
-                        let port = animateController.drawThingsPort
-                        Task { await runDrawThingsDiagnostic(host: host, port: port) }
                     case "diag-codex":
                         Task { await runCodexDiagnostic() }
                     default: break
@@ -355,9 +365,14 @@ struct OperaShellView: View {
             }
         }
         .onChange(of: selectedMode) { _, newMode in
+            let normalizedMode = newMode.navigationMode
+            guard normalizedMode == newMode else {
+                selectedMode = normalizedMode
+                return
+            }
             modeSwitchTask?.cancel()
             modeSwitchTask = Task {
-                await handleModeSelectionChange(newMode)
+                await handleModeSelectionChange(normalizedMode)
             }
         }
         .onChange(of: writeController.selectedScenePath) { _, newPath in
@@ -383,7 +398,7 @@ struct OperaShellView: View {
         }
         .onChange(of: animateController.selectedScenePath) { _, newPath in
             // Characters, Places, Props, and Animate share animateController; route to whichever is active.
-            let effectiveMode: OperaMode = (renderedMode == .characters || renderedMode == .places || renderedMode == .props || renderedMode == .scenes) ? renderedMode : .animate
+            let effectiveMode: OperaMode = [OperaMode.characters, .places, .scenes].contains(currentMode) ? currentMode : .animate
             captureSceneSelectionChange(
                 newPath,
                 from: effectiveMode,
@@ -395,6 +410,7 @@ struct OperaShellView: View {
             // the shell has active, so external agents can trigger generations
             // without the user first switching into Places/Animate.
             animateController.setAPIHostProjectURL(newURL)
+            mountedCharacterImageModes.removeAll(keepingCapacity: true)
         }
         .onReceive(NotificationCenter.default.publisher(for: OperaShellSignals.openProjectFromDisk)) { _ in
             Task {
@@ -439,32 +455,29 @@ struct OperaShellView: View {
     }
 
     private var activeSaveIndicator: SaveIndicatorState {
-        switch renderedMode {
+        switch currentMode {
         case .write: return writeController.saveIndicator
         case .score: return scoreController.saveIndicator
         case .mix: return mixController.saveIndicator
-        case .scenes: return animateController.saveIndicator
-        case .characters: return animateController.saveIndicator
-        case .places: return animateController.saveIndicator
-        case .props: return animateController.saveIndicator
-        case .animate: return animateController.saveIndicator
-        case .allImages: return animateController.saveIndicator
-        case .canvas: return animateController.saveIndicator
+        case .scenes, .characters, .places, .animate, .allImages, .canvas:
+            return animateController.saveIndicator
+        case .props:
+            return animateController.saveIndicator
         }
     }
 
     private var currentSidebarVisible: Bool {
-        switch renderedMode {
+        switch currentMode {
         case .write: return writeSidebarVisible
         case .score: return scoreSidebarVisible
         case .mix: return mixSidebarVisible
         case .scenes: return imagineSidebarVisible
         case .characters: return charactersSidebarVisible
         case .places: return placesSidebarVisible
-        case .props: return propsSidebarVisible
         case .animate: return animateSidebarVisible
         case .allImages: return allImagesSidebarVisible
         case .canvas: return canvasSidebarVisible
+        case .props: return allImagesSidebarVisible
         }
     }
 
@@ -523,114 +536,131 @@ struct OperaShellView: View {
 
     private func toggleSidebar() {
         withAnimation(.easeInOut(duration: 0.2)) {
-            switch renderedMode {
+            switch currentMode {
             case .write: writeSidebarVisible.toggle()
             case .score: scoreSidebarVisible.toggle()
             case .mix: mixSidebarVisible.toggle()
             case .scenes: imagineSidebarVisible.toggle()
             case .characters: charactersSidebarVisible.toggle()
             case .places: placesSidebarVisible.toggle()
-            case .props: propsSidebarVisible.toggle()
             case .animate: animateSidebarVisible.toggle()
             case .allImages: allImagesSidebarVisible.toggle()
             case .canvas: canvasSidebarVisible.toggle()
+            case .props: allImagesSidebarVisible.toggle()
             }
         }
     }
 
     private var currentInspectorVisible: Bool {
-        switch renderedMode {
+        switch currentMode {
         case .write: return writeInspectorVisible
         case .score: return scoreInspectorVisible
         case .mix: return mixInspectorVisible
         case .scenes: return imagineInspectorVisible
         case .characters: return charactersInspectorVisible
         case .places: return placesInspectorVisible
-        case .props: return propsInspectorVisible
         case .animate: return animateInspectorVisible
         case .allImages: return allImagesInspectorVisible
         case .canvas: return canvasInspectorVisible
+        case .props: return allImagesInspectorVisible
         }
     }
 
     private func toggleInspector() {
         withAnimation(.easeInOut(duration: 0.2)) {
-            switch renderedMode {
+            switch currentMode {
             case .write: writeInspectorVisible.toggle()
             case .score: scoreInspectorVisible.toggle()
             case .mix: mixInspectorVisible.toggle()
             case .scenes: imagineInspectorVisible.toggle()
             case .characters: charactersInspectorVisible.toggle()
             case .places: placesInspectorVisible.toggle()
-            case .props: propsInspectorVisible.toggle()
             case .animate: animateInspectorVisible.toggle()
             case .allImages: allImagesInspectorVisible.toggle()
             case .canvas: canvasInspectorVisible.toggle()
+            case .props: allImagesInspectorVisible.toggle()
+            }
         }
-    }
     }
 
     private var tabBar: some View {
-        HStack(spacing: 14) {
-            OperaChromeCompactSaveIndicator(state: activeSaveIndicator)
+        GeometryReader { proxy in
+            let availableWidth = proxy.size.width
+            let compact = availableWidth < 1120
+            let ultraCompact = availableWidth < 820
 
-            Spacer(minLength: 4)
-
-            HStack(spacing: 8) {
-                // RunPod status indicator
-                if animateController.isRunPodActive {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 8, height: 8)
-                        Text("RunPod")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(.green)
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(Color.green.opacity(0.1), in: Capsule())
+            HStack(spacing: compact ? 8 : 14) {
+                if !ultraCompact {
+                    OperaChromeCompactSaveIndicator(state: activeSaveIndicator)
+                    animateController.storyboardServerStatusIndicatorView()
                 }
 
-                ForEach(OperaMode.allCases.filter(\.isSidebarVisible)) { mode in
-                    OperaModeButton(
-                        mode: mode,
-                        isSelected: selectedMode == mode
+                Spacer(minLength: compact ? 2 : 4)
+
+                HStack(spacing: compact ? 4 : 8) {
+                    // RunPod status indicator
+                    if animateController.isRunPodActive {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 8, height: 8)
+                            if !compact {
+                                Text("RunPod")
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        .padding(.horizontal, compact ? 4 : 6)
+                        .padding(.vertical, 3)
+                        .background(Color.green.opacity(0.1), in: Capsule())
+                    }
+
+                    ForEach(OperaMode.sidebarModes) { mode in
+                        OperaModeButton(
+                            mode: mode,
+                            isSelected: selectedMode.navigationMode == mode,
+                            compact: compact
+                        ) {
+                            selectedMode = mode
+                        }
+                    }
+                }
+                .layoutPriority(1)
+
+                Spacer(minLength: compact ? 2 : 4)
+
+                HStack(spacing: compact ? 4 : 6) {
+                    if !compact {
+                        animateController.vertexCreditTitleBarView()
+                    }
+                    if !ultraCompact {
+                        animateController.geminiStatusBadgeView()
+                    }
+
+                    OperaChromeActionButton(
+                        systemImage: "paintpalette",
+                        isSelected: selectedMode.navigationMode == .canvas
                     ) {
-                        selectedMode = mode
+                        selectedMode = .canvas
+                    }
+
+                    animateController.globalSettingsGearView()
+
+                    OperaChromeActionButton(
+                        systemImage: currentSidebarVisible ? "sidebar.left" : "sidebar.right",
+                        isSelected: currentSidebarVisible
+                    ) {
+                        toggleSidebar()
+                    }
+                    OperaChromeActionButton(
+                        systemImage: "info.circle",
+                        isSelected: currentInspectorVisible
+                    ) {
+                        toggleInspector()
                     }
                 }
             }
-
-            Spacer(minLength: 4)
-
-            HStack(spacing: 6) {
-                animateController.vertexCreditTitleBarView()
-                animateController.geminiStatusBadgeView()
-                animateController.storyboardURLButtonView()
-
-                OperaChromeActionButton(
-                    systemImage: "paintpalette",
-                    isSelected: selectedMode == .canvas
-                ) {
-                    selectedMode = .canvas
-                }
-
-                animateController.globalSettingsGearView()
-
-                OperaChromeActionButton(
-                    systemImage: currentSidebarVisible ? "sidebar.left" : "sidebar.right",
-                    isSelected: currentSidebarVisible
-                ) {
-                    toggleSidebar()
-                }
-                OperaChromeActionButton(
-                    systemImage: "info.circle",
-                    isSelected: currentInspectorVisible
-                ) {
-                    toggleInspector()
-                }
-            }
+            .frame(width: availableWidth, height: 36)
         }
         .frame(height: 36)
         .background(OperaChromeTheme.headerBackground)
@@ -651,7 +681,7 @@ struct OperaShellView: View {
 
     @ViewBuilder
     private var activeWorkspace: some View {
-        switch renderedMode {
+        switch currentMode {
         case .write:
             WriteWorkspace(controller: writeController)
         case .score:
@@ -660,19 +690,65 @@ struct OperaShellView: View {
             MixWorkspace(controller: mixController)
         case .scenes:
             ScenesWorkspace(controller: animateController)
-        case .characters:
-            CharactersWorkspace(controller: animateController)
+        case .characters, .allImages, .props:
+            characterImageWorkspaceDeck
         case .places:
             PlacesWorkspace(controller: animateController)
-        case .props:
-            PropsWorkspace(controller: animateController)
         case .animate:
             AnimateWorkspace(controller: animateController)
-        case .allImages:
-            AllProjectImagesWorkspace(controller: animateController)
         case .canvas:
             CanvasWorkspace(controller: animateController)
         }
+    }
+
+    @ViewBuilder
+    private var characterImageWorkspaceDeck: some View {
+        let modes = cachedCharacterImageModes()
+
+        ZStack {
+            if modes.contains(.characters) {
+                cachedCharacterImageWorkspaceLayer(mode: .characters) {
+                    CharactersWorkspace(controller: animateController)
+                }
+            }
+
+            if modes.contains(.allImages) {
+                cachedCharacterImageWorkspaceLayer(mode: .allImages) {
+                    AllProjectImagesWorkspace(controller: animateController)
+                }
+            }
+        }
+    }
+
+    private func cachedCharacterImageModes() -> Set<OperaMode> {
+        var modes = mountedCharacterImageModes
+        switch currentMode {
+        case .characters:
+            modes.insert(.characters)
+        case .allImages, .props:
+            modes.insert(.allImages)
+        default:
+            break
+        }
+        return modes
+    }
+
+    @ViewBuilder
+    private func cachedCharacterImageWorkspaceLayer<Content: View>(
+        mode: OperaMode,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let isActive = currentMode == mode || (currentMode == .props && mode == .allImages)
+
+        content()
+            .id("\(mode.rawValue)-\(activeProjectURL?.path ?? "no-project")")
+            .opacity(isActive ? 1 : 0)
+            .allowsHitTesting(isActive)
+            .accessibilityHidden(!isActive)
+            .zIndex(isActive ? 1 : 0)
+            .onAppear {
+                mountedCharacterImageModes.insert(mode)
+            }
     }
 
     private var recentProjectsSheet: some View {
@@ -712,6 +788,7 @@ struct OperaShellView: View {
     private func initializeShellIfNeeded() async {
         guard !didInitialize else { return }
         didInitialize = true
+        selectedMode = selectedMode.navigationMode
         renderedMode = selectedMode
         recentProjects = OperaRecentProjectsStore.recentProjects()
         if activeProjectURL == nil,
@@ -767,7 +844,7 @@ struct OperaShellView: View {
     @MainActor
     private func openProject(_ url: URL, displayName: String) async -> Bool {
         let normalizedURL = url.standardizedFileURL
-        let requestedMode = selectedMode
+        let requestedMode = selectedMode.navigationMode
         workspacePrewarmTask?.cancel()
         beginSceneSelectionRestore(for: requestedMode, projectURL: normalizedURL)
         loadState = .loading(mode: requestedMode, projectName: displayName, projectPath: normalizedURL.path)
@@ -806,10 +883,12 @@ struct OperaShellView: View {
         switch loadResult {
         case .success:
             scheduleIdleWorkspacePrewarm(for: normalizedURL, activeMode: requestedMode)
+            suspendInactiveBackgroundWork(activeMode: requestedMode)
             progressCenter.finish(projectURL: normalizedURL)
             loadState = .idle
         case .timedOut:
             scheduleIdleWorkspacePrewarm(for: normalizedURL, activeMode: requestedMode)
+            suspendInactiveBackgroundWork(activeMode: requestedMode)
             progressCenter.update(
                 projectURL: normalizedURL,
                 phaseTitle: "Opening Workspace",
@@ -821,7 +900,7 @@ struct OperaShellView: View {
             break
         }
 
-        if selectedMode != requestedMode {
+        if selectedMode.navigationMode != requestedMode {
             modeSwitchTask?.cancel()
             modeSwitchTask = Task {
                 await handleModeSelectionChange(selectedMode)
@@ -851,75 +930,6 @@ struct OperaShellView: View {
         try? lines.joined(separator: "\n").write(toFile: resultPath, atomically: true, encoding: .utf8)
     }
 
-    private func runDrawThingsDiagnostic(host: String, port: Int) async {
-        let resultPath = "/Volumes/Storage VIII/Programming/opera-diag-result.txt"
-        var lines: [String] = []
-        lines.append("=== DrawThings Diagnostic ===")
-        lines.append("Time: \(Date())")
-        lines.append("Host: \(host)")
-        lines.append("Port: \(port)")
-
-        // DNS resolution
-        let hostOnly = host
-            .replacingOccurrences(of: "http://", with: "")
-            .replacingOccurrences(of: "https://", with: "")
-        lines.append("Hostname to resolve: \(hostOnly)")
-
-        // URLSession test
-        guard var components = URLComponents(string: host) else {
-            lines.append("URL PARSE FAILED for: \(host)")
-            try? lines.joined(separator: "\n").write(toFile: resultPath, atomically: true, encoding: .utf8)
-            return
-        }
-        if components.scheme == nil { components.scheme = "http" }
-        components.port = port
-        components.path = "/sdapi/v1/options"
-        guard let url = components.url else {
-            lines.append("URL BUILD FAILED")
-            try? lines.joined(separator: "\n").write(toFile: resultPath, atomically: true, encoding: .utf8)
-            return
-        }
-        lines.append("Test URL: \(url.absoluteString)")
-
-        do {
-            var req = URLRequest(url: url)
-            req.timeoutInterval = 10
-            let (data, response) = try await URLSession.shared.data(for: req)
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-            lines.append("HTTP Status: \(statusCode)")
-            lines.append("Response size: \(data.count) bytes")
-            lines.append("RESULT: SUCCESS")
-        } catch {
-            let nsError = error as NSError
-            lines.append("CONNECTION ERROR: \(error.localizedDescription)")
-            lines.append("Error domain: \(nsError.domain)")
-            lines.append("Error code: \(nsError.code)")
-            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
-                lines.append("Underlying: \(underlying.domain) code=\(underlying.code) \(underlying.localizedDescription)")
-            }
-            lines.append("RESULT: FAILED")
-        }
-
-        // Also try direct IP fallback
-        lines.append("")
-        lines.append("--- Direct IP test ---")
-        let directURL = URL(string: "http://192.168.28.54:7860/sdapi/v1/options")!
-        do {
-            var req = URLRequest(url: directURL)
-            req.timeoutInterval = 10
-            let (data, response) = try await URLSession.shared.data(for: req)
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-            lines.append("Direct IP HTTP Status: \(statusCode)")
-            lines.append("Direct IP Response size: \(data.count) bytes")
-            lines.append("Direct IP RESULT: SUCCESS")
-        } catch {
-            lines.append("Direct IP ERROR: \(error.localizedDescription)")
-            lines.append("Direct IP RESULT: FAILED")
-        }
-
-        try? lines.joined(separator: "\n").write(toFile: resultPath, atomically: true, encoding: .utf8)
-    }
-
     private func handleModeSelectionChange(_ newMode: OperaMode) async {
         guard didInitialize else { return }
         guard let activeProjectURL else {
@@ -927,6 +937,9 @@ struct OperaShellView: View {
             return
         }
         guard newMode != renderedMode else { return }
+        let previousMode = renderedMode
+        let staysWithinAnimateCluster = Self.animateClusterModes.contains(previousMode.navigationMode)
+            && Self.animateClusterModes.contains(newMode)
         let modeSwitchSignpost = PerfSignposts.begin(
             .modeSwitch,
             "\(renderedMode.rawValue)→\(newMode.rawValue)"
@@ -937,17 +950,21 @@ struct OperaShellView: View {
 
         // Suspend background watchers on the mode we're leaving so they don't
         // contend with the incoming mode's database and file-system access.
-        switch renderedMode {
-        case .write: writeController.suspendBackgroundWork()
-        case .score: scoreController.suspendBackgroundWork()
-        case .mix: mixController.suspendBackgroundWork()
-        case .scenes: animateController.suspendBackgroundWork()
-        case .characters: animateController.suspendBackgroundWork()
-        case .places: animateController.suspendBackgroundWork()
-        case .props: animateController.suspendBackgroundWork()
-        case .animate: animateController.suspendBackgroundWork()
-        case .allImages: animateController.suspendBackgroundWork()
-        case .canvas: animateController.suspendBackgroundWork()
+        if !staysWithinAnimateCluster {
+            suspendBackgroundWork(for: previousMode.navigationMode)
+        }
+
+        if isWorkspaceReadyForImmediateDisplay(newMode, projectURL: activeProjectURL) {
+            activeProjectLoadError = nil
+            if !staysWithinAnimateCluster {
+                resumeBackgroundWork(for: newMode)
+            }
+            finishSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
+            renderedMode = newMode
+            suspendInactiveBackgroundWork(activeMode: newMode)
+            scheduleIdleWorkspacePrewarm(for: activeProjectURL, activeMode: newMode)
+            scheduleAnimateAudioAutopopulateIfNeeded(for: newMode, projectURL: activeProjectURL)
+            return
         }
 
         let projectName = activeProjectTitle ?? displayName(for: activeProjectURL)
@@ -958,8 +975,18 @@ struct OperaShellView: View {
             detail: "Preparing the \(newMode.title) tools for \(projectName)."
         )
         activeProjectLoadError = nil
+        if newMode == .allImages {
+            // All Images can show its own loading/indexing shell while the
+            // Animate store finishes hydrating. Rendering the destination
+            // immediately avoids the title-bar click feeling like it hung
+            // during the first post-launch Animate load.
+            renderedMode = newMode
+        }
         await Task.yield()
         guard !Task.isCancelled else {
+            if !staysWithinAnimateCluster {
+                resumeBackgroundWork(for: previousMode.navigationMode)
+            }
             clearSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
             progressCenter.finish(projectURL: activeProjectURL)
             loadState = .idle
@@ -975,6 +1002,9 @@ struct OperaShellView: View {
         }
 
         guard !Task.isCancelled else {
+            if !staysWithinAnimateCluster {
+                resumeBackgroundWork(for: previousMode.navigationMode)
+            }
             clearSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
             progressCenter.finish(projectURL: activeProjectURL)
             loadState = .idle
@@ -983,22 +1013,28 @@ struct OperaShellView: View {
 
         switch loadResult {
         case .success:
+            if !staysWithinAnimateCluster {
+                resumeBackgroundWork(for: newMode)
+            }
             finishSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
             renderedMode = newMode
+            suspendInactiveBackgroundWork(activeMode: newMode)
             scheduleIdleWorkspacePrewarm(for: activeProjectURL, activeMode: newMode)
-            // When switching to Animate, ensure Mix is loaded then auto-populate audio
-            if newMode == .animate {
-                Task {
-                    _ = await load(mode: .mix, projectURL: activeProjectURL)
-                    await autoPopulateAnimateAudioFromMix()
-                }
-            }
+            scheduleAnimateAudioAutopopulateIfNeeded(for: newMode, projectURL: activeProjectURL)
         case let .failure(error):
+            if !staysWithinAnimateCluster {
+                resumeBackgroundWork(for: previousMode.navigationMode)
+            }
             clearSceneSelectionRestore(for: newMode, projectURL: activeProjectURL)
             activeProjectLoadError = error
-            selectedMode = renderedMode
+            renderedMode = previousMode
+            selectedMode = previousMode
         case .timedOut:
+            if !staysWithinAnimateCluster {
+                resumeBackgroundWork(for: newMode)
+            }
             renderedMode = newMode
+            suspendInactiveBackgroundWork(activeMode: newMode)
             scheduleIdleWorkspacePrewarm(for: activeProjectURL, activeMode: newMode)
             progressCenter.update(
                 projectURL: activeProjectURL,
@@ -1009,6 +1045,79 @@ struct OperaShellView: View {
 
         progressCenter.finish(projectURL: activeProjectURL)
         loadState = .idle
+    }
+
+    @MainActor
+    private func isWorkspaceReadyForImmediateDisplay(_ mode: OperaMode, projectURL: URL) -> Bool {
+        switch mode {
+        case .write:
+            return writeController.isProjectDisplayReady(projectURL)
+        case .score:
+            return scoreController.isProjectDisplayReady(projectURL)
+        case .mix:
+            return mixController.isProjectDisplayReady(projectURL)
+        case .scenes, .characters, .places, .props, .animate, .allImages, .canvas:
+            return animateController.isProjectDisplayReady(projectURL)
+        }
+    }
+
+    @MainActor
+    private func suspendBackgroundWork(for mode: OperaMode) {
+        switch mode {
+        case .write:
+            writeController.suspendBackgroundWork()
+        case .score:
+            scoreController.suspendBackgroundWork()
+        case .mix:
+            mixController.suspendBackgroundWork()
+        case .scenes, .characters, .places, .props, .animate, .allImages, .canvas:
+            animateController.suspendBackgroundWork()
+        }
+    }
+
+    @MainActor
+    private func resumeBackgroundWork(for mode: OperaMode) {
+        switch mode {
+        case .write:
+            writeController.resumeBackgroundWork()
+        case .score:
+            scoreController.resumeBackgroundWork()
+        case .mix:
+            mixController.resumeBackgroundWork()
+        case .scenes, .characters, .places, .props, .animate, .allImages, .canvas:
+            animateController.resumeBackgroundWork()
+        }
+    }
+
+    @MainActor
+    private func suspendInactiveBackgroundWork(activeMode: OperaMode) {
+        let activeNavigationMode = activeMode.navigationMode
+        if activeNavigationMode != .write {
+            writeController.suspendBackgroundWork()
+        }
+        if activeNavigationMode != .score {
+            scoreController.suspendBackgroundWork()
+        }
+        if activeNavigationMode != .mix {
+            mixController.suspendBackgroundWork()
+        }
+        if !Self.animateClusterModes.contains(activeNavigationMode) {
+            animateController.suspendBackgroundWork()
+        }
+    }
+
+    @MainActor
+    private func scheduleAnimateAudioAutopopulateIfNeeded(for mode: OperaMode, projectURL: URL) {
+        guard mode == .animate else { return }
+        Task {
+            _ = await load(mode: .mix, projectURL: projectURL)
+            await autoPopulateAnimateAudioFromMix()
+            await MainActor.run {
+                if selectedMode.navigationMode != .mix {
+                    mixController.suspendBackgroundWork()
+                }
+            }
+        }
     }
 
     @MainActor
@@ -1055,12 +1164,32 @@ struct OperaShellView: View {
 
             if activeMode != .score {
                 _ = await load(mode: .score, projectURL: normalizedURL)
+                await MainActor.run {
+                    if selectedMode.navigationMode != .score {
+                        scoreController.suspendBackgroundWork()
+                    }
+                }
             }
 
             guard !Task.isCancelled else { return }
 
             if !Self.animateClusterModes.contains(activeMode) {
-                try? await Task.sleep(for: .milliseconds(250))
+                if activeMode == .score {
+                    let isScorePlaying = await MainActor.run(resultType: Bool.self) {
+                        scoreController.isPlaybackActive
+                    }
+                    guard !isScorePlaying else { return }
+                    try? await Task.sleep(for: .seconds(4))
+                    guard !Task.isCancelled else { return }
+                    let isStillSafeToPrewarmFromScore = await MainActor.run(resultType: Bool.self) {
+                        activeProjectURL?.standardizedFileURL.path == projectPath
+                            && loadState == .idle
+                            && !scoreController.isPlaybackActive
+                    }
+                    guard isStillSafeToPrewarmFromScore else { return }
+                } else {
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
                 guard !Task.isCancelled else { return }
                 let canPrewarmAnimate = await MainActor.run(resultType: Bool.self) {
                     activeProjectURL?.standardizedFileURL.path == projectPath && loadState == .idle
@@ -1069,6 +1198,12 @@ struct OperaShellView: View {
                     return
                 }
                 _ = await load(mode: .scenes, projectURL: normalizedURL)
+                await MainActor.run {
+                    if activeProjectURL?.standardizedFileURL.path == projectPath,
+                       !Self.animateClusterModes.contains(selectedMode.navigationMode) {
+                        animateController.suspendBackgroundWork()
+                    }
+                }
             }
         }
     }
@@ -1132,7 +1267,7 @@ struct OperaShellView: View {
 
         if let error {
             clearSceneSelectionRestore(for: mode, projectURL: projectURL)
-            guard renderedMode == mode || selectedMode == mode else { return }
+            guard currentMode == mode || selectedMode.navigationMode == mode else { return }
             activeProjectLoadError = error
             return
         }
@@ -1182,7 +1317,7 @@ struct OperaShellView: View {
     }
 
     private func captureSceneSelectionChange(_ path: String?, from mode: OperaMode, projectPath: String?) {
-        guard renderedMode == mode else { return }
+        guard currentMode == mode else { return }
         guard let projectPath,
               projectPath == activeProjectURL?.standardizedFileURL.path else {
             return
@@ -1452,26 +1587,16 @@ struct OperaShellView: View {
     private func saveActiveWorkspace() {
         guard activeProjectURL != nil else { return }
 
-        switch renderedMode {
+        switch currentMode {
         case .write:
             writeController.save()
         case .score:
             scoreController.save()
         case .mix:
             mixController.save()
-        case .scenes:
-            animateController.save()
-        case .characters:
-            animateController.save()
-        case .places:
+        case .scenes, .characters, .places, .animate, .allImages, .canvas:
             animateController.save()
         case .props:
-            animateController.save()
-        case .animate:
-            animateController.save()
-        case .allImages:
-            animateController.save()
-        case .canvas:
             animateController.save()
         }
     }
@@ -1498,20 +1623,25 @@ private enum RuntimeError: LocalizedError {
 private struct OperaModeButton: View {
     let mode: OperaMode
     let isSelected: Bool
+    var compact: Bool = false
     let action: () -> Void
 
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            HStack(spacing: compact ? 0 : 6) {
                 Image(systemName: mode.systemImage)
                     .font(.system(size: 10, weight: .medium))
-                Text(mode.title)
-                    .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                if !compact {
+                    Text(mode.title)
+                        .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
             }
             .foregroundStyle(isSelected ? OperaChromeTheme.textPrimary : OperaChromeTheme.textSecondary)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, compact ? 8 : 12)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -1523,7 +1653,7 @@ private struct OperaModeButton: View {
             )
         }
         .buttonStyle(.plain)
-        .fixedSize()
+        .fixedSize(horizontal: compact, vertical: true)
         .onHover { isHovered = $0 }
         .help(mode.subtitle)
     }
@@ -1904,7 +2034,7 @@ private struct OperaWindowAccessor: NSViewRepresentable {
 
         private func applyConfiguration() {
             guard let window else { return }
-            window.minSize = NSSize(width: 760, height: 560)
+            window.minSize = NSSize(width: 680, height: 520)
             window.isOpaque = false
             window.backgroundColor = NSColor(calibratedWhite: 0.14, alpha: 0.96)
             window.titleVisibility = .hidden

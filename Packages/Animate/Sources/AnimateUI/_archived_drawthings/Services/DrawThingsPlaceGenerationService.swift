@@ -108,7 +108,9 @@ struct DrawThingsPlaceGenerationService {
             throw ServiceError.invalidResponse
         }
 
-        try imageData.write(to: outputURL, options: .atomic)
+        try await Task.detached(priority: .utility) {
+            try imageData.write(to: outputURL, options: .atomic)
+        }.value
     }
 
     func generateImg2ImgImage(
@@ -131,7 +133,9 @@ struct DrawThingsPlaceGenerationService {
             throw ServiceError.invalidBaseURL
         }
 
-        let sourceData = try Data(contentsOf: sourceImageURL)
+        let sourceData = try await Task.detached(priority: .userInitiated) {
+            try Data(contentsOf: sourceImageURL)
+        }.value
         let base64Source = sourceData.base64EncodedString()
 
         var request = URLRequest(url: url)
@@ -175,6 +179,8 @@ struct DrawThingsPlaceGenerationService {
             throw ServiceError.invalidResponse
         }
 
-        try imageData.write(to: outputURL, options: .atomic)
+        try await Task.detached(priority: .utility) {
+            try imageData.write(to: outputURL, options: .atomic)
+        }.value
     }
 }
