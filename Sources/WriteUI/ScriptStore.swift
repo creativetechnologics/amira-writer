@@ -827,6 +827,15 @@ final class ScriptStore {
         showsRecentAgentUpdate ? "sparkles" : "arrow.triangle.2.circlepath"
     }
 
+    // MARK: - Script Cards (structured sidecar)
+
+    /// Structured projection of bracket markup, persisted at
+    /// `<project>/Metadata/script-cards.json`. Slowly replacing the
+    /// wall-of-text DSL the lyrics used to carry inline. See
+    /// `ScriptCardImporter` for the projection rules and
+    /// `ScriptCardSidecarStore` for disk I/O.
+    var scriptCards: ScriptDocumentCards = ScriptDocumentCards()
+
     // MARK: - Scratchpad / Derived Text State
 
     var scratchpadFiles: [ProjectTextFile] = []
@@ -1068,6 +1077,7 @@ final class ScriptStore {
             persistProjectHistoryState()
             refreshGitHistory(for: url)
             loadProjectSettings()
+            loadAndImportScriptCards()
             startFileWatching()
         } catch {
             statusMessage = "Failed to load: \(error.localizedDescription)"
@@ -1710,15 +1720,15 @@ final class ScriptStore {
 
         Four bracket levels are used, each for a different purpose:
 
-        1. **Direction markup** — double brackets: `[[1.01.0.001 - Description]]`
-           Numbered storyboard directions with act.scene.subsection.direction addresses.
+        1. **Direction** — double brackets: `[[1.01.0.001 - Description]]`
+           Numbered direction shots with act.scene.subsection.direction addresses.
 
-        2. **Narrative storyboarding** — single brackets: `[The mountains press in from all sides...]`
-           Prose atmosphere/staging descriptions that add to the reading experience.
+        2. **Action** — single brackets: `[The mountains press in from all sides...]`
+           Prose action atmosphere/staging descriptions that add to the reading experience.
 
-        3. **Animate instructions** — canonical single brackets: `[camera: zoom_in | from=wide | to=close | bars=17-24]`
-           Technical instructions for Animate. Keywords include: scene, camera, enter, exit, move, emotion, action, gesture, object, object_move, object_state, object_visibility, lipsync, pause, sfx, transition.
-           Legacy single-curly animate blocks may still appear in older files, but new authoring should use the canonical single-bracket Animate DSL.
+        3. **Camera** — canonical single brackets: `[camera: zoom_in | from=wide | to=close | bars=17-24]`
+           Technical instructions for Camera. Keywords include: scene, camera, enter, exit, move, emotion, action, gesture, object, object_move, object_state, object_visibility, lipsync, pause, sfx, transition.
+           Legacy single-curly camera blocks may still appear in older files, but new authoring should use the canonical single-bracket Camera DSL.
 
         4. **Summary blocks** — triple curly braces: `{{{SUMMARY}}}...{{{/SUMMARY}}}`
            Scene summary blocks displayed in the sidebar.
@@ -1773,7 +1783,7 @@ final class ScriptStore {
         guard let url = fileProjectURL else { return }
         let settings = ProjectSettingsPersistence.load(from: url)
 
-        // Apply markup settings (project values override UserDefaults)
+        // Apply Direction / Action / Camera settings (project values override UserDefaults)
         if let v = settings.showDirections { showDirections = v }
         if let v = settings.showStoryboarding { showStoryboarding = v }
         if let v = settings.showAnimateDirections { showAnimateDirections = v }
@@ -1795,6 +1805,57 @@ final class ScriptStore {
         if let model = settings.llmMiniMaxModel { config.setModelID(model, for: .minimax) }
         if let model = settings.llmOpenCodeModel { config.setModelID(model, for: .opencode) }
         if let model = settings.llmClaudeModel { config.setModelID(model, for: .claude) }
+    }
+
+    // MARK: - Script Cards Sidecar
+
+    /// Load the script-cards sidecar from `Metadata/script-cards.json`.
+    /// For any song that has no cards entry yet (legacy projects), import
+    /// the cards from the song's bracket markup and persist back so the
+    /// migration only happens once. Lyrics are never modified.
+    func loadAndImportScriptCards() {
+        guard let url = fileProjectURL else {
+            scriptCards = ScriptDocumentCards()
+            return
+        }
+        var working = (try? ScriptCardSidecarStore.load(projectURL: url)) ?? ScriptDocumentCards()
+        var didImport = false
+        for file in librettoFiles where working.songs[file.relativePath] == nil {
+            let imported = ScriptCardImporter.importLyrics(
+                file.content,
+                songRelativePath: file.relativePath
+            )
+            guard !imported.scenes.isEmpty else { continue }
+            working.songs[file.relativePath] = imported
+            didImport = true
+        }
+        scriptCards = working
+        if didImport {
+            try? ScriptCardSidecarStore.save(working, projectURL: url)
+        }
+    }
+
+    /// Persist `scriptCards` to disk. Called after card edits / Director
+    /// Pass acceptances; cheap enough to call eagerly.
+    func saveScriptCards() {
+        guard let url = fileProjectURL else { return }
+        try? ScriptCardSidecarStore.save(scriptCards, projectURL: url)
+    }
+
+    /// Re-run the legacy markup importer for a single song, replacing the
+    /// in-memory entry. Used by debug tooling and the future "Reimport
+    /// from markup" action — does not auto-save.
+    func reimportScriptCards(forSongAt path: String) {
+        guard let file = librettoFiles.first(where: { $0.relativePath == path }) else {
+            scriptCards.songs.removeValue(forKey: path)
+            return
+        }
+        let imported = ScriptCardImporter.importLyrics(file.content, songRelativePath: path)
+        if imported.scenes.isEmpty {
+            scriptCards.songs.removeValue(forKey: path)
+        } else {
+            scriptCards.songs[path] = imported
+        }
     }
 
     /// Save project-level settings to the OWP bundle.

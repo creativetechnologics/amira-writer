@@ -210,6 +210,14 @@ public struct ProjectPaths: Sendable {
         metadata.appendingPathComponent("mix_session.json")
     }
 
+    /// `<project>/Metadata/script-cards.json`
+    /// Structured Write sidecar (direction/action/camera/tags). Lyrics in
+    /// `Songs/*.ows` remain the canonical text; this file is the source of
+    /// truth for everything else previously expressed as bracket markup.
+    public var scriptCardsJSON: URL {
+        metadata.appendingPathComponent("script-cards.json")
+    }
+
     // MARK: - Suno per-song directory
 
     /// `<project>/Suno/<baseTitle>/`
