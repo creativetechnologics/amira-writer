@@ -670,14 +670,12 @@ struct AllProjectImagesPageView: View {
                     }
                     return .ignored
                 }
-                // Keep the keyboard-selected thumbnail in view as the user
-                // arrow-keys around the grid; without this, selection can
-                // walk off the visible viewport.
+                // Pagination only: nil anchor → SwiftUI scrolls the minimum
+                // amount to make the selection visible, and does nothing
+                // when it's already on-screen.
                 .task(id: state.selectedRecordID) {
                     guard let selectedID = state.selectedRecordID else { return }
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        proxy.scrollTo(selectedID, anchor: .center)
-                    }
+                    proxy.scrollTo(selectedID)
                 }
             }
         }

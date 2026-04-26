@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import ProjectKit
+import Quartz
 import SwiftUI
 
 @available(macOS 26.0, *)
@@ -15,8 +16,12 @@ public struct CanvasWorkspace: View {
         ZStack {
             CanvasWorkspaceContent(
                 store: controller.store,
-                libraryState: controller.canvasLibraryState
+                libraryState: controller.canvasLibraryState,
+                canvasFormState: controller.canvasFormState
             )
+            .environment(\.unifiedImageFlipHandler) { path in
+                controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
+            }
 
             CanvasWorkspaceLoadingOverlay(controller: controller)
         }
@@ -46,6 +51,7 @@ private struct CanvasWorkspaceLoadingOverlay: View {
 private struct CanvasWorkspaceContent: View {
     @Bindable var store: AnimateStore
     @Bindable var libraryState: AllProjectImagesState
+    @Bindable var canvasFormState: CanvasFormState
     @State private var selectedGenerationID: UUID? = nil
 
     @AppStorage("novotro.canvas.sidebarVisible") private var sidebarVisible = true
@@ -74,15 +80,29 @@ private struct CanvasWorkspaceContent: View {
                             title: "Edit with Gemini",
                             confirmTitle: "Generate",
                             onConfirm: { finalDrafts, _ in
+                                if let first = finalDrafts.first {
+                                    libraryState.edit.aspectRatio = first.aspectRatio
+                                    libraryState.edit.imageSize = first.imageSize
+                                }
                                 let sourceRecord = libraryState.selectedRecord
                                 libraryState.edit.pendingPreflight = nil
                                 runLibraryEditGeneration(finalDrafts, sourceRecord: sourceRecord)
                             },
                             onCancel: {
+                                if let first = libraryState.edit.pendingDrafts.first {
+                                    libraryState.edit.aspectRatio = first.aspectRatio
+                                    libraryState.edit.imageSize = first.imageSize
+                                }
                                 libraryState.edit.pendingPreflight = nil
                                 libraryState.edit.pendingDrafts = []
                             }
                         )
+                        .onChange(of: libraryState.edit.pendingDrafts.first?.aspectRatio) { _, newValue in
+                            if let newValue { libraryState.edit.aspectRatio = newValue }
+                        }
+                        .onChange(of: libraryState.edit.pendingDrafts.first?.imageSize) { _, newValue in
+                            if let newValue { libraryState.edit.imageSize = newValue }
+                        }
                     }
                     .alert(
                         "Generation Error",
@@ -99,9 +119,17 @@ private struct CanvasWorkspaceContent: View {
             store.refreshGeneratedBackgroundLibraryIfNeededInBackground()
             ensureValidCanvasSelection()
         }
-        .onChange(of: store.canvasGenerations.map(\.id)) { _, _ in
+        .onChange(of: canvasGenerationSelectionSignature) { _, _ in
             ensureValidCanvasSelection()
         }
+    }
+
+    private struct CanvasGenerationSelectionSignature: Equatable {
+        var revision: Int
+    }
+
+    private var canvasGenerationSelectionSignature: CanvasGenerationSelectionSignature {
+        CanvasGenerationSelectionSignature(revision: store.canvasGenerationsRevision)
     }
 
     private var workspaceBody: some View {
@@ -176,6 +204,7 @@ private struct CanvasWorkspaceContent: View {
             } content: {
                 ImagineCanvasPageView(
                     store: store,
+                    canvasState: canvasFormState,
                     selectedGenerationID: $selectedGenerationID
                 )
             }
@@ -225,7 +254,7 @@ private struct CanvasWorkspaceContent: View {
     }
 
     private func ensureValidCanvasSelection() {
-        let sorted = store.canvasGenerations.sorted { $0.createdAt > $1.createdAt }
+        let sorted = store.canvasGenerationsNewestFirst()
         guard !sorted.isEmpty else {
             selectedGenerationID = nil
             return
@@ -313,9 +342,10 @@ private struct CanvasInspectorView: View {
     @Bindable var store: AnimateStore
     @Binding var selectedGenerationID: UUID?
     @FocusState private var recentGenerationsKeyboardFocused: Bool
+    @State private var quickLookKeyMonitor: Any?
 
     private func sortedGenerations() -> [AnimateStore.CanvasGeneration] {
-        store.canvasGenerations.sorted { $0.createdAt > $1.createdAt }
+        store.canvasGenerationsNewestFirst()
     }
 
     private func selectedGeneration(
@@ -347,7 +377,7 @@ private struct CanvasInspectorView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    LazyVStack(alignment: .leading, spacing: 14) {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Recent Generations")
                                 .font(.system(size: 11, weight: .semibold))
@@ -414,21 +444,77 @@ private struct CanvasInspectorView: View {
                     recentGenerationsKeyboardFocused = true
                 }
                 .onKeyPress(.space) {
-                    guard let generation = selectedGeneration else {
-                        return .ignored
-                    }
-                    ImagineQuickLook.preview(url: URL(fileURLWithPath: generation.imagePath))
-                    return .handled
+                    openQuickLook(generations: generations, selected: selectedGeneration)
+                    return selectedGeneration == nil ? .ignored : .handled
+                }
+                .onKeyPress(.upArrow) {
+                    navigateSelection(delta: -1, generations: generations)
+                }
+                .onKeyPress(.downArrow) {
+                    navigateSelection(delta: 1, generations: generations)
                 }
             }
         }
         .onAppear {
             ensureSelection(in: generations)
             recentGenerationsKeyboardFocused = true
+            installQuickLookKeyMonitor()
         }
         .onChange(of: generations.map(\.id)) { _, _ in
             ensureSelection(in: generations)
         }
+        .onDisappear {
+            removeQuickLookKeyMonitor()
+        }
+    }
+
+
+    private func navigateSelection(delta: Int, generations: [AnimateStore.CanvasGeneration]) -> KeyPress.Result {
+        guard !generations.isEmpty else { return .ignored }
+        let currentIndex = selectedGenerationID.flatMap { selected in
+            generations.firstIndex(where: { $0.id == selected })
+        } ?? 0
+        let newIndex = min(max(currentIndex + delta, 0), generations.count - 1)
+        selectedGenerationID = generations[newIndex].id
+        if let panel = QLPreviewPanel.shared(), panel.isVisible {
+            panel.currentPreviewItemIndex = newIndex
+        }
+        return .handled
+    }
+
+    private func installQuickLookKeyMonitor() {
+        guard quickLookKeyMonitor == nil else { return }
+        quickLookKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard QLPreviewPanel.sharedPreviewPanelExists(),
+                  let panel = QLPreviewPanel.shared(),
+                  panel.isVisible else {
+                return event
+            }
+            switch event.keyCode {
+            case 126: // Up arrow
+                _ = navigateSelection(delta: -1, generations: sortedGenerations())
+                return nil
+            case 125: // Down arrow
+                _ = navigateSelection(delta: 1, generations: sortedGenerations())
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+
+    private func removeQuickLookKeyMonitor() {
+        if let quickLookKeyMonitor {
+            NSEvent.removeMonitor(quickLookKeyMonitor)
+            self.quickLookKeyMonitor = nil
+        }
+    }
+
+    private func openQuickLook(generations: [AnimateStore.CanvasGeneration], selected: AnimateStore.CanvasGeneration?) {
+        guard let selected else { return }
+        let urls = generations.map { URL(fileURLWithPath: $0.imagePath) }
+        let index = generations.firstIndex(where: { $0.id == selected.id }) ?? 0
+        ImagineQuickLook.preview(urls: urls, selectedIndex: index)
     }
 
     @ViewBuilder

@@ -1383,15 +1383,32 @@ private struct AllProjectImagesWorkspaceContent: View {
                             title: "Edit with Gemini",
                             confirmTitle: "Generate",
                             onConfirm: { finalDrafts, _ in
+                                if let first = finalDrafts.first {
+                                    state.edit.aspectRatio = first.aspectRatio
+                                    state.edit.imageSize = first.imageSize
+                                }
                                 let sourceRecord = state.selectedRecord
                                 state.edit.pendingPreflight = nil
                                 runEditGeneration(finalDrafts, sourceRecord: sourceRecord)
                             },
                             onCancel: {
+                                if let first = state.edit.pendingDrafts.first {
+                                    state.edit.aspectRatio = first.aspectRatio
+                                    state.edit.imageSize = first.imageSize
+                                }
                                 state.edit.pendingPreflight = nil
                                 state.edit.pendingDrafts = []
                             }
                         )
+                        // Persist the picker selections live too so a hard
+                        // quit (or any close path that bypasses the explicit
+                        // callbacks) still saves the last value.
+                        .onChange(of: state.edit.pendingDrafts.first?.aspectRatio) { _, newValue in
+                            if let newValue { state.edit.aspectRatio = newValue }
+                        }
+                        .onChange(of: state.edit.pendingDrafts.first?.imageSize) { _, newValue in
+                            if let newValue { state.edit.imageSize = newValue }
+                        }
                     }
                     .alert(
                         "Generation Error",
