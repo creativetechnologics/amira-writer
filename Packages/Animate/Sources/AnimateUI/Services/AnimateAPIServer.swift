@@ -938,6 +938,7 @@ final class AnimateAPIRouter {
         let maxBatchSize = intValue(body["maxBatchSize"]).flatMap { $0 > 0 ? $0 : nil }
         let forceReanalysis = boolValue(body["forceReanalysis"]) ?? false
         let enqueueExistingWithoutRuns = boolValue(body["enqueueExistingWithoutRuns"]) ?? true
+        let enqueueExistingMissingAnalysis = boolValue(body["enqueueExistingMissingAnalysis"]) ?? false
         let markMissingAssets = boolValue(body["markMissingAssets"]) ?? true
         let startWorker = boolValue(body["startWorker"]) ?? false
 
@@ -954,6 +955,7 @@ final class AnimateAPIRouter {
             forceReanalysis: forceReanalysis,
             linkKinds: linkKinds,
             enqueueExistingWithoutRuns: enqueueExistingWithoutRuns,
+            enqueueExistingMissingAnalysis: enqueueExistingMissingAnalysis,
             markMissingAssets: markMissingAssets
         ) else {
             return .error(500, "Image intelligence is not initialized for this project yet.")

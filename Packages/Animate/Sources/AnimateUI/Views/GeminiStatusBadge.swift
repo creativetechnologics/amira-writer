@@ -2,9 +2,9 @@ import AppKit
 import ProjectKit
 import SwiftUI
 
-/// Title-bar indicator that shows whether any Gemini image generations are
-/// in flight. Click to see the recent-activity popover (queued/running/
-/// recently-completed entries with source + filename).
+/// Title-bar indicator that shows whether any Gemini image work is in flight
+/// (generation or Image Intelligence analysis). Click to see the recent-activity
+/// popover (queued/running/recently-completed entries with source + filename).
 ///
 /// - Gray capsule with sparkle icon = idle
 /// - Green pulsing capsule + count = N running / queued
@@ -29,8 +29,8 @@ struct GeminiStatusBadge: View {
     }
 
     private func helpText(activeCount: Int) -> String {
-        if activeCount == 0 { return "No active Gemini generations. Click for recent activity." }
-        return "\(activeCount) Gemini generation\(activeCount == 1 ? "" : "s") in flight. Click for details."
+        if activeCount == 0 { return "No active Gemini work. Click for recent activity." }
+        return "\(activeCount) Gemini job\(activeCount == 1 ? "" : "s") in flight. Click for details."
     }
 
     @ViewBuilder
@@ -51,7 +51,7 @@ struct GeminiStatusBadge: View {
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(.green)
             }
-            Text(isIdle ? "Gemini" : "generating")
+            Text(isIdle ? "Gemini" : "working")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(isIdle ? Color.secondary : Color.green)
         }
@@ -138,11 +138,11 @@ struct GeminiActivityPopover: View {
                     Text(entry.title)
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
-                    Text(entry.kind == .batch ? "BATCH" : "IMMEDIATE")
+                    Text(entry.kind.activityLabel)
                         .font(.system(size: 8, weight: .bold, design: .monospaced))
                         .padding(.horizontal, 4).padding(.vertical, 1)
-                        .background((entry.kind == .batch ? Color.purple : Color.blue).opacity(0.2), in: Capsule())
-                        .foregroundStyle(entry.kind == .batch ? Color.purple : Color.blue)
+                        .background(entry.kind.activityColor.opacity(0.2), in: Capsule())
+                        .foregroundStyle(entry.kind.activityColor)
                 }
                 Text(entry.source)
                     .font(.caption2)
@@ -175,7 +175,7 @@ struct GeminiActivityPopover: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Cancel this generation")
+                .help("Cancel this Gemini job")
                 .padding(.top, 1)
             }
         }
@@ -222,4 +222,23 @@ private extension AnimateStore.GeminiActivityEntry {
         f.dateFormat = "h:mm:ss a"
         return f
     }()
+}
+
+@available(macOS 26.0, *)
+private extension AnimateStore.GeminiActivityEntry.Kind {
+    var activityLabel: String {
+        switch self {
+        case .batch: return "BATCH"
+        case .immediate: return "IMMEDIATE"
+        case .analysis: return "ANALYSIS"
+        }
+    }
+
+    var activityColor: Color {
+        switch self {
+        case .batch: return .purple
+        case .immediate: return .blue
+        case .analysis: return .teal
+        }
+    }
 }

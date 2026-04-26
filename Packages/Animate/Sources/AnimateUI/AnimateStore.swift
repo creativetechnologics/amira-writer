@@ -943,6 +943,8 @@ final class AnimateStore {
     @ObservationIgnored private var imageAnalysisCoordinator: ImageAnalysisCoordinator?
     @ObservationIgnored private var imageAssetDiscovery: ImageAssetDiscoveryService?
     @ObservationIgnored private var imageAnalysisBackfill: ImageAnalysisBackfillService?
+    @ObservationIgnored private var imageAnalysisWorkerActivityID: UUID?
+    @ObservationIgnored private var imageAnalysisActivityMonitorTask: Task<Void, Never>?
     
     private func setupImageIntelligence() {
         guard let projectURL = fileOWPURL else { return }
@@ -1216,6 +1218,15 @@ final class AnimateStore {
         } else {
             resolvedAnalysisMode = enqueueForAnalysis ? .enqueue : .none
         }
+        let activityID: UUID? = {
+            guard resolvedAnalysisMode == .immediate else { return nil }
+            return registerGeminiActivity(
+                kind: .analysis,
+                title: "Analyze \(inspectionFilename)",
+                source: "Image Intelligence • \(linkKind.rawValue)",
+                initialStatus: .running
+            )
+        }()
 
         Task.detached(priority: .utility) {
             do {
@@ -1254,16 +1265,45 @@ final class AnimateStore {
                           AND status = 'completed'
                         LIMIT 1
                     """, [assetID, inspection.contentHashSHA256]) != nil
-                    guard !completedRuns else { return }
+                    guard !completedRuns else {
+                        if let activityID {
+                            await MainActor.run {
+                                self.updateGeminiActivity(
+                                    activityID,
+                                    status: .completed,
+                                    outputFilename: "Already analyzed"
+                                )
+                            }
+                        }
+                        return
+                    }
                     await coordinator.configure(apiKey: apiKey)
                     try await coordinator.analyzeAssetNow(
                         assetID: assetID,
                         reason: "post_generation_immediate"
                     )
+                    if let activityID {
+                        await MainActor.run {
+                            self.updateGeminiActivity(
+                                activityID,
+                                status: .completed,
+                                outputFilename: inspectionFilename
+                            )
+                        }
+                    }
                 case .none:
                     break
                 }
             } catch {
+                if let activityID {
+                    await MainActor.run {
+                        self.updateGeminiActivity(
+                            activityID,
+                            status: .failed,
+                            errorMessage: error.localizedDescription
+                        )
+                    }
+                }
                 print("[AnimateStore] Failed to register image asset: \(error)")
             }
         }
@@ -1876,6 +1916,7 @@ final class AnimateStore {
         forceReanalysis: Bool = false,
         linkKinds: [ImageAssetLinkKind]? = nil,
         enqueueExistingWithoutRuns: Bool = false,
+        enqueueExistingMissingAnalysis: Bool = false,
         markMissingAssets: Bool = true
     ) async -> ImageAnalysisBackfillService.BackfillReport? {
         guard let backfill = imageAnalysisBackfill else { return nil }
@@ -1886,6 +1927,7 @@ final class AnimateStore {
                 forceReanalysis: forceReanalysis,
                 linkKinds: linkKinds,
                 enqueueExistingWithoutRuns: enqueueExistingWithoutRuns,
+                enqueueExistingMissingAnalysis: enqueueExistingMissingAnalysis,
                 markMissingAssets: markMissingAssets
             )
         )
@@ -1919,6 +1961,7 @@ final class AnimateStore {
 
     /// Start the image analysis worker.
     public func startImageAnalysisWorker() {
+        startImageAnalysisActivityMonitor()
         Task {
             await imageAnalysisCoordinator?.startWorker()
         }
@@ -1926,9 +1969,96 @@ final class AnimateStore {
     
     /// Stop the image analysis worker.
     public func stopImageAnalysisWorker() {
+        imageAnalysisActivityMonitorTask?.cancel()
+        imageAnalysisActivityMonitorTask = nil
+        let coordinator = imageAnalysisCoordinator
         Task {
-            await imageAnalysisCoordinator?.stopWorker()
+            let stats = try? await coordinator?.stats()
+            await coordinator?.stopWorker()
+            await MainActor.run {
+                self.finishImageAnalysisWorkerActivity(stats: stats, stopped: true)
+            }
         }
+    }
+
+    private func startImageAnalysisActivityMonitor() {
+        let coordinator = imageAnalysisCoordinator
+        let activityID = ensureImageAnalysisWorkerActivity()
+        imageAnalysisActivityMonitorTask?.cancel()
+        imageAnalysisActivityMonitorTask = Task { [weak self, coordinator, activityID] in
+            while !Task.isCancelled {
+                let stats = try? await coordinator?.stats()
+                let shouldContinue = await MainActor.run { () -> Bool in
+                    guard let self else { return false }
+                    return self.updateImageAnalysisWorkerActivity(activityID: activityID, stats: stats)
+                }
+                if !shouldContinue { break }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    @discardableResult
+    private func ensureImageAnalysisWorkerActivity() -> UUID {
+        if let existingID = imageAnalysisWorkerActivityID,
+           geminiActivityLog.contains(where: { entry in
+               entry.id == existingID && (entry.status == .queued || entry.status == .running)
+           }) {
+            return existingID
+        }
+        let activityID = registerGeminiActivity(
+            kind: .analysis,
+            title: "Image Intelligence analysis",
+            source: "Image Intelligence worker",
+            initialStatus: .running
+        )
+        imageAnalysisWorkerActivityID = activityID
+        return activityID
+    }
+
+    private func updateImageAnalysisWorkerActivity(
+        activityID: UUID,
+        stats: ImageAnalysisCoordinator.WorkerStats?
+    ) -> Bool {
+        guard imageAnalysisWorkerActivityID == activityID else { return false }
+        guard let stats else {
+            updateGeminiActivity(
+                activityID,
+                status: .running,
+                outputFilename: "Waiting for Image Intelligence stats…"
+            )
+            return true
+        }
+
+        let activeJobs = stats.pendingJobs + stats.runningJobs
+        let progress = "\(stats.completedJobs) done · \(activeJobs) active · \(stats.failedJobs) failed"
+        if activeJobs > 0 || stats.isRunning {
+            updateGeminiActivity(activityID, status: .running, outputFilename: progress)
+            return true
+        }
+
+        updateGeminiActivity(activityID, status: .completed, outputFilename: progress)
+        imageAnalysisWorkerActivityID = nil
+        imageAnalysisActivityMonitorTask = nil
+        return false
+    }
+
+    private func finishImageAnalysisWorkerActivity(
+        stats: ImageAnalysisCoordinator.WorkerStats?,
+        stopped: Bool
+    ) {
+        guard let activityID = imageAnalysisWorkerActivityID else { return }
+        let pending = stats.map { $0.pendingJobs + $0.runningJobs } ?? 0
+        let output: String
+        if let stats {
+            output = stopped && pending > 0
+                ? "Stopped · \(pending) pending · \(stats.completedJobs) done"
+                : "\(stats.completedJobs) done · \(pending) active · \(stats.failedJobs) failed"
+        } else {
+            output = stopped ? "Stopped" : "Finished"
+        }
+        updateGeminiActivity(activityID, status: .completed, outputFilename: output)
+        imageAnalysisWorkerActivityID = nil
     }
     
     private var backgroundIndexRefreshTask: Task<Void, Never>?
@@ -13535,7 +13665,7 @@ final class AnimateStore {
 
     /// A single registered Gemini generation (immediate or batch-submitted).
     struct GeminiActivityEntry: Identifiable, Sendable, Hashable {
-        enum Kind: String, Codable, Sendable { case immediate, batch }
+        enum Kind: String, Codable, Sendable { case immediate, batch, analysis }
         enum Status: String, Codable, Sendable { case queued, running, completed, failed }
 
         let id: UUID

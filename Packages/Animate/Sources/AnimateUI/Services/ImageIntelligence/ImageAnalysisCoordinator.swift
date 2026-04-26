@@ -81,12 +81,41 @@ public actor ImageAnalysisCoordinator {
         let dedupeKey = "\(assetID)|v1|gemini-3-flash-preview|gemini-embedding-2|3072"
         let now = Date().timeIntervalSince1970
 
-        // Check if already queued
+        // Dedupe is intentionally unique across every terminal state. If a
+        // prior failed/cancelled/completed job exists, make that durable row
+        // re-runnable instead of throwing a UNIQUE constraint error during
+        // backfill. Analysis runs and visual metadata remain historical rows.
         if let existing = try await store.querySingle(
-            "SELECT id FROM image_analysis_jobs WHERE dedupe_key = ? AND status IN ('pending', 'running')",
+            "SELECT id, status FROM image_analysis_jobs WHERE dedupe_key = ? LIMIT 1",
             [dedupeKey]
         ) {
-            print("[ImageAnalysisCoordinator] Job already exists: \(existing["id"] as? String ?? "unknown")")
+            let existingID = existing["id"] as? String ?? "unknown"
+            let existingStatus = existing["status"] as? String ?? ""
+            if existingStatus == JobStatus.pending.rawValue || existingStatus == JobStatus.running.rawValue {
+                print("[ImageAnalysisCoordinator] Job already exists: \(existingID)")
+                return
+            }
+
+            try await store.exec("""
+                UPDATE image_analysis_jobs
+                SET reason = ?,
+                    status = ?,
+                    attempt_count = ?,
+                    available_at = ?,
+                    started_at = NULL,
+                    finished_at = NULL,
+                    last_error_message = NULL,
+                    updated_at = ?
+                WHERE id = ?
+            """, [
+                reason,
+                JobStatus.pending.rawValue,
+                0,
+                now,
+                now,
+                existingID
+            ])
+            log("Re-queued existing job \(existingID) for asset \(assetID)")
             return
         }
 
