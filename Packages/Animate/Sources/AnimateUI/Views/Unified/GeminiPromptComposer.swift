@@ -78,8 +78,9 @@ struct GeminiPromptComposer: View {
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
-            appendReferenceURLs(urls)
-            return !urls.isEmpty
+            let resolvedURLs = ImageMultiSelectionDragContext.resolveDroppedURLs(urls)
+            appendReferenceURLs(resolvedURLs)
+            return !resolvedURLs.isEmpty
         } isTargeted: { targeted in
             isDropTarget = targeted
         }

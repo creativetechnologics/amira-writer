@@ -1751,17 +1751,42 @@ struct ImageGallerySection: View {
                     onSetAsProfilePic: onSetAsProfilePic == nil ? nil : { onSetAsProfilePic?(path) },
                     onShowPrompt: onShowPrompt == nil ? nil : { onShowPrompt?(path) },
                     onToggleCurated: onToggleCurated == nil ? nil : { onToggleCurated?(path) },
-                    onMoveToTrash: onMoveToTrash == nil ? nil : { onMoveToTrash?(path) },
+                    onMoveToTrash: onMoveToTrash == nil ? nil : {
+                        let targets = selectedActionTargets(anchor: path)
+                        for target in targets {
+                            onMoveToTrash?(target)
+                        }
+                        selectedPaths.subtract(targets)
+                    },
                     onEditWithGemini: onEditWithGemini == nil ? nil : { onEditWithGemini?(path) },
                     onGenerateWithGemini: onGenerateWithGemini == nil ? nil : { count in onGenerateWithGemini?(path, count) },
                     onGenerateAnimated: onGenerateAnimated == nil ? nil : { onGenerateAnimated?(path) },
                     currentRating: ratingFor.map { $0(path) },
                     isRejected: isRejectedFor?(path) ?? false,
                     hasNotes: hasNotesFor?(path) ?? false,
-                    onSetRating: onSetRating == nil ? nil : { rating in onSetRating?(path, rating) },
+                    onSetRating: onSetRating == nil ? nil : { rating in
+                        for target in selectedActionTargets(anchor: path) {
+                            onSetRating?(target, rating)
+                        }
+                    },
+                    dragURLs: selectedDragURLs(anchor: path),
                     showsInlineRemoveButton: showsInlineRemoveButton
                 )
             }
+        }
+    }
+
+    private func selectedActionTargets(anchor path: String) -> [String] {
+        guard selectedPaths.contains(path), selectedPaths.count > 1 else {
+            return [path]
+        }
+        let ordered = paths.filter { selectedPaths.contains($0) }
+        return ordered.isEmpty ? [path] : ordered
+    }
+
+    private func selectedDragURLs(anchor path: String) -> [URL] {
+        selectedActionTargets(anchor: path).compactMap { selectedPath in
+            store.resolvedCharacterAssetURL(for: selectedPath)
         }
     }
 }
@@ -1773,10 +1798,14 @@ struct GalleryClickEvent {
 
 private struct FileDragModifier: ViewModifier {
     let url: URL?
+    var urls: [URL] = []
 
     func body(content: Content) -> some View {
-        if let url {
-            content.draggable(url)
+        let payload = urls.isEmpty ? url.map { [$0] } ?? [] : urls
+        if let first = payload.first {
+            content.onDrag {
+                ImageMultiSelectionDragContext.itemProvider(for: payload, fallbackURL: first)
+            }
         } else {
             content
         }
@@ -1809,6 +1838,7 @@ struct ImageGalleryThumbnail: View {
     let isRejected: Bool
     let hasNotes: Bool
     let onSetRating: ((Int) -> Void)?
+    var dragURLs: [URL] = []
     let showsInlineRemoveButton: Bool
 
     var body: some View {
@@ -1872,7 +1902,7 @@ struct ImageGalleryThumbnail: View {
             },
             topTrailingOverlay: Self.inlineRemoveOverlay(enabled: showsInlineRemoveButton, onRemove: onRemove)
         )
-        .modifier(FileDragModifier(url: resolvedURL))
+        .modifier(FileDragModifier(url: resolvedURL, urls: dragURLs))
     }
 
     /// Top-trailing inline remove button used by the Character detail gallery

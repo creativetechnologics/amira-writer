@@ -1339,10 +1339,22 @@ final class AllProjectImagesState {
         }
     }
 
-    func selectedRecordsForDrag(fallback record: ProjectImageRecord? = nil) -> [ProjectImageRecord] {
+    func selectedRecordsForAction(fallback record: ProjectImageRecord? = nil) -> [ProjectImageRecord] {
         let selected = selectedRecordIDs.compactMap { recordsByID[$0] }
-        if !selected.isEmpty { return selected }
-        return record.map { [$0] } ?? []
+        guard !selected.isEmpty else {
+            return record.map { [$0] } ?? []
+        }
+        guard let record else {
+            return selected
+        }
+        if selected.count > 1, selectedRecordIDs.contains(record.id) {
+            return selected
+        }
+        return [record]
+    }
+
+    func selectedRecordsForDrag(fallback record: ProjectImageRecord? = nil) -> [ProjectImageRecord] {
+        selectedRecordsForAction(fallback: record)
     }
 
     func selectedDragURLs(fallback record: ProjectImageRecord? = nil) -> [URL] {
@@ -2092,8 +2104,7 @@ private struct AllProjectImagesSidebarView: View {
     }
 
     private func dropURLs(_ urls: [URL]) -> [URL] {
-        let selected = state.selectedDragURLs()
-        return selected.isEmpty ? urls : selected
+        ImageMultiSelectionDragContext.resolveDroppedURLs(urls)
     }
 
     @ViewBuilder

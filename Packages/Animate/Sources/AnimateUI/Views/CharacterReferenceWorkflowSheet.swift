@@ -47,6 +47,10 @@ struct CharacterReferenceWorkflowSheet: View {
     @State private var headSheetDropTargeted = false
     @State private var masterSourceItems: [CharacterMasterImageItem] = []
     @State private var masterSourceItemsCharacterID: UUID?
+    @State private var isOverviewExpanded = true
+    @State private var isMasterReferenceExpanded = true
+    @State private var isHeadTurnaroundExpanded = true
+    @State private var isCostumesExpanded = true
 
     enum WorkflowAction: Hashable {
         case masterSheet
@@ -245,6 +249,20 @@ struct CharacterReferenceWorkflowSheet: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                HStack(spacing: 8) {
+                    Button("Expand All") {
+                        setAllWorkflowSections(expanded: true)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                    Button("Collapse All") {
+                        setAllWorkflowSections(expanded: false)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
             }
 
             Button("Reset Workflow") {
@@ -338,18 +356,27 @@ struct CharacterReferenceWorkflowSheet: View {
         let approvedFullBodyCount = character.costumeReferenceSets.flatMap(\.fullBodySlots).filter { $0.approvedVariant != nil }.count
         let approvedAccessoryCount = character.costumeReferenceSets.flatMap(\.accessorySlots).filter { $0.approvedVariant != nil }.count
 
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Use the realistic inspiration images to generate several beautiful master sheets first. Approve the best master sheet, then use it as the ingredient for specific head poses, full-body costume poses, and accessories.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        return DisclosureGroup(isExpanded: $isOverviewExpanded) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Use the realistic inspiration images to generate several beautiful master sheets first. Approve the best master sheet, then use it as the ingredient for specific head poses, full-body costume poses, and accessories.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
 
-            HStack(spacing: 12) {
-                workflowPill(title: "Inspiration Images", value: "\(character.inspirationImagePaths.count)", systemImage: "photo.stack")
-                workflowPill(title: "Master Sheets", value: "\(character.masterReferenceSheetVariants.count)", systemImage: "rectangle.3.group")
-                workflowPill(title: "Head Poses", value: "\(approvedHeadCount)/\(character.headTurnaroundSlots.count)", systemImage: "person.crop.square")
-                workflowPill(title: "Costume Poses", value: "\(approvedFullBodyCount)", systemImage: "figure.stand")
-                workflowPill(title: "Accessories", value: "\(approvedAccessoryCount)", systemImage: "briefcase")
+                HStack(spacing: 12) {
+                    workflowPill(title: "Inspiration Images", value: "\(character.inspirationImagePaths.count)", systemImage: "photo.stack")
+                    workflowPill(title: "Master Sheets", value: "\(character.masterReferenceSheetVariants.count)", systemImage: "rectangle.3.group")
+                    workflowPill(title: "Head Poses", value: "\(approvedHeadCount)/\(character.headTurnaroundSlots.count)", systemImage: "person.crop.square")
+                    workflowPill(title: "Costume Poses", value: "\(approvedFullBodyCount)", systemImage: "figure.stand")
+                    workflowPill(title: "Accessories", value: "\(approvedAccessoryCount)", systemImage: "briefcase")
+                }
             }
+            .padding(.top, 12)
+        } label: {
+            sectionDisclosureLabel(
+                title: "Overview",
+                subtitle: "Workflow summary and progress",
+                systemImage: "text.alignleft"
+            )
         }
         .padding(16)
         .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -372,347 +399,399 @@ struct CharacterReferenceWorkflowSheet: View {
     }
 
     private func masterReferenceSheetSection(_ character: AnimationCharacter) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Master Reference Sheet", systemImage: "rectangle.3.group")
-                        .font(.headline)
-                    Text("Generate several master sheets from the original inspiration images, approve the best one, then use that sheet as the main reference for every later NB2 request.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        DisclosureGroup(isExpanded: $isMasterReferenceExpanded) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Generate several master sheets from the original inspiration images, approve the best one, then use that sheet as the main reference for every later NB2 request.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
-                Spacer()
+                    Spacer()
 
-                Button {
-                    prepareMasterSheetPlan(count: 1)
-                } label: {
-                    Label("Generate 1", systemImage: "sparkles")
-                }
-                .buttonStyle(.bordered)
-                .disabled(!store.canGenerateGeminiImagesImmediately)
-
-                Button {
-                    importExistingMasterSheet()
-                } label: {
-                    Label("Attach Existing Sheet", systemImage: "square.and.arrow.down")
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    prepareMasterSheetPlan(count: 3)
-                } label: {
-                    Label("Generate 3", systemImage: "square.stack.3d.up")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!store.canGenerateGeminiImagesImmediately)
-
-                if character.approvedMasterReferenceSheetVariant != nil {
                     Button {
-                        let result = store.regenerateMasterReferenceSheetBackgroundRemoval(for: characterID)
-                        applyBackgroundRemovalResult(result, label: "master sheet")
+                        prepareMasterSheetPlan(count: 1)
                     } label: {
-                        Label("Re-remove Background", systemImage: "wand.and.stars")
+                        Label("Generate 1", systemImage: "sparkles")
                     }
                     .buttonStyle(.bordered)
-                    .help("Re-run Vision foreground extraction on the approved master sheet and save it back as a transparent PNG.")
-                }
-            }
+                    .disabled(!store.canGenerateGeminiImagesImmediately)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Master Sheet Prompt")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ResizablePromptEditor(
-                    text: $localMasterPrompt,
-                    persistenceID: "characters.masterSheetPrompt",
-                    minHeight: 120,
-                    defaultHeight: 160
-                )
-                    .onChange(of: localMasterPrompt) { _, newValue in
-                        guard hasAppearedPrompts else { return }
-                        scheduleMasterPromptSave(newValue)
+                    Button {
+                        importExistingMasterSheet()
+                    } label: {
+                        Label("Attach Existing Sheet", systemImage: "square.and.arrow.down")
                     }
-                .font(.callout)
-                .padding(8)
-                .background(.background.opacity(0.85), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(.quaternary.opacity(0.4))
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        prepareMasterSheetPlan(count: 3)
+                    } label: {
+                        Label("Generate 3", systemImage: "square.stack.3d.up")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!store.canGenerateGeminiImagesImmediately)
+
+                    if character.approvedMasterReferenceSheetVariant != nil {
+                        Button {
+                            let result = store.regenerateMasterReferenceSheetBackgroundRemoval(for: characterID)
+                            applyBackgroundRemovalResult(result, label: "master sheet")
+                        } label: {
+                            Label("Re-remove Background", systemImage: "wand.and.stars")
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Re-run Vision foreground extraction on the approved master sheet and save it back as a transparent PNG.")
+                    }
                 }
-            }
 
-            masterPromptReferenceDropZone(character)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Master Sheet Prompt")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ResizablePromptEditor(
+                        text: $localMasterPrompt,
+                        persistenceID: "characters.masterSheetPrompt",
+                        minHeight: 120,
+                        defaultHeight: 160
+                    )
+                        .onChange(of: localMasterPrompt) { _, newValue in
+                            guard hasAppearedPrompts else { return }
+                            scheduleMasterPromptSave(newValue)
+                        }
+                    .font(.callout)
+                    .padding(8)
+                    .background(.background.opacity(0.85), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(.quaternary.opacity(0.4))
+                    }
+                }
 
-            if character.masterReferenceSheetVariants.isEmpty {
-                if generatingActions.contains(.masterSheet) {
+                masterPromptReferenceDropZone(character)
+
+                if character.masterReferenceSheetVariants.isEmpty {
+                    if generatingActions.contains(.masterSheet) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                loadingReferenceVariantCard(title: "Generating Master Sheet", subtitle: generationStatus ?? "Waiting for Nano Banana 2…")
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    } else {
+                        workflowEmptyState(icon: "rectangle.3.group", message: "No master sheets yet. Generate a few variants, pick the best face/costume look, then use it to drive the grids below.")
+                    }
+                } else {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 12) {
-                            loadingReferenceVariantCard(title: "Generating Master Sheet", subtitle: generationStatus ?? "Waiting for Nano Banana 2…")
+                            ForEach(Array(character.masterReferenceSheetVariants.enumerated()), id: \.element.id) { index, variant in
+                                ReferenceVariantCard(
+                                    store: store,
+                                    variant: variant,
+                                    title: "Master Sheet \(index + 1)",
+                                    isApproved: character.approvedMasterReferenceSheetVariantID == variant.id,
+                                    onQuickLook: {
+                                        openQuickLook(
+                                            for: character.masterReferenceSheetVariants.map(\.imagePath),
+                                            startingAt: index
+                                        )
+                                    },
+                                    onCopy: {
+                                        copyImage(at: variant.imagePath)
+                                    },
+                                    onEdit: {
+                                        prepareMasterSheetEditPlan(variant)
+                                    },
+                                    onShowPrompt: {
+                                        showPromptPreview(title: "Master Sheet \(index + 1)", variant: variant)
+                                    },
+                                    onApprove: {
+                                        store.setApprovedMasterReferenceSheetVariant(variant.id, for: characterID)
+                                    },
+                                    onDelete: {
+                                        store.removeMasterReferenceSheetVariant(variant.id, for: characterID)
+                                    },
+                                    approveLabel: "Choose",
+                                    approvedLabel: "Chosen"
+                                )
+                            }
+                            if generatingActions.contains(.masterSheet) {
+                                loadingReferenceVariantCard(title: "Generating Master Sheet", subtitle: generationStatus ?? "Waiting for Nano Banana 2…")
+                            }
                         }
                         .padding(.vertical, 4)
                     }
-                } else {
-                    workflowEmptyState(icon: "rectangle.3.group", message: "No master sheets yet. Generate a few variants, pick the best face/costume look, then use it to drive the grids below.")
-                }
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(Array(character.masterReferenceSheetVariants.enumerated()), id: \.element.id) { index, variant in
-                            ReferenceVariantCard(
-                                store: store,
-                                variant: variant,
-                                title: "Master Sheet \(index + 1)",
-                                isApproved: character.approvedMasterReferenceSheetVariantID == variant.id,
-                                onQuickLook: {
-                                    openQuickLook(
-                                        for: character.masterReferenceSheetVariants.map(\.imagePath),
-                                        startingAt: index
-                                    )
-                                },
-                                onCopy: {
-                                    copyImage(at: variant.imagePath)
-                                },
-                                onEdit: {
-                                    prepareMasterSheetEditPlan(variant)
-                                },
-                                onShowPrompt: {
-                                    showPromptPreview(title: "Master Sheet \(index + 1)", variant: variant)
-                                },
-                                onApprove: {
-                                    store.setApprovedMasterReferenceSheetVariant(variant.id, for: characterID)
-                                },
-                                onDelete: {
-                                    store.removeMasterReferenceSheetVariant(variant.id, for: characterID)
-                                },
-                                approveLabel: "Choose",
-                                approvedLabel: "Chosen"
-                            )
-                        }
-                        if generatingActions.contains(.masterSheet) {
-                            loadingReferenceVariantCard(title: "Generating Master Sheet", subtitle: generationStatus ?? "Waiting for Nano Banana 2…")
-                        }
-                    }
-                    .padding(.vertical, 4)
                 }
             }
+            .padding(.top, 12)
+        } label: {
+            sectionDisclosureLabel(
+                title: "Master Reference Sheet",
+                subtitle: "Generate and approve the core character reference",
+                systemImage: "rectangle.3.group"
+            )
         }
         .padding(18)
         .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private func headTurnaroundSection(_ character: AnimationCharacter) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Head Turnaround Grid", systemImage: "person.crop.square")
-                        .font(.headline)
-                    Text("Generate or attach one square 2x3 head turnaround sheet first. The system crops the six head poses from the chosen sheet automatically, and you can still regenerate any individual missing pose afterward.")
+        DisclosureGroup(isExpanded: $isHeadTurnaroundExpanded) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Generate or attach one square 2x3 head turnaround sheet first. The system crops the six head poses from the chosen sheet automatically, and you can still regenerate any individual missing pose afterward.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        importHeadTurnaroundSheet()
+                    } label: {
+                        Label("Attach Sheet", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        prepareHeadSheetPlan()
+                    } label: {
+                        Label("Generate Sheet", systemImage: "square.grid.2x2")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!store.canGenerateGeminiImagesImmediately)
+
+                    Button {
+                        prepareHeadBatchPlan()
+                    } label: {
+                        Label("Generate Missing", systemImage: "sparkles")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!store.canSubmitGeminiBatchJobs)
+
+                    if character.approvedHeadTurnaroundSheetVariant != nil {
+                        Button {
+                            do {
+                                try store.cropApprovedHeadTurnaroundSheet(for: characterID)
+                            } catch {
+                                generationError = "Crop failed: \(error.localizedDescription)"
+                            }
+                        } label: {
+                            Label("Re-crop from Sheet", systemImage: "crop")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if character.headTurnaroundSlots.contains(where: { $0.approvedVariant != nil }) {
+                        Button {
+                            let result = store.regenerateHeadTurnaroundBackgroundRemoval(for: characterID)
+                            applyBackgroundRemovalResult(result, label: "head turnaround")
+                        } label: {
+                            Label("Re-remove Backgrounds", systemImage: "wand.and.stars")
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Re-run Vision foreground extraction on every approved head pose and save them back as transparent PNGs.")
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Head Sheet Prompt")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Button {
-                    importHeadTurnaroundSheet()
-                } label: {
-                    Label("Attach Sheet", systemImage: "square.and.arrow.down")
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    prepareHeadSheetPlan()
-                } label: {
-                    Label("Generate Sheet", systemImage: "square.grid.2x2")
-                }
-                .buttonStyle(.bordered)
-                .disabled(!store.canGenerateGeminiImagesImmediately)
-
-                Button {
-                    prepareHeadBatchPlan()
-                } label: {
-                    Label("Generate Missing", systemImage: "sparkles")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!store.canSubmitGeminiBatchJobs)
-
-                if character.approvedHeadTurnaroundSheetVariant != nil {
-                    Button {
-                        do {
-                            try store.cropApprovedHeadTurnaroundSheet(for: characterID)
-                        } catch {
-                            generationError = "Crop failed: \(error.localizedDescription)"
-                        }
-                    } label: {
-                        Label("Re-crop from Sheet", systemImage: "crop")
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                if character.headTurnaroundSlots.contains(where: { $0.approvedVariant != nil }) {
-                    Button {
-                        let result = store.regenerateHeadTurnaroundBackgroundRemoval(for: characterID)
-                        applyBackgroundRemovalResult(result, label: "head turnaround")
-                    } label: {
-                        Label("Re-remove Backgrounds", systemImage: "wand.and.stars")
-                    }
-                    .buttonStyle(.bordered)
-                    .help("Re-run Vision foreground extraction on every approved head pose and save them back as transparent PNGs.")
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Head Sheet Prompt")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ResizablePromptEditor(
-                    text: $localHeadPrompt,
-                    persistenceID: "characters.headSheetPrompt",
-                    minHeight: 88,
-                    defaultHeight: 120
-                )
-                    .onChange(of: localHeadPrompt) { _, newValue in
-                        guard hasAppearedPrompts else { return }
-                        scheduleHeadPromptSave(newValue)
-                    }
-                .font(.callout)
-                .padding(8)
-                .background(.background.opacity(0.85), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(.quaternary.opacity(0.4))
-                }
-            }
-
-            headSheetReferenceDropZone(character)
-
-            if character.headTurnaroundSheetVariants.isEmpty {
-                workflowEmptyState(icon: "square.grid.2x2", message: "No head turnaround sheets yet. Generate or attach one, then choose the best sheet and the six cropped head poses will populate below.")
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(Array(character.headTurnaroundSheetVariants.enumerated()), id: \.element.id) { index, variant in
-                            ReferenceVariantCard(
-                                store: store,
-                                variant: variant,
-                                title: "Head Sheet \(index + 1)",
-                                isApproved: character.approvedHeadTurnaroundSheetVariantID == variant.id,
-                                onQuickLook: {
-                                    openQuickLook(for: character.headTurnaroundSheetVariants.map(\.imagePath), startingAt: index)
-                                },
-                                onCopy: {
-                                    copyImage(at: variant.imagePath)
-                                },
-                                onEdit: {
-                                    prepareHeadSheetEditPlan(variant)
-                                },
-                                onShowPrompt: {
-                                    showPromptPreview(title: "Head Sheet \(index + 1)", variant: variant)
-                                },
-                                onApprove: {
-                                    store.setApprovedHeadTurnaroundSheetVariant(variant.id, for: characterID)
-                                },
-                                onDelete: {
-                                    store.removeHeadTurnaroundSheetVariant(variant.id, for: characterID)
-                                },
-                                approveLabel: "Choose",
-                                approvedLabel: "Chosen"
-                            )
-                        }
-                        if generatingActions.contains(.headSheet) {
-                            loadingReferenceVariantCard(title: "Generating Head Sheet", subtitle: generationStatus ?? "Waiting for Nano Banana 2…")
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 12)], spacing: 14) {
-                ForEach(character.headTurnaroundSlots) { slot in
-                    poseSlotCard(
-                        title: slot.title,
-                        badge: slot.pose.gridLabel,
-                        notes: slot.notes,
-                        approvedVariant: slot.approvedVariant,
-                        variants: slot.variants,
-                        isGenerating: generatingActions.contains(.headPose(slot.id)),
-                        onGenerate: { prepareHeadSlotPlan(slot) },
-                        onImport: { importHeadTurnaroundVariant(slot) },
-                        onEditApproved: {
-                            guard let approvedVariant = slot.approvedVariant else { return }
-                            prepareHeadSlotEditPlan(slot, variant: approvedVariant)
-                        },
-                        onShowPromptApproved: {
-                            guard let approvedVariant = slot.approvedVariant else { return }
-                            showPromptPreview(title: slot.title, variant: approvedVariant)
-                        },
-                        onQuickLookApproved: {
-                            openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: slot.approvedVariant?.id))
-                        },
-                        onEditVariant: { variantID in
-                            guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
-                            prepareHeadSlotEditPlan(slot, variant: variant)
-                        },
-                        onShowPromptVariant: { variantID in
-                            guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
-                            showPromptPreview(title: "\(slot.title) Variant", variant: variant)
-                        },
-                        onQuickLookVariant: { variantID in
-                            openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: variantID))
-                        },
-                        onApprove: { variantID in
-                            store.setApprovedHeadTurnaroundVariant(variantID, slotID: slot.id, for: characterID)
-                        },
-                        onDelete: { variantID in
-                            store.removeHeadTurnaroundVariant(variantID, slotID: slot.id, for: characterID)
-                        },
-                        onAdjustCrop: {
-                            guard let approvedVariant = slot.approvedVariant else { return }
-                            store.openVariantCropTool(
-                                characterID: characterID,
-                                slotKey: slot.key,
-                                variantID: approvedVariant.id,
-                                sourceSheetPath: approvedVariant.sourceSheetPath ?? character.approvedHeadTurnaroundSheetVariant?.imagePath,
-                                initialCropRect: approvedVariant.sourceCropRect
-                            )
-                        },
-                        onAdjustCropVariant: { variantID in
-                            guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
-                            store.openVariantCropTool(
-                                characterID: characterID,
-                                slotKey: slot.key,
-                                variantID: variantID,
-                                sourceSheetPath: variant.sourceSheetPath ?? character.approvedHeadTurnaroundSheetVariant?.imagePath,
-                                initialCropRect: variant.sourceCropRect
-                            )
-                        }
+                    ResizablePromptEditor(
+                        text: $localHeadPrompt,
+                        persistenceID: "characters.headSheetPrompt",
+                        minHeight: 88,
+                        defaultHeight: 120
                     )
+                        .onChange(of: localHeadPrompt) { _, newValue in
+                            guard hasAppearedPrompts else { return }
+                            scheduleHeadPromptSave(newValue)
+                        }
+                    .font(.callout)
+                    .padding(8)
+                    .background(.background.opacity(0.85), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(.quaternary.opacity(0.4))
+                    }
+                }
+
+                headSheetReferenceDropZone(character)
+
+                if character.headTurnaroundSheetVariants.isEmpty {
+                    workflowEmptyState(icon: "square.grid.2x2", message: "No head turnaround sheets yet. Generate or attach one, then choose the best sheet and the six cropped head poses will populate below.")
+                } else {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(Array(character.headTurnaroundSheetVariants.enumerated()), id: \.element.id) { index, variant in
+                                ReferenceVariantCard(
+                                    store: store,
+                                    variant: variant,
+                                    title: "Head Sheet \(index + 1)",
+                                    isApproved: character.approvedHeadTurnaroundSheetVariantID == variant.id,
+                                    onQuickLook: {
+                                        openQuickLook(for: character.headTurnaroundSheetVariants.map(\.imagePath), startingAt: index)
+                                    },
+                                    onCopy: {
+                                        copyImage(at: variant.imagePath)
+                                    },
+                                    onEdit: {
+                                        prepareHeadSheetEditPlan(variant)
+                                    },
+                                    onShowPrompt: {
+                                        showPromptPreview(title: "Head Sheet \(index + 1)", variant: variant)
+                                    },
+                                    onApprove: {
+                                        store.setApprovedHeadTurnaroundSheetVariant(variant.id, for: characterID)
+                                    },
+                                    onDelete: {
+                                        store.removeHeadTurnaroundSheetVariant(variant.id, for: characterID)
+                                    },
+                                    approveLabel: "Choose",
+                                    approvedLabel: "Chosen"
+                                )
+                            }
+                            if generatingActions.contains(.headSheet) {
+                                loadingReferenceVariantCard(title: "Generating Head Sheet", subtitle: generationStatus ?? "Waiting for Nano Banana 2…")
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 190), spacing: 12)], spacing: 14) {
+                    ForEach(character.headTurnaroundSlots) { slot in
+                        poseSlotCard(
+                            title: slot.title,
+                            badge: slot.pose.gridLabel,
+                            notes: slot.notes,
+                            approvedVariant: slot.approvedVariant,
+                            variants: slot.variants,
+                            isGenerating: generatingActions.contains(.headPose(slot.id)),
+                            onGenerate: { prepareHeadSlotPlan(slot) },
+                            onImport: { importHeadTurnaroundVariant(slot) },
+                            onEditApproved: {
+                                guard let approvedVariant = slot.approvedVariant else { return }
+                                prepareHeadSlotEditPlan(slot, variant: approvedVariant)
+                            },
+                            onShowPromptApproved: {
+                                guard let approvedVariant = slot.approvedVariant else { return }
+                                showPromptPreview(title: slot.title, variant: approvedVariant)
+                            },
+                            onQuickLookApproved: {
+                                openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: slot.approvedVariant?.id))
+                            },
+                            onEditVariant: { variantID in
+                                guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                                prepareHeadSlotEditPlan(slot, variant: variant)
+                            },
+                            onShowPromptVariant: { variantID in
+                                guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                                showPromptPreview(title: "\(slot.title) Variant", variant: variant)
+                            },
+                            onQuickLookVariant: { variantID in
+                                openQuickLook(for: slot.variants.map(\.imagePath), startingAt: approvedVariantIndex(in: slot.variants, selected: variantID))
+                            },
+                            onApprove: { variantID in
+                                store.setApprovedHeadTurnaroundVariant(variantID, slotID: slot.id, for: characterID)
+                            },
+                            onDelete: { variantID in
+                                store.removeHeadTurnaroundVariant(variantID, slotID: slot.id, for: characterID)
+                            },
+                            onAdjustCrop: {
+                                guard let approvedVariant = slot.approvedVariant else { return }
+                                store.openVariantCropTool(
+                                    characterID: characterID,
+                                    slotKey: slot.key,
+                                    variantID: approvedVariant.id,
+                                    sourceSheetPath: approvedVariant.sourceSheetPath ?? character.approvedHeadTurnaroundSheetVariant?.imagePath,
+                                    initialCropRect: approvedVariant.sourceCropRect
+                                )
+                            },
+                            onAdjustCropVariant: { variantID in
+                                guard let variant = slot.variants.first(where: { $0.id == variantID }) else { return }
+                                store.openVariantCropTool(
+                                    characterID: characterID,
+                                    slotKey: slot.key,
+                                    variantID: variantID,
+                                    sourceSheetPath: variant.sourceSheetPath ?? character.approvedHeadTurnaroundSheetVariant?.imagePath,
+                                    initialCropRect: variant.sourceCropRect
+                                )
+                            }
+                        )
+                    }
                 }
             }
+            .padding(.top, 12)
+        } label: {
+            sectionDisclosureLabel(
+                title: "Head Turnaround Grid",
+                subtitle: "Crop and manage the six head poses",
+                systemImage: "person.crop.square"
+            )
         }
         .padding(18)
         .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private func costumesSection(_ character: AnimationCharacter) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Label("Costume Pose Sets", systemImage: "figure.stand")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    store.addCostumeReferenceSet(for: characterID)
-                } label: {
-                    Label("Add Costume", systemImage: "plus")
+        DisclosureGroup(isExpanded: $isCostumesExpanded) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("Create one or more costume reference sets for clothing, accessories, and body poses. Each set can hold full-body poses and accessory reference variants.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        store.addCostumeReferenceSet(for: characterID)
+                    } label: {
+                        Label("Add Costume", systemImage: "plus")
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
+
+                ForEach(character.costumeReferenceSets) { costume in
+                    CostumeSectionView(store: store, characterID: characterID, costume: costume)
+                }
+            }
+            .padding(.top, 12)
+        } label: {
+            sectionDisclosureLabel(
+                title: "Costume Pose Sets",
+                subtitle: "Full-body poses and accessories",
+                systemImage: "figure.stand"
+            )
+        }
+        .padding(18)
+        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private func sectionDisclosureLabel(title: String, subtitle: String, systemImage: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .frame(width: 18, alignment: .center)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            ForEach(character.costumeReferenceSets) { costume in
-                CostumeSectionView(store: store, characterID: characterID, costume: costume)
-            }
+            Spacer(minLength: 0)
         }
+    }
+
+    private func setAllWorkflowSections(expanded: Bool) {
+        isOverviewExpanded = expanded
+        isMasterReferenceExpanded = expanded
+        isHeadTurnaroundExpanded = expanded
+        isCostumesExpanded = expanded
     }
 
 
@@ -1754,7 +1833,7 @@ struct CharacterReferenceWorkflowSheet: View {
                 )
         }
         .dropDestination(for: URL.self) { urls, _ in
-            addMasterPromptReferenceURLs(urls, for: character)
+            addMasterPromptReferenceURLs(ImageMultiSelectionDragContext.resolveDroppedURLs(urls), for: character)
         } isTargeted: { targeted in
             masterPromptDropTargeted = targeted
         }
@@ -1846,8 +1925,9 @@ struct CharacterReferenceWorkflowSheet: View {
             onRemove: { path in headSheetPromptReferencePaths.removeAll { $0 == path } }
         )
         .dropDestination(for: URL.self) { urls, _ in
-            let matches = matchedCharacterImagePaths(for: urls, character: character)
-            let fallbackPaths = urls.compactMap { url -> String? in
+            let resolvedURLs = ImageMultiSelectionDragContext.resolveDroppedURLs(urls)
+            let matches = matchedCharacterImagePaths(for: resolvedURLs, character: character)
+            let fallbackPaths = resolvedURLs.compactMap { url -> String? in
                 let path = url.standardizedFileURL.path
                 guard FileManager.default.fileExists(atPath: path) else { return nil }
                 return path

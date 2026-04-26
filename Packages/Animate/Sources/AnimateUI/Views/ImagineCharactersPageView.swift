@@ -52,7 +52,6 @@ struct ImagineCharactersPageView: View {
     @State private var hasShownFocusHighlight = false
     @State private var galleryColumnCount: Int = 1
     @State private var pendingGallerySaveTask: Task<Void, Never>?
-    @State private var deferredPromptSaveTask: Task<Void, Never>?
     private let gallerySaveDebounceNanoseconds: UInt64 = 300_000_000
 
     /// Transient in-session multi-selection — the yellow ring around
@@ -110,14 +109,7 @@ struct ImagineCharactersPageView: View {
     }
 
     private var galleryFilter: GalleryFilter {
-        get {
-            switch GalleryFilter(rawValue: galleryFilterRawValue) ?? .all {
-            case .rejected, .hidden:
-                return .all
-            case let filter:
-                return filter
-            }
-        }
+        get { GalleryFilter(rawValue: galleryFilterRawValue) ?? .all }
         nonmutating set { galleryFilterRawValue = newValue.rawValue }
     }
 
@@ -227,11 +219,7 @@ struct ImagineCharactersPageView: View {
                 Text(inspirationGenerationErrorMessage ?? "Unknown error.")
             }
             .onChange(of: store.selectedCharacterID) { _, _ in
-                scheduleDeferredCharacterPromptSave()
-            }
-            .onDisappear {
-                deferredPromptSaveTask?.cancel()
-                deferredPromptSaveTask = nil
+                store.saveCharacterPromptEdits()
             }
         } else {
             VStack(spacing: 8) {
@@ -247,16 +235,6 @@ struct ImagineCharactersPageView: View {
     }
 
     // MARK: - Character Header
-
-    private func scheduleDeferredCharacterPromptSave() {
-        deferredPromptSaveTask?.cancel()
-        deferredPromptSaveTask = Task { @MainActor in
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            store.saveCharacterPromptEdits()
-            deferredPromptSaveTask = nil
-        }
-    }
 
     @ViewBuilder
     private func characterHeader(_ character: AnimationCharacter) -> some View {
@@ -340,11 +318,18 @@ struct ImagineCharactersPageView: View {
             }
 
             // Selection status bar
-            if !yellowSelection.isEmpty {
+            if !yellowSelection.isEmpty || !character.inspirationRejectedPaths.isEmpty {
                 HStack(spacing: 8) {
-                    Text("\(yellowSelection.count) selected")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.yellow)
+                    if !yellowSelection.isEmpty {
+                        Text("\(yellowSelection.count) selected")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.yellow)
+                    }
+                    if !character.inspirationRejectedPaths.isEmpty {
+                        Text("\(character.inspirationRejectedPaths.count) rejected")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                     Text(keyboardShortcutHint)
                         .font(.caption2)
@@ -528,40 +513,39 @@ struct ImagineCharactersPageView: View {
         // via Hide/Show (see contextMenu below).
         .onKeyPress(.init("x")) {
             if let path = focusedPath {
-                store.toggleInspirationRejected(path: path, for: character.id)
+                applyRejectedToggle(anchorPath: path, anchorIsRejected: character.inspirationRejectedPaths.contains(path), characterID: character.id)
                 hasShownFocusHighlight = true
             }
             return .handled
         }
-        // Rating shortcuts 1-5 / 0. Apply to the focused path (single-image),
-        // unlike Places which applies to the full selectedPaths set — here the
-        // selected set means "Gemini multi-select", so we keep rating on the
-        // focus cursor to avoid surprise batch rates.
+        // Rating shortcuts 1-5 / 0 apply to the full yellow selection when the
+        // focused thumbnail is part of that selection. Otherwise they keep the
+        // single-image behavior.
         .onKeyPress(phases: .down) { press in
             guard let path = focusedPath else { return .ignored }
             switch press.key {
             case "1":
-                store.setInspirationRating(1, path: path, for: character.id)
+                applyRating(1, anchorPath: path, characterID: character.id)
                 hasShownFocusHighlight = true
                 return .handled
             case "2":
-                store.setInspirationRating(2, path: path, for: character.id)
+                applyRating(2, anchorPath: path, characterID: character.id)
                 hasShownFocusHighlight = true
                 return .handled
             case "3":
-                store.setInspirationRating(3, path: path, for: character.id)
+                applyRating(3, anchorPath: path, characterID: character.id)
                 hasShownFocusHighlight = true
                 return .handled
             case "4":
-                store.setInspirationRating(4, path: path, for: character.id)
+                applyRating(4, anchorPath: path, characterID: character.id)
                 hasShownFocusHighlight = true
                 return .handled
             case "5":
-                store.setInspirationRating(5, path: path, for: character.id)
+                applyRating(5, anchorPath: path, characterID: character.id)
                 hasShownFocusHighlight = true
                 return .handled
             case "0":
-                store.setInspirationRating(nil, path: path, for: character.id)
+                applyRating(nil, anchorPath: path, characterID: character.id)
                 hasShownFocusHighlight = true
                 return .handled
             default:
@@ -601,6 +585,12 @@ struct ImagineCharactersPageView: View {
                     isSelected: galleryFilter == .unreviewed
                 ) { galleryFilter = .unreviewed }
                 .help("Show only unreviewed images")
+
+                galleryFilterButton(
+                    systemImage: GalleryFilter.rejected.systemImage,
+                    isSelected: galleryFilter == .rejected || galleryFilter == .hidden
+                ) { galleryFilter = .rejected }
+                .help("Show only rejected images")
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -687,10 +677,6 @@ struct ImagineCharactersPageView: View {
     private func isPathVisibleInGallery(_ path: String) -> Bool {
         guard let character = store.selectedCharacter else { return true }
 
-        if character.inspirationRejectedPaths.contains(path) {
-            return false
-        }
-
         // Rating filter: images below the minimum are hidden regardless of
         // flag filter. 0 = don't apply this filter.
         if galleryMinimumRating > 0 {
@@ -704,7 +690,9 @@ struct ImagineCharactersPageView: View {
         case .unreviewed:
             return !character.reviewedInspirationImagePaths.contains(path)
         case .rejected, .hidden:
-            return false
+            // Legacy `.hidden` persisted values redirect to rejected — the
+            // two concepts were unified on 2026-04-16.
+            return character.inspirationRejectedPaths.contains(path)
         case .gemini:
             // `.gemini` filter pill was retired when the persistent
             // Gemini-reference set was replaced by the transient
@@ -1328,18 +1316,15 @@ struct ImagineCharactersPageView: View {
                     )
                 ] : [],
                 onSetRating: { r in
-                    store.setInspirationRating(r, path: path, for: charID)
+                    applyRating(r, anchorPath: path, characterID: charID)
                 },
                 currentRating: rating,
                 onToggleRejected: {
-                    store.toggleInspirationRejected(path: path, for: charID)
+                    applyRejectedToggle(anchorPath: path, anchorIsRejected: isRejected, characterID: charID)
                 },
                 isRejected: isRejected,
                 onMoveToTrash: {
-                    store.deleteInspirationImageToTrash(path: path, for: charID)
-                    if let refreshed = store.characters.first(where: { $0.id == charID }) {
-                        refreshPreloadedPaths(character: refreshed)
-                    }
+                    moveInspirationImagesToTrash(anchorPath: path, characterID: charID)
                 }
             ),
             onTap: {
@@ -1353,6 +1338,60 @@ struct ImagineCharactersPageView: View {
             topTrailingOverlay: nil,
             bottomLeadingOverlay: isNew ? AnyView(unreviewedDot) : nil
         )
+        .onDrag {
+            let urls = actionPaths(anchorPath: path).compactMap { selectedPath -> URL? in
+                if let resolved = resolvedGalleryAssetPath(for: selectedPath) {
+                    return URL(fileURLWithPath: resolved)
+                }
+                return store.resolvedCharacterAssetURL(for: selectedPath)
+            }
+            return ImageMultiSelectionDragContext.itemProvider(
+                for: urls,
+                fallbackURL: resolvedPath.map { URL(fileURLWithPath: $0) }
+            )
+        }
+    }
+
+    private func applyRating(_ rating: Int?, anchorPath: String, characterID: UUID) {
+        for target in actionPaths(anchorPath: anchorPath) {
+            store.setInspirationRating(rating, path: target, for: characterID)
+        }
+    }
+
+    private func applyRejectedToggle(anchorPath: String, anchorIsRejected: Bool, characterID: UUID) {
+        let targetRejectedState = !anchorIsRejected
+        guard let character = store.characters.first(where: { $0.id == characterID }) else { return }
+        for target in actionPaths(anchorPath: anchorPath) {
+            let currentlyRejected = character.inspirationRejectedPaths.contains(target)
+            if currentlyRejected != targetRejectedState {
+                store.toggleInspirationRejected(path: target, for: characterID)
+            }
+        }
+    }
+
+    private func moveInspirationImagesToTrash(anchorPath: String, characterID: UUID) {
+        let targets = actionPaths(anchorPath: anchorPath)
+        for target in targets {
+            _ = store.deleteInspirationImageToTrash(path: target, for: characterID)
+        }
+        yellowSelection.subtract(targets)
+        if let anchor = rangeAnchorPath, targets.contains(anchor) {
+            rangeAnchorPath = yellowSelection.first
+        }
+        if let refreshed = store.characters.first(where: { $0.id == characterID }) {
+            refreshPreloadedPaths(character: refreshed)
+        }
+    }
+
+    private func actionPaths(anchorPath: String) -> [String] {
+        guard yellowSelection.contains(anchorPath), yellowSelection.count > 1 else {
+            return [anchorPath]
+        }
+        let ordered = preloadedPaths.filter { yellowSelection.contains($0) }
+        if ordered.contains(anchorPath) {
+            return ordered
+        }
+        return [anchorPath] + ordered
     }
 
     /// The green "new / unreviewed" dot for the bottom-leading overlay slot.

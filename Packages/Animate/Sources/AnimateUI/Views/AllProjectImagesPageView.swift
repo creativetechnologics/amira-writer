@@ -220,7 +220,7 @@ struct AllProjectImagesPageView: View {
             state.requestCharacterRecoveryIfNeeded(store: store)
         }
         .dropDestination(for: URL.self) { urls, _ in
-            store.importDroppedImagesToUnattachedLibrary(urls: urls)
+            store.importDroppedImagesToUnattachedLibrary(urls: ImageMultiSelectionDragContext.resolveDroppedURLs(urls))
         } isTargeted: { isTargeted in
             isImportDropTarget = isTargeted
         }
@@ -815,7 +815,12 @@ struct AllProjectImagesPageView: View {
                                     filmstripKeyboardFocused = true
                                 }
                             )
-                            .draggable(URL(fileURLWithPath: record.resolvedPath))
+                            .onDrag {
+                                ImageMultiSelectionDragContext.itemProvider(
+                                    for: state.selectedDragURLs(fallback: record),
+                                    fallbackURL: URL(fileURLWithPath: record.resolvedPath)
+                                )
+                            }
                             .id(record.id)
                         }
                     }
@@ -941,7 +946,12 @@ struct AllProjectImagesPageView: View {
                 }
             }
         )
-        .draggable(URL(fileURLWithPath: record.resolvedPath))
+        .onDrag {
+            ImageMultiSelectionDragContext.itemProvider(
+                for: state.selectedDragURLs(fallback: record),
+                fallbackURL: URL(fileURLWithPath: record.resolvedPath)
+            )
+        }
     }
 
     private func characterTagEntries(for record: ProjectImageRecord) -> [UnifiedCharacterTagEntry] {
@@ -1003,33 +1013,52 @@ struct AllProjectImagesPageView: View {
     }
 
     private func updateRating(_ rating: Int?, for record: ProjectImageRecord) {
-        let updated = persistReviewUpdate(
-            store: store,
-            record: record,
-            rating: rating,
-            isRejected: record.isRejected,
-            notes: record.notes
-        )
-        state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+        for target in actionRecords(anchor: record) {
+            let updated = persistReviewUpdate(
+                store: store,
+                record: target,
+                rating: rating,
+                isRejected: target.isRejected,
+                notes: target.notes
+            )
+            state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+        }
     }
 
     private func toggleRejected(for record: ProjectImageRecord) {
-        let updated = persistReviewUpdate(
-            store: store,
-            record: record,
-            rating: record.rating,
-            isRejected: !record.isRejected,
-            notes: record.notes
-        )
-        state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+        let targetRejectedState = !record.isRejected
+        for target in actionRecords(anchor: record) {
+            let updated = persistReviewUpdate(
+                store: store,
+                record: target,
+                rating: target.rating,
+                isRejected: targetRejectedState,
+                notes: target.notes
+            )
+            state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+        }
     }
 
     private func moveToTrash(record: ProjectImageRecord) {
-        if state.selectedRecordID == record.id {
-            state.selectedRecordID = nil
+        let targets = actionRecords(anchor: record)
+        let targetIDs = Set(targets.map(\.id))
+        state.selectedRecordIDs.subtract(targetIDs)
+        for target in targets {
+            store.moveAnyProjectImageToTrash(path: target.path, resolvedPath: target.resolvedPath)
         }
-        state.selectedRecordIDs.remove(record.id)
-        store.moveAnyProjectImageToTrash(path: record.path, resolvedPath: record.resolvedPath)
+        if let selectedRecordID = state.selectedRecordID,
+           targetIDs.contains(selectedRecordID) {
+            state.selectedRecordID = state.selectedRecordIDs.first
+        }
+    }
+
+    private func actionRecords(anchor record: ProjectImageRecord) -> [ProjectImageRecord] {
+        guard state.selectedRecordIDs.contains(record.id), state.selectedRecordIDs.count > 1 else {
+            return [record]
+        }
+        let selectedIDs = state.selectedRecordIDs
+        let ordered = state.filteredRecords.filter { selectedIDs.contains($0.id) }
+        return ordered.isEmpty ? state.selectedRecordsForAction(fallback: record) : ordered
     }
 
     // MARK: - Inline edit (right-click → Edit with Gemini)
