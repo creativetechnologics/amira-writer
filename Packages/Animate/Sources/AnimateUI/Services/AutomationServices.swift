@@ -605,6 +605,20 @@ struct AutomationFrameGenerationService {
             )
         }
 
+        if isExecute, let configurationError = store.geminiImageGenerationAvailabilityError {
+            return .init(
+                ok: false,
+                mode: mode,
+                isDryRun: isDryRun,
+                model: model.rawValue,
+                imageSize: imageSize,
+                estimatedCostUSD: 0,
+                maxCostUSD: maxCostUSD,
+                records: [],
+                blockers: [.init(code: .failedProviderError, message: configurationError.localizedDescription, field: "geminiConfiguration")]
+            )
+        }
+
         guard !isExecute || maxCostUSD != nil else {
             return .init(
                 ok: false,
