@@ -20,15 +20,17 @@ struct ImagineGenerationService {
         owpURL: URL,
         sceneSlug: String,
         shotIndex: Int,
-        moment: ImagineShotMoment
+        moment: ImagineShotMoment,
+        aspectRatio: String = "16:9",
+        imageSize: String = "2K"
     ) async throws -> URL {
         let service = GeminiImageService()
         let request = GeminiImageService.GenerationRequest(
             prompt: prompt,
             referenceImages: referenceImages,
             model: model,
-            aspectRatio: "16:9",
-            imageSize: "2K"
+            aspectRatio: aspectRatio,
+            imageSize: imageSize
         )
 
         let result = try await service.generate(request: request, apiKey: apiKey)

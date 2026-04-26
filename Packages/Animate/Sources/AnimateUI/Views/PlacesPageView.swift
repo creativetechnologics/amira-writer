@@ -29,6 +29,7 @@ private struct PlaceAllImagesGallerySection: View {
     /// the shared library.
     var onEditWithGemini: ((GeneratedBackgroundLibraryRecord) -> Void)? = nil
     var onGenerateWithGemini: ((GeneratedBackgroundLibraryRecord, Int) -> Void)? = nil
+    var onGenerateAnimated: ((GeneratedBackgroundLibraryRecord) -> Void)? = nil
     var onDropURLs: (([URL]) -> Bool)? = nil
     @FocusState private var galleryKeyboardFocused: Bool
     @State private var columnCount: Int = 1
@@ -67,6 +68,7 @@ private struct PlaceAllImagesGallerySection: View {
                             onCopy: { copyPath(record.activePath) },
                             onEditWithGemini: onEditWithGemini.map { handler in { handler(record) } },
                             onGenerateWithGemini: onGenerateWithGemini.map { handler in { count in handler(record, count) } },
+                            onGenerateAnimated: onGenerateAnimated.map { handler in { handler(record) } },
                             onSetRating: { rating in
                                 store.setGeneratedBackgroundRating(rating, for: record.id)
                             },
@@ -317,6 +319,7 @@ private struct PlaceAllImagesThumbnail: View {
     let onCopy: () -> Void
     let onEditWithGemini: (() -> Void)?
     let onGenerateWithGemini: ((Int) -> Void)?
+    let onGenerateAnimated: (() -> Void)?
     let onSetRating: (Int?) -> Void
     let onToggleRejected: () -> Void
 
@@ -346,6 +349,7 @@ private struct PlaceAllImagesThumbnail: View {
                 onQuickLook: { onQuickLook() },
                 onEditWithGemini: onEditWithGemini,
                 onGenerateWithGemini: onGenerateWithGemini,
+                onGenerateAnimated: onGenerateAnimated,
                 onSetRating: { rating in onSetRating(rating) },
                 currentRating: record.rating,
                 onToggleRejected: { onToggleRejected() },
@@ -1934,6 +1938,15 @@ struct PlacesPageView: View {
                     }
                     beginGenerateWithGemini(for: place, imagePath: record.activePath, count: count, workflow: record.workflow)
                 },
+                onGenerateAnimated: { record in
+                    guard let placeID = record.linkedPlaceID,
+                          let place = store.backgrounds.first(where: { $0.id == placeID })
+                    else {
+                        beginGenerateAnimated(for: record)
+                        return
+                    }
+                    beginGenerateAnimated(for: place, imagePath: record.activePath, workflow: record.workflow)
+                },
                 onDropURLs: { urls in
                     store.importDroppedImagesToUnattachedLibrary(urls: urls)
                 }
@@ -2658,6 +2671,9 @@ struct PlacesPageView: View {
                 onEditWithGemini: { path in
                     beginEditWithGemini(for: place, imagePath: path, workflow: workflowMode)
                 },
+                onGenerateAnimated: { path in
+                    beginGenerateAnimated(for: place, imagePath: path, workflow: workflowMode)
+                },
                 ratingFor: { path in store.placeImageRating(path: path, placeID: place.id) },
                 isRejectedFor: { path in store.placeImageIsRejected(path: path) },
                 hasNotesFor: { path in
@@ -3268,6 +3284,92 @@ struct PlacesPageView: View {
             count: placeGenerationDrafts.count,
             title: count == 1 ? "Generate from \(filename)" : "All Images • \(placeGenerationDrafts.count) draft\(placeGenerationDrafts.count == 1 ? "" : "s")",
             confirmTitle: count == 1 ? "Generate Draft" : "Generate Drafts"
+        )
+    }
+
+    /// Place-bound "Generate Animated" — same place-context as
+    /// `beginGenerateWithGemini(for:imagePath:count:workflow:)` but with the
+    /// master animated-look toggle pre-checked, single draft, empty prompt.
+    private func beginGenerateAnimated(
+        for place: BackgroundPlate,
+        imagePath: String,
+        workflow: PlaceWorkflowMode
+    ) {
+        let config = store.workflowConfig(for: workflow)
+        let filename = URL(fileURLWithPath: imagePath).lastPathComponent
+
+        var refs = generationReferenceDrafts(for: place, workflow: workflow)
+        let anchorLabel = "Reference: \(filename)"
+        if !refs.contains(where: { $0.path == imagePath }) {
+            refs.insert(
+                GeminiGenerationReferenceDraft(label: anchorLabel, path: imagePath, isIncluded: true),
+                at: 0
+            )
+        } else if let idx = refs.firstIndex(where: { $0.path == imagePath }) {
+            refs[idx].isIncluded = true
+            refs.swapAt(0, idx)
+        }
+
+        UserDefaults.standard.set(true, forKey: AnimatedLookPromptSettings.preflightToggleDefaultsKey)
+        placeGenerationDrafts = [
+            GeminiGenerationDraft(
+                title: "Generate Animated from \(filename)",
+                destinationDescription: "\(place.name) • \(workflow.displayName)",
+                prompt: "",
+                contextNote: "Animated-look variation — the master animated prompt is composed into the request automatically.",
+                model: config.model,
+                aspectRatio: config.aspectRatio,
+                imageSize: config.imageSize,
+                referenceItems: refs,
+                usesMasterAnimatedLookPrompt: true
+            )
+        ]
+        placePendingPlan = PendingPlaceGenerationPlan(
+            placeID: place.id,
+            sourceDescription: place.name,
+            workflow: workflow,
+            routeID: nil,
+            nodeIDs: [],
+            count: 1,
+            title: "Generate Animated from \(filename)",
+            confirmTitle: "Generate Draft"
+        )
+    }
+
+    /// "Generate Animated" right-click action — single draft with the master
+    /// animated-look toggle pre-checked and an empty prompt.
+    private func beginGenerateAnimated(for record: GeneratedBackgroundLibraryRecord) {
+        let config = store.workflowConfig(for: record.workflow)
+        let metadata = store.generationMetadata(for: record.activePath)
+        let filename = URL(fileURLWithPath: record.activePath).lastPathComponent
+        let reference = GeminiGenerationReferenceDraft(
+            label: "Reference: \(filename)",
+            path: record.activePath,
+            isIncluded: true
+        )
+        UserDefaults.standard.set(true, forKey: AnimatedLookPromptSettings.preflightToggleDefaultsKey)
+        placeGenerationDrafts = [
+            GeminiGenerationDraft(
+                title: "Generate Animated from \(filename)",
+                destinationDescription: "Places • All Images",
+                prompt: "",
+                contextNote: "Animated-look variation — the master animated prompt is composed into the request automatically.",
+                model: metadata.flatMap { GeminiModel(rawValue: $0.model) } ?? config.model,
+                aspectRatio: metadata?.aspectRatio ?? config.aspectRatio,
+                imageSize: metadata?.imageSize ?? config.imageSize,
+                referenceItems: [reference],
+                usesMasterAnimatedLookPrompt: true
+            )
+        ]
+        placePendingPlan = PendingPlaceGenerationPlan(
+            placeID: nil,
+            sourceDescription: filename,
+            workflow: record.workflow,
+            routeID: nil,
+            nodeIDs: [],
+            count: 1,
+            title: "Generate Animated from \(filename)",
+            confirmTitle: "Generate Draft"
         )
     }
 

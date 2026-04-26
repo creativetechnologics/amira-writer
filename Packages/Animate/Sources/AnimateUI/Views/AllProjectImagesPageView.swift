@@ -792,6 +792,11 @@ struct AllProjectImagesPageView: View {
                                     onGenerateWithGemini: { count in
                                         beginGenerate(for: record, count: count)
                                     },
+                                    onGenerateAnimated: {
+                                        state.selectedRecordID = record.id
+                                        state.inspectorTab = .generate
+                                        beginGenerateAnimated(for: record)
+                                    },
                                     onSetRating: { rating in
                                         updateRating(rating, for: record)
                                     },
@@ -906,6 +911,11 @@ struct AllProjectImagesPageView: View {
                 onGenerateWithGemini: { count in
                     beginGenerate(for: record, count: count)
                 },
+                onGenerateAnimated: {
+                    state.selectedRecordID = record.id
+                    state.inspectorTab = .generate
+                    beginGenerateAnimated(for: record)
+                },
                 onSetRating: { rating in
                     updateRating(rating, for: record)
                 },
@@ -1014,6 +1024,35 @@ struct AllProjectImagesPageView: View {
         }
         state.edit.pendingDrafts = drafts
         state.edit.pendingPreflight = drafts.first
+    }
+
+    /// "Generate Animated" right-click action. Builds a single Gemini draft
+    /// pre-checked for the master animated-look prompt with the right-clicked
+    /// image attached as a reference, and opens the same preflight sheet
+    /// "Generate with Gemini" uses.
+    private func beginGenerateAnimated(for record: ProjectImageRecord) {
+        let filename = URL(fileURLWithPath: record.resolvedPath).lastPathComponent
+        let reference = GeminiGenerationReferenceDraft(
+            label: "Reference: \(filename)",
+            path: record.resolvedPath,
+            isIncluded: true
+        )
+        // The preflight syncs the toggle from @AppStorage on appear, so flip
+        // the persisted value to true *before* presenting. The user explicitly
+        // chose "Generate Animated" — that's a clear opt-in for this session.
+        UserDefaults.standard.set(true, forKey: AnimatedLookPromptSettings.preflightToggleDefaultsKey)
+        let draft = GeminiGenerationDraft(
+            title: "Generate Animated from \(filename)",
+            destinationDescription: "Places → Unattached library",
+            prompt: "",
+            model: state.edit.model,
+            aspectRatio: state.edit.aspectRatio,
+            imageSize: state.edit.imageSize,
+            referenceItems: [reference],
+            usesMasterAnimatedLookPrompt: true
+        )
+        state.edit.pendingDrafts = [draft]
+        state.edit.pendingPreflight = draft
     }
 
     // MARK: - Prefetch key

@@ -68,6 +68,8 @@ struct ImagineScenesPageView: View {
     @State private var deleteConfirmationPath: String? = nil
     @State private var galleryMetadataRevision: Int = 0
     @State private var filteredMomentPaths: [String] = []
+    @State private var scenePreflightDrafts: [GeminiGenerationDraft] = []
+    @State private var scenePendingPreflight: GeminiGenerationDraft? = nil
 
     @AppStorage("animate.scenes.middlePane.bottomHeight") private var middlePaneBottomHeight: Double = 280
     /// Persisted height for the storyboard strip inside the bottom region.
@@ -332,6 +334,27 @@ struct ImagineScenesPageView: View {
             }
             .task(id: generationPlanPreviewRefreshKey) {
                 refreshGenerationPlanPreview()
+            }
+            .sheet(item: $scenePendingPreflight) { _ in
+                GeminiGenerationPreflightSheet(
+                    store: store,
+                    drafts: $scenePreflightDrafts,
+                    title: scenePreflightDrafts.first?.title ?? "Generate Animated",
+                    confirmTitle: "Generate",
+                    onConfirm: { drafts, mode in
+                        scenePendingPreflight = nil
+                        switch mode {
+                        case .standard:
+                            runScenePreflightGeneration(drafts)
+                        case .batch:
+                            generationError = "Scene shot batch queue is not available here yet. Use Generate Now."
+                        }
+                    },
+                    onCancel: {
+                        scenePendingPreflight = nil
+                        scenePreflightDrafts = []
+                    }
+                )
             }
             .sheet(item: $activeReferencePicker) { pickerMode in
                 UniversalImagePickerSheet(
@@ -726,6 +749,9 @@ struct ImagineScenesPageView: View {
                 onShowPrompt: { showPromptForImage(path: path) },
                 onShowInFinder: { ImagineProjectStorage.revealInFinder(path) },
                 onCopy: { copyImageToPasteboardAsync(path: path) },
+                onGenerateAnimated: {
+                    beginGenerateAnimated(path: path)
+                },
                 onSetRating: { newRating in
                     setSceneShotImageRating(newRating, path: path)
                 },
@@ -1059,6 +1085,114 @@ struct ImagineScenesPageView: View {
                 generationError = error.localizedDescription
             }
         }
+    }
+
+    /// Right-click "Generate Animated" for a scene-shot gallery thumbnail.
+    /// Opens the shared Gemini preflight sheet with the clicked image attached
+    /// as the only manual reference and the master animated-look prompt enabled.
+    private func beginGenerateAnimated(path: String) {
+        guard let scene = selectedScene,
+              let shotIndex = store.imagineSelectedShotIndex,
+              shotIndex >= 0,
+              shotIndex < scene.shots.count else { return }
+        let filename = URL(fileURLWithPath: path).lastPathComponent
+        let reference = GeminiGenerationReferenceDraft(
+            label: "Reference: \(filename)",
+            path: path,
+            isIncluded: true
+        )
+        UserDefaults.standard.set(true, forKey: AnimatedLookPromptSettings.preflightToggleDefaultsKey)
+        let draft = GeminiGenerationDraft(
+            title: "Generate Animated from \(filename)",
+            destinationDescription: "\(scene.name) • Shot \(shotIndex + 1) • \(selectedMoment.rawValue)",
+            prompt: "",
+            contextNote: "Animated-look variation — the master animated prompt is composed into the request automatically.",
+            model: store.selectedGeminiModel,
+            aspectRatio: ShotFrameOpenMattePlan.defaultGeneratedAspectRatio,
+            imageSize: ShotFrameOpenMattePlan.defaultGeneratedImageSize,
+            referenceItems: [reference],
+            usesMasterAnimatedLookPrompt: true
+        )
+        scenePreflightDrafts = [draft]
+        scenePendingPreflight = draft
+    }
+
+    private func runScenePreflightGeneration(_ drafts: [GeminiGenerationDraft]) {
+        guard let scene = selectedScene,
+              let owpURL = store.fileOWPURL,
+              let shotIndex = store.imagineSelectedShotIndex,
+              shotIndex >= 0,
+              shotIndex < scene.shots.count else { return }
+        guard store.isGeminiAllowed() else {
+            generationError = "Gemini API calls are blocked. Enable in Inspector > Tools."
+            return
+        }
+        guard !drafts.isEmpty else { return }
+
+        let sceneSlug = scene.name
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: "/", with: "-")
+        let generationMoment = selectedMoment
+
+        isGenerating = true
+        generationError = nil
+        Task { @MainActor in
+            defer {
+                isGenerating = false
+                store.refreshImagineGalleryFromDisk(sceneID: scene.id)
+                scenePreflightDrafts = []
+            }
+
+            let service = ImagineGenerationService()
+            for draft in drafts {
+                let activityID = store.registerGeminiActivity(
+                    kind: .immediate,
+                    title: draft.title,
+                    source: "Imagine Scenes • \(scene.name)"
+                )
+                do {
+                    store.logGeminiAPICall(endpoint: "image-generation", source: "ImagineScenesPageView.runScenePreflightGeneration()")
+                    let savedURL = try await service.generateWithGemini(
+                        prompt: draft.effectivePrompt,
+                        referenceImages: buildPreflightReferenceImages(from: draft.referenceItems),
+                        model: draft.model,
+                        apiKey: store.geminiAPIKey,
+                        owpURL: owpURL,
+                        sceneSlug: sceneSlug,
+                        shotIndex: shotIndex,
+                        moment: generationMoment,
+                        aspectRatio: draft.aspectRatio,
+                        imageSize: draft.imageSize
+                    )
+                    registerGeneratedShotImage(
+                        savedURL,
+                        scene: scene,
+                        shotIndex: shotIndex,
+                        moment: generationMoment,
+                        generator: "gemini",
+                        mode: "animated"
+                    )
+                    store.updateGeminiActivity(
+                        activityID,
+                        status: .completed,
+                        outputFilename: savedURL.lastPathComponent
+                    )
+                } catch {
+                    store.updateGeminiActivity(activityID, status: .failed, errorMessage: error.localizedDescription)
+                    generationError = error.localizedDescription
+                    break
+                }
+            }
+        }
+    }
+
+    private func buildPreflightReferenceImages(from references: [GeminiGenerationReferenceDraft]) -> [GeminiImageService.ReferenceImage] {
+        references
+            .filter(\.isIncluded)
+            .compactMap { reference in
+                GeminiImageService.referenceImage(from: URL(fileURLWithPath: reference.path).standardizedFileURL)
+            }
     }
 
     private func showPromptForImage(path: String) {

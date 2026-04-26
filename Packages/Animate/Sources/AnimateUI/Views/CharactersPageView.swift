@@ -20,165 +20,244 @@ struct CharactersPageView: View {
     // 3D Sidecars pane archived
     @AppStorage("charactersPage.showActionImagesPane") private var showActionImagesPane: Bool = false
     @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
+    @AppStorage("charactersSidebarWidth") private var sidebarWidth: Double = 260
     @State private var characterSearchText: String = ""
     @State private var filteredCharacters: [AnimationCharacter] = []
+    @State private var filteredCharactersSignature: Int = 0
+    @State private var filteredCharactersSearchText: String = ""
+    @State private var heavyDetailReadyCharacterID: UUID?
+    @State private var heavyDetailTask: Task<Void, Never>?
+    @State private var heavyDetailRenderGeneration: UInt64 = 0
+    @State private var deferredPromptSaveTask: Task<Void, Never>?
     var showSidebar: Bool = true
 
     // MARK: - Cached State Helpers
 
+    private func resizeSidebar(_ delta: CGFloat) {
+        sidebarWidth = min(max(sidebarWidth + Double(delta), 180), 350)
+    }
+
     private func updateFilteredCharacters() {
-        if characterSearchText.isEmpty {
+        let signature = characterListSignature
+        let search = characterSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard signature != filteredCharactersSignature || search != filteredCharactersSearchText else {
+            return
+        }
+
+        filteredCharactersSignature = signature
+        filteredCharactersSearchText = search
+
+        if search.isEmpty {
             filteredCharacters = store.characters
         } else {
+            let loweredSearch = search.lowercased()
             filteredCharacters = store.characters.filter {
-                $0.name.localizedCaseInsensitiveContains(characterSearchText)
+                $0.name.lowercased().contains(loweredSearch)
             }
         }
     }
 
     var body: some View {
-        GeometryReader { geo in
-            HStack(spacing: 0) {
-                if showSidebar {
-                    characterList
-                        .frame(width: min(geo.size.width * 0.3, 280))
-
-                    Divider()
+        mainContent
+            .overlay {
+                previewOverlay
+            }
+            .sheet(isPresented: $showReferenceImages) {
+                referenceImagesSheet
+            }
+            .onChange(of: store.selectedCharacterID) { _, _ in
+                scheduleDeferredCharacterPromptSave()
+                inspirationSelectedPaths = []
+                inspirationLastClicked = nil
+                previewImageIndex = nil
+                scheduleHeavyDetailRender()
+            }
+            .onChange(of: characterSearchText) { _, _ in
+                updateFilteredCharacters()
+            }
+            .onChange(of: characterListSignature) { _, _ in
+                updateFilteredCharacters()
+            }
+            .onAppear {
+                updateFilteredCharacters()
+                scheduleHeavyDetailRender()
+            }
+            .onDisappear {
+                heavyDetailTask?.cancel()
+                heavyDetailTask = nil
+                deferredPromptSaveTask?.cancel()
+                deferredPromptSaveTask = nil
+                heavyDetailReadyCharacterID = nil
+            }
+            .task(id: store.owpURL?.path) {
+                await store.recoverMissingPersistedCharactersIfNeededAsync()
+            }
+            .onChange(of: showReferenceWorkflowPane) { _, expanded in
+                if expanded, let character = store.selectedCharacter {
+                    store.seedCharacterReferenceWorkflowIfNeeded(for: character.id)
                 }
+            }
+            .sheet(item: $promptPreview) { preview in
+                StoredImagePromptPreviewSheet(preview: preview)
+            }
+            .sheet(isPresented: $store.showImageCropper) {
+                imageCropperSheet
+            }
+            .sheet(isPresented: $store.showVariantCropper) {
+                variantCropperSheet
+            }
+            .sheet(isPresented: $store.showImageEraser) {
+                imageEraserSheet
+            }
+            .sheet(isPresented: $showExpressionBatchSheet) {
+                expressionBatchSheet
+            }
+    }
 
-                characterDetail
-                    .frame(maxWidth: .infinity)
-            }
+    private var characterListSignature: Int {
+        var hasher = Hasher()
+        hasher.combine(store.characters.count)
+        for character in store.characters {
+            hasher.combine(character.id)
+            hasher.combine(character.name)
         }
-        .overlay {
-            if let index = previewImageIndex {
-                ImagePreviewOverlay(
-                    store: store,
-                    paths: previewImagePaths,
-                    currentIndex: Binding(
-                        get: { index },
-                        set: { newIndex in
-                            previewImageIndex = newIndex
-                            if previewImagePaths.indices.contains(newIndex) {
-                                let path = previewImagePaths[newIndex]
-                                inspirationSelectedPaths = [path]
-                                inspirationLastClicked = path
-                            }
+        return hasher.finalize()
+    }
+
+    @ViewBuilder
+    private var previewOverlay: some View {
+        if let index = previewImageIndex {
+            ImagePreviewOverlay(
+                store: store,
+                paths: previewImagePaths,
+                currentIndex: Binding(
+                    get: { index },
+                    set: { newIndex in
+                        previewImageIndex = newIndex
+                        if previewImagePaths.indices.contains(newIndex) {
+                            let path = previewImagePaths[newIndex]
+                            inspirationSelectedPaths = [path]
+                            inspirationLastClicked = path
                         }
-                    ),
-                    onDismiss: { previewImageIndex = nil }
-                )
-            }
-        }
-        .sheet(isPresented: $showReferenceImages) {
-            if let character = store.selectedCharacter {
-                ReferenceImagesSheet(
-                    character: character,
-                    store: store,
-                    onDismiss: { showReferenceImages = false }
-                )
-            }
-        }
-        .onChange(of: store.selectedCharacterID) { _, _ in
-            store.saveCharacterPromptEdits()  // Save edits before switching character
-            inspirationSelectedPaths = []
-            inspirationLastClicked = nil
-            previewImageIndex = nil
-        }
-        .onChange(of: characterSearchText) { _, _ in
-            updateFilteredCharacters()
-        }
-        .onChange(of: store.characters.count) { _, _ in
-            updateFilteredCharacters()
-        }
-        .onAppear {
-            updateFilteredCharacters()
-        }
-        .onChange(of: showReferenceWorkflowPane) { _, expanded in
-            if expanded, let character = store.selectedCharacter {
-                store.seedCharacterReferenceWorkflowIfNeeded(for: character.id)
-            }
-        }
-        .sheet(item: $promptPreview) { preview in
-            StoredImagePromptPreviewSheet(preview: preview)
-        }
-        .sheet(isPresented: $store.showImageCropper) {
-            if let imagePath = store.pendingCropImagePath,
-               let characterID = store.pendingCropCharacterID {
-                ImageCropperView(
-                    imagePath: imagePath,
-                    onCrop: { cropRect in
-                        store.cropAndSetProfileImage(cropRect: cropRect, for: characterID)
-                    },
-                    onCancel: {
-                        store.cancelImageCrop()
                     }
-                )
-            }
+                ),
+                onDismiss: { previewImageIndex = nil }
+            )
         }
-        .sheet(isPresented: $store.showVariantCropper) {
-            if let characterID = store.pendingVariantCropCharacterID,
-               let slotKey = store.pendingVariantCropSlotKey,
-               let variantID = store.pendingVariantCropVariantID {
-                let effectiveSourcePath: String? = {
-                    if let sp = store.pendingVariantCropSourceSheetPath { return sp }
-                    // Fallback: use variant's own imagePath
-                    let chars = store.characters
-                    if let char = chars.first(where: { $0.id == characterID }) {
-                        if let slot = char.headTurnaroundSlots.first(where: { $0.key == slotKey }),
+    }
+
+    @ViewBuilder
+    private var referenceImagesSheet: some View {
+        if let character = store.selectedCharacter {
+            ReferenceImagesSheet(
+                character: character,
+                store: store,
+                onDismiss: { showReferenceImages = false }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var imageCropperSheet: some View {
+        if let imagePath = store.pendingCropImagePath,
+           let characterID = store.pendingCropCharacterID {
+            ImageCropperView(
+                imagePath: imagePath,
+                onCrop: { cropRect in
+                    store.cropAndSetProfileImage(cropRect: cropRect, for: characterID)
+                },
+                onCancel: {
+                    store.cancelImageCrop()
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var variantCropperSheet: some View {
+        if let characterID = store.pendingVariantCropCharacterID,
+           let slotKey = store.pendingVariantCropSlotKey,
+           let variantID = store.pendingVariantCropVariantID {
+            let effectiveSourcePath: String? = {
+                if let sp = store.pendingVariantCropSourceSheetPath { return sp }
+                // Fallback: use variant's own imagePath
+                let chars = store.characters
+                if let char = chars.first(where: { $0.id == characterID }) {
+                    if let slot = char.headTurnaroundSlots.first(where: { $0.key == slotKey }),
+                       let variant = slot.variants.first(where: { $0.id == variantID }) {
+                        return variant.imagePath
+                    }
+                    for costume in char.costumeReferenceSets {
+                        if let slot = costume.fullBodySlots.first(where: { $0.key == slotKey }),
                            let variant = slot.variants.first(where: { $0.id == variantID }) {
                             return variant.imagePath
                         }
-                        for costume in char.costumeReferenceSets {
-                            if let slot = costume.fullBodySlots.first(where: { $0.key == slotKey }),
-                               let variant = slot.variants.first(where: { $0.id == variantID }) {
-                                return variant.imagePath
-                            }
-                        }
                     }
-                    return nil
-                }()
-                if let imagePath = effectiveSourcePath {
-                    CharacterVariantCropSheet(
-                        store: store,
-                        sourceImagePath: imagePath,
-                        initialCropRect: store.pendingVariantCropInitialRect?.cgRect,
-                        aspectRatioHint: nil,
-                        onCrop: { cropRect in
-                            try? store.applyCropToVariant(
-                                cropRect: cropRect,
-                                characterID: characterID,
-                                slotKey: slotKey,
-                                variantID: variantID,
-                                sourceSheetPath: imagePath
-                            )
-                            store.cancelVariantCrop()
-                        },
-                        onCancel: {
-                            store.cancelVariantCrop()
-                        }
-                    )
                 }
-            }
-        }
-        .sheet(isPresented: $store.showImageEraser) {
-            if let imagePath = store.pendingEraserImagePath {
-                ImageEraserView(
+                return nil
+            }()
+            if let imagePath = effectiveSourcePath {
+                CharacterVariantCropSheet(
                     store: store,
-                    imagePath: imagePath,
-                    onDone: {
-                        store.closeEraseTool()
+                    sourceImagePath: imagePath,
+                    initialCropRect: store.pendingVariantCropInitialRect?.cgRect,
+                    aspectRatioHint: nil,
+                    onCrop: { cropRect in
+                        try? store.applyCropToVariant(
+                            cropRect: cropRect,
+                            characterID: characterID,
+                            slotKey: slotKey,
+                            variantID: variantID,
+                            sourceSheetPath: imagePath
+                        )
+                        store.cancelVariantCrop()
                     },
                     onCancel: {
-                        store.closeEraseTool()
+                        store.cancelVariantCrop()
                     }
                 )
             }
         }
-        .sheet(isPresented: $showExpressionBatchSheet) {
-            if let character = store.selectedCharacter {
-                ExpressionBatchSheet(store: store, character: character)
+    }
+
+    @ViewBuilder
+    private var imageEraserSheet: some View {
+        if let imagePath = store.pendingEraserImagePath {
+            ImageEraserView(
+                store: store,
+                imagePath: imagePath,
+                onDone: {
+                    store.closeEraseTool()
+                },
+                onCancel: {
+                    store.closeEraseTool()
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var expressionBatchSheet: some View {
+        if let character = store.selectedCharacter {
+            ExpressionBatchSheet(store: store, character: character)
+        }
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
+        HStack(spacing: 0) {
+            if showSidebar {
+                characterList
+                    .frame(width: CGFloat(sidebarWidth))
+
+                OperaChromeSplitHandle(
+                    onDragChanged: resizeSidebar,
+                    onDragEnded: { }
+                )
             }
+
+            characterDetail
+                .frame(maxWidth: .infinity)
         }
     }
 
@@ -319,10 +398,11 @@ struct CharactersPageView: View {
     @ViewBuilder
     private var characterDetail: some View {
         if let character = store.selectedCharacter {
+            let canRenderHeavyDetails = heavyDetailReadyCharacterID == character.id
             VStack(spacing: 0) {
                 CharacterQueueControlsBar(store: store)
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    LazyVStack(alignment: .leading, spacing: 16) {
 
                         characterHeader(character)
 
@@ -352,7 +432,7 @@ struct CharactersPageView: View {
                             : "Master sheet approved",
                         isExpanded: $showReferenceWorkflowPane
                     ) {
-                        if showReferenceWorkflowPane {
+                        if showReferenceWorkflowPane && canRenderHeavyDetails {
                             CharacterReferenceWorkflowSheet(
                                 store: store,
                                 characterID: character.id,
@@ -370,7 +450,7 @@ struct CharactersPageView: View {
                         counterText: "\(character.costumeReferenceSets.count) costumes",
                         isExpanded: $showCostumesPane
                     ) {
-                        if showCostumesPane {
+                        if showCostumesPane && canRenderHeavyDetails {
                             CostumesPane(store: store, characterID: character.id)
                         }
                     }
@@ -380,7 +460,7 @@ struct CharactersPageView: View {
                         icon: "figure.walk.motion",
                         isExpanded: $showActionImagesPane
                     ) {
-                        if showActionImagesPane {
+                        if showActionImagesPane && canRenderHeavyDetails {
                             ActionImagesPane(store: store, character: character)
                         }
                     }
@@ -391,6 +471,9 @@ struct CharactersPageView: View {
                         counterText: "\(EmotionLibrary.presets.count) presets",
                         isExpanded: $showExpressionLibraryPane,
                         trailing: {
+                            let hasFrontNeutralReference = character.headTurnaroundSlots
+                                .first(where: { $0.pose == .frontNeutral })?
+                                .approvedVariant != nil
                             Button {
                                 showExpressionBatchSheet = true
                             } label: {
@@ -398,11 +481,12 @@ struct CharactersPageView: View {
                             }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
-                            .disabled(!store.canGenerateGeminiImagesImmediately)
+                            .disabled(!store.canGenerateGeminiImagesImmediately || !hasFrontNeutralReference)
+                            .help(hasFrontNeutralReference ? "Generate expression variants from the selected Front Neutral head reference" : "Choose a Head Turnaround Grid → Front Neutral image first")
                         }
                     ) {
-                        if showExpressionLibraryPane {
-                            ExpressionLibraryView()
+                        if showExpressionLibraryPane && canRenderHeavyDetails {
+                            ExpressionLibraryView(store: store, character: character)
                         }
                     }
 
@@ -426,6 +510,34 @@ struct CharactersPageView: View {
                     .font(.callout)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func scheduleHeavyDetailRender() {
+        heavyDetailTask?.cancel()
+        heavyDetailRenderGeneration &+= 1
+        let generation = heavyDetailRenderGeneration
+        let selectedID = store.selectedCharacterID
+        heavyDetailReadyCharacterID = nil
+        heavyDetailTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled,
+                  generation == heavyDetailRenderGeneration,
+                  store.selectedCharacterID == selectedID else {
+                return
+            }
+            heavyDetailReadyCharacterID = selectedID
+            heavyDetailTask = nil
+        }
+    }
+
+    private func scheduleDeferredCharacterPromptSave() {
+        deferredPromptSaveTask?.cancel()
+        deferredPromptSaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            store.saveCharacterPromptEdits()
+            deferredPromptSaveTask = nil
         }
     }
 
@@ -787,14 +899,10 @@ struct CharactersPageView: View {
     }
 
     private func textInfoSummary(for character: AnimationCharacter) -> String {
-        let filledFields = [
-            character.backstory,
-            character.personality,
-            character.notes
-        ]
-        .map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        .filter { $0 }
-        .count
+        var filledFields = 0
+        if !character.backstory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filledFields += 1 }
+        if !character.personality.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filledFields += 1 }
+        if !character.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filledFields += 1 }
 
         return "\(filledFields)/3 filled"
     }
@@ -808,10 +916,12 @@ struct CharactersPageView: View {
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
         DisclosureGroup(isExpanded: isExpanded) {
-            VStack(alignment: .leading, spacing: 12) {
-                content()
+            if isExpanded.wrappedValue {
+                VStack(alignment: .leading, spacing: 12) {
+                    content()
+                }
+                .padding(.top, 12)
             }
-            .padding(.top, 12)
         } label: {
             HStack(spacing: 10) {
                 Label(title, systemImage: icon)
@@ -961,6 +1071,7 @@ private struct AsyncSidebarThumbnail: View {
     let owpChar: OPWCharacter?
 
     @State private var image: NSImage?
+    @State private var dragURL: URL?
 
     var body: some View {
         ZStack {
@@ -996,20 +1107,27 @@ private struct AsyncSidebarThumbnail: View {
                             if let url = store.resolvedCharacterAssetURL(for: path) {
                                 NSWorkspace.shared.activateFileViewerSelecting([url])
                             }
+                        },
+                        onFlipHorizontally: {
+                            store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
                         }
                     )
                 )
             }
         }
-        .modifier(ProjectImageFileDragModifier(url: store.resolvedCharacterAssetURL(for: character.profileImagePath)))
+        .modifier(ProjectImageFileDragModifier(url: dragURL))
         .task(id: character.profileImagePath ?? "") {
             guard let path = character.profileImagePath,
                   let url = store.resolvedCharacterAssetURL(for: path) else {
                 image = nil
+                dragURL = nil
                 return
             }
-            let resolvedPath = url.path
-            image = await loadSharedPreviewImage(at: resolvedPath, maxPixelSize: 256)
+            dragURL = url
+            image = store.cachedThumbnailImage(for: path, maxSize: 128)
+            if image != nil { return }
+            let loaded = await store.thumbnailImageAsync(for: path, maxSize: 128)
+            if !Task.isCancelled { image = loaded }
         }
     }
 
@@ -1024,6 +1142,7 @@ private struct AsyncProfileImageView: View {
     let onSetAsProfilePic: (String) -> Void
 
     @State private var image: NSImage?
+    @State private var dragURL: URL?
 
     var body: some View {
         ZStack {
@@ -1048,7 +1167,8 @@ private struct AsyncProfileImageView: View {
                                 isSelected: false,
                                 actions: UnifiedImageActions(
                                     onSetAsProfile: { onSetAsProfilePic(profilePath) },
-                                    onShowInFinder: { onShowInFinder(profilePath) }
+                                    onShowInFinder: { onShowInFinder(profilePath) },
+                                    onFlipHorizontally: { store.flipImageHorizontallyAndAttachLikeOriginal(path: profilePath) }
                                 )
                             )
                         }
@@ -1072,9 +1192,16 @@ private struct AsyncProfileImageView: View {
                     }
             }
         }
-        .modifier(ProjectImageFileDragModifier(url: store.resolvedCharacterAssetURL(for: character.profileImagePath)))
+        .modifier(ProjectImageFileDragModifier(url: dragURL))
         .task(id: character.profileImagePath ?? "") {
-            guard let path = character.profileImagePath else { image = nil; return }
+            guard let path = character.profileImagePath else {
+                image = nil
+                dragURL = nil
+                return
+            }
+            dragURL = store.resolvedCharacterAssetURL(for: path)
+            image = store.cachedThumbnailImage(for: path, maxSize: 128)
+            if image != nil { return }
             let loaded = await store.thumbnailImageAsync(for: path, maxSize: 128)
             if !Task.isCancelled { image = loaded }
         }
@@ -1090,6 +1217,16 @@ private struct AsyncReferenceThumbView: View {
     let onSetAsProfilePic: (String) -> Void
 
     @State private var image: NSImage?
+    @State private var dragURL: URL?
+
+    private var visibleReferencePath: String? {
+        guard let path = character.inspirationReferenceImagePath,
+              !character.inspirationRejectedPaths.contains(path),
+              !store.imageLibraryIsRejected(for: path) else {
+            return nil
+        }
+        return path
+    }
 
     var body: some View {
         ZStack {
@@ -1108,13 +1245,14 @@ private struct AsyncReferenceThumbView: View {
                             .offset(x: 4, y: 4)
                     }
                     .contextMenu {
-                        if let refPath = character.inspirationReferenceImagePath {
+                        if let refPath = visibleReferencePath {
                             UnifiedImageContextMenuContent(
                                 selectedCount: 0,
                                 isSelected: false,
                                 actions: UnifiedImageActions(
                                     onSetAsProfile: { onSetAsProfilePic(refPath) },
-                                    onShowInFinder: { onShowInFinder(refPath) }
+                                    onShowInFinder: { onShowInFinder(refPath) },
+                                    onFlipHorizontally: { store.flipImageHorizontallyAndAttachLikeOriginal(path: refPath) }
                                 )
                             )
                         }
@@ -1138,13 +1276,17 @@ private struct AsyncReferenceThumbView: View {
                     }
             }
         }
-        .modifier(ProjectImageFileDragModifier(url: store.resolvedCharacterAssetURL(for: character.inspirationReferenceImagePath)))
-        .task(id: character.inspirationReferenceImagePath ?? "") {
-            guard let path = character.inspirationReferenceImagePath,
-                  let url = store.resolvedCharacterAssetURL(for: path) else {
-                image = nil; return
+        .modifier(ProjectImageFileDragModifier(url: dragURL))
+        .task(id: visibleReferencePath ?? "") {
+            guard let path = visibleReferencePath else {
+                image = nil
+                dragURL = nil
+                return
             }
-            let loaded = await loadSharedPreviewImage(at: url.path, maxPixelSize: 256)
+            dragURL = store.resolvedCharacterAssetURL(for: path)
+            image = store.cachedThumbnailImage(for: path, maxSize: 128)
+            if image != nil { return }
+            let loaded = await store.thumbnailImageAsync(for: path, maxSize: 128)
             if !Task.isCancelled { image = loaded }
         }
     }
@@ -1164,6 +1306,7 @@ private struct AsyncApprovedVariantView: View {
     let onSetAsProfilePic: () -> Void
 
     @State private var image: NSImage?
+    @State private var dragURL: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -1197,6 +1340,9 @@ private struct AsyncApprovedVariantView: View {
                         onSetAsProfile: onSetAsProfilePic,
                         onShowInFinder: onShowInFinder,
                         onCopy: onCopy,
+                        onFlipHorizontally: {
+                            store.flipImageHorizontallyAndAttachLikeOriginal(path: variant.imagePath)
+                        },
                         onQuickLook: onQuickLook
                     )
                 )
@@ -1209,14 +1355,13 @@ private struct AsyncApprovedVariantView: View {
                 .lineLimit(2)
         }
         .task(id: variant.imagePath) {
-            guard let url = store.resolvedCharacterAssetURL(for: variant.imagePath) else { return }
-            let loaded = await loadSharedPreviewImage(
-                at: url.path,
-                maxPixelSize: Int(max(width, height) * 2)
-            )
+            dragURL = store.resolvedCharacterAssetURL(for: variant.imagePath)
+            image = store.cachedThumbnailImage(for: variant.imagePath, maxSize: max(width, height) * 2)
+            if image != nil { return }
+            let loaded = await store.thumbnailImageAsync(for: variant.imagePath, maxSize: max(width, height) * 2)
             if !Task.isCancelled { image = loaded }
         }
-        .modifier(ProjectImageFileDragModifier(url: store.resolvedCharacterAssetURL(for: variant.imagePath)))
+        .modifier(ProjectImageFileDragModifier(url: dragURL))
     }
 }
 
@@ -1245,6 +1390,7 @@ struct ImageGallerySection: View {
     let onMoveToTrash: ((String) -> Void)?
     let onEditWithGemini: ((String) -> Void)?
     let onGenerateWithGemini: ((String, Int) -> Void)?
+    let onGenerateAnimated: ((String) -> Void)?
     let ratingFor: ((String) -> Int)?        // nil = rating UI disabled
     let isRejectedFor: ((String) -> Bool)?
     let hasNotesFor: ((String) -> Bool)?
@@ -1279,6 +1425,7 @@ struct ImageGallerySection: View {
         onMoveToTrash: ((String) -> Void)? = nil,
         onEditWithGemini: ((String) -> Void)? = nil,
         onGenerateWithGemini: ((String, Int) -> Void)? = nil,
+        onGenerateAnimated: ((String) -> Void)? = nil,
         ratingFor: ((String) -> Int)? = nil,
         isRejectedFor: ((String) -> Bool)? = nil,
         hasNotesFor: ((String) -> Bool)? = nil,
@@ -1308,6 +1455,7 @@ struct ImageGallerySection: View {
         self.onMoveToTrash = onMoveToTrash
         self.onEditWithGemini = onEditWithGemini
         self.onGenerateWithGemini = onGenerateWithGemini
+        self.onGenerateAnimated = onGenerateAnimated
         self.ratingFor = ratingFor
         self.isRejectedFor = isRejectedFor
         self.hasNotesFor = hasNotesFor
@@ -1606,6 +1754,7 @@ struct ImageGallerySection: View {
                     onMoveToTrash: onMoveToTrash == nil ? nil : { onMoveToTrash?(path) },
                     onEditWithGemini: onEditWithGemini == nil ? nil : { onEditWithGemini?(path) },
                     onGenerateWithGemini: onGenerateWithGemini == nil ? nil : { count in onGenerateWithGemini?(path, count) },
+                    onGenerateAnimated: onGenerateAnimated == nil ? nil : { onGenerateAnimated?(path) },
                     currentRating: ratingFor.map { $0(path) },
                     isRejected: isRejectedFor?(path) ?? false,
                     hasNotes: hasNotesFor?(path) ?? false,
@@ -1655,6 +1804,7 @@ struct ImageGalleryThumbnail: View {
     let onMoveToTrash: (() -> Void)?
     let onEditWithGemini: (() -> Void)?
     let onGenerateWithGemini: ((Int) -> Void)?
+    let onGenerateAnimated: (() -> Void)?
     let currentRating: Int?           // nil = rating UI disabled
     let isRejected: Bool
     let hasNotes: Bool
@@ -1699,6 +1849,7 @@ struct ImageGalleryThumbnail: View {
                 onQuickLook: onPreview,
                 onEditWithGemini: onEditWithGemini,
                 onGenerateWithGemini: onGenerateWithGemini,
+                onGenerateAnimated: onGenerateAnimated,
                 onSetRating: onSetRating.map { set in { rating in set(rating ?? 0) } },
                 currentRating: currentRating,
                 onRemoveFromCollection: onRemove,
@@ -1914,10 +2065,18 @@ struct ImagePreviewOverlay: View {
 }
 
 @available(macOS 26.0, *)
+private struct ProfileImagePickerItem: Identifiable, Hashable {
+    var id: String { path }
+    let path: String
+    let resolvedPath: String
+    let fileName: String
+}
+
+@available(macOS 26.0, *)
 private struct ProfileImagePickerSection: Identifiable {
     let id = UUID()
     let title: String
-    let paths: [String]
+    let items: [ProfileImagePickerItem]
 }
 
 @available(macOS 26.0, *)
@@ -1929,18 +2088,61 @@ private struct ProfileImagePickerSheet: View {
     let onDismiss: () -> Void
 
     @State private var thumbnailSize: CGFloat = 108
+    @State private var sections: [ProfileImagePickerSection] = []
 
-    private var sections: [ProfileImagePickerSection] {
+    private var sectionsReloadSignature: Int {
+        var hasher = Hasher()
+        hasher.combine(character.id)
+        func combine(_ path: String?) {
+            hasher.combine(path ?? "")
+        }
+        func combineMany(_ paths: [String]) {
+            hasher.combine(paths.count)
+            for path in paths { hasher.combine(path) }
+        }
+        combine(character.profileImagePath)
+        combine(character.inspirationReferenceImagePath)
+        combineMany(character.inspirationImagePaths)
+        combineMany(character.referenceImagePaths)
+        combineMany(character.animatedImagePaths)
+        combineMany(character.masterReferenceSheetVariants.map(\.imagePath))
+        combineMany(character.headTurnaroundSheetVariants.map(\.imagePath))
+        for slot in character.headTurnaroundSlots {
+            combineMany(slot.variants.map(\.imagePath))
+        }
+        for slot in character.lookDevelopmentSlots {
+            combineMany(slot.variants.map(\.imagePath))
+        }
+        for costume in character.costumeReferenceSets {
+            hasher.combine(costume.id)
+            hasher.combine(costume.name)
+            combineMany(costume.sheetVariants.map(\.imagePath))
+            for slot in costume.fullBodySlots {
+                combineMany(slot.variants.map(\.imagePath))
+            }
+            for slot in costume.accessorySlots {
+                combineMany(slot.variants.map(\.imagePath))
+            }
+        }
+        return hasher.finalize()
+    }
+
+    private func buildSections() -> [ProfileImagePickerSection] {
         var sections: [ProfileImagePickerSection] = []
         var seen = Set<String>()
 
         func appendSection(_ title: String, paths rawPaths: [String]) {
-            let paths = rawPaths.filter {
-                guard store.resolvedCharacterAssetURL(for: $0) != nil else { return false }
-                return seen.insert($0).inserted
+            let items = rawPaths.compactMap { path -> ProfileImagePickerItem? in
+                guard seen.insert(path).inserted,
+                      let url = store.resolvedCharacterAssetURL(for: path) else { return nil }
+                return ProfileImagePickerItem(
+                    path: path,
+                    resolvedPath: url.path,
+                    fileName: url.lastPathComponent
+                )
             }
-            guard !paths.isEmpty else { return }
-            sections.append(ProfileImagePickerSection(title: title, paths: paths))
+            guard !items.isEmpty else { return }
+            sections.append(ProfileImagePickerSection(title: title, items: items))
         }
 
         appendSection("Current Profile", paths: [character.profileImagePath].compactMap { $0 })
@@ -2015,30 +2217,22 @@ private struct ProfileImagePickerSheet: View {
                                     columns: [GridItem(.adaptive(minimum: thumbnailSize, maximum: thumbnailSize), spacing: 12)],
                                     spacing: 12
                                 ) {
-                                    ForEach(section.paths, id: \.self) { path in
-                                        if let url = store.resolvedCharacterAssetURL(for: path) {
+                                    ForEach(section.items) { item in
                                             Button {
-                                                onChooseImagePath(path)
+                                                onChooseImagePath(item.path)
                                             } label: {
                                                 VStack(alignment: .leading, spacing: 6) {
-                                                    ZStack {
-                                                        RoundedRectangle(cornerRadius: 10)
-                                                            .fill(.quaternary.opacity(0.22))
-                                                            .frame(width: thumbnailSize, height: thumbnailSize)
+                                                    AsyncStoreThumbnailImage.rounded(
+                                                        store: store,
+                                                        path: item.path,
+                                                        maxSize: thumbnailSize,
+                                                        width: thumbnailSize,
+                                                        height: thumbnailSize,
+                                                        cornerRadius: 10,
+                                                        placeholderOpacity: 0.22
+                                                    )
 
-                                                        if let image = store.thumbnailImage(for: path, maxSize: thumbnailSize) {
-                                                            Image(nsImage: image)
-                                                                .resizable()
-                                                                .aspectRatio(contentMode: .fit)
-                                                                .frame(width: thumbnailSize, height: thumbnailSize)
-                                                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                                                        } else {
-                                                            Image(systemName: "photo")
-                                                                .foregroundStyle(.tertiary)
-                                                        }
-                                                    }
-
-                                                    Text(url.lastPathComponent)
+                                                    Text(item.fileName)
                                                         .font(.caption2)
                                                         .foregroundStyle(.secondary)
                                                         .lineLimit(2)
@@ -2054,22 +2248,24 @@ private struct ProfileImagePickerSheet: View {
                                                     actions: UnifiedImageActions(
                                                         onSetAsProfile: {
                                                             if let character = store.selectedCharacter {
-                                                                store.prepareProfilePicCrop(from: path, for: character.id)
+                                                                store.prepareProfilePicCrop(from: item.path, for: character.id)
                                                             }
                                                         },
                                                         onShowInFinder: {
-                                                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                                                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.resolvedPath)])
+                                                        },
+                                                        onFlipHorizontally: {
+                                                            store.flipImageHorizontallyAndAttachLikeOriginal(path: item.path)
                                                         },
                                                         onQuickLook: {
-                                                            QuickLookPreviewController.shared.present(urls: [url], startAt: 0)
+                                                            QuickLookPreviewController.shared.present(urls: [URL(fileURLWithPath: item.resolvedPath)], startAt: 0)
                                                         }
                                                     )
                                                 )
                                             }
                                             .onTapGesture(count: 2) {
-                                                QuickLookPreviewController.shared.present(urls: [url], startAt: 0)
+                                                QuickLookPreviewController.shared.present(urls: [URL(fileURLWithPath: item.resolvedPath)], startAt: 0)
                                             }
-                                        }
                                     }
                                 }
                             }
@@ -2081,6 +2277,9 @@ private struct ProfileImagePickerSheet: View {
         }
         .frame(width: 820, height: 680)
         .background(Color(nsColor: .windowBackgroundColor))
+        .task(id: sectionsReloadSignature) {
+            sections = buildSections()
+        }
     }
 
 }
@@ -2267,13 +2466,19 @@ struct InspirationGallerySheet: View {
     @State private var generatePendingPlan: PendingInspirationGenerationPlan?
     @State private var generateDrafts: [GeminiGenerationDraft] = []
 
+    private var visibleInspirationImagePaths: [String] {
+        character.inspirationImagePaths.filter { path in
+            !character.inspirationRejectedPaths.contains(path) && !store.imageLibraryIsRejected(for: path)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             headerBar
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if character.inspirationImagePaths.isEmpty {
+                    if visibleInspirationImagePaths.isEmpty {
                         emptyState
                     } else {
                         galleryGrid
@@ -2327,6 +2532,33 @@ struct InspirationGallerySheet: View {
         )
     }
 
+    /// "Generate Animated" right-click action — single inspiration draft with
+    /// the master animated-look toggle pre-checked and an empty prompt.
+    private func beginGenerateAnimated(imagePath: String) {
+        let filename = URL(fileURLWithPath: imagePath).lastPathComponent
+        let ref = GeminiGenerationReferenceDraft(label: "Reference: \(filename)", path: imagePath, isIncluded: true)
+        UserDefaults.standard.set(true, forKey: AnimatedLookPromptSettings.preflightToggleDefaultsKey)
+        generateDrafts = [
+            GeminiGenerationDraft(
+                title: "Generate Animated from \(filename)",
+                destinationDescription: "\(character.name) • inspiration",
+                prompt: "",
+                contextNote: "Animated-look variation — the master animated prompt is composed into the request automatically.",
+                model: store.selectedGeminiModel,
+                aspectRatio: CharacterInspirationPromptCatalog.defaultAspectRatio,
+                imageSize: CharacterInspirationPromptCatalog.defaultImageSize,
+                referenceItems: [ref],
+                usesMasterAnimatedLookPrompt: true
+            )
+        ]
+        generatePendingPlan = PendingInspirationGenerationPlan(
+            title: "Generate Animated from \(filename)",
+            confirmTitle: "Generate",
+            mode: .immediate,
+            wardrobe: character.defaultWardrobeType
+        )
+    }
+
     private var headerBar: some View {
         HStack {
             Label("Inspiration Images", systemImage: "photo.stack")
@@ -2369,8 +2601,8 @@ struct InspirationGallerySheet: View {
 
     private var galleryGrid: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: thumbnailBaseSize, maximum: thumbnailBaseSize), spacing: 12)], spacing: 12) {
-            ForEach(character.inspirationImagePaths, id: \.self) { path in
-                let index = character.inspirationImagePaths.firstIndex(of: path) ?? 0
+            ForEach(visibleInspirationImagePaths, id: \.self) { path in
+                let index = visibleInspirationImagePaths.firstIndex(of: path) ?? 0
                 galleryThumbnail(path: path, index: index)
             }
         }
@@ -2399,17 +2631,21 @@ struct InspirationGallerySheet: View {
                     }
                 },
                 onQuickLook: {
-                    openQuickLook(for: character.inspirationImagePaths, startingAt: index)
+                    openQuickLook(for: visibleInspirationImagePaths, startingAt: index)
                 },
                 onGenerateWithGemini: geminiEnabled ? { count in
                     beginGenerateWithGemini(imagePath: path, count: count)
                 } : nil,
+                onGenerateAnimated: geminiEnabled ? {
+                    beginGenerateAnimated(imagePath: path)
+                } : nil,
                 onRemoveFromCollection: {
-                    store.removeInspirationImage(at: index, for: character.id)
+                    let removalIndex = character.inspirationImagePaths.firstIndex(of: path) ?? index
+                    store.removeInspirationImage(at: removalIndex, for: character.id)
                 }
             ),
             onDoubleTap: {
-                openQuickLook(for: character.inspirationImagePaths, startingAt: index)
+                openQuickLook(for: visibleInspirationImagePaths, startingAt: index)
             }
         )
     }
@@ -2431,9 +2667,27 @@ struct ReferenceImagesSheet: View {
     let store: AnimateStore
     let onDismiss: () -> Void
     var onGenerateWithGemini: ((String, Int) -> Void)? = nil
+    var onGenerateAnimated: ((String) -> Void)? = nil
 
     @State private var thumbnailBaseSize: CGFloat = 120
     @State private var mainRefImage: NSImage?
+    @State private var generatePendingPlan: PendingInspirationGenerationPlan?
+    @State private var generateDrafts: [GeminiGenerationDraft] = []
+
+    private var visibleReferenceImagePaths: [String] {
+        character.referenceImagePaths.filter { path in
+            !character.inspirationRejectedPaths.contains(path) && !store.imageLibraryIsRejected(for: path)
+        }
+    }
+
+    private var visibleMainReferenceImagePath: String? {
+        guard let path = character.inspirationReferenceImagePath,
+              !character.inspirationRejectedPaths.contains(path),
+              !store.imageLibraryIsRejected(for: path) else {
+            return nil
+        }
+        return path
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2455,14 +2709,137 @@ struct ReferenceImagesSheet: View {
             store.importReferenceImages(from: valid, for: character.id)
             return true
         }
-        .task(id: character.inspirationReferenceImagePath ?? "") {
-            guard let path = character.inspirationReferenceImagePath,
+        .task(id: visibleMainReferenceImagePath ?? "") {
+            guard let path = visibleMainReferenceImagePath,
                   let url = store.resolvedCharacterAssetURL(for: path) else {
                 mainRefImage = nil; return
             }
             let loaded = await loadSharedPreviewImage(at: url.path, maxPixelSize: 1200)
             if !Task.isCancelled { mainRefImage = loaded }
         }
+        .sheet(item: $generatePendingPlan) { plan in
+            GeminiGenerationPreflightSheet(
+                store: store,
+                drafts: $generateDrafts,
+                title: plan.title,
+                confirmTitle: plan.confirmTitle,
+                onConfirm: { drafts, mode in
+                    generatePendingPlan = nil
+                    switch mode {
+                    case .standard:
+                        runReferenceImageGeneration(drafts)
+                    case .batch:
+                        store.statusMessage = "Reference-image batch queue is not available here yet. Use Generate Now."
+                    }
+                },
+                onCancel: {
+                    generatePendingPlan = nil
+                    generateDrafts = []
+                }
+            )
+        }
+    }
+
+    /// "Generate Animated" right-click action — single inspiration draft with
+    /// the master animated-look toggle pre-checked and an empty prompt.
+    private func beginGenerateAnimated(imagePath: String) {
+        let filename = URL(fileURLWithPath: imagePath).lastPathComponent
+        let ref = GeminiGenerationReferenceDraft(label: "Reference: \(filename)", path: imagePath, isIncluded: true)
+        UserDefaults.standard.set(true, forKey: AnimatedLookPromptSettings.preflightToggleDefaultsKey)
+        generateDrafts = [
+            GeminiGenerationDraft(
+                title: "Generate Animated from \(filename)",
+                destinationDescription: "\(character.name) • inspiration",
+                prompt: "",
+                contextNote: "Animated-look variation — the master animated prompt is composed into the request automatically.",
+                model: store.selectedGeminiModel,
+                aspectRatio: CharacterInspirationPromptCatalog.defaultAspectRatio,
+                imageSize: CharacterInspirationPromptCatalog.defaultImageSize,
+                referenceItems: [ref],
+                usesMasterAnimatedLookPrompt: true
+            )
+        ]
+        generatePendingPlan = PendingInspirationGenerationPlan(
+            title: "Generate Animated from \(filename)",
+            confirmTitle: "Generate",
+            mode: .immediate,
+            wardrobe: character.defaultWardrobeType
+        )
+    }
+
+    private func runReferenceImageGeneration(_ drafts: [GeminiGenerationDraft]) {
+        if let error = store.geminiImageGenerationAvailabilityError {
+            store.statusMessage = error.localizedDescription
+            return
+        }
+        guard !drafts.isEmpty else { return }
+
+        Task { @MainActor in
+            let service = GeminiImageService()
+            var completed = 0
+            for draft in drafts {
+                let activityID = store.registerGeminiActivity(
+                    kind: .immediate,
+                    title: draft.title,
+                    source: "Characters • \(character.name) • Reference Images"
+                )
+                let request = GeminiImageService.GenerationRequest(
+                    prompt: draft.effectivePrompt,
+                    referenceImages: buildReferenceImages(from: draft.referenceItems),
+                    model: draft.model,
+                    aspectRatio: draft.aspectRatio,
+                    imageSize: draft.imageSize
+                )
+                store.logGeminiAPICall(endpoint: "image-generation", source: "ReferenceImagesSheet.runReferenceImageGeneration()")
+                do {
+                    let result = try await service.generate(request: request, apiKey: store.geminiAPIKey)
+                    let storedPath = try store.storeGeneratedInspirationImage(
+                        result.imageData,
+                        prompt: draft.effectivePrompt,
+                        model: draft.model,
+                        filenameStem: sanitizedFilenameStem(for: draft.title),
+                        for: character.id,
+                        aspectRatio: draft.aspectRatio,
+                        imageSize: draft.imageSize
+                    )
+                    store.updateGeminiActivity(
+                        activityID,
+                        status: .completed,
+                        outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent
+                    )
+                    completed += 1
+                } catch {
+                    store.updateGeminiActivity(activityID, status: .failed, errorMessage: error.localizedDescription)
+                    store.statusMessage = error.localizedDescription
+                    break
+                }
+            }
+            if completed > 0 {
+                store.statusMessage = "Generated \(completed) animated reference image\(completed == 1 ? "" : "s")"
+            }
+            generateDrafts = []
+        }
+    }
+
+    private func buildReferenceImages(from references: [GeminiGenerationReferenceDraft]) -> [GeminiImageService.ReferenceImage] {
+        references
+            .filter(\.isIncluded)
+            .prefix(3)
+            .compactMap { reference in
+                let url = store.resolvedCharacterAssetURL(for: reference.path) ?? URL(fileURLWithPath: reference.path)
+                return GeminiImageService.referenceImage(from: url)
+            }
+    }
+
+    private func sanitizedFilenameStem(for input: String) -> String {
+        var result = input
+            .components(separatedBy: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_")).inverted)
+            .joined(separator: "-")
+            .lowercased()
+        while result.contains("--") {
+            result = result.replacingOccurrences(of: "--", with: "-")
+        }
+        return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     }
 
     private var headerBar: some View {
@@ -2485,7 +2862,8 @@ struct ReferenceImagesSheet: View {
     }
 
     private var mainReferenceImageSection: some View {
-        let refURL = store.resolvedCharacterAssetURL(for: character.inspirationReferenceImagePath)
+        let refPath = visibleMainReferenceImagePath
+        let refURL = store.resolvedCharacterAssetURL(for: refPath)
         return VStack(alignment: .leading, spacing: 12) {
             Text("Main Reference Image")
                 .font(.subheadline)
@@ -2505,10 +2883,10 @@ struct ReferenceImagesSheet: View {
                                 .stroke(.quaternary, lineWidth: 1)
                         )
                         .onTapGesture(count: 2) {
-                            openQuickLook(for: [character.inspirationReferenceImagePath].compactMap { $0 }, startingAt: 0)
+                            openQuickLook(for: [refPath].compactMap { $0 }, startingAt: 0)
                         }
                         .contextMenu {
-                            if let refPath = character.inspirationReferenceImagePath {
+                            if let refPath {
                                 let geminiEnabled = store.canGenerateGeminiImagesImmediately
                                 UnifiedImageContextMenuContent(
                                     selectedCount: 0,
@@ -2524,11 +2902,21 @@ struct ReferenceImagesSheet: View {
                                                 NSWorkspace.shared.activateFileViewerSelecting([url])
                                             }
                                         },
+                                        onFlipHorizontally: {
+                                            store.flipImageHorizontallyAndAttachLikeOriginal(path: refPath)
+                                        },
                                         onQuickLook: {
                                             openQuickLook(for: [refPath], startingAt: 0)
                                         },
                                         onGenerateWithGemini: (geminiEnabled && onGenerateWithGemini != nil) ? { count in
                                             onGenerateWithGemini?(refPath, count)
+                                        } : nil,
+                                        onGenerateAnimated: geminiEnabled ? {
+                                            if let onGenerateAnimated {
+                                                onGenerateAnimated(refPath)
+                                            } else {
+                                                beginGenerateAnimated(imagePath: refPath)
+                                            }
                                         } : nil
                                     )
                                 )
@@ -2605,7 +2993,7 @@ struct ReferenceImagesSheet: View {
 
                 Spacer()
 
-                Text("\(character.referenceImagePaths.count) images")
+                Text("\(visibleReferenceImagePaths.count) images")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
 
@@ -2620,7 +3008,7 @@ struct ReferenceImagesSheet: View {
                 .controlSize(.small)
             }
 
-            if character.referenceImagePaths.isEmpty {
+            if visibleReferenceImagePaths.isEmpty {
                 emptyGalleryState
             } else {
                 galleryGrid
@@ -2680,8 +3068,8 @@ struct ReferenceImagesSheet: View {
             columns: [GridItem(.adaptive(minimum: thumbnailBaseSize, maximum: thumbnailBaseSize), spacing: 12)],
             spacing: 12
         ) {
-            ForEach(character.referenceImagePaths, id: \.self) { path in
-                let index = character.referenceImagePaths.firstIndex(of: path) ?? 0
+            ForEach(visibleReferenceImagePaths, id: \.self) { path in
+                let index = visibleReferenceImagePaths.firstIndex(of: path) ?? 0
                 referenceGalleryThumbnail(path: path, index: index)
             }
         }
@@ -2710,17 +3098,25 @@ struct ReferenceImagesSheet: View {
                     }
                 },
                 onQuickLook: {
-                    openQuickLook(for: character.referenceImagePaths, startingAt: index)
+                    openQuickLook(for: visibleReferenceImagePaths, startingAt: index)
                 },
                 onGenerateWithGemini: (geminiEnabled && onGenerateWithGemini != nil) ? { count in
                     onGenerateWithGemini?(path, count)
                 } : nil,
+                onGenerateAnimated: geminiEnabled ? {
+                    if let onGenerateAnimated {
+                        onGenerateAnimated(path)
+                    } else {
+                        beginGenerateAnimated(imagePath: path)
+                    }
+                } : nil,
                 onRemoveFromCollection: {
-                    store.removeReferenceImage(at: index, for: character.id)
+                    let removalIndex = character.referenceImagePaths.firstIndex(of: path) ?? index
+                    store.removeReferenceImage(at: removalIndex, for: character.id)
                 }
             ),
             onDoubleTap: {
-                openQuickLook(for: character.referenceImagePaths, startingAt: index)
+                openQuickLook(for: visibleReferenceImagePaths, startingAt: index)
             }
         )
     }

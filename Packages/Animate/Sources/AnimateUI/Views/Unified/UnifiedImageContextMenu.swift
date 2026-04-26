@@ -26,17 +26,32 @@ import SwiftUI
 /// ```
 @available(macOS 26.0, *)
 struct UnifiedImageActions {
+    /// Workflow-specific primary action for choosing the image as the active
+    /// master/approved variant. Kept generic enough for Characters head,
+    /// costume, accessory, and other reference grids while preserving the
+    /// single unified tile/context-menu surface.
+    var onChooseAsMaster: (() -> Void)? = nil
+    var isMaster: Bool = false
+    var chooseAsMasterLabel: String = "Choose as Master"
+    var chosenAsMasterLabel: String = "Chosen as Master"
     var onToggleCurated: (() -> Void)? = nil
     var isCurated: Bool = false
     var onShowPrompt: (() -> Void)? = nil
     var onSetAsProfile: (() -> Void)? = nil
     var onShowInFinder: (() -> Void)? = nil
     var onCopy: (() -> Void)? = nil
+    var onFlipHorizontally: (() -> Void)? = nil
     var onQuickLook: (() -> Void)? = nil
     var onEditWithGemini: (() -> Void)? = nil
+    var onAdjustCrop: (() -> Void)? = nil
     /// Called with variation count (usually 1 or 27). Caller decides what
     /// that means in their subject's context.
     var onGenerateWithGemini: ((Int) -> Void)? = nil
+    /// Called when the user wants to open the Gemini preflight sheet with
+    /// this image attached as a reference and the master animated-look
+    /// toggle pre-checked. Equivalent to "Generate with Gemini" but the
+    /// resulting prompt always runs through the animated-look composition.
+    var onGenerateAnimated: (() -> Void)? = nil
     /// Extra Gemini submenu entries (e.g. wardrobe-specific generation).
     /// Each entry becomes a button under the "Generate with Gemini…" menu
     /// above the standard 1/27 buttons.
@@ -51,6 +66,10 @@ struct UnifiedImageActions {
     var removeFromCollectionLabel: String = "Remove Image"
     /// Called when the user wants to move the underlying file to trash.
     var onMoveToTrash: (() -> Void)? = nil
+    /// Called when the user chooses "Set as X Frame" for a specific shot moment.
+    var onSetAsFrame: ((ImagineShotMoment) -> Void)? = nil
+    /// Which moment (if any) this image is already the featured frame for, so the menu can show a checkmark.
+    var featuredFrameMoment: ImagineShotMoment? = nil
 }
 
 @available(macOS 26.0, *)
@@ -70,13 +89,46 @@ struct UnifiedImageContextMenuContent: View {
 
     var body: some View {
         Group {
+            masterSection
             curatedSection
+            setAsFrameSection
             promptSection
             fileSection
             geminiSection
             ratingSection
             rejectionSection
             trashSection
+        }
+    }
+
+    @ViewBuilder
+    private var masterSection: some View {
+        if let onChooseAsMaster = actions.onChooseAsMaster {
+            Button(
+                actions.isMaster ? actions.chosenAsMasterLabel : actions.chooseAsMasterLabel,
+                systemImage: actions.isMaster ? "checkmark.circle.fill" : "checkmark.circle"
+            ) {
+                onChooseAsMaster()
+            }
+            .disabled(actions.isMaster)
+            Divider()
+        }
+    }
+
+    @ViewBuilder
+    private var setAsFrameSection: some View {
+        if let onSetAsFrame = actions.onSetAsFrame {
+            Menu("Set as Frame") {
+                ForEach(ImagineShotMoment.allCases) { moment in
+                    Button(
+                        moment.rawValue,
+                        systemImage: actions.featuredFrameMoment == moment ? "checkmark.circle.fill" : "circle"
+                    ) {
+                        onSetAsFrame(moment)
+                    }
+                }
+            }
+            Divider()
         }
     }
 
@@ -111,6 +163,11 @@ struct UnifiedImageContextMenuContent: View {
         if let onCopy = actions.onCopy {
             Button("Copy Image", systemImage: "doc.on.doc") { onCopy() }
         }
+        if let onFlipHorizontally = actions.onFlipHorizontally {
+            Button("Flip Horizontally", systemImage: "arrow.left.and.right") {
+                onFlipHorizontally()
+            }
+        }
         if let onQuickLook = actions.onQuickLook {
             Button("Quick Look", systemImage: "eye") { onQuickLook() }
         }
@@ -119,12 +176,24 @@ struct UnifiedImageContextMenuContent: View {
     @ViewBuilder
     private var geminiSection: some View {
         if actions.onEditWithGemini != nil
+            || actions.onAdjustCrop != nil
             || actions.onGenerateWithGemini != nil
+            || actions.onGenerateAnimated != nil
             || !actions.extraGeminiGenerateEntries.isEmpty {
             Divider()
             if let onEditWithGemini = actions.onEditWithGemini {
                 Button("Edit with Gemini…", systemImage: "wand.and.sparkles") {
                     onEditWithGemini()
+                }
+            }
+            if let onAdjustCrop = actions.onAdjustCrop {
+                Button("Adjust Crop", systemImage: "crop") {
+                    onAdjustCrop()
+                }
+            }
+            if let onGenerateAnimated = actions.onGenerateAnimated {
+                Button("Generate Animated", systemImage: "play.tv") {
+                    onGenerateAnimated()
                 }
             }
             if actions.onGenerateWithGemini != nil
