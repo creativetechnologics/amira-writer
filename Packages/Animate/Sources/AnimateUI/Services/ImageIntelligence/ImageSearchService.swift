@@ -185,87 +185,513 @@ public actor ImageSearchService {
         input: SelectorInput,
         maxImages: Int = 5
     ) async throws -> [ReferenceSelection] {
-        var candidates: [(assetID: String, path: String, score: Double)] = []
+        var candidatesByAssetID: [String: ShotReferenceCandidate] = [:]
+        let queryTokens = Self.referenceQueryTokens(from: input.queryText)
 
-        // Build query based on input
+        // Build query based on the script/storyboard reference contract.
+        // This is intentionally link-driven first: exact owner links are cheap,
+        // deterministic, and prevent the selector from inventing references when
+        // the project already knows the shot/character/place attachment.
         var conditions: [String] = []
         var params: [Any] = []
 
         // Filter by place
         if let placeID = input.placeID {
-            conditions.append("(l.owner_id = ? AND l.link_kind = 'place_generated')")
+            conditions.append("""
+                (l.owner_id = ? AND l.link_kind IN (
+                    'place_generated',
+                    'place_reference',
+                    'place_landmark_reference',
+                    'place_angle_image',
+                    'place_master_map',
+                    'map3d_capture'
+                ))
+                """)
             params.append(placeID)
         }
 
         // Filter by character
         for charID in input.characterIDs {
-            conditions.append("(l.owner_id = ? AND l.link_kind LIKE 'character_%')")
-            params.append(charID)
+            conditions.append("""
+                (
+                    (l.owner_id = ? AND l.link_kind LIKE 'character_%')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM image_character_regions cr
+                        WHERE cr.image_asset_id = a.id
+                          AND cr.character_id = ?
+                    )
+                )
+                """)
+            params.append(contentsOf: [charID, charID])
         }
 
         // Filter by scene shot
         if let shotID = input.shotID {
-            conditions.append("(l.owner_id = ? AND l.link_kind = 'scene_shot_image')")
+            conditions.append("(l.owner_id = ? AND l.link_kind IN ('scene_shot_image', 'storyboard_frame'))")
             params.append(shotID)
         }
+
+        if let sceneID = input.sceneID {
+            conditions.append("(l.owner_parent_id = ? AND l.link_kind IN ('scene_shot_image', 'storyboard_frame'))")
+            params.append(sceneID)
+        }
+
+        let queryFilterTokens = Self.referenceQueryFilterTokens(from: queryTokens, limit: 10)
+        if !queryFilterTokens.isEmpty {
+            conditions.append(Self.queryFilterSQL(tokenCount: queryFilterTokens.count))
+            for token in queryFilterTokens {
+                let pattern = "%\(token)%"
+                params.append(contentsOf: Array(repeating: pattern, count: 8))
+            }
+        }
+
+        guard !conditions.isEmpty else { return [] }
 
         let whereClause = conditions.isEmpty ? "" : "AND (" + conditions.joined(separator: " OR ") + ")"
 
         let sql = """
-            SELECT DISTINCT a.id, a.resolved_path
+            SELECT
+                a.id,
+                a.resolved_path,
+                a.content_hash_sha256,
+                l.link_kind,
+                l.owner_id,
+                l.owner_parent_id,
+                l.moment,
+                l.workflow,
+                (
+                    SELECT vm.summary
+                    FROM image_visual_metadata vm
+                    WHERE vm.image_asset_id = a.id
+                    ORDER BY vm.created_at DESC
+                    LIMIT 1
+                ) AS visual_summary,
+                (
+                    SELECT vm.short_caption
+                    FROM image_visual_metadata vm
+                    WHERE vm.image_asset_id = a.id
+                    ORDER BY vm.created_at DESC
+                    LIMIT 1
+                ) AS visual_short_caption,
+                (
+                    SELECT vm.long_caption
+                    FROM image_visual_metadata vm
+                    WHERE vm.image_asset_id = a.id
+                    ORDER BY vm.created_at DESC
+                    LIMIT 1
+                ) AS visual_long_caption,
+                (
+                    SELECT vm.retrieval_json
+                    FROM image_visual_metadata vm
+                    WHERE vm.image_asset_id = a.id
+                    ORDER BY vm.created_at DESC
+                    LIMIT 1
+                ) AS visual_retrieval_json,
+                (
+                    SELECT GROUP_CONCAT(t.slug || ' ' || COALESCE(t.display_name, ''), ' ')
+                    FROM image_tag_assignments ta
+                    JOIN image_tags t ON ta.tag_id = t.id
+                    WHERE ta.image_asset_id = a.id
+                      AND ta.is_negative = 0
+                ) AS tag_text,
+                (
+                    SELECT GROUP_CONCAT(cr.character_id || ' ' || COALESCE(cr.character_name, ''), ' ')
+                    FROM image_character_regions cr
+                    WHERE cr.image_asset_id = a.id
+                ) AS character_region_text,
+                EXISTS(
+                    SELECT 1
+                    FROM image_visual_metadata vm
+                    WHERE vm.image_asset_id = a.id
+                    LIMIT 1
+                ) AS has_visual_metadata
             FROM image_assets a
             LEFT JOIN image_asset_links l ON a.id = l.image_asset_id
             WHERE a.is_missing = 0
             \(whereClause)
+            ORDER BY has_visual_metadata DESC, a.updated_at DESC, a.resolved_path ASC
             LIMIT ?
         """
 
-        params.append(maxImages * 3) // Get more candidates for scoring
+        params.append(max(50, maxImages * 12)) // Get more candidates for scoring
 
         let rows = try await store.query(sql, params)
 
         for row in rows {
             guard let id = row["id"] as? String,
                   let path = row["resolved_path"] as? String else { continue }
+            let linkKind = row["link_kind"] as? String
 
-            var score = 0.5 // Base score
+            var candidate = candidatesByAssetID[id] ?? ShotReferenceCandidate(assetID: id, path: path)
+            candidate.hasContentHash = candidate.hasContentHash || ((row["content_hash_sha256"] as? String)?.isEmpty == false)
+            candidate.hasVisualMetadata = candidate.hasVisualMetadata || boolValue(row["has_visual_metadata"])
 
-            // Boost for matching place
-            if input.placeID != nil {
-                score += 0.15
+            let ownerID = row["owner_id"] as? String
+            let ownerParentID = row["owner_parent_id"] as? String
+            let moment = row["moment"] as? String
+            if let linkKind {
+                candidate.addMatch(
+                    scoredMatch(
+                        linkKind: linkKind,
+                        ownerID: ownerID,
+                        ownerParentID: ownerParentID,
+                        moment: moment,
+                        input: input
+                    )
+                )
             }
-
-            // Boost for matching characters
-            score += Double(input.characterIDs.count) * 0.1
-
-            // Boost for having analysis metadata
-            if let metadata = try await store.assetByID(id),
-               metadata.contentHashSHA256 != nil {
-                score += 0.05
+            candidate.addMatch(
+                spatialCharacterRegionMatch(
+                    regionText: row["character_region_text"] as? String,
+                    input: input
+                )
+            )
+            if !queryTokens.isEmpty {
+                candidate.considerQueryMatch(
+                    Self.queryMatch(
+                        queryTokens: queryTokens,
+                        assetText: [
+                            path,
+                            row["visual_summary"] as? String,
+                            row["visual_short_caption"] as? String,
+                            row["visual_long_caption"] as? String,
+                            row["visual_retrieval_json"] as? String,
+                            row["tag_text"] as? String,
+                            row["character_region_text"] as? String
+                        ]
+                        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                        .joined(separator: " ")
+                    )
+                )
             }
-
-            candidates.append((assetID: id, path: path, score: min(score, 1.0)))
+            candidatesByAssetID[id] = candidate
         }
 
-        // Sort by score and take top N
-        let sorted = candidates.sorted { $0.score > $1.score }.prefix(maxImages)
-
-        var selections: [ReferenceSelection] = []
-        for candidate in sorted {
-            selections.append(
+        return candidatesByAssetID.values
+            .map { $0.finalized() }
+            .sorted {
+                if $0.score == $1.score {
+                    return $0.path < $1.path
+                }
+                return $0.score > $1.score
+            }
+            .prefix(maxImages)
+            .map { candidate in
                 ReferenceSelection(
                     assetID: candidate.assetID,
                     resolvedPath: candidate.path,
-                    role: try await determineRole(for: candidate.assetID),
+                    role: candidate.role,
                     score: candidate.score,
-                    reason: "Matched based on project context"
+                    reason: candidate.reason
                 )
-            )
-        }
-        return selections
+            }
     }
 
     // MARK: - Helpers
+
+    private struct ScoredShotReferenceMatch {
+        var role: String
+        var score: Double
+        var reason: String
+    }
+
+    private struct ShotReferenceCandidate {
+        var assetID: String
+        var path: String
+        var score: Double = 0.12
+        var roleScores: [String: Double] = [:]
+        var reasons: [String] = []
+        var hasContentHash: Bool = false
+        var hasVisualMetadata: Bool = false
+        var queryScore: Double = 0
+        var queryReason: String?
+
+        mutating func addMatch(_ match: ScoredShotReferenceMatch?) {
+            guard let match else { return }
+            score += match.score
+            roleScores[match.role, default: 0] += match.score
+            if !reasons.contains(match.reason) {
+                reasons.append(match.reason)
+            }
+        }
+
+        mutating func considerQueryMatch(_ match: ScoredShotReferenceMatch?) {
+            guard let match,
+                  match.score > queryScore else { return }
+            queryScore = match.score
+            queryReason = match.reason
+            roleScores[match.role, default: 0] += match.score
+        }
+
+        func finalized() -> ShotReferenceCandidate {
+            var copy = self
+            if hasContentHash {
+                copy.score += 0.03
+            }
+            if hasVisualMetadata {
+                copy.score += 0.05
+            }
+            if queryScore > 0 {
+                copy.score += queryScore
+                if let queryReason,
+                   !copy.reasons.contains(queryReason) {
+                    copy.reasons.append(queryReason)
+                }
+            }
+            copy.score = min(copy.score, 1.0)
+            return copy
+        }
+
+        var role: String {
+            roleScores.max { lhs, rhs in
+                if lhs.value == rhs.value {
+                    return lhs.key > rhs.key
+                }
+                return lhs.value < rhs.value
+            }?.key ?? "style_reference"
+        }
+
+        var reason: String {
+            let prefix = reasons.prefix(3).joined(separator: "; ")
+            return prefix.isEmpty ? "Matched based on project context" : prefix
+        }
+    }
+
+    private func scoredMatch(
+        linkKind: String,
+        ownerID: String?,
+        ownerParentID: String?,
+        moment: String?,
+        input: SelectorInput
+    ) -> ScoredShotReferenceMatch? {
+        let normalizedMoment = moment?.lowercased()
+        let momentMatches: Bool = {
+            guard let normalizedMoment,
+                  let inputMoment = input.moment else { return false }
+            return Self.momentAliases(for: inputMoment).contains(normalizedMoment)
+        }()
+
+        if linkKind == "storyboard_frame",
+           ownerID == input.shotID {
+            return ScoredShotReferenceMatch(
+                role: "storyboard_layout_reference",
+                score: momentMatches ? 0.62 : 0.48,
+                reason: momentMatches ? "Storyboard frame for this moment" : "Storyboard frame for this shot"
+            )
+        }
+
+        if linkKind == "scene_shot_image",
+           ownerID == input.shotID {
+            return ScoredShotReferenceMatch(
+                role: "shot_reference",
+                score: momentMatches ? 0.50 : 0.38,
+                reason: momentMatches ? "Generated frame for this moment" : "Generated frame for this shot"
+            )
+        }
+
+        if linkKind == "scene_shot_image",
+           ownerParentID == input.sceneID {
+            return ScoredShotReferenceMatch(
+                role: "shot_reference",
+                score: 0.20,
+                reason: "Generated frame from the same scene"
+            )
+        }
+
+        if let ownerID,
+           input.characterIDs.contains(ownerID),
+           linkKind.hasPrefix("character_") {
+            let preferredCharacterKinds: Set<String> = [
+                "character_animated",
+                "character_master_source",
+                "character_master_sheet_variant",
+                "character_head_sheet_variant",
+                "character_head_turn_variant",
+                "character_costume_fullbody_variant",
+                "character_costume_reference"
+            ]
+            return ScoredShotReferenceMatch(
+                role: "character_reference",
+                score: preferredCharacterKinds.contains(linkKind) ? 0.40 : 0.30,
+                reason: preferredCharacterKinds.contains(linkKind)
+                    ? "Character production reference"
+                    : "Character reference"
+            )
+        }
+
+        if let placeID = input.placeID,
+           ownerID == placeID {
+            switch linkKind {
+            case "place_landmark_reference":
+                return ScoredShotReferenceMatch(
+                    role: "location_reference",
+                    score: 0.40,
+                    reason: "Landmark reference for the scene place"
+                )
+            case "place_generated", "place_reference", "place_angle_image":
+                return ScoredShotReferenceMatch(
+                    role: "location_reference",
+                    score: 0.34,
+                    reason: "Place reference for the scene"
+                )
+            case "place_master_map", "map3d_capture":
+                return ScoredShotReferenceMatch(
+                    role: "location_reference",
+                    score: 0.26,
+                    reason: "Spatial reference for the scene place"
+                )
+            default:
+                break
+            }
+        }
+
+        return nil
+    }
+
+    private func spatialCharacterRegionMatch(
+        regionText: String?,
+        input: SelectorInput
+    ) -> ScoredShotReferenceMatch? {
+        guard let regionText,
+              !regionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let haystack = regionText.lowercased()
+        let matchedCount = input.characterIDs.reduce(0) { count, characterID in
+            haystack.contains(characterID.lowercased()) ? count + 1 : count
+        }
+        guard matchedCount > 0 else { return nil }
+        return ScoredShotReferenceMatch(
+            role: "character_reference",
+            score: min(0.46, 0.30 + (Double(matchedCount - 1) * 0.08)),
+            reason: matchedCount == 1
+                ? "Manual spatial character tag"
+                : "Manual spatial character tags for \(matchedCount) shot characters"
+        )
+    }
+
+    private static func momentAliases(for rawMoment: String) -> Set<String> {
+        switch rawMoment.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "begin", "beginning", "start":
+            return ["begin", "beginning", "start"]
+        case "middle", "mid":
+            return ["middle", "mid"]
+        case "end", "ending", "final":
+            return ["end", "ending", "final"]
+        default:
+            return [rawMoment.lowercased()]
+        }
+    }
+
+    private static func queryMatch(
+        queryTokens: Set<String>,
+        assetText: String
+    ) -> ScoredShotReferenceMatch? {
+        let assetTokens = referenceQueryTokens(from: assetText)
+        let overlaps = queryTokens.intersection(assetTokens)
+        guard !overlaps.isEmpty else { return nil }
+
+        let rankedTerms = overlaps.sorted { lhs, rhs in
+            if lhs.count == rhs.count {
+                return lhs < rhs
+            }
+            return lhs.count > rhs.count
+        }
+        let visibleTerms = rankedTerms.prefix(5).joined(separator: ", ")
+        let score = min(0.18, 0.035 + Double(min(overlaps.count, 6)) * 0.024)
+        return ScoredShotReferenceMatch(
+            role: "semantic_reference",
+            score: score,
+            reason: "Matched prompt terms in metadata/tags: \(visibleTerms)"
+        )
+    }
+
+    private static func referenceQueryFilterTokens(
+        from tokens: Set<String>,
+        limit: Int
+    ) -> [String] {
+        tokens
+            .sorted { lhs, rhs in
+                if lhs.count == rhs.count {
+                    return lhs < rhs
+                }
+                return lhs.count > rhs.count
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private static func queryFilterSQL(tokenCount: Int) -> String {
+        let perToken = """
+            (
+                LOWER(a.filename) LIKE ?
+                OR LOWER(a.resolved_path) LIKE ?
+                OR EXISTS(
+                    SELECT 1
+                    FROM image_visual_metadata vm
+                    WHERE vm.image_asset_id = a.id
+                      AND (
+                          LOWER(COALESCE(vm.summary, '')) LIKE ?
+                          OR LOWER(COALESCE(vm.short_caption, '')) LIKE ?
+                          OR LOWER(COALESCE(vm.long_caption, '')) LIKE ?
+                          OR LOWER(COALESCE(vm.retrieval_json, '')) LIKE ?
+                      )
+                )
+                OR EXISTS(
+                    SELECT 1
+                    FROM image_tag_assignments ta
+                    JOIN image_tags t ON ta.tag_id = t.id
+                    WHERE ta.image_asset_id = a.id
+                      AND ta.is_negative = 0
+                      AND (
+                          LOWER(t.slug) LIKE ?
+                          OR LOWER(COALESCE(t.display_name, '')) LIKE ?
+                      )
+                )
+            )
+            """
+        return "(" + Array(repeating: perToken, count: max(1, tokenCount)).joined(separator: " OR ") + ")"
+    }
+
+    private static let referenceQueryStopWords: Set<String> = [
+        "about", "above", "across", "after", "again", "against", "also", "and", "angle",
+        "another", "around", "because", "before", "behind", "being", "between", "camera",
+        "close", "closer", "color", "colours", "colors", "down", "during", "each", "every",
+        "frame", "from", "full", "into", "like", "look", "looks", "make", "middle", "more",
+        "onto", "over", "plain", "prompt", "render", "scene", "shot", "show", "shows",
+        "style", "that", "their", "there", "these", "this", "through", "toward", "towards",
+        "under", "very", "with", "without"
+    ]
+
+    private static func referenceQueryTokens(from rawText: String?) -> Set<String> {
+        guard let rawText else { return [] }
+        let parts = rawText
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+        var tokens = Set<String>()
+        for part in parts {
+            let token = String(part)
+            guard token.count >= 4,
+                  !referenceQueryStopWords.contains(token) else { continue }
+            tokens.insert(token)
+            if token.hasSuffix("ing"), token.count > 6 {
+                tokens.insert(String(token.dropLast(3)))
+            } else if token.hasSuffix("ed"), token.count > 5 {
+                tokens.insert(String(token.dropLast(2)))
+            } else if token.hasSuffix("s"), token.count > 5 {
+                tokens.insert(String(token.dropLast()))
+            }
+        }
+        return tokens
+    }
+
+    private func boolValue(_ value: Any?) -> Bool {
+        if let bool = value as? Bool { return bool }
+        if let int = value as? Int { return int != 0 }
+        if let int64 = value as? Int64 { return int64 != 0 }
+        if let double = value as? Double { return double != 0 }
+        return false
+    }
 
     private func getEmbeddingVector(assetID: String, kind: String) async throws -> (vector: [Float], norm: Float)? {
         let sql = """
@@ -297,6 +723,9 @@ public actor ImageSearchService {
 
     private func determineRole(for assetID: String) async throws -> String {
         let links = try await store.linksForAsset(assetID)
+        if links.contains(where: { $0.linkKind == .storyboardFrame }) {
+            return "storyboard_layout_reference"
+        }
         if links.contains(where: { $0.linkKind == .sceneShotImage }) {
             return "shot_reference"
         }

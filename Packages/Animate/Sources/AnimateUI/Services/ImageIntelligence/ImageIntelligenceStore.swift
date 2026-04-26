@@ -10,7 +10,8 @@ public actor ImageIntelligenceStore {
     public let databaseURL: URL
 
     private nonisolated(unsafe) var db: OpaquePointer?
-    private static let currentSchemaVersion = 1
+    private static let currentSchemaVersion = 2
+    private static let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     public init(projectURL: URL) {
         self.projectURL = projectURL
@@ -165,6 +166,25 @@ public actor ImageIntelligenceStore {
             UNIQUE(image_asset_id, tag_id, analysis_run_id)
         );
 
+        -- Manual spatial character annotations. Coordinates are normalized
+        -- into image space with a top-left origin so they can be reused by
+        -- prompt builders, embedding retrieval, and future preview overlays.
+        CREATE TABLE IF NOT EXISTS image_character_regions (
+            id TEXT PRIMARY KEY,
+            image_asset_id TEXT NOT NULL REFERENCES image_assets(id) ON DELETE CASCADE,
+            character_id TEXT NOT NULL,
+            character_name TEXT,
+            geometry_kind TEXT NOT NULL DEFAULT 'point',
+            x REAL NOT NULL,
+            y REAL NOT NULL,
+            width REAL,
+            height REAL,
+            source TEXT,
+            confidence REAL,
+            created_at REAL DEFAULT (unixepoch()),
+            updated_at REAL DEFAULT (unixepoch())
+        );
+
         -- Vector embeddings
         CREATE TABLE IF NOT EXISTS image_embeddings (
             id TEXT PRIMARY KEY,
@@ -232,6 +252,8 @@ public actor ImageIntelligenceStore {
         CREATE INDEX IF NOT EXISTS idx_embeddings_asset ON image_embeddings(image_asset_id);
         CREATE INDEX IF NOT EXISTS idx_embeddings_kind ON image_embeddings(embedding_kind);
         CREATE INDEX IF NOT EXISTS idx_tag_assignments_asset ON image_tag_assignments(image_asset_id);
+        CREATE INDEX IF NOT EXISTS idx_character_regions_asset ON image_character_regions(image_asset_id);
+        CREATE INDEX IF NOT EXISTS idx_character_regions_character ON image_character_regions(character_id);
         CREATE INDEX IF NOT EXISTS idx_qc_flags_asset ON image_qc_flags(image_asset_id);
         """
 
@@ -254,10 +276,33 @@ public actor ImageIntelligenceStore {
         let version = try currentSchemaVersion()
         guard version < Self.currentSchemaVersion else { return }
 
-        // Future migrations go here
-        // e.g., if version < 2 { try migrateToV2() }
+        if version < 2 {
+            try migrateToV2()
+        }
 
         try exec("INSERT OR REPLACE INTO schema_version (version) VALUES (?)", [Self.currentSchemaVersion])
+    }
+
+    private func migrateToV2() throws {
+        try execRaw("""
+        CREATE TABLE IF NOT EXISTS image_character_regions (
+            id TEXT PRIMARY KEY,
+            image_asset_id TEXT NOT NULL REFERENCES image_assets(id) ON DELETE CASCADE,
+            character_id TEXT NOT NULL,
+            character_name TEXT,
+            geometry_kind TEXT NOT NULL DEFAULT 'point',
+            x REAL NOT NULL,
+            y REAL NOT NULL,
+            width REAL,
+            height REAL,
+            source TEXT,
+            confidence REAL,
+            created_at REAL DEFAULT (unixepoch()),
+            updated_at REAL DEFAULT (unixepoch())
+        );
+        CREATE INDEX IF NOT EXISTS idx_character_regions_asset ON image_character_regions(image_asset_id);
+        CREATE INDEX IF NOT EXISTS idx_character_regions_character ON image_character_regions(character_id);
+        """)
     }
 
     private func currentSchemaVersion() throws -> Int {
@@ -440,6 +485,58 @@ public actor ImageIntelligenceStore {
         )
     }
 
+    // MARK: - Manual Spatial Character Tags
+
+    @discardableResult
+    public func addCharacterRegionTag(
+        assetID: String,
+        characterID: String,
+        characterName: String?,
+        normalizedX: Double,
+        normalizedY: Double,
+        normalizedWidth: Double? = nil,
+        normalizedHeight: Double? = nil,
+        source: String = "manual_context_menu",
+        confidence: Double? = 1.0
+    ) throws -> String {
+        let id = UUID().uuidString
+        let now = Date().timeIntervalSince1970
+        try exec("""
+            INSERT INTO image_character_regions (
+                id, image_asset_id, character_id, character_name,
+                geometry_kind, x, y, width, height, source, confidence,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            id,
+            assetID,
+            characterID,
+            characterName,
+            normalizedWidth == nil || normalizedHeight == nil ? "point" : "rect",
+            min(max(normalizedX, 0), 1),
+            min(max(normalizedY, 0), 1),
+            normalizedWidth.map { min(max($0, 0), 1) },
+            normalizedHeight.map { min(max($0, 0), 1) },
+            source,
+            confidence,
+            now,
+            now
+        ])
+        return id
+    }
+
+    public func characterRegionTagsForAsset(_ assetID: String) throws -> [ImageCharacterRegionTagRecord] {
+        let rows = try query(
+            "SELECT * FROM image_character_regions WHERE image_asset_id = ? ORDER BY created_at DESC",
+            [assetID]
+        )
+        return rows.compactMap { ImageCharacterRegionTagRecord(from: $0) }
+    }
+
+    public func deleteCharacterRegionTag(_ id: String) throws {
+        try exec("DELETE FROM image_character_regions WHERE id = ?", [id])
+    }
+
     // MARK: - Helpers
 
     private func aspectRatio(width: Int?, height: Int?) -> Double? {
@@ -455,9 +552,13 @@ public actor ImageIntelligenceStore {
                 NSLocalizedDescriptionKey: "Failed to open database"
             ])
         }
-        // Enable WAL mode for better concurrency
+        // Enable WAL mode for better concurrency and keep normal UI operations
+        // from stalling behind synchronous fsync-heavy writes.
         sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil)
+        sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", nil, nil, nil)
         sqlite3_exec(db, "PRAGMA foreign_keys=ON;", nil, nil, nil)
+        sqlite3_exec(db, "PRAGMA busy_timeout=2500;", nil, nil, nil)
+        sqlite3_exec(db, "PRAGMA temp_store=MEMORY;", nil, nil, nil)
     }
 
     func exec(_ sql: String, _ params: [Any?] = []) throws {
@@ -498,10 +599,24 @@ public actor ImageIntelligenceStore {
             if let param {
                 if let s = param as? String {
                     sqlite3_bind_text(stmt, idx, (s as NSString).utf8String, -1, nil)
+                } else if let data = param as? Data {
+                    data.withUnsafeBytes { rawBuffer in
+                        _ = sqlite3_bind_blob(
+                            stmt,
+                            idx,
+                            rawBuffer.baseAddress,
+                            Int32(data.count),
+                            Self.sqliteTransient
+                        )
+                    }
                 } else if let i = param as? Int {
                     sqlite3_bind_int64(stmt, idx, Int64(i))
+                } else if let i = param as? Int64 {
+                    sqlite3_bind_int64(stmt, idx, i)
                 } else if let d = param as? Double {
                     sqlite3_bind_double(stmt, idx, d)
+                } else if let f = param as? Float {
+                    sqlite3_bind_double(stmt, idx, Double(f))
                 } else if let b = param as? Bool {
                     sqlite3_bind_int(stmt, idx, b ? 1 : 0)
                 } else {
@@ -579,6 +694,7 @@ public enum ImageAssetLinkKind: String, CaseIterable, Sendable {
     case characterCostumeAccessoryVariant = "character_costume_accessory_variant"
     case characterCostumeReference = "character_costume_reference"
     case characterCostumeVariation = "character_costume_variation"
+    case storyboardFrame = "storyboard_frame"
     case sceneShotImage = "scene_shot_image"
     case canvasGeneration = "canvas_generation"
 }
@@ -646,6 +762,45 @@ public struct ImageAssetLinkRecord: Sendable {
         self.ownerParentID = row["owner_parent_id"] as? String
         self.moment = row["moment"] as? String
         self.workflow = row["workflow"] as? String
+        self.createdAt = Date(timeIntervalSince1970: row["created_at"] as? Double ?? 0)
+        self.updatedAt = Date(timeIntervalSince1970: row["updated_at"] as? Double ?? 0)
+    }
+}
+
+@available(macOS 26.0, *)
+public struct ImageCharacterRegionTagRecord: Sendable, Identifiable, Hashable {
+    public let id: String
+    public let imageAssetID: String
+    public let characterID: String
+    public let characterName: String?
+    public let geometryKind: String
+    public let x: Double
+    public let y: Double
+    public let width: Double?
+    public let height: Double?
+    public let source: String?
+    public let confidence: Double?
+    public let createdAt: Date
+    public let updatedAt: Date
+
+    init?(from row: [String: Any]) {
+        guard let id = row["id"] as? String,
+              let imageAssetID = row["image_asset_id"] as? String,
+              let characterID = row["character_id"] as? String,
+              let geometryKind = row["geometry_kind"] as? String,
+              let x = row["x"] as? Double,
+              let y = row["y"] as? Double else { return nil }
+        self.id = id
+        self.imageAssetID = imageAssetID
+        self.characterID = characterID
+        self.characterName = row["character_name"] as? String
+        self.geometryKind = geometryKind
+        self.x = x
+        self.y = y
+        self.width = row["width"] as? Double
+        self.height = row["height"] as? Double
+        self.source = row["source"] as? String
+        self.confidence = row["confidence"] as? Double
         self.createdAt = Date(timeIntervalSince1970: row["created_at"] as? Double ?? 0)
         self.updatedAt = Date(timeIntervalSince1970: row["updated_at"] as? Double ?? 0)
     }

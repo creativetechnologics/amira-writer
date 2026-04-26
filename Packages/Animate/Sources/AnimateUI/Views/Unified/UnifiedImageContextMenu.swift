@@ -26,6 +26,11 @@ import SwiftUI
 /// ```
 @available(macOS 26.0, *)
 struct UnifiedImageActions {
+    /// First-menu action for assigning character tags. When the tile can
+    /// resolve a cursor position, entries with `spatialAction` save a
+    /// normalized in-image tag at that point; otherwise they fall back to the
+    /// older asset-level tag action.
+    var characterTagEntries: [UnifiedCharacterTagEntry] = []
     /// Workflow-specific primary action for choosing the image as the active
     /// master/approved variant. Kept generic enough for Characters head,
     /// costume, accessory, and other reference grids while preserving the
@@ -82,13 +87,31 @@ struct UnifiedGeminiGenerateEntry: Identifiable {
 }
 
 @available(macOS 26.0, *)
+struct UnifiedCharacterTagEntry: Identifiable {
+    let id: UUID
+    let label: String
+    let spatialLabel: String?
+    let isTagged: Bool
+    let action: () -> Void
+    let spatialAction: ((UnifiedImageSpatialTagPoint) -> Void)?
+}
+
+@available(macOS 26.0, *)
+struct UnifiedImageSpatialTagPoint: Sendable, Equatable {
+    let normalizedX: Double
+    let normalizedY: Double
+}
+
+@available(macOS 26.0, *)
 struct UnifiedImageContextMenuContent: View {
     let selectedCount: Int
     let isSelected: Bool
     let actions: UnifiedImageActions
+    var spatialTagPoint: UnifiedImageSpatialTagPoint? = nil
 
     var body: some View {
         Group {
+            tagSection
             masterSection
             curatedSection
             setAsFrameSection
@@ -98,6 +121,26 @@ struct UnifiedImageContextMenuContent: View {
             ratingSection
             rejectionSection
             trashSection
+        }
+    }
+
+    @ViewBuilder
+    private var tagSection: some View {
+        if !actions.characterTagEntries.isEmpty {
+            Menu("Tag", systemImage: "tag") {
+                ForEach(actions.characterTagEntries) { entry in
+                    if let spatialTagPoint, let spatialAction = entry.spatialAction {
+                        Button(entry.spatialLabel ?? entry.label, systemImage: "scope") {
+                            spatialAction(spatialTagPoint)
+                        }
+                    } else {
+                        Button(entry.label, systemImage: entry.isTagged ? "checkmark.circle.fill" : "person.crop.circle") {
+                            entry.action()
+                        }
+                    }
+                }
+            }
+            Divider()
         }
     }
 

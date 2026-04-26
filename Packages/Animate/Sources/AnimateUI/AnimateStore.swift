@@ -47,6 +47,29 @@ private struct GeneratedBackgroundLibraryScan: Codable, Sendable {
     }
 }
 
+enum UnattachedGeneratedImageKind: Sendable {
+    case library
+    case map3DCapture
+
+    var directoryName: String {
+        switch self {
+        case .library:
+            return "_unattached-library"
+        case .map3DCapture:
+            return "_map3d-captures"
+        }
+    }
+
+    var keywords: [String] {
+        switch self {
+        case .library:
+            return ["generated"]
+        case .map3DCapture:
+            return ["map3d-capture"]
+        }
+    }
+}
+
 private struct PersistedPlacesScriptIndexSong: Codable, Sendable {
     let songPath: String
     let sceneName: String
@@ -1625,6 +1648,70 @@ final class AnimateStore {
         guard let store = imageIntelligenceStore,
               let record = try? await store.assetByPath(URL(fileURLWithPath: path).standardizedFileURL.path) else { return nil }
         return try? await store.latestVisualMetadataForAsset(record.id)
+    }
+
+    public func imageCharacterRegionTags(for path: String) async -> [ImageCharacterRegionTagRecord] {
+        guard let store = imageIntelligenceStore,
+              let record = try? await store.assetByPath(URL(fileURLWithPath: path).standardizedFileURL.path) else { return [] }
+        return (try? await store.characterRegionTagsForAsset(record.id)) ?? []
+    }
+
+    @discardableResult
+    public func addImageCharacterRegionTag(
+        path: String,
+        characterID: UUID,
+        characterName: String,
+        normalizedX: Double,
+        normalizedY: Double
+    ) async -> Bool {
+        guard let store = imageIntelligenceStore else { return false }
+        let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard FileManager.default.fileExists(atPath: standardizedPath) else { return false }
+
+        do {
+            let inspection = ImageAssetInspector.inspect(path: standardizedPath)
+            let assetID = try await store.registerAsset(
+                resolvedPath: standardizedPath,
+                projectRelativePath: projectRelativePath(for: standardizedPath),
+                filename: URL(fileURLWithPath: standardizedPath).lastPathComponent,
+                mimeType: inspection.mimeType,
+                width: inspection.width,
+                height: inspection.height,
+                fileSizeBytes: inspection.fileSizeBytes,
+                contentHashSHA256: inspection.contentHashSHA256
+            )
+            try await store.addCharacterRegionTag(
+                assetID: assetID,
+                characterID: characterID.uuidString,
+                characterName: characterName,
+                normalizedX: normalizedX,
+                normalizedY: normalizedY,
+                source: "manual_context_menu",
+                confidence: 1.0
+            )
+            mutateImageLibrarySidecar(for: standardizedPath) { metadata in
+                if !metadata.characterTags.contains(characterName) {
+                    metadata.characterTags.append(characterName)
+                    metadata.characterTags = Array(Set(metadata.characterTags)).sorted()
+                }
+            }
+            return true
+        } catch {
+            AppLog.log("IMAGE_INTELLIGENCE", "Failed to save spatial character tag: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    @discardableResult
+    public func removeImageCharacterRegionTag(id: String) async -> Bool {
+        guard let store = imageIntelligenceStore else { return false }
+        do {
+            try await store.deleteCharacterRegionTag(id)
+            return true
+        } catch {
+            AppLog.log("IMAGE_INTELLIGENCE", "Failed to remove spatial character tag: \(error.localizedDescription)")
+            return false
+        }
     }
 
     public func imageIntelligenceQueueSnapshot(limit: Int = 100) async -> [ImageAnalysisCoordinator.JobRecord] {
@@ -5471,6 +5558,7 @@ final class AnimateStore {
             normalized.contains("/backgrounds/chosen-references/") ||
             normalized.contains("/backgrounds/pipeline/tests/") ||
             normalized.contains("/backgrounds/pipeline/batches/") ||
+            normalized.contains("/backgrounds/_unattached-library/") ||
             normalized.contains("/backgrounds/_map3d-captures/") {
             return !isCharacterCentricGeneratedBackgroundPath(
                 normalized,
@@ -5534,7 +5622,8 @@ final class AnimateStore {
         if normalized.contains("/backgrounds/place-batches/") { return 2 }
         if normalized.contains("/backgrounds/pipeline/batches/") { return 3 }
         if normalized.contains("/backgrounds/pipeline/tests/") { return 4 }
-        return 5
+        if normalized.contains("/backgrounds/_unattached-library/") { return 5 }
+        return 6
     }
 
     private func observePersistedSaveState() {
@@ -7849,6 +7938,28 @@ final class AnimateStore {
         save()
     }
 
+
+    private func importedOrExistingProjectImagePath(
+        from sourceURL: URL,
+        characterSlug: String,
+        category: String,
+        animateURL: URL
+    ) throws -> String {
+        let standardized = sourceURL.standardizedFileURL
+        if let normalized = normalizedCharacterAssetPath(standardized.path),
+           resolvedCharacterAssetURL(for: normalized) != nil {
+            return normalized
+        }
+
+        let storedURL = try assetManager.importCharacterImageURL(
+            from: standardized,
+            characterSlug: characterSlug,
+            category: category,
+            animateURL: animateURL
+        )
+        return normalizedCharacterAssetPath(storedURL.path) ?? storedURL.path
+    }
+
     func importInspirationImages(for characterID: UUID) {
         guard characters.contains(where: { $0.id == characterID }) else { return }
 
@@ -7870,13 +7981,13 @@ final class AnimateStore {
                 for url in panel.urls {
                     do {
                         guard let animateURL else { continue }
-                        let storedURL = try self.assetManager.importCharacterImageURL(
+                        let imagePath = try self.importedOrExistingProjectImagePath(
                             from: url,
                             characterSlug: slug,
                             category: "inspiration",
                             animateURL: animateURL
                         )
-                        self.addInspirationImage(storedURL.path, for: characterID)
+                        self.addInspirationImage(imagePath, for: characterID)
                         importedCount += 1
                     } catch {
                         self.statusMessage = "Failed to import inspiration image: \(url.lastPathComponent)"
@@ -7896,13 +8007,13 @@ final class AnimateStore {
         var importedCount = 0
         for url in urls {
             do {
-                let storedURL = try assetManager.importCharacterImageURL(
+                let imagePath = try importedOrExistingProjectImagePath(
                     from: url,
                     characterSlug: slug,
                     category: "inspiration",
                     animateURL: animateURL
                 )
-                addInspirationImage(storedURL.path, for: characterID)
+                addInspirationImage(imagePath, for: characterID)
                 importedCount += 1
             } catch {
                 statusMessage = "Failed to import inspiration image: \(url.lastPathComponent)"
@@ -8042,20 +8153,22 @@ final class AnimateStore {
         return storedPath
     }
 
-    /// Store a generated image that is NOT linked to any place — lands in
-    /// `Animate/backgrounds/_map3d-captures/` and appears in the Places
-    /// "Show All Images" gallery via `linkedPlaceID = nil`.
+    /// Store a generated image that is NOT linked to any place.
+    /// Normal library/edit generations land in `Animate/backgrounds/_unattached-library/`.
+    /// Only the explicit 3D Map capture flow uses `_map3d-captures/` and the
+    /// `map3d-capture` keyword that image grids use for the Map 3D source label.
     func storeUnattachedGeneratedImage(
         imageData: Data,
         prompt: String,
         model: GeminiModel,
         aspectRatio: String,
-        imageSize: String
+        imageSize: String,
+        kind: UnattachedGeneratedImageKind = .library
     ) throws -> String {
         let animateURL = try requireAnimateURL()
         let directory = ProjectPaths(root: animateURL.deletingLastPathComponent())
             .animateBackgrounds
-            .appendingPathComponent("_map3d-captures")
+            .appendingPathComponent(kind.directoryName)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let timestamp = ISO8601DateFormatter().string(from: Date())
@@ -8084,7 +8197,7 @@ final class AnimateStore {
             createdAt: Date(),
             updatedAt: Date()
         )
-        record.keywords = ["map3d-capture"]
+        record.keywords = kind.keywords
         placesWorkflowLibrary.generatedImageRecords.append(record)
 
         save(writePlaces: true)
@@ -8418,8 +8531,14 @@ final class AnimateStore {
 
     func addReferenceImage(_ imagePath: String, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
-        guard let normalizedPath = normalizedCharacterAssetPath(imagePath),
-              characterAssetExists(at: normalizedPath) else {
+        guard let normalizedPath = projectRelativeCharacterAssetPath(from: imagePath)
+                ?? normalizedCharacterAssetPath(imagePath)
+                ?? (FileManager.default.fileExists(atPath: imagePath) ? imagePath : nil)
+        else {
+            statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
+            return
+        }
+        guard characterAssetExists(at: normalizedPath) || FileManager.default.fileExists(atPath: imagePath) else {
             statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
             return
         }
@@ -8461,13 +8580,13 @@ final class AnimateStore {
                 let slug = self.characters[index].assetFolderSlug
                 for url in panel.urls {
                     do {
-                        let storedURL = try self.assetManager.importCharacterImageURL(
+                        let imagePath = try self.importedOrExistingProjectImagePath(
                             from: url,
                             characterSlug: slug,
                             category: "reference",
                             animateURL: animateURL
                         )
-                        self.addReferenceImage(storedURL.path, for: characterID)
+                        self.addReferenceImage(imagePath, for: characterID)
                     } catch {
                         self.statusMessage = "Failed to import image: \(url.lastPathComponent)"
                     }
@@ -8481,13 +8600,13 @@ final class AnimateStore {
               let animateURL else { return }
         for url in urls {
             do {
-                let storedURL = try assetManager.importCharacterImageURL(
+                let imagePath = try importedOrExistingProjectImagePath(
                     from: url,
                     characterSlug: characters[index].assetFolderSlug,
                     category: "reference",
                     animateURL: animateURL
                 )
-                addReferenceImage(storedURL.path, for: characterID)
+                addReferenceImage(imagePath, for: characterID)
             } catch {
                 statusMessage = "Failed to import image: \(url.lastPathComponent)"
             }
@@ -8514,8 +8633,14 @@ final class AnimateStore {
 
     func addAnimatedImage(_ imagePath: String, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
-        guard let normalizedPath = normalizedCharacterAssetPath(imagePath),
-              characterAssetExists(at: normalizedPath) else {
+        guard let normalizedPath = projectRelativeCharacterAssetPath(from: imagePath)
+                ?? normalizedCharacterAssetPath(imagePath)
+                ?? (FileManager.default.fileExists(atPath: imagePath) ? imagePath : nil)
+        else {
+            statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
+            return
+        }
+        guard characterAssetExists(at: normalizedPath) || FileManager.default.fileExists(atPath: imagePath) else {
             statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
             return
         }
@@ -8560,13 +8685,13 @@ final class AnimateStore {
                 for url in panel.urls {
                     do {
                         guard let animateURL else { continue }
-                        let storedURL = try self.assetManager.importCharacterImageURL(
+                        let imagePath = try self.importedOrExistingProjectImagePath(
                             from: url,
                             characterSlug: slug,
                             category: "animated",
                             animateURL: animateURL
                         )
-                        self.addAnimatedImage(storedURL.path, for: characterID)
+                        self.addAnimatedImage(imagePath, for: characterID)
                         importedCount += 1
                     } catch {
                         self.statusMessage = "Failed to import animated image: \(url.lastPathComponent)"
@@ -8586,13 +8711,13 @@ final class AnimateStore {
         var importedCount = 0
         for url in urls {
             do {
-                let storedURL = try assetManager.importCharacterImageURL(
+                let imagePath = try importedOrExistingProjectImagePath(
                     from: url,
                     characterSlug: slug,
                     category: "animated",
                     animateURL: animateURL
                 )
-                addAnimatedImage(storedURL.path, for: characterID)
+                addAnimatedImage(imagePath, for: characterID)
                 importedCount += 1
             } catch {
                 statusMessage = "Failed to import animated image: \(url.lastPathComponent)"
@@ -10822,7 +10947,7 @@ final class AnimateStore {
 
         let destinationDir = ProjectPaths(root: animateDir.deletingLastPathComponent())
             .animateBackgrounds
-            .appendingPathComponent("_map3d-captures", isDirectory: true)
+            .appendingPathComponent(UnattachedGeneratedImageKind.library.directoryName, isDirectory: true)
         var importedCount = 0
 
         for sourceURL in validURLs {

@@ -776,6 +776,7 @@ struct AllProjectImagesPageView: View {
                                 hasNotes: !record.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                                 rating: record.rating,
                                 actions: UnifiedImageActions(
+                                    characterTagEntries: characterTagEntries(for: record),
                                     onShowInFinder: {
                                         NSWorkspace.shared.activateFileViewerSelecting(
                                             [URL(fileURLWithPath: record.resolvedPath)]
@@ -890,6 +891,7 @@ struct AllProjectImagesPageView: View {
             showsSelectionCheckmark: selectedCount > 1,
             selectedCount: selectedCount,
             actions: UnifiedImageActions(
+                characterTagEntries: characterTagEntries(for: record),
                 onShowInFinder: {
                     NSWorkspace.shared.activateFileViewerSelecting(
                         [URL(fileURLWithPath: record.resolvedPath)]
@@ -940,6 +942,64 @@ struct AllProjectImagesPageView: View {
             }
         )
         .draggable(URL(fileURLWithPath: record.resolvedPath))
+    }
+
+    private func characterTagEntries(for record: ProjectImageRecord) -> [UnifiedCharacterTagEntry] {
+        let existingTags = Set(
+            (ImageLibraryMetadataSidecarService.load(forImagePath: record.resolvedPath)?.characterTags ?? [])
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        return store.characters.map { character in
+            let name = character.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? character.id.uuidString
+                : character.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return UnifiedCharacterTagEntry(
+                id: character.id,
+                label: existingTags.contains(name) ? "Remove \(name)" : name,
+                spatialLabel: "Tag \(name) Here",
+                isTagged: existingTags.contains(name),
+                action: { toggleCharacterTag(name, for: record) },
+                spatialAction: { point in
+                    tagCharacterSpatially(character, named: name, for: record, at: point)
+                }
+            )
+        }
+    }
+
+    private func toggleCharacterTag(_ name: String, for record: ProjectImageRecord) {
+        var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: record.resolvedPath)
+            ?? ImageLibraryReviewMetadata(rating: record.rating, isRejected: record.isRejected, notes: record.notes, updatedAt: nil)
+        if metadata.characterTags.contains(name) {
+            metadata.characterTags.removeAll { $0 == name }
+        } else {
+            metadata.characterTags.append(name)
+            metadata.characterTags = Array(Set(metadata.characterTags)).sorted()
+        }
+        metadata.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: record.resolvedPath)
+    }
+
+    private func tagCharacterSpatially(
+        _ character: AnimationCharacter,
+        named name: String,
+        for record: ProjectImageRecord,
+        at point: UnifiedImageSpatialTagPoint
+    ) {
+        Task { @MainActor in
+            let saved = await store.addImageCharacterRegionTag(
+                path: record.resolvedPath,
+                characterID: character.id,
+                characterName: name,
+                normalizedX: point.normalizedX,
+                normalizedY: point.normalizedY
+            )
+            if saved {
+                store.statusMessage = "Tagged \(name) at \(Int(point.normalizedX * 100))%, \(Int(point.normalizedY * 100))% in \(URL(fileURLWithPath: record.resolvedPath).lastPathComponent)"
+            } else {
+                store.statusMessage = "Could not save spatial tag for \(name)"
+            }
+        }
     }
 
     private func updateRating(_ rating: Int?, for record: ProjectImageRecord) {

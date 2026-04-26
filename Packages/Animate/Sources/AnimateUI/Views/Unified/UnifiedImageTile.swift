@@ -1,6 +1,22 @@
 import AppKit
 import SwiftUI
 
+@available(macOS 26.0, *)
+typealias UnifiedImageFlipHandler = @MainActor (String) -> Void
+
+@available(macOS 26.0, *)
+private struct UnifiedImageFlipHandlerKey: EnvironmentKey {
+    static let defaultValue: UnifiedImageFlipHandler? = nil
+}
+
+@available(macOS 26.0, *)
+extension EnvironmentValues {
+    var unifiedImageFlipHandler: UnifiedImageFlipHandler? {
+        get { self[UnifiedImageFlipHandlerKey.self] }
+        set { self[UnifiedImageFlipHandlerKey.self] = newValue }
+    }
+}
+
 /// The single, canonical image tile used by every photo grid in the app.
 ///
 /// Rationale (Gary, Pass 3): "EVERY photo grid in this application needs to be
@@ -26,6 +42,8 @@ import SwiftUI
 /// - Right-click menu always routes through `UnifiedImageContextMenuContent`.
 @available(macOS 26.0, *)
 struct UnifiedImageTile: View {
+    @Environment(\.unifiedImageFlipHandler) private var flipHandler
+
     /// Identity/display path (may be relative). Kept separate from
     /// `resolvedPath` so callers pass whatever their selection/persistence
     /// layer uses, without double-resolving every render.
@@ -60,8 +78,21 @@ struct UnifiedImageTile: View {
     var bottomCenterOverlay: AnyView? = nil
     var bottomTrailingOverlay: AnyView? = nil
 
+    @State private var rightClickSpatialTagPoint: UnifiedImageSpatialTagPoint?
+    @State private var imagePixelSize: CGSize?
+
     private var effectivePath: String { resolvedPath ?? path }
     private var dragURL: URL? { projectImageDragURL(forResolvedPath: resolvedPath ?? (path.hasPrefix("/") ? path : nil)) }
+    private var effectiveActions: UnifiedImageActions {
+        var updated = actions
+        if updated.onFlipHorizontally == nil, let flipHandler {
+            let flipPath = resolvedPath ?? path
+            if !flipPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updated.onFlipHorizontally = { flipHandler(flipPath) }
+            }
+        }
+        return updated
+    }
 
     var body: some View {
         // No captions under tiles, per Gary (2026-04-17): "All thumbnails
@@ -93,6 +124,15 @@ struct UnifiedImageTile: View {
     private var thumbnailLayer: some View {
         CachedThumbnailView(path: effectivePath, size: thumbnailSize)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                UnifiedImageRightClickLocationReader(
+                    imagePixelSize: imagePixelSize,
+                    contentMode: .fill,
+                    onRightClick: { point in
+                        rightClickSpatialTagPoint = point
+                    }
+                )
+            }
             .overlay(alignment: .topLeading) { topLeadingSlot }
             .overlay(alignment: .topTrailing) { topTrailingSlot }
             .overlay(alignment: .bottomLeading) { bottomLeadingSlot }
@@ -103,8 +143,21 @@ struct UnifiedImageTile: View {
                 UnifiedImageContextMenuContent(
                     selectedCount: selectedCount,
                     isSelected: isSelected,
-                    actions: actions
+                    actions: effectiveActions,
+                    spatialTagPoint: rightClickSpatialTagPoint
                 )
+            }
+            .task(id: effectivePath) {
+                let currentPath = effectivePath
+                let props = await Task.detached(priority: .utility) {
+                    ImageAssetInspector.imageProperties(path: currentPath)
+                }.value
+                guard !Task.isCancelled, currentPath == effectivePath else { return }
+                if let props {
+                    imagePixelSize = CGSize(width: CGFloat(props.width), height: CGFloat(props.height))
+                } else {
+                    imagePixelSize = nil
+                }
             }
     }
 
@@ -210,6 +263,122 @@ private struct TapHandlers: ViewModifier {
                 .onTapGesture { onTap() }
         } else {
             content.onTapGesture { onTap() }
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct UnifiedImageRightClickLocationReader: NSViewRepresentable {
+    let imagePixelSize: CGSize?
+    let contentMode: ContentMode
+    let onRightClick: (UnifiedImageSpatialTagPoint?) -> Void
+
+    func makeNSView(context: Context) -> RightClickLocationView {
+        let view = RightClickLocationView()
+        view.onRightClick = onRightClick
+        view.imagePixelSize = imagePixelSize
+        view.contentMode = contentMode
+        return view
+    }
+
+    func updateNSView(_ nsView: RightClickLocationView, context: Context) {
+        nsView.onRightClick = onRightClick
+        nsView.imagePixelSize = imagePixelSize
+        nsView.contentMode = contentMode
+    }
+
+    final class RightClickLocationView: NSView {
+        var imagePixelSize: CGSize?
+        var contentMode: ContentMode = .fill
+        var onRightClick: ((UnifiedImageSpatialTagPoint?) -> Void)?
+        private var monitor: Any?
+
+        override var isFlipped: Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            installMonitorIfNeeded()
+        }
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            if newWindow == nil {
+                removeMonitor()
+            }
+            super.viewWillMove(toWindow: newWindow)
+        }
+
+        override func removeFromSuperview() {
+            removeMonitor()
+            super.removeFromSuperview()
+        }
+
+        private func installMonitorIfNeeded() {
+            guard monitor == nil, window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown]) { [weak self] event in
+                self?.capture(event)
+                return event
+            }
+        }
+
+        private func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        private func capture(_ event: NSEvent) {
+            guard let window,
+                  event.window === window,
+                  !isHiddenOrHasHiddenAncestor else { return }
+            let point = convert(event.locationInWindow, from: nil)
+            guard bounds.contains(point) else { return }
+            onRightClick?(normalizedImagePoint(for: point))
+        }
+
+        private func normalizedImagePoint(for point: CGPoint) -> UnifiedImageSpatialTagPoint? {
+            guard let imagePixelSize,
+                  imagePixelSize.width > 0,
+                  imagePixelSize.height > 0,
+                  bounds.width > 0,
+                  bounds.height > 0 else { return nil }
+
+            let imageAspect = imagePixelSize.width / imagePixelSize.height
+            let boundsAspect = bounds.width / bounds.height
+            let displaySize: CGSize
+            switch contentMode {
+            case .fill:
+                if imageAspect > boundsAspect {
+                    displaySize = CGSize(width: bounds.height * imageAspect, height: bounds.height)
+                } else {
+                    displaySize = CGSize(width: bounds.width, height: bounds.width / imageAspect)
+                }
+            default:
+                if imageAspect > boundsAspect {
+                    displaySize = CGSize(width: bounds.width, height: bounds.width / imageAspect)
+                } else {
+                    displaySize = CGSize(width: bounds.height * imageAspect, height: bounds.height)
+                }
+            }
+
+            let imageRect = CGRect(
+                x: (bounds.width - displaySize.width) / 2,
+                y: (bounds.height - displaySize.height) / 2,
+                width: displaySize.width,
+                height: displaySize.height
+            )
+            guard imageRect.contains(point) else { return nil }
+
+            let x = (point.x - imageRect.minX) / imageRect.width
+            let y = (point.y - imageRect.minY) / imageRect.height
+            return UnifiedImageSpatialTagPoint(
+                normalizedX: min(max(Double(x), 0), 1),
+                normalizedY: min(max(Double(y), 0), 1)
+            )
         }
     }
 }

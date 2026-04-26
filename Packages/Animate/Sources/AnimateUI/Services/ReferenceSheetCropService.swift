@@ -315,11 +315,14 @@ final class ReferenceSheetCropService {
 
         guard let cropped = cgImage.cropping(to: paddedRect) else { return nil }
 
-        // Render into a writable RGBA bitmap so we can white-fill adjacent figure pixels
+        // Render into a writable RGBA bitmap so we can isolate the target
+        // figure, remove the sheet background, and save a true 1:1 contained
+        // PNG. This keeps sheet-derived animated/costume references visually
+        // uniform even when the detected figure bounds are not square.
         let cropW = Int(paddedRect.width)
         let cropH = Int(paddedRect.height)
         let bytesPerRow = cropW * 4
-        var rgba = [UInt8](repeating: 255, count: cropH * bytesPerRow)
+        var rgba = [UInt8](repeating: 0, count: cropH * bytesPerRow)
 
         guard let ctx = CGContext(
             data: &rgba,
@@ -333,9 +336,17 @@ final class ReferenceSheetCropService {
 
         ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: cropW, height: cropH))
 
-        // Mask adjacent figure pixels — any content pixel NOT belonging to this component
+        // Mask adjacent figure pixels — any content pixel NOT belonging to this component.
+        // Also remove the near-white reference-sheet background so the saved
+        // square contains only the figure, centered on a transparent canvas.
         let cropOriginX = Int(paddedRect.minX)
         let cropOriginY = Int(paddedRect.minY)
+
+        let edgeConnectedBackground = Self.edgeConnectedReferenceSheetBackgroundMask(
+            rgba: rgba,
+            width: cropW,
+            height: cropH
+        )
 
         for localY in 0..<cropH {
             for localX in 0..<cropW {
@@ -344,24 +355,41 @@ final class ReferenceSheetCropService {
                 guard globalX >= 0, globalX < imageWidth,
                       globalY >= 0, globalY < imageHeight else { continue }
                 let maskIdx = globalY * imageWidth + globalX
-                // Dark pixel = content
-                if binaryMask[maskIdx] == 0 {
-                    // Check if it belongs to this component (within its raw bounding box)
-                    let insideTarget = rawBounds.contains(CGPoint(x: globalX, y: globalY))
-                    if !insideTarget {
-                        // White-fill this pixel
-                        let rgbaIdx = localY * bytesPerRow + localX * 4
-                        rgba[rgbaIdx]     = 255
-                        rgba[rgbaIdx + 1] = 255
-                        rgba[rgbaIdx + 2] = 255
-                        rgba[rgbaIdx + 3] = 255
-                    }
+                let rgbaIdx = localY * bytesPerRow + localX * 4
+                let isWithinTargetBounds = rawBounds.contains(CGPoint(x: globalX, y: globalY))
+                let isTargetContent = binaryMask[maskIdx] == 0
+                let isProtectedInteriorLightPixel = !edgeConnectedBackground[localY * cropW + localX]
+                let shouldKeep = isWithinTargetBounds && (isTargetContent || isProtectedInteriorLightPixel)
+                if !shouldKeep {
+                    rgba[rgbaIdx] = 0
+                    rgba[rgbaIdx + 1] = 0
+                    rgba[rgbaIdx + 2] = 0
+                    rgba[rgbaIdx + 3] = 0
                 }
             }
         }
 
-        // Re-create CGImage from modified buffer and convert to PNG
-        guard let modifiedCtx = CGContext(
+        return Self.squareContainedPNG(fromRGBA: rgba, width: cropW, height: cropH)
+    }
+
+    static func squareContainedPNG(
+        from cgImage: CGImage,
+        cropRect: CGRect,
+        removeReferenceSheetBackground: Bool = true
+    ) -> Data? {
+        let boundedRect = cropRect.integral.intersection(
+            CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height)
+        )
+        guard boundedRect.width > 0,
+              boundedRect.height > 0,
+              let cropped = cgImage.cropping(to: boundedRect) else { return nil }
+
+        let cropW = Int(boundedRect.width)
+        let cropH = Int(boundedRect.height)
+        let bytesPerRow = cropW * 4
+        var rgba = [UInt8](repeating: 0, count: cropH * bytesPerRow)
+
+        guard let ctx = CGContext(
             data: &rgba,
             width: cropW,
             height: cropH,
@@ -369,9 +397,118 @@ final class ReferenceSheetCropService {
             bytesPerRow: bytesPerRow,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ), let modifiedCG = modifiedCtx.makeImage() else { return nil }
+        ) else { return nil }
 
-        let nsImage = NSImage(cgImage: modifiedCG, size: paddedRect.size)
+        ctx.draw(cropped, in: CGRect(x: 0, y: 0, width: cropW, height: cropH))
+
+        if removeReferenceSheetBackground {
+            Self.clearEdgeConnectedReferenceSheetBackground(&rgba, width: cropW, height: cropH)
+        }
+
+        return squareContainedPNG(fromRGBA: rgba, width: cropW, height: cropH)
+    }
+
+    private static func clearEdgeConnectedReferenceSheetBackground(_ rgba: inout [UInt8], width: Int, height: Int) {
+        let mask = edgeConnectedReferenceSheetBackgroundMask(rgba: rgba, width: width, height: height)
+        let bytesPerRow = width * 4
+        for y in 0..<height {
+            for x in 0..<width where mask[y * width + x] {
+                let idx = y * bytesPerRow + x * 4
+                rgba[idx] = 0
+                rgba[idx + 1] = 0
+                rgba[idx + 2] = 0
+                rgba[idx + 3] = 0
+            }
+        }
+    }
+
+    private static func edgeConnectedReferenceSheetBackgroundMask(rgba: [UInt8], width: Int, height: Int) -> [Bool] {
+        guard width > 0, height > 0 else { return [] }
+        let bytesPerRow = width * 4
+        var visited = [Bool](repeating: false, count: width * height)
+        var queue: [(Int, Int)] = []
+        queue.reserveCapacity(width * 2 + height * 2)
+
+        func isNearWhiteBackground(_ x: Int, _ y: Int) -> Bool {
+            let idx = y * bytesPerRow + x * 4
+            return isLikelyReferenceSheetBackground(
+                red: rgba[idx],
+                green: rgba[idx + 1],
+                blue: rgba[idx + 2],
+                alpha: rgba[idx + 3]
+            )
+        }
+
+        func enqueueIfBackground(_ x: Int, _ y: Int) {
+            guard x >= 0, x < width, y >= 0, y < height else { return }
+            let key = y * width + x
+            guard !visited[key], isNearWhiteBackground(x, y) else { return }
+            visited[key] = true
+            queue.append((x, y))
+        }
+
+        for x in 0..<width {
+            enqueueIfBackground(x, 0)
+            enqueueIfBackground(x, height - 1)
+        }
+        if height > 2 {
+            for y in 1..<(height - 1) {
+                enqueueIfBackground(0, y)
+                enqueueIfBackground(width - 1, y)
+            }
+        }
+
+        var head = 0
+        while head < queue.count {
+            let (x, y) = queue[head]
+            head += 1
+            enqueueIfBackground(x + 1, y)
+            enqueueIfBackground(x - 1, y)
+            enqueueIfBackground(x, y + 1)
+            enqueueIfBackground(x, y - 1)
+        }
+
+        return visited
+    }
+
+    private static func isLikelyReferenceSheetBackground(red: UInt8, green: UInt8, blue: UInt8, alpha: UInt8) -> Bool {
+        guard alpha > 0 else { return true }
+        let maxChannel = max(red, max(green, blue))
+        let minChannel = min(red, min(green, blue))
+        let chroma = Int(maxChannel) - Int(minChannel)
+        let average = (Int(red) + Int(green) + Int(blue)) / 3
+        return average >= 238 && chroma <= 18
+    }
+
+    private static func squareContainedPNG(fromRGBA rgba: [UInt8], width: Int, height: Int) -> Data? {
+        guard width > 0, height > 0 else { return nil }
+        let squareSide = max(width, height)
+        let squareBytesPerRow = squareSide * 4
+        var squareRGBA = [UInt8](repeating: 0, count: squareSide * squareBytesPerRow)
+        let offsetX = (squareSide - width) / 2
+        let offsetY = (squareSide - height) / 2
+        let sourceBytesPerRow = width * 4
+
+        for y in 0..<height {
+            let sourceStart = y * sourceBytesPerRow
+            let targetStart = (y + offsetY) * squareBytesPerRow + offsetX * 4
+            squareRGBA.replaceSubrange(
+                targetStart..<(targetStart + sourceBytesPerRow),
+                with: rgba[sourceStart..<(sourceStart + sourceBytesPerRow)]
+            )
+        }
+
+        guard let squareCtx = CGContext(
+            data: &squareRGBA,
+            width: squareSide,
+            height: squareSide,
+            bitsPerComponent: 8,
+            bytesPerRow: squareBytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let squareCG = squareCtx.makeImage() else { return nil }
+
+        let nsImage = NSImage(cgImage: squareCG, size: NSSize(width: squareSide, height: squareSide))
         guard let tiff = nsImage.tiffRepresentation,
               let bmp = NSBitmapImageRep(data: tiff),
               let png = bmp.representation(using: .png, properties: [:]) else { return nil }

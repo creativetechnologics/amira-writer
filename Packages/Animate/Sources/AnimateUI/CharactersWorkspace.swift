@@ -13,6 +13,9 @@ public struct CharactersWorkspace: View {
     public var body: some View {
         ZStack {
             CharactersWorkspaceContent(store: controller.store)
+                .environment(\.unifiedImageFlipHandler) { path in
+                    controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
+                }
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
             if controller.isLoadingProject || controller.isSelectionRestorePending {
@@ -66,9 +69,6 @@ private struct CharactersWorkspaceContent: View {
             } else {
                 workspaceBody
             }
-        }
-        .task(id: store.owpURL?.path) {
-            store.recoverMissingPersistedCharactersIfNeeded()
         }
         .sheet(isPresented: $store.showGenerationSheet) {
             GeminiGenerationView(store: store)
@@ -166,6 +166,7 @@ private struct CharactersWorkspaceContent: View {
                     onDragChanged: resizeInspector,
                     onDragEnded: { }
                 )
+                .zIndex(2)
 
                 OperaChromeFlatPane {
                     OperaChromePaneHeader(
@@ -186,7 +187,7 @@ private struct CharactersWorkspaceContent: View {
                         animateWorkspaceState: animateWorkspaceState
                     )
                 }
-                .frame(width: inspectorWidth)
+                .frame(width: max(inspectorWidth, 280))
             }
         }
         .background(OperaChromeTheme.workspaceBackground)
@@ -217,9 +218,10 @@ private struct CharactersWorkspaceContent: View {
     }
 
     private func resizeInspector(_ delta: CGFloat) {
-        inspectorWidth = min(
-            max(inspectorWidth - Double(delta), 250),
-            600
-        )
+        // Anchor from the clamped visible width. If an older persisted value is
+        // below the current minimum, using it directly makes the pane look
+        // locked until the drag overcomes the hidden underflow.
+        let anchor = max(inspectorWidth, 280.0)
+        inspectorWidth = min(max(anchor - Double(delta), 280.0), 720.0)
     }
 }

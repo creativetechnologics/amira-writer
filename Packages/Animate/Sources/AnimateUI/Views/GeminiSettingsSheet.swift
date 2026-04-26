@@ -25,9 +25,13 @@ struct APISettingsSheet: View {
     @State private var vertexProbeMessage: String = ""
     @State private var vertexProbeIsError: Bool = false
     @State private var vertexProbing: Bool = false
+    @State private var vertexAttemptLedgerRefreshID = UUID()
     @State private var imageAnalysisBackend: ImageAnalysisBackend = .aiStudio
     @State private var imageAnalysisVertexProjectDraft: String = ""
     @State private var imageAnalysisVertexRegionDraft: String = "global"
+    @State private var isResettingImageAnalysisQueue = false
+    @State private var imageAnalysisQueueResetMessage = ""
+    @State private var imageAnalysisConfigurationRefreshTask: Task<Void, Never>?
 
     enum SettingsTab: String, CaseIterable {
         case gemini = "Gemini"
@@ -87,6 +91,13 @@ struct APISettingsSheet: View {
         .onChange(of: selectedTab) { _, newValue in
             guard newValue == .runPod else { return }
             Task { await store.refreshRunPodAccountSummary(using: runPodKeyDraft) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AnimateStore.vertexImageGenerationAttemptLedgerDidChangeNotification)) { _ in
+            vertexAttemptLedgerRefreshID = UUID()
+        }
+        .onDisappear {
+            imageAnalysisConfigurationRefreshTask?.cancel()
+            imageAnalysisConfigurationRefreshTask = nil
         }
     }
 
@@ -196,7 +207,7 @@ struct APISettingsSheet: View {
                                     projectID: newValue.trimmingCharacters(in: .whitespacesAndNewlines),
                                     region: imageAnalysisVertexRegionDraft
                                 )
-                                store.refreshImageAnalysisConfiguration()
+                                scheduleImageAnalysisConfigurationRefresh()
                             }
                     }
 
@@ -216,7 +227,7 @@ struct APISettingsSheet: View {
                                 projectID: imageAnalysisVertexProjectDraft.trimmingCharacters(in: .whitespacesAndNewlines),
                                 region: newValue
                             )
-                            store.refreshImageAnalysisConfiguration()
+                            scheduleImageAnalysisConfigurationRefresh()
                         }
                     }
 
@@ -271,8 +282,51 @@ struct APISettingsSheet: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+
+                    Button(role: .destructive) {
+                        resetImageAnalysisQueue()
+                    } label: {
+                        if isResettingImageAnalysisQueue {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Reset Queue", systemImage: "trash")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isResettingImageAnalysisQueue)
+                }
+
+                if !imageAnalysisQueueResetMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(imageAnalysisQueueResetMessage)
+                        .font(.caption)
+                        .foregroundStyle(imageAnalysisQueueResetMessage.localizedCaseInsensitiveContains("could not") ? .red : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        }
+    }
+
+    private func resetImageAnalysisQueue() {
+        isResettingImageAnalysisQueue = true
+        imageAnalysisQueueResetMessage = "Resetting image analysis queue…"
+        Task {
+            let message = await store.resetImageAnalysisQueue()
+            await MainActor.run {
+                imageAnalysisQueueResetMessage = message
+                isResettingImageAnalysisQueue = false
+            }
+        }
+    }
+
+    private func scheduleImageAnalysisConfigurationRefresh() {
+        imageAnalysisConfigurationRefreshTask?.cancel()
+        imageAnalysisConfigurationRefreshTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            store.refreshImageAnalysisConfiguration()
+            imageAnalysisConfigurationRefreshTask = nil
         }
     }
 
@@ -376,6 +430,144 @@ struct APISettingsSheet: View {
             }
             vertexProbing = false
         }
+    }
+
+    private var shouldShowVertexAttemptLedger: Bool {
+        imageGenBackend == .vertex || !recentVertexImageAttempts.isEmpty
+    }
+
+    private var recentVertexImageAttempts: [AnimateStore.VertexImageGenerationAttemptRecord] {
+        _ = vertexAttemptLedgerRefreshID
+        return AnimateStore.recentVertexImageGenerationAttempts()
+            .sorted { $0.startedAt > $1.startedAt }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    private var recentVertexAttemptLedgerSection: some View {
+        let attempts = recentVertexImageAttempts
+        return GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                if attempts.isEmpty {
+                    Text("No Vertex image-generation attempts recorded yet.")
+                        .font(.caption)
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ForEach(Array(attempts.enumerated()), id: \.element.id) { index, attempt in
+                        vertexAttemptRow(attempt)
+
+                        if index < attempts.count - 1 {
+                            Divider()
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Recent Vertex image-generation attempts")
+                        .font(.body.bold())
+                        .foregroundStyle(OperaChromeTheme.textPrimary)
+                    Text("Latest \(attempts.count) recorded attempts.")
+                        .font(.caption)
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                }
+            }
+        }
+    }
+
+    private func vertexAttemptRow(_ attempt: AnimateStore.VertexImageGenerationAttemptRecord) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            vertexAttemptStatusBadge(for: attempt.status)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(vertexAttemptTitle(for: attempt))
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(OperaChromeTheme.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 8)
+
+                    Text("Started \(attempt.startedAt.formatted(.relative(presentation: .named)))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Text("\(vertexAttemptModelName(for: attempt)) · \(attempt.imageSize) · \(attempt.aspectRatio)")
+                    .font(.caption)
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("\(attempt.isEditRequest ? "Edit" : "Generate") · refs \(attempt.referenceImageCount) · est \(vertexAttemptCurrencyString(attempt.estimatedCostUSD)) · charged \(vertexAttemptCurrencyString(attempt.chargedEstimatedCostUSD))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if attempt.status == .failed,
+                   let errorMessage = attempt.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !errorMessage.isEmpty {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func vertexAttemptStatusBadge(
+        for status: AnimateStore.VertexImageGenerationAttemptRecord.Status
+    ) -> some View {
+        let presentation = vertexAttemptStatusPresentation(for: status)
+        return Label(presentation.title, systemImage: presentation.symbol)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(presentation.color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(presentation.color.opacity(0.12), in: Capsule())
+            .accessibilityLabel(presentation.title)
+    }
+
+    private func vertexAttemptStatusPresentation(
+        for status: AnimateStore.VertexImageGenerationAttemptRecord.Status
+    ) -> (title: String, symbol: String, color: Color) {
+        switch status {
+        case .running:
+            return ("Running", "circle.dashed", .blue)
+        case .succeeded:
+            return ("Succeeded", "checkmark.circle.fill", .green)
+        case .failed:
+            return ("Failed", "exclamationmark.triangle.fill", .red)
+        }
+    }
+
+    private func vertexAttemptTitle(
+        for attempt: AnimateStore.VertexImageGenerationAttemptRecord
+    ) -> String {
+        switch attempt.status {
+        case .running:
+            return "Running"
+        case .succeeded:
+            return "Succeeded"
+        case .failed:
+            return "Failed"
+        }
+    }
+
+    private func vertexAttemptModelName(
+        for attempt: AnimateStore.VertexImageGenerationAttemptRecord
+    ) -> String {
+        GeminiModel(rawValue: attempt.model)?.displayName ?? attempt.model
+    }
+
+    private func vertexAttemptCurrencyString(_ value: Double) -> String {
+        String(format: "$%.4f", value)
     }
 
     // MARK: - MiniMax

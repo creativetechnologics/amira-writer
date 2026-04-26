@@ -9,11 +9,44 @@ struct ImageLibraryReviewMetadata: Equatable, Sendable {
     var isRejected: Bool
     var notes: String
     var updatedAt: Date?
+    var characterTags: [String]
+    var visualStyle: ImageLibraryVisualStyle?
+
+    init(
+        rating: Int?,
+        isRejected: Bool,
+        notes: String,
+        updatedAt: Date?,
+        characterTags: [String] = [],
+        visualStyle: ImageLibraryVisualStyle? = nil
+    ) {
+        self.rating = rating
+        self.isRejected = isRejected
+        self.notes = notes
+        self.updatedAt = updatedAt
+        self.characterTags = characterTags
+        self.visualStyle = visualStyle
+    }
 
     var isEmpty: Bool {
         rating == nil
             && !isRejected
             && notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && characterTags.isEmpty
+            && visualStyle == nil
+    }
+}
+
+@available(macOS 26.0, *)
+enum ImageLibraryVisualStyle: String, CaseIterable, Codable, Sendable {
+    case realistic
+    case animated
+
+    var displayName: String {
+        switch self {
+        case .realistic: return "Realistic"
+        case .animated: return "Animated"
+        }
     }
 }
 
@@ -32,12 +65,21 @@ enum ImageLibraryMetadataSidecarService {
             .map { ["true", "1", "yes"].contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) } ?? false
         let notes = extractTagValue("Notes", from: xml).map(unescapeXML) ?? ""
         let updatedAt = extractTagValue("UpdatedAt", from: xml).flatMap { iso8601Formatter().date(from: $0) }
+        let characterTags = extractTagValues("Character", from: xml)
+            .map(unescapeXML)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let visualStyle = extractTagValue("VisualStyle", from: xml)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .flatMap(ImageLibraryVisualStyle.init(rawValue:))
 
         let metadata = ImageLibraryReviewMetadata(
             rating: rating.map { min(max($0, 1), 5) },
             isRejected: isRejected,
             notes: notes,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            characterTags: Array(Set(characterTags)).sorted(),
+            visualStyle: visualStyle
         )
         return metadata.isEmpty ? nil : metadata
     }
@@ -57,6 +99,8 @@ enum ImageLibraryMetadataSidecarService {
               \(metadata.rating.map { "<xmp:Rating>\($0)</xmp:Rating>" } ?? "")
               <amira:IsRejected>\(metadata.isRejected ? "true" : "false")</amira:IsRejected>
               <amira:Notes>\(escapeXML(metadata.notes))</amira:Notes>
+              \(metadata.visualStyle.map { "<amira:VisualStyle>\($0.rawValue)</amira:VisualStyle>" } ?? "")
+              \(metadata.characterTags.map { "<amira:Character>\(escapeXML($0))</amira:Character>" }.joined(separator: "\n              "))
               <amira:UpdatedAt>\(iso8601Formatter().string(from: metadata.updatedAt ?? Date()))</amira:UpdatedAt>
             </rdf:Description>
           </rdf:RDF>
@@ -79,7 +123,7 @@ enum ImageLibraryMetadataSidecarService {
 
     // Pre-compiled regex patterns keyed by tag name — avoids recompiling on every call.
     private static let tagRegexes: [String: NSRegularExpression] = {
-        let tags = ["Rating", "IsRejected", "Notes", "UpdatedAt"]
+        let tags = ["Rating", "IsRejected", "Notes", "UpdatedAt", "Character", "VisualStyle"]
         var dict: [String: NSRegularExpression] = [:]
         for tag in tags {
             let pattern = "<(?:[A-Za-z0-9_\\-]+:)?\(tag)>(.*?)</(?:[A-Za-z0-9_\\-]+:)?\(tag)>"
@@ -87,6 +131,15 @@ enum ImageLibraryMetadataSidecarService {
         }
         return dict
     }()
+
+    private static func extractTagValues(_ tag: String, from xml: String) -> [String] {
+        guard let regex = tagRegexes[tag] else { return [] }
+        let nsRange = NSRange(xml.startIndex..<xml.endIndex, in: xml)
+        return regex.matches(in: xml, options: [], range: nsRange).compactMap { match in
+            guard match.numberOfRanges > 1, let range = Range(match.range(at: 1), in: xml) else { return nil }
+            return String(xml[range])
+        }
+    }
 
     private static func extractTagValue(_ tagName: String, from xml: String) -> String? {
         guard let regex = tagRegexes[tagName] else { return nil }
@@ -2486,11 +2539,14 @@ func persistReviewUpdate(
         }
     }
 
+    let existingMetadata = ImageLibraryMetadataSidecarService.load(forImagePath: record.resolvedPath)
     let metadata = ImageLibraryReviewMetadata(
         rating: rating,
         isRejected: isRejected,
         notes: notes,
-        updatedAt: Date()
+        updatedAt: Date(),
+        characterTags: existingMetadata?.characterTags ?? [],
+        visualStyle: existingMetadata?.visualStyle
     )
     ImageLibraryMetadataSidecarService.saveAsync(metadata, forImagePath: record.resolvedPath)
     return metadata
