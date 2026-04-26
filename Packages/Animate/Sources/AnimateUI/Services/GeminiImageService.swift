@@ -1,6 +1,30 @@
 import AppKit
 import Foundation
 
+@available(macOS 26.0, *)
+private actor GeminiImageGenerationSerialGate {
+    private var isRunning = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        if !isRunning {
+            isRunning = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func leave() {
+        if waiters.isEmpty {
+            isRunning = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 /// Direct Gemini API client for AI-assisted character image generation.
 ///
 /// Supports both text-only and image+text prompts. Images are sent as base64-encoded
@@ -22,6 +46,7 @@ final class GeminiImageService {
         case masterSwitchOff
         case vertexNotConfigured(String)
         case authFailureHalt(String)
+        case referenceImageUnavailable(String)
 
         var errorDescription: String? {
             switch self {
@@ -51,6 +76,8 @@ final class GeminiImageService {
                 return "Vertex AI backend is selected but not configured: \(msg)"
             case .authFailureHalt(let msg):
                 return "Gemini halted after 2 consecutive auth failures. Re-check the API key or Vertex credentials before retrying. (\(msg))"
+            case .referenceImageUnavailable(let msg):
+                return "Reference image unavailable: \(msg)"
             }
         }
     }
@@ -61,6 +88,10 @@ final class GeminiImageService {
         var model: GeminiModel = .flash
         var aspectRatio: String = "3:4"
         var imageSize: String = "2K"
+        /// Gemini image editing examples send the source media before the text
+        /// edit instruction. Existing generation flows keep the historical
+        /// prompt-first ordering unless an edit plan asks for media-first.
+        var referenceImagesFirst: Bool = false
     }
 
     struct ReferenceImage {
@@ -119,17 +150,23 @@ final class GeminiImageService {
     private static var authFailureHalted: Bool = false
     private static let authFailureHaltThreshold: Int = 2
 
+    /// Vertex/AI Studio image generation capacity is one-at-a-time for Gary's account.
+    /// Serialize every immediate image-generation request globally so Canvas, Places,
+    /// Characters, and All Images append to one long queue instead of racing.
+    private static let immediateGenerationGate = GeminiImageGenerationSerialGate()
+
     // MARK: - Properties
 
-    private let session: URLSession
-    private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
-
-    init() {
+    private static let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 300
         config.timeoutIntervalForResource = 600
-        self.session = URLSession(configuration: config)
-    }
+        return URLSession(configuration: config)
+    }()
+
+    private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    init() {}
 
     // MARK: - Cost Estimation
 
@@ -183,6 +220,10 @@ final class GeminiImageService {
             }
         }
 
+        // Only one immediate image generation may be in-flight globally.
+        await Self.immediateGenerationGate.enter()
+        defer { Task { await Self.immediateGenerationGate.leave() } }
+
         // Rate limiting: reset the window counter if more than 60 seconds have elapsed.
         let now = Date()
         if now.timeIntervalSince(Self.callCountResetTime) > 60 {
@@ -196,43 +237,58 @@ final class GeminiImageService {
             throw ServiceError.rateLimitExceeded
         }
 
-        // Resolve the target URL + auth header based on the selected backend.
-        let (url, authHeaderName, authHeaderValue): (URL, String, String)
-        switch backend {
-        case .aiStudio:
-            guard let u = URL(string: "\(baseURL)/\(request.model.rawValue):generateContent") else {
-                throw ServiceError.invalidResponse
-            }
-            url = u
-            authHeaderName = "x-goog-api-key"
-            authHeaderValue = apiKey
-
-        case .vertex:
-            let settings = ImageGenBackendStore.currentVertexSettings()
-            guard !settings.projectID.isEmpty else {
-                throw ServiceError.vertexNotConfigured("missing project ID")
-            }
-            let client = VertexAIClient(projectID: settings.projectID, region: settings.region)
-            guard let u = client.generateContentURL(modelID: request.model.rawValue) else {
-                throw ServiceError.invalidResponse
-            }
-            url = u
-            do {
-                let token = try await client.accessToken()
-                authHeaderName = "Authorization"
-                authHeaderValue = "Bearer \(token)"
-            } catch {
-                throw ServiceError.vertexNotConfigured(error.localizedDescription)
-            }
-        }
-
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.setValue(authHeaderValue, forHTTPHeaderField: authHeaderName)
-        urlRequest.httpBody = try await Self.serializedRequestBody(for: request)
+        // Start the Vertex attempt record before endpoint/auth resolution so
+        // missing project IDs, gcloud/token failures, and malformed endpoint
+        // setup are visible in the durable ledger too.
+        let vertexAttemptID: UUID? = backend == .vertex
+            ? AnimateStore.recordVertexImageGenerationAttemptStarted(
+                model: request.model,
+                imageSize: request.imageSize,
+                aspectRatio: request.aspectRatio,
+                referenceImageCount: request.referenceImages.count,
+                isEditRequest: request.referenceImagesFirst
+            )
+            : nil
 
         do {
+            // Resolve the target URL + auth header based on the selected backend.
+            let (url, authHeaderName, authHeaderValue): (URL, String, String)
+            switch backend {
+            case .aiStudio:
+                guard let u = URL(string: "\(baseURL)/\(request.model.rawValue):generateContent") else {
+                    throw ServiceError.invalidResponse
+                }
+                url = u
+                authHeaderName = "x-goog-api-key"
+                authHeaderValue = apiKey
+
+            case .vertex:
+                let settings = ImageGenBackendStore.currentVertexSettings()
+                guard !settings.projectID.isEmpty else {
+                    throw ServiceError.vertexNotConfigured("missing project ID")
+                }
+                let client = await VertexAIClientCache.shared.client(
+                    projectID: settings.projectID,
+                    region: settings.region
+                )
+                guard let u = client.generateContentURL(modelID: request.model.rawValue) else {
+                    throw ServiceError.invalidResponse
+                }
+                url = u
+                do {
+                    let token = try await client.accessToken()
+                    authHeaderName = "Authorization"
+                    authHeaderValue = "Bearer \(token)"
+                } catch {
+                    throw ServiceError.vertexNotConfigured(error.localizedDescription)
+                }
+            }
+
+            var urlRequest = URLRequest(url: url)
+            urlRequest.httpMethod = "POST"
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            urlRequest.setValue(authHeaderValue, forHTTPHeaderField: authHeaderName)
+            urlRequest.httpBody = try await Self.serializedRequestBody(for: request)
             let (data, httpResponse) = try await performRequestWithRetry(urlRequest, backend: backend)
 
             // Success — reset the failure counter and clear any prior trip.
@@ -252,6 +308,15 @@ final class GeminiImageService {
             }
 
             if backend == .vertex {
+                if let vertexAttemptID {
+                    AnimateStore.finishVertexImageGenerationAttempt(
+                        vertexAttemptID,
+                        status: .succeeded,
+                        model: request.model,
+                        imageSize: request.imageSize,
+                        httpStatusCode: httpResponse.statusCode
+                    )
+                }
                 AnimateStore.recordVertexCreditUsageForSuccessfulImageGeneration(
                     model: request.model,
                     imageSize: request.imageSize
@@ -265,6 +330,15 @@ final class GeminiImageService {
                 textResponse: payload.textResponse
             )
         } catch {
+            if let vertexAttemptID {
+                AnimateStore.finishVertexImageGenerationAttempt(
+                    vertexAttemptID,
+                    status: .failed,
+                    model: request.model,
+                    imageSize: request.imageSize,
+                    errorMessage: error.localizedDescription
+                )
+            }
             if case ServiceError.cancelled = error {
                 throw error
             }
@@ -304,37 +378,134 @@ final class GeminiImageService {
         cache.totalCostLimit = 50 * 1024 * 1024  // ~50 MB
         return cache
     }()
+    /// Files at or under this size go straight to the wire untouched (PNG
+    /// stays lossless). Anything larger is re-encoded as a high-quality JPEG
+    /// at the SAME pixel dimensions — a 4K screenshot collapses from ~15 MB
+    /// PNG to ~3 MB JPEG with no perceptible quality loss, so continuity
+    /// edits keep their full source resolution.
+    nonisolated private static let maxInlineReferenceImageBytes = 6 * 1024 * 1024
+    /// Hard ceiling on a single inline reference (raw bytes before base64).
+    /// Gemini caps total request inline data around 20 MB; with base64
+    /// inflation (×1.33) this leaves room for multi-reference edits.
+    nonisolated private static let absoluteInlineReferenceCeilingBytes = 14 * 1024 * 1024
+    /// Visually-lossless JPEG quality used for the high-quality re-encode
+    /// path. 0.95 is the practical equivalent of "JPEGli quality 90"
+    /// (visually lossless per JPEGli docs); we're using the system encoder
+    /// because libjxl/cjpegli isn't available on Gary's machine. Dropping
+    /// to 0.85 only kicks in if the 0.95 output still exceeds the ceiling.
+    nonisolated private static let referenceJPEGQualityHigh: CGFloat = 0.95
+    nonisolated private static let referenceJPEGQualityFallback: CGFloat = 0.85
 
-    /// Create a ReferenceImage from a file URL.
-    static func referenceImage(from url: URL) -> ReferenceImage? {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-        let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
-        let cacheKey = NSString(string: "\(url.path)|\(mtime)|\(size)")
+    /// Create a required ReferenceImage from a file URL.
+    ///
+    /// Use this for edit-source images where silently dropping the image would
+    /// turn a continuity-preserving edit into a prompt-only generation. Files
+    /// larger than the inline cap are re-encoded as high-quality JPEG at the
+    /// original pixel dimensions (no downscaling) so we never silently lose
+    /// continuity AND never lose resolution.
+    nonisolated static func requiredReferenceImage(from url: URL) throws -> ReferenceImage {
+        let standardizedURL = url.standardizedFileURL
+        let path = standardizedURL.path
+        let attrs: [FileAttributeKey: Any]
+        do {
+            attrs = try FileManager.default.attributesOfItem(atPath: path)
+        } catch {
+            throw ServiceError.referenceImageUnavailable(
+                "Could not inspect \(path): \(error.localizedDescription)"
+            )
+        }
+        let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let size = (attrs[.size] as? NSNumber)?.intValue ?? 0
+        guard size > 0 else {
+            throw ServiceError.referenceImageUnavailable("\(path) is empty or missing.")
+        }
 
+        let cacheKey = NSString(string: "\(path)|\(mtime)|\(size)")
         if let hit = referenceCache.object(forKey: cacheKey) {
             return ReferenceImage(data: hit.data, mimeType: hit.mimeType)
         }
 
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        // Small enough to inline as-is — fast path keeps PNGs lossless.
+        if size <= Self.maxInlineReferenceImageBytes {
+            let data: Data
+            do {
+                data = try Data(contentsOf: standardizedURL)
+            } catch {
+                throw ServiceError.referenceImageUnavailable(
+                    "Could not read \(path): \(error.localizedDescription)"
+                )
+            }
 
-        let ext = url.pathExtension.lowercased()
-        let mimeType: String
-        switch ext {
-        case "png": mimeType = "image/png"
-        case "jpg", "jpeg": mimeType = "image/jpeg"
-        case "webp": mimeType = "image/webp"
-        default: mimeType = "image/png"
+            let ext = standardizedURL.pathExtension.lowercased()
+            let mimeType: String
+            switch ext {
+            case "png": mimeType = "image/png"
+            case "jpg", "jpeg": mimeType = "image/jpeg"
+            case "webp": mimeType = "image/webp"
+            default: mimeType = "image/png"
+            }
+
+            let encoded = data.base64EncodedString()
+            referenceCache.setObject(
+                CachedReference(data: encoded, mimeType: mimeType),
+                forKey: cacheKey,
+                cost: encoded.utf8.count
+            )
+            return ReferenceImage(data: encoded, mimeType: mimeType)
         }
 
-        let encoded = data.base64EncodedString()
+        // Oversized — re-encode as high-quality JPEG at ORIGINAL dimensions.
+        // No downscaling: a 4K identity reference stays 4K so Gemini can
+        // still see facial detail / signage / textures.
+        guard let recoded = Self.fullResJPEGData(at: standardizedURL) else {
+            throw ServiceError.referenceImageUnavailable(
+                "\(path) is \(String(format: "%.1f", Double(size) / 1_048_576.0)) MB and could not be re-encoded for inline Gemini reference. Try re-exporting it as JPEG."
+            )
+        }
+
+        let encoded = recoded.base64EncodedString()
         referenceCache.setObject(
-            CachedReference(data: encoded, mimeType: mimeType),
+            CachedReference(data: encoded, mimeType: "image/jpeg"),
             forKey: cacheKey,
             cost: encoded.utf8.count
         )
+        print("[GeminiImageService] Re-encoded oversized reference at full resolution (\(String(format: "%.1f", Double(size) / 1_048_576.0)) MB → \(String(format: "%.1f", Double(recoded.count) / 1_048_576.0)) MB JPEG): \(path)")
+        return ReferenceImage(data: encoded, mimeType: "image/jpeg")
+    }
 
-        return ReferenceImage(data: encoded, mimeType: mimeType)
+    /// Decode `url` and re-encode as JPEG at the same pixel dimensions.
+    /// Tries the high-quality factor first (visually lossless); falls back to
+    /// a slightly lower quality only if the high-quality output still exceeds
+    /// the absolute inline ceiling. Returns nil if AppKit can't decode.
+    nonisolated private static func fullResJPEGData(at url: URL) -> Data? {
+        guard let image = NSImage(contentsOf: url) else { return nil }
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+
+        if let highQ = bitmap.representation(
+            using: .jpeg,
+            properties: [.compressionFactor: Self.referenceJPEGQualityHigh]
+        ), highQ.count <= Self.absoluteInlineReferenceCeilingBytes {
+            return highQ
+        }
+
+        return bitmap.representation(
+            using: .jpeg,
+            properties: [.compressionFactor: Self.referenceJPEGQualityFallback]
+        )
+    }
+
+    /// Create an optional ReferenceImage from a file URL.
+    ///
+    /// Optional context references may be skipped when unavailable, but the
+    /// reason is logged. Edit-source images should use `requiredReferenceImage`.
+    nonisolated static func referenceImage(from url: URL) -> ReferenceImage? {
+        do {
+            return try requiredReferenceImage(from: url)
+        } catch {
+            print("[GeminiImageService] Skipping optional inline reference image: \(url.path) — \(error.localizedDescription)")
+            return nil
+        }
     }
 
     /// Save a generated image to disk as PNG.
@@ -348,14 +519,21 @@ final class GeminiImageService {
     private static func serializedRequestBody(for request: GenerationRequest) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
             var parts: [[String: Any]] = []
-            parts.append(["text": request.prompt])
-            for ref in request.referenceImages {
-                parts.append([
+            let referenceParts: [[String: Any]] = request.referenceImages.map { ref in
+                [
                     "inlineData": [
                         "mimeType": ref.mimeType,
                         "data": ref.data,
                     ]
-                ])
+                ]
+            }
+
+            if request.referenceImagesFirst {
+                parts.append(contentsOf: referenceParts)
+                parts.append(["text": request.prompt])
+            } else {
+                parts.append(["text": request.prompt])
+                parts.append(contentsOf: referenceParts)
             }
 
             let requestBody: [String: Any] = [
@@ -420,7 +598,7 @@ final class GeminiImageService {
 
         for attempt in 1...maxAttempts {
             do {
-                let (data, response) = try await session.data(for: urlRequest)
+                let (data, response) = try await Self.session.data(for: urlRequest)
                 guard let httpResponse = response as? HTTPURLResponse else {
                     throw ServiceError.invalidResponse
                 }
