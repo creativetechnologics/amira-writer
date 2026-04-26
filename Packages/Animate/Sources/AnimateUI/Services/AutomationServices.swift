@@ -775,8 +775,11 @@ struct AutomationFrameGenerationService {
             }
         }
 
+        let hasBlockingRecords = records.contains { record in
+            record.status == "blocked" || record.status.hasPrefix("failed")
+        }
         return .init(
-            ok: blockers.filter { $0.severity == "blocking" }.isEmpty && records.allSatisfy { $0.status != "failed_provider_error" },
+            ok: blockers.filter { $0.severity == "blocking" }.isEmpty && !hasBlockingRecords,
             mode: mode,
             isDryRun: isDryRun,
             model: model.rawValue,
