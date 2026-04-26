@@ -576,10 +576,26 @@ enum OWPProjectIO {
     static func enumerateSongStubs(in songsRoot: URL) -> [SongStub] {
         let fm = FileManager.default
         guard fm.fileExists(atPath: songsRoot.path) else { return [] }
-        let enumerator = fm.enumerator(at: songsRoot, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey], options: [.skipsHiddenFiles])
+        let enumerator = fm.enumerator(
+            at: songsRoot,
+            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        )
         var stubs: [SongStub] = []
         while let fileURL = enumerator?.nextObject() as? URL {
-            guard fileURL.pathExtension.lowercased() == "ows" else { continue }
+            // Don't descend into per-song sidecar folders (e.g. `*.lyric-iterations/`)
+            // — they hold dozens of small files that the watch loop must NOT walk
+            // every poll tick. Without this skip, a 52-song project pushes 600+
+            // syscalls per 0.55s tick onto the main thread.
+            let ext = fileURL.pathExtension.lowercased()
+            let isDir = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            if isDir {
+                if ext == "lyric-iterations" || ext == "lyric-iteration" {
+                    enumerator?.skipDescendants()
+                }
+                continue
+            }
+            guard ext == "ows" else { continue }
             // Skip SyncThing conflict files — they should not appear as songs
             let filename = fileURL.lastPathComponent
             if filename.contains(".sync-conflict-") { continue }
@@ -1846,7 +1862,7 @@ final class ScoreStore {
 
     // MARK: - Persistence
 
-    private static let externalWatchInterval: TimeInterval = 0.55
+    private static let externalWatchInterval: TimeInterval = 2.0
     private var dirtySongPaths: Set<String> = []
     private var isSavingInternal: Bool = false
     private var lastSelectedMidiID: UUID?
@@ -2362,21 +2378,14 @@ final class ScoreStore {
         guard fileProjectURL != nil else { return }
         isExternalFileWatchingActive = true
         externalFileWatchGeneration &+= 1
-        let generation = externalFileWatchGeneration
-
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            guard self.isExternalFileWatchingActive,
-                  self.externalFileWatchGeneration == generation else { return }
-            self.checkForExternalProjectChanges()
-            guard self.isExternalFileWatchingActive,
-                  self.externalFileWatchGeneration == generation else { return }
-            self.scheduleExternalFileWatch(generation: generation)
-        }
-        externalFileWatchWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.externalWatchInterval, execute: workItem)
+        scheduleExternalFileWatch(generation: externalFileWatchGeneration)
     }
 
+    /// Periodic external-file scan. Runs the FS walk on a background queue
+    /// (it touches 50–600+ files on each tick depending on project size) and
+    /// hops back to main only to apply the diff. Keeping the syscalls off the
+    /// main actor is what keeps the UI responsive while the project tree is
+    /// being polled.
     private func scheduleExternalFileWatch(generation: UInt64) {
         guard isExternalFileWatchingActive,
               externalFileWatchGeneration == generation,
@@ -2386,10 +2395,20 @@ final class ScoreStore {
             guard let self else { return }
             guard self.isExternalFileWatchingActive,
                   self.externalFileWatchGeneration == generation else { return }
-            self.checkForExternalProjectChanges()
-            guard self.isExternalFileWatchingActive,
-                  self.externalFileWatchGeneration == generation else { return }
-            self.scheduleExternalFileWatch(generation: generation)
+            guard let projectURL = self.fileProjectURL, !self.isSavingInternal else {
+                self.scheduleExternalFileWatch(generation: generation)
+                return
+            }
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let snapshots = ScoreStore.monitoredExternalFileSnapshots(for: projectURL)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    guard self.isExternalFileWatchingActive,
+                          self.externalFileWatchGeneration == generation else { return }
+                    self.applyExternalSnapshotDiff(snapshots, projectURL: projectURL)
+                    self.scheduleExternalFileWatch(generation: generation)
+                }
+            }
         }
         externalFileWatchWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.externalWatchInterval, execute: workItem)
@@ -2407,14 +2426,16 @@ final class ScoreStore {
 
     private func recordExternalFileSnapshots() {
         guard let projectURL = fileProjectURL else { return }
-        lastKnownExternalSnapshots = monitoredExternalFileSnapshots(for: projectURL)
+        lastKnownExternalSnapshots = Self.monitoredExternalFileSnapshots(for: projectURL)
     }
 
-    private func monitoredExternalFileSnapshots(for projectURL: URL) -> [String: ExternalProjectFileSnapshot] {
+    nonisolated fileprivate static func monitoredExternalFileSnapshots(
+        for projectURL: URL
+    ) -> [String: ExternalProjectFileSnapshot] {
         var snapshots: [String: ExternalProjectFileSnapshot] = [:]
 
         if projectURL.pathExtension.lowercased() == "ows" {
-            if let snapshot = fileSnapshot(for: projectURL) {
+            if let snapshot = Self.fileSnapshot(for: projectURL) {
                 snapshots[projectURL.lastPathComponent] = snapshot
             }
             return snapshots
@@ -2422,7 +2443,7 @@ final class ScoreStore {
 
         let songsRoot = projectURL.appendingPathComponent(OWPProjectIO.songsDir)
         for stub in OWPProjectIO.enumerateSongStubs(in: songsRoot) {
-            if let snapshot = fileSnapshot(for: stub.fileURL) {
+            if let snapshot = Self.fileSnapshot(for: stub.fileURL) {
                 snapshots[stub.relativePath] = snapshot
             }
         }
@@ -2434,7 +2455,7 @@ final class ScoreStore {
             OWPProjectIO.legacyProjectInstrumentsFile,
         ] {
             let fileURL = projectURL.appendingPathComponent(path)
-            if let snapshot = fileSnapshot(for: fileURL) {
+            if let snapshot = Self.fileSnapshot(for: fileURL) {
                 snapshots[path] = snapshot
             }
         }
@@ -2442,7 +2463,7 @@ final class ScoreStore {
         return snapshots
     }
 
-    private func fileSnapshot(for fileURL: URL) -> ExternalProjectFileSnapshot? {
+    nonisolated fileprivate static func fileSnapshot(for fileURL: URL) -> ExternalProjectFileSnapshot? {
         guard let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
               let modificationDate = values.contentModificationDate else {
             return nil
@@ -2456,8 +2477,18 @@ final class ScoreStore {
 
     private func checkForExternalProjectChanges() {
         guard let projectURL = fileProjectURL, !isSavingInternal else { return }
+        let currentSnapshots = Self.monitoredExternalFileSnapshots(for: projectURL)
+        applyExternalSnapshotDiff(currentSnapshots, projectURL: projectURL)
+    }
 
-        let currentSnapshots = monitoredExternalFileSnapshots(for: projectURL)
+    /// Apply already-collected external snapshots against the last-known state and
+    /// dispatch change handlers. Call this on the main actor with snapshots that
+    /// were ideally collected off-main (the FS scan can be slow on large projects).
+    private func applyExternalSnapshotDiff(
+        _ currentSnapshots: [String: ExternalProjectFileSnapshot],
+        projectURL: URL
+    ) {
+        guard !isSavingInternal else { return }
         let changedPaths = Set(currentSnapshots.keys).union(lastKnownExternalSnapshots.keys)
             .filter { currentSnapshots[$0] != lastKnownExternalSnapshots[$0] }
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
@@ -6241,6 +6272,15 @@ final class ScoreStore {
         // Phase 1 diagnostic: count status codes across all render blocks
         var statusCounts = ["success": 0, "insufficientData": 0, "cannotDo": 0, "error": 0, "unknown": 0]
 
+        // Diagnostic: log progress periodically and on the LAST event before each
+        // block, so a hung renderOffline call leaves a syslog breadcrumb that
+        // identifies the song position + last MIDI event dispatched. Tag with the
+        // output filename so multiple concurrent renders can be disambiguated.
+        let renderTag = outputURL.deletingPathExtension().lastPathComponent
+        let progressLogEveryBlocks = 128
+        var blocksRendered = 0
+        var lastEventDispatched: (mappingKey: String, isOn: Bool, pitch: UInt8, frame: AVAudioFramePosition)?
+
         var retryCount = 0
         while currentFrame < AVAudioFramePosition(totalFrames) {
             let framesToRender = min(renderBlockSize, AVAudioFrameCount(AVAudioFramePosition(totalFrames) - currentFrame))
@@ -6248,6 +6288,7 @@ final class ScoreStore {
             let blockEnd = currentFrame + AVAudioFramePosition(framesToRender)
             while eventIndex < events.count && events[eventIndex].framePosition < blockEnd {
                 let event = events[eventIndex]
+                lastEventDispatched = (event.mappingKey, event.isNoteOn, event.pitch, event.framePosition)
 
                 if let auUnit = auNodes[event.mappingKey] {
                     if let scheduleMIDI = auUnit.auAudioUnit.scheduleMIDIEventBlock {
@@ -6278,7 +6319,18 @@ final class ScoreStore {
                 eventIndex += 1
             }
 
+            // Pre-render breadcrumb: if renderOffline wedges (hosted XPC AU
+            // eventlink hang), the last syslog line tells us exactly where.
+            if blocksRendered % progressLogEveryBlocks == 0 {
+                let lastEv = lastEventDispatched.map {
+                    "\($0.mappingKey) \($0.isOn ? "ON" : "OFF") p=\($0.pitch) @\($0.frame)"
+                } ?? "<no events yet>"
+                NSLog("[OfflineRender:%@] block=%d frame=%lld/%lld lastEvent=%@",
+                      renderTag, blocksRendered, currentFrame, AVAudioFramePosition(totalFrames), lastEv)
+            }
+
             let status = try offlineEngine.renderOffline(framesToRender, to: outputBuffer)
+            blocksRendered += 1
 
             switch status {
             case .success:
