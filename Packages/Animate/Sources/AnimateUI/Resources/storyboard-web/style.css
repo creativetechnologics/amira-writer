@@ -67,7 +67,12 @@ html, body {
 body {
   display: flex;
   position: fixed;
+  /* inset: 0 is the fallback. height: 100dvh / min-height: 100dvh ensures the
+     body reaches the very bottom of the iPad viewport even when Safari's
+     dynamic UI chrome hides/reveals — fixes the gap-at-bottom regression. */
   inset: 0;
+  height: 100dvh;
+  min-height: 100dvh;
 }
 
 /* ─── Sidebar ────────────────────────────────────────────────────────────── */

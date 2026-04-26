@@ -41,6 +41,11 @@ struct ImagineScenesPageView: View {
     @State private var generationPromptHeight: CGFloat = 110
     @State private var generationPromptDragStartHeight: CGFloat?
     @State private var geminiReferenceImages: [GeminiImageService.ReferenceImage] = []
+    /// Source-of-truth for manual reference images on this page. The
+    /// `geminiReferenceImages` array (which holds base64-encoded payloads)
+    /// is derived from this whenever the URLs change, and again right before
+    /// generation.
+    @State private var manualReferenceURLs: [URL] = []
     @State private var automaticReferenceImagePaths: [String] = []
     @State private var automaticReferenceStatus: String?
     @State private var cachedGenerationPlanPreview: ShotFrameGenerationPlan?
@@ -65,6 +70,9 @@ struct ImagineScenesPageView: View {
     @State private var filteredMomentPaths: [String] = []
 
     @AppStorage("animate.scenes.middlePane.bottomHeight") private var middlePaneBottomHeight: Double = 280
+    /// Persisted height for the storyboard strip inside the bottom region.
+    /// The composer fills whatever's left after this and the mid-divider.
+    @AppStorage("animate.scenes.middlePane.storyboardStripHeight") private var storyboardStripHeight: Double = 150
     private let splitHandleHeight: CGFloat = 8
 
     private var selectedScene: AnimationScene? { store.selectedScene }
@@ -135,6 +143,21 @@ struct ImagineScenesPageView: View {
         let upper = Swift.max(lower, totalHeight - 200 - splitHandleHeight)
         let newVal = Swift.min(Swift.max(CGFloat(middlePaneBottomHeight) - delta, lower), upper)
         middlePaneBottomHeight = Double(newVal)
+    }
+
+    private func clampedStoryboardStripHeight(bottomRegionHeight: CGFloat) -> CGFloat {
+        // Always leave at least a usable composer height (180pt) below the
+        // mid-divider, and never collapse the strip below 60pt.
+        let lower: CGFloat = 60
+        let upper = Swift.max(lower, bottomRegionHeight - 180 - splitHandleHeight)
+        return Swift.min(Swift.max(CGFloat(storyboardStripHeight), lower), upper)
+    }
+
+    private func resizeStoryboardStrip(_ delta: CGFloat, bottomRegionHeight: CGFloat) {
+        let lower: CGFloat = 60
+        let upper = Swift.max(lower, bottomRegionHeight - 180 - splitHandleHeight)
+        let newVal = Swift.min(Swift.max(CGFloat(storyboardStripHeight) + delta, lower), upper)
+        storyboardStripHeight = Double(newVal)
     }
 
     private var filteredMomentPathsKey: String {
@@ -499,22 +522,34 @@ struct ImagineScenesPageView: View {
                 }
                 .frame(height: topHeight)
 
+                // Top divider: adjusts the gallery vs the storyboard+composer block.
                 OperaChromeSplitHandle(axis: .vertical, thickness: splitHandleHeight) { delta in
                     resizeMiddleBottomPane(delta, totalHeight: totalHeight)
                 }
 
-                // Bottom region — fixed (no inner scroll). Storyboard strip
-                // sits directly above the Gemini generation pane.
-                VStack(alignment: .leading, spacing: 12) {
+                // Bottom region — storyboard strip + draggable mid-divider +
+                // shared Gemini composer. The mid-divider lets the user choose
+                // how much room to give the strip vs the prompt box.
+                let stripHeight = clampedStoryboardStripHeight(bottomRegionHeight: bottomHeight)
+                VStack(spacing: 0) {
                     SceneStoryboardDrawingsStrip(
                         projectRoot: store.fileOWPURL,
                         sceneID: scene.id,
                         shot: currentShot
                     )
+                    .frame(height: stripHeight, alignment: .top)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 4)
+
+                    OperaChromeSplitHandle(axis: .vertical, thickness: splitHandleHeight) { delta in
+                        resizeStoryboardStrip(delta, bottomRegionHeight: bottomHeight)
+                    }
+
                     generationControls
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 10)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
                 .frame(height: bottomHeight)
             }
         }
@@ -789,15 +824,23 @@ struct ImagineScenesPageView: View {
                 .frame(maxWidth: 220)
                 .disabled(!store.geminiMasterSwitch)
 
-                Button {
-                    activeReferencePicker = .gemini
-                } label: {
-                    Label("\(geminiReferenceImages.count)/5 Refs", systemImage: "photo.on.rectangle.angled")
-                }
-                .controlSize(.small)
-                .disabled(!store.geminiMasterSwitch)
-
                 Spacer()
+
+                if isGeneratingPrompt {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 60)
+                } else {
+                    Button { autoGeneratePrompt() } label: {
+                        Label("Auto (GPT)", systemImage: "wand.and.stars")
+                    }
+                    .controlSize(.small)
+
+                    Button { prefillPrompt() } label: {
+                        Label("Pre-fill", systemImage: "text.insert")
+                    }
+                    .controlSize(.small)
+                }
 
                 Button { generateImage() } label: {
                     Label("Generate", systemImage: "sparkles")
@@ -807,47 +850,16 @@ struct ImagineScenesPageView: View {
                 .disabled(generationPrompt.isEmpty || isGenerating || isGeneratingPrompt || !store.geminiMasterSwitch)
             }
 
-            HStack(spacing: 8) {
-                ResizablePromptEditor(
-                    text: $generationPrompt,
-                    persistenceID: "scenes.generationPrompt",
-                    minHeight: 72,
-                    defaultHeight: 110
-                )
-                    .font(.caption)
-                    .padding(4)
-                    .background(.quaternary.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
-
-                VStack(spacing: 4) {
-                    if isGeneratingPrompt {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 60)
-                    } else {
-                        Button { autoGeneratePrompt() } label: {
-                            Label("Auto (GPT)", systemImage: "wand.and.stars")
-                        }
-                        .controlSize(.small)
-
-                        Button { prefillPrompt() } label: {
-                            Label("Pre-fill", systemImage: "text.insert")
-                        }
-                        .controlSize(.small)
-                    }
-                }
-            }
-
-            if !geminiReferenceImages.isEmpty {
-                HStack(spacing: 6) {
-                    Text("References:").font(.caption).foregroundStyle(.secondary)
-                    ForEach(0..<geminiReferenceImages.count, id: \.self) { i in
-                        RoundedRectangle(cornerRadius: 4).fill(Color.accentColor.opacity(0.2))
-                            .frame(width: 30, height: 30)
-                            .overlay { Text("\(i + 1)").font(.caption2) }
-                    }
-                    Button("Clear") { geminiReferenceImages = [] }.controlSize(.mini)
-                }
-            }
+            // Shared composer: same prompt-editor + references drop-target box
+            // used on the Canvas page. Drag images (including storyboard
+            // drawings from the strip above) into the dashed area.
+            GeminiPromptComposer(
+                prompt: $generationPrompt,
+                referenceURLs: $manualReferenceURLs,
+                promptPersistenceID: "scenes.generationPrompt",
+                promptPlaceholder: "Describe this shot frame…",
+                maxReferenceCount: 5
+            )
 
             if let plan = currentGenerationPlanPreview {
                 generationPlanSummary(plan)
@@ -981,6 +993,9 @@ struct ImagineScenesPageView: View {
     private func generateImage() {
         guard let scene = selectedScene, let owpURL = store.fileOWPURL, let shotIndex = store.imagineSelectedShotIndex else { return }
         persistCurrentPrompt(debounced: false)
+        // Sync URL-based composer state to the GeminiImageService payload
+        // immediately before submitting — the composer is the source of truth.
+        geminiReferenceImages = makeGeminiReferenceImages(from: manualReferenceURLs.map(\.path))
         isGenerating = true
         generationError = nil
         let sceneSlug = scene.name.lowercased().replacingOccurrences(of: " ", with: "-").replacingOccurrences(of: "/", with: "-")
@@ -1099,6 +1114,8 @@ struct ImagineScenesPageView: View {
     ) {
         switch mode {
         case .gemini:
+            // Keep composer URL list and the encoded payloads in lockstep.
+            manualReferenceURLs = paths.map { URL(fileURLWithPath: $0).standardizedFileURL }
             geminiReferenceImages = makeGeminiReferenceImages(from: paths)
             refreshGenerationPlanPreview()
         }

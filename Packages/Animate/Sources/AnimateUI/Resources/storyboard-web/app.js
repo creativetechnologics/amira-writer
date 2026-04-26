@@ -21,7 +21,8 @@ import {
 
 // ─── Constants ────────────────────────────────────────────────────────────
 
-const AUTOSAVE_INTERVAL_MS = 30_000;
+const AUTOSAVE_INTERVAL_MS = 5_000;
+const STROKE_END_SAVE_DEBOUNCE_MS = 400;
 const SUMMARY_DEBOUNCE_MS = 1_500;
 const FRAMES = ['begin', 'middle', 'end'];
 const LS_SHOT_KEY = 'storyboard_shotId';
@@ -36,7 +37,6 @@ const BRUSH_LIMITS = {
   pencil: { min: 1, max: 12 },
   eraser: { min: 4, max: 50 },
 };
-const DOUBLE_TAP_GUARD_MS = 300;
 
 // ─── App state ────────────────────────────────────────────────────────────
 
@@ -54,8 +54,6 @@ let isToolbarOpen = true;
 let summaryDebounceTimer = null;
 let autosaveTimer = null;
 let isSaving = false;
-let lastTouchTapAt = 0;
-let lastTouchTapTarget = null;
 let isAddShotOpen = false;
 let addPlaceType = 'place';
 
@@ -70,8 +68,6 @@ const mainEl = document.getElementById('main');
 const toolbar = document.getElementById('toolbar');
 const toolbarShowBtn = document.getElementById('toolbar-show-btn');
 const toolbarToggleBtn = document.getElementById('toolbar-toggle-btn');
-const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
-const sidebarCloseBtn = document.getElementById('sidebar-close-btn');
 const addShotBtn = document.getElementById('add-item-btn');
 const addShotSheet = document.getElementById('add-shot-sheet');
 const addShotForm = document.getElementById('add-shot-form');
@@ -173,6 +169,7 @@ async function boot() {
   selectTool('pencil', { syncSlider: true });
   updateLayout();
   startAutosave();
+  installSaveOnExitHooks();
   clearAppStatus();
 }
 
@@ -881,9 +878,18 @@ function buildFlatFrameList() {
 
 // ─── Save logic ───────────────────────────────────────────────────────────
 
+let strokeEndSaveTimer = null;
+
 function markDirty() {
   isDirty = true;
   setSaveStatus('unsaved');
+  // Drawings are precious — schedule a debounced save right after the stroke
+  // ends so we don't rely on the slower interval-based autosave catching up.
+  if (strokeEndSaveTimer) clearTimeout(strokeEndSaveTimer);
+  strokeEndSaveTimer = setTimeout(() => {
+    strokeEndSaveTimer = null;
+    if (isDirty && !isSaving) performSave();
+  }, STROKE_END_SAVE_DEBOUNCE_MS);
 }
 
 function clearDirty() {
@@ -898,7 +904,7 @@ async function saveIfDirty() {
   await performSave();
 }
 
-async function performSave() {
+async function performSave({ keepalive = false } = {}) {
   if (isSaving) return;
   if (sidebarMode === 'places' && !currentPlaceTarget) return;
   if (sidebarMode !== 'places' && !currentShotId) return;
@@ -914,6 +920,9 @@ async function performSave() {
       method: 'PUT',
       headers: { 'Content-Type': 'image/png' },
       body: blob,
+      // keepalive lets the request survive page hide / app backgrounding
+      // without being canceled — critical for never losing a drawing.
+      keepalive,
     });
     clearDirty();
     if (sidebarMode === 'places') {
@@ -946,6 +955,29 @@ function startAutosave() {
   autosaveTimer = setInterval(() => {
     if (isDirty && !isSaving) performSave();
   }, AUTOSAVE_INTERVAL_MS);
+}
+
+// Save on every event that means "this page may be torn down soon" — PWA
+// backgrounded, tab closed, iPad locked, app switcher, etc. keepalive: true
+// lets the in-flight request finish even if the document is being unloaded.
+function installSaveOnExitHooks() {
+  const flush = () => {
+    if (!isDirty || isSaving) return;
+    // Cancel any pending debounced stroke-end save — we're saving now.
+    if (strokeEndSaveTimer) {
+      clearTimeout(strokeEndSaveTimer);
+      strokeEndSaveTimer = null;
+    }
+    performSave({ keepalive: true });
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flush();
+  });
+  window.addEventListener('pagehide', flush);
+  window.addEventListener('beforeunload', flush);
+  // iOS Safari sometimes fires only `blur` when the user switches apps.
+  window.addEventListener('blur', flush);
 }
 
 // ─── Summary editor ───────────────────────────────────────────────────────
@@ -1011,123 +1043,26 @@ function autoGrowTextarea(el) {
   el.style.height = Math.min(el.scrollHeight, 72) + 'px';
 }
 
-function isTextInputTarget(target) {
+function isCanvasTarget(target) {
   if (!(target instanceof Element)) return false;
-  return Boolean(target.closest([
-    'textarea',
-    'input:not([type])',
-    'input[type="email"]',
-    'input[type="number"]',
-    'input[type="password"]',
-    'input[type="search"]',
-    'input[type="tel"]',
-    'input[type="text"]',
-    'input[type="url"]',
-    '[contenteditable="true"]',
-  ].join(',')));
-}
-
-function getGestureGuardTarget(target) {
-  if (!(target instanceof Element)) return null;
-  return target.closest([
-    '#drawing-canvas',
-    'button',
-    '.icon-btn',
-    '.tool-btn',
-    '.frame-btn',
-    '.shot-row',
-    '.place-row',
-    '.sidebar-tab',
-    '.add-type-btn',
-    '.sidebar-toggle-outside',
-    '.toolbar-show-btn',
-    '.toolbar-collapse-btn',
-    '.canvas-area',
-    '.save-status',
-    '.app-status',
-    '.slider',
-  ].join(','));
-}
-
-function isGestureGuardTarget(target) {
-  return Boolean(getGestureGuardTarget(target));
+  return Boolean(target.closest('#drawing-canvas, .canvas-area'));
 }
 
 function installInputGuards() {
-  // ALWAYS-ON pencil-only enforcement: block finger-touch interactions on
-  // every UI surface. Apple Pencil and mouse remain unaffected. The flag
-  // is set by the touchstart listener below (which fires before the click)
-  // and consulted by the click listener to suppress synthesized taps.
-  let recentTouchTapAt = 0;
-  const isTouchTapStale = () => performance.now() - recentTouchTapAt > 600;
-
-  document.addEventListener('touchstart', (e) => {
-    if (isTextInputTarget(e.target)) return;
-    recentTouchTapAt = performance.now();
-    // Single-finger taps: block on UI surfaces (canvas handles its own touch
-    // logic in drawing.js). Multi-touch (gestures) is preventDefaulted so the
-    // browser doesn't synthesize zoom or pan.
-    if (isGestureGuardTarget(e.target)) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-  }, { capture: true, passive: false });
-
-  // Block synthesized clicks from finger touches.
-  document.addEventListener('click', (e) => {
-    if (isTextInputTarget(e.target)) return;
-    if (!isTouchTapStale() && isGestureGuardTarget(e.target)) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-  }, { capture: true });
-
-  document.addEventListener('contextmenu', (e) => {
-    if (!isTextInputTarget(e.target) && isGestureGuardTarget(e.target)) {
-      e.preventDefault();
-    }
-  }, { capture: true });
-
-  document.addEventListener('selectstart', (e) => {
-    if (!isTextInputTarget(e.target) && isGestureGuardTarget(e.target)) {
-      e.preventDefault();
-    }
-  }, { capture: true });
-
-  document.addEventListener('dragstart', (e) => {
-    if (!isTextInputTarget(e.target) && isGestureGuardTarget(e.target)) {
-      e.preventDefault();
-    }
-  }, { capture: true });
-
-  document.addEventListener('selectionchange', () => {
-    if (isTextInputTarget(document.activeElement)) return;
-    const selection = window.getSelection?.();
-    if (selection && !selection.isCollapsed) selection.removeAllRanges();
-  });
-
-  document.addEventListener('touchend', (e) => {
-    if (e.defaultPrevented || e.changedTouches.length !== 1) return;
-    const guardTarget = getGestureGuardTarget(e.target);
-    if (isTextInputTarget(e.target) || !guardTarget) return;
-
-    const now = performance.now();
-    if (lastTouchTapTarget === guardTarget && now - lastTouchTapAt < DOUBLE_TAP_GUARD_MS) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-
-    lastTouchTapTarget = guardTarget;
-    lastTouchTapAt = now;
-  }, { capture: true, passive: false });
-
+  // Suppress iOS pinch/zoom gestures on the drawing canvas only. Finger taps
+  // on regular UI elements (buttons, toolbar, sidebar rows) are allowed
+  // through — pencil-only enforcement happens inside drawing.js, which
+  // filters by pointerType on the canvas itself.
   ['gesturestart', 'gesturechange', 'gestureend'].forEach((eventName) => {
     document.addEventListener(eventName, (e) => {
-      if (!isTextInputTarget(e.target) && isGestureGuardTarget(e.target)) {
-        e.preventDefault();
-      }
+      if (isCanvasTarget(e.target)) e.preventDefault();
     }, { capture: true, passive: false });
   });
+
+  // Block the long-press context menu on the canvas (would interrupt drawing).
+  document.addEventListener('contextmenu', (e) => {
+    if (isCanvasTarget(e.target)) e.preventDefault();
+  }, { capture: true });
 }
 
 // ─── Frame picker ─────────────────────────────────────────────────────────
@@ -1275,19 +1210,6 @@ function setupSidebar() {
     }
   });
 
-  sidebarCloseBtn.addEventListener('click', () => {
-    isSidebarOpen = false;
-    sidebar.classList.add('sidebar--closed');
-    sidebarToggleBtn.classList.remove('hidden');
-    updateLayout();
-  });
-
-  sidebarToggleBtn.addEventListener('click', () => {
-    isSidebarOpen = true;
-    sidebar.classList.remove('sidebar--closed');
-    sidebarToggleBtn.classList.add('hidden');
-    updateLayout();
-  });
 }
 
 // ─── Layout ───────────────────────────────────────────────────────────────
