@@ -150,6 +150,10 @@ struct EffectiveShotSpecBuilder {
                 query: feedbackQuery,
                 limit: 6
             )
+        ) + ContinuityRuleExtractionService.relevantPromptClauses(
+            projectRoot: projectRoot,
+            query: feedbackQuery,
+            limit: 8
         )
         let prompt = Self.prompt(
             scene: scene,

@@ -313,10 +313,11 @@ private struct ContinuityBuilderWorkspaceContent: View {
                     .disabled((session?.activeTurnIndex ?? 0) == 0)
                 Button("Submit & Next") { submit(turn) }
                     .keyboardShortcut(.return, modifiers: [])
-                Button("Generate candidate") {
-                    statusMessage = "Paid generation is intentionally blocked here until Gary explicitly approves a test/run."
+                Button("Generate 3 × 1K") {
+                    generateCandidates(turn)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(isLoading)
             }
             Text(dictationSession.statusMessage.isEmpty ? statusMessage : "\(statusMessage) • \(dictationSession.statusMessage)")
                 .font(.system(size: 11))
@@ -396,6 +397,37 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 statusMessage = "Saved continuity feedback to Metadata/automation/continuity-builder."
             } catch {
                 statusMessage = "Could not save continuity feedback: \(error.localizedDescription)"
+            }
+        }
+    }
+
+
+    private func generateCandidates(_ turn: ContinuityBuilderTurn) {
+        guard let projectRoot, let currentSession = session else { return }
+        isLoading = true
+        statusMessage = "Generating Continuity Builder candidates with a $0.50 cap…"
+        Task {
+            let result = await ContinuityBuilderGenerationService(store: store).generate(
+                .init(
+                    session: currentSession,
+                    turnID: turn.id,
+                    projectRoot: projectRoot,
+                    mode: "execute",
+                    maxCostUSD: 0.50,
+                    candidateCount: 3,
+                    model: store.selectedGeminiModel,
+                    imageSize: "1K",
+                    aspectRatio: "4:3",
+                    apiKey: store.geminiAPIKey
+                )
+            )
+            session = result.session
+            selectedLabel = result.session.activeTurn?.candidates.first?.label
+            isLoading = false
+            if result.ok {
+                statusMessage = "Generated \(result.records.filter { $0.status == "completed" }.count) Continuity Builder candidate(s); immediate Image Intelligence analysis is queued/running."
+            } else {
+                statusMessage = (result.blockers.first?.message ?? result.records.first(where: { $0.errorMessage != nil })?.errorMessage) ?? "Continuity generation did not complete."
             }
         }
     }

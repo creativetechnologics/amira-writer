@@ -203,11 +203,31 @@ Current implementation:
 - Shows one/two/three candidate references with stable labels (`single`, `left`, `middle`, `right`) so dictated feedback like “the middle one…” can be interpreted later.
 - Captures a closeness percentage plus notes, with optional Parakeet review dictation using the same project-local configuration as All Images review dictation.
 - Writes artifacts to `Metadata/automation/continuity-builder/` and indexes feedback for later prompt retrieval.
-- Injects matching Continuity Builder feedback into future `EffectiveShotSpec` prompts alongside All Images review feedback.
-- Does **not** call Gemini, MiniMax, or any paid provider yet. The Generate Candidate button is intentionally blocked until Gary explicitly approves paid testing.
+- Promotes repeated feedback into canonical continuity rule fingerprints under `Metadata/automation/continuity-rules/`.
+- Injects matching All Images feedback, Continuity Builder feedback, and canonical continuity rules into future `EffectiveShotSpec` prompts.
+- The Continuity Builder Generate button now calls Gemini only through an execute-gated 1K/4:3 path with a local cost cap; generated candidates write prompt/response/metadata sidecars and register with the image library so Image Intelligence can run immediately.
+
+Useful local API checks:
+
+```bash
+curl -sS http://127.0.0.1:19849/automation/continuity-builder/session | jq
+
+curl -sS -X POST http://127.0.0.1:19849/automation/feedback/rules/extract \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"dry_run","maxSources":80,"write":true}' | jq
+
+curl -sS -X POST http://127.0.0.1:19849/automation/feedback/rules/query \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"bridge ravine town river north bank","limit":5}' | jq
+
+# Paid Gemini/Vertex call; requires explicit user budget/approval.
+curl -sS -X POST http://127.0.0.1:19849/automation/continuity-builder/generate \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"execute","candidateCount":1,"imageSize":"1K","aspectRatio":"4:3","maxCostUSD":0.25}' | jq
+```
 
 Design intent:
 
-- Keep training generations cheap (`1K`, `4:3` open matte) once execute mode is added.
+- Keep training generations cheap (`1K`, `4:3` open matte) with explicit execute mode and cost caps.
 - Use guided pathways in priority order: world geography → bridge/ravine → place topography → character identity → costume/accessory → style continuity.
 - Preserve all existing workflows; this adds a new artifact-backed feedback layer instead of mutating `Scenes/scenes.json`, place records, or character rigs.

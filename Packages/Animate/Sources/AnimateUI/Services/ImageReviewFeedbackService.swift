@@ -160,7 +160,7 @@ enum ImageReviewFeedbackService {
         try encoder.encode(artifacts).write(to: indexURL, options: .atomic)
     }
 
-    private static func loadAllFeedback(projectRoot: URL) -> [ImageReviewFeedbackArtifact] {
+    static func loadAllFeedback(projectRoot: URL) -> [ImageReviewFeedbackArtifact] {
         let dir = feedbackDirectory(projectRoot: projectRoot)
         guard let urls = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return [] }
         let decoder = JSONDecoder()

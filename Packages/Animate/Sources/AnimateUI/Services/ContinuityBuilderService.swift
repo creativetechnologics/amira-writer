@@ -64,6 +64,11 @@ struct ContinuityBuilderService {
         return updated
     }
 
+    func writeSessionForGeneration(_ session: ContinuityBuilderSession, projectRoot: URL) throws {
+        try writeSession(session, projectRoot: projectRoot)
+        try writeIndex(projectRoot: projectRoot)
+    }
+
     static func relevantFeedback(projectRoot: URL, query: String, limit: Int = 6) -> [ContinuityBuilderFeedback] {
         let terms = Set(query.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count > 2 })
         guard !terms.isEmpty else { return [] }
