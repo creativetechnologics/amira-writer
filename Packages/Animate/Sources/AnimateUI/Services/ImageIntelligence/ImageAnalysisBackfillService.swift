@@ -32,6 +32,7 @@ public actor ImageAnalysisBackfillService {
         public let forceReanalysis: Bool
         public let linkKinds: [ImageAssetLinkKind]?
         public let enqueueExistingWithoutRuns: Bool
+        public let enqueueExistingMissingAnalysis: Bool
         public let markMissingAssets: Bool
 
         public init(
@@ -40,6 +41,7 @@ public actor ImageAnalysisBackfillService {
             forceReanalysis: Bool = false,
             linkKinds: [ImageAssetLinkKind]? = nil,
             enqueueExistingWithoutRuns: Bool = false,
+            enqueueExistingMissingAnalysis: Bool = false,
             markMissingAssets: Bool = true
         ) {
             self.dryRun = dryRun
@@ -47,6 +49,7 @@ public actor ImageAnalysisBackfillService {
             self.forceReanalysis = forceReanalysis
             self.linkKinds = linkKinds
             self.enqueueExistingWithoutRuns = enqueueExistingWithoutRuns
+            self.enqueueExistingMissingAnalysis = enqueueExistingMissingAnalysis
             self.markMissingAssets = markMissingAssets
         }
     }
@@ -186,11 +189,28 @@ public actor ImageAnalysisBackfillService {
         _ assetID: String,
         options: BackfillOptions
     ) async throws -> Bool {
-        guard options.forceReanalysis || options.enqueueExistingWithoutRuns else {
+        guard options.forceReanalysis || options.enqueueExistingWithoutRuns || options.enqueueExistingMissingAnalysis else {
             return false
         }
         if options.forceReanalysis {
             return true
+        }
+
+        if options.enqueueExistingMissingAnalysis {
+            let latestMetadata = try await store.latestVisualMetadataForAsset(assetID)
+            let embeddingCount = (try await store.querySingle("""
+                SELECT COUNT(*) AS count
+                FROM image_embeddings
+                WHERE image_asset_id = ?
+            """, [assetID])?["count"] as? Int) ?? 0
+            if latestMetadata != nil && embeddingCount > 0 {
+                return false
+            }
+
+            let jobs = try await coordinator?.jobsForAsset(assetID) ?? []
+            return !jobs.contains { job in
+                job.status == .pending || job.status == .running
+            }
         }
 
         guard let coordinator else {

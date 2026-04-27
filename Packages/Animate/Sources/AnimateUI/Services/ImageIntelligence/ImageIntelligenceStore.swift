@@ -478,6 +478,53 @@ public actor ImageIntelligenceStore {
         return ImageVisualMetadataRecord(from: row)
     }
 
+    func continuityCandidateRows(matchingTerms terms: [String], limit: Int) throws -> [[String: Sendable]] {
+        let cleanedTerms = Array(Set(terms.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { $0.count > 3 }))
+            .sorted()
+            .prefix(12)
+        guard !cleanedTerms.isEmpty else { return [] }
+        let textExpression = """
+            LOWER(
+                COALESCE(a.resolved_path, '') || ' ' ||
+                COALESCE(a.project_relative_path, '') || ' ' ||
+                COALESCE(vm.summary, '') || ' ' ||
+                COALESCE(vm.short_caption, '') || ' ' ||
+                COALESCE(vm.long_caption, '') || ' ' ||
+                COALESCE(vm.retrieval_json, '') || ' ' ||
+                COALESCE(vm.entities_json, '') || ' ' ||
+                COALESCE(vm.scene_json, '') || ' ' ||
+                COALESCE(vm.style_json, '')
+            )
+            """
+        let clauses = cleanedTerms.map { _ in "\(textExpression) LIKE ?" }.joined(separator: " OR ")
+        let sql = """
+            SELECT
+                a.id,
+                a.resolved_path,
+                a.project_relative_path,
+                vm.summary,
+                vm.short_caption,
+                vm.long_caption,
+                vm.retrieval_json,
+                vm.entities_json,
+                vm.scene_json,
+                vm.style_json
+            FROM image_assets a
+            LEFT JOIN image_visual_metadata vm ON vm.id = (
+                SELECT id FROM image_visual_metadata
+                WHERE image_asset_id = a.id
+                ORDER BY created_at DESC
+                LIMIT 1
+            )
+            WHERE a.is_missing = 0
+              AND (\(clauses))
+            ORDER BY a.updated_at DESC
+            LIMIT ?
+        """
+        let params: [Any?] = cleanedTerms.map { "%\($0)%" } + [max(1, min(limit, 500))]
+        return try query(sql, params)
+    }
+
     public func queuedJobs(limit: Int = 100) throws -> [[String: Sendable]] {
         try query(
             "SELECT * FROM image_analysis_jobs ORDER BY updated_at DESC LIMIT ?",

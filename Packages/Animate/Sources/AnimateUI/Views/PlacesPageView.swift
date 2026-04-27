@@ -3640,7 +3640,8 @@ struct PlacesPageView: View {
                         routeID: draft.routeID,
                         worldNodeID: draft.worldNodeID,
                         mapPoint: draft.mapPoint,
-                        cameraPose: draft.cameraPose
+                        cameraPose: draft.cameraPose,
+                        referencePaths: draft.referenceItems.filter(\.isIncluded).map(\.path)
                     )
                     store.updateGeminiActivity(
                         activityID,
@@ -4288,7 +4289,8 @@ struct PlacesPageView: View {
                             routeID: draft.routeID,
                             worldNodeID: draft.worldNodeID,
                             mapPoint: draft.mapPoint,
-                            cameraPose: draft.cameraPose
+                            cameraPose: draft.cameraPose,
+                            referencePaths: draft.referenceItems.filter(\.isIncluded).map(\.path)
                         )
                         _ = storedPath
                         store.updateGeminiActivity(activityID, status: .completed,
@@ -4382,7 +4384,8 @@ struct PlacesPageView: View {
                         model: draft.model,
                         aspectRatio: draft.aspectRatio,
                         imageSize: draft.imageSize,
-                        kind: .map3DCapture
+                        kind: .map3DCapture,
+                        referencePaths: draft.referenceItems.filter(\.isIncluded).map(\.path)
                     )
                     store.updateGeminiActivity(activityID, status: .completed,
                                                outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent)
@@ -4444,7 +4447,8 @@ struct PlacesPageView: View {
                         prompt: draft.effectivePrompt,
                         model: draft.model,
                         aspectRatio: draft.aspectRatio,
-                        imageSize: draft.imageSize
+                        imageSize: draft.imageSize,
+                        referencePaths: draft.referenceItems.filter(\.isIncluded).map(\.path)
                     )
                     store.updateGeminiActivity(
                         activityID,

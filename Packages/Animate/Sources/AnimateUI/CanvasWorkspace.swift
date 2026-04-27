@@ -22,6 +22,9 @@ public struct CanvasWorkspace: View {
             .environment(\.unifiedImageFlipHandler) { path in
                 controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
             }
+            .environment(\.unifiedImageRecategorizeHandler) { path, category in
+                controller.store.recategorizeImageReviewScope(path: path, semanticRole: category.semanticRole)
+            }
 
             CanvasWorkspaceLoadingOverlay(controller: controller)
         }
@@ -205,6 +208,7 @@ private struct CanvasWorkspaceContent: View {
                 ImagineCanvasPageView(
                     store: store,
                     canvasState: canvasFormState,
+                    libraryState: libraryState,
                     selectedGenerationID: $selectedGenerationID
                 )
             }
@@ -309,7 +313,8 @@ private struct CanvasWorkspaceContent: View {
                         prompt: draft.effectivePrompt,
                         model: draft.model,
                         aspectRatio: draft.aspectRatio,
-                        imageSize: draft.imageSize
+                        imageSize: draft.imageSize,
+                        referencePaths: draft.referenceItems.filter(\.isIncluded).map(\.path)
                     )
                     store.updateGeminiActivity(
                         activityID,

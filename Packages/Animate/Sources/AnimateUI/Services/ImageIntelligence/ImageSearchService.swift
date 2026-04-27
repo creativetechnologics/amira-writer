@@ -321,9 +321,16 @@ public actor ImageSearchService {
         for row in rows {
             guard let id = row["id"] as? String,
                   let path = row["resolved_path"] as? String else { continue }
+            guard ImagePreferenceProfileService.isPositiveReferenceEligible(path) else { continue }
             let linkKind = row["link_kind"] as? String
 
             var candidate = candidatesByAssetID[id] ?? ShotReferenceCandidate(assetID: id, path: path)
+            if let score = ImagePreferenceProfileService.referencePreferenceScore(forImagePath: path) {
+                candidate.preferenceScore = max(candidate.preferenceScore, score)
+            }
+            if let updatedAt = ImagePreferenceProfileService.referenceUpdatedAt(forImagePath: path) {
+                candidate.updatedAt = max(candidate.updatedAt ?? updatedAt, updatedAt)
+            }
             candidate.hasContentHash = candidate.hasContentHash || ((row["content_hash_sha256"] as? String)?.isEmpty == false)
             candidate.hasVisualMetadata = candidate.hasVisualMetadata || boolValue(row["has_visual_metadata"])
 
@@ -405,6 +412,8 @@ public actor ImageSearchService {
         var reasons: [String] = []
         var hasContentHash: Bool = false
         var hasVisualMetadata: Bool = false
+        var preferenceScore: Double = 0
+        var updatedAt: Date?
         var queryScore: Double = 0
         var queryReason: String?
 
@@ -432,6 +441,19 @@ public actor ImageSearchService {
             }
             if hasVisualMetadata {
                 copy.score += 0.05
+            }
+            if preferenceScore > 0 {
+                copy.score += preferenceScore * 0.08
+                let label = preferenceScore >= 5.5 ? "Gary-liked reference" : "\(Int(preferenceScore.rounded()))★ Gary-rated reference"
+                copy.reasons.append(label)
+            }
+            if let updatedAt {
+                let ageDays = max(0, Date().timeIntervalSince(updatedAt) / 86_400)
+                let recencyBoost = max(0, min(0.08, 0.08 * exp(-ageDays / 45.0)))
+                if recencyBoost > 0 {
+                    copy.score += recencyBoost
+                    copy.reasons.append("recently reviewed/generated")
+                }
             }
             if queryScore > 0 {
                 copy.score += queryScore

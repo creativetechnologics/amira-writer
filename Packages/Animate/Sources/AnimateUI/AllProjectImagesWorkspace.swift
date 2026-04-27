@@ -4,36 +4,57 @@ import SwiftUI
 import ProjectKit
 
 @available(macOS 26.0, *)
+enum ImageLibrarySemanticRole: String, CaseIterable, Codable, Sendable, Hashable {
+    case place
+    case character
+
+    var displayName: String {
+        switch self {
+        case .place: return "Place"
+        case .character: return "Character"
+        }
+    }
+}
+
+@available(macOS 26.0, *)
 struct ImageLibraryReviewMetadata: Equatable, Sendable {
     var rating: Int?
     var isRejected: Bool
+    var isLiked: Bool
     var notes: String
     var updatedAt: Date?
     var characterTags: [String]
     var visualStyle: ImageLibraryVisualStyle?
+    var semanticRole: ImageLibrarySemanticRole?
 
     init(
         rating: Int?,
         isRejected: Bool,
+        isLiked: Bool = false,
         notes: String,
         updatedAt: Date?,
         characterTags: [String] = [],
-        visualStyle: ImageLibraryVisualStyle? = nil
+        visualStyle: ImageLibraryVisualStyle? = nil,
+        semanticRole: ImageLibrarySemanticRole? = nil
     ) {
         self.rating = rating
         self.isRejected = isRejected
+        self.isLiked = isLiked
         self.notes = notes
         self.updatedAt = updatedAt
         self.characterTags = characterTags
         self.visualStyle = visualStyle
+        self.semanticRole = semanticRole
     }
 
     var isEmpty: Bool {
         rating == nil
             && !isRejected
+            && !isLiked
             && notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && characterTags.isEmpty
             && visualStyle == nil
+            && semanticRole == nil
     }
 }
 
@@ -63,6 +84,8 @@ enum ImageLibraryMetadataSidecarService {
         let rating = extractTagValue("Rating", from: xml).flatMap(Int.init)
         let isRejected = extractTagValue("IsRejected", from: xml)
             .map { ["true", "1", "yes"].contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) } ?? false
+        let isLiked = extractTagValue("IsLiked", from: xml)
+            .map { ["true", "1", "yes"].contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) } ?? false
         let notes = extractTagValue("Notes", from: xml).map(unescapeXML) ?? ""
         let updatedAt = extractTagValue("UpdatedAt", from: xml).flatMap { iso8601Formatter().date(from: $0) }
         let characterTags = extractTagValues("Character", from: xml)
@@ -72,14 +95,19 @@ enum ImageLibraryMetadataSidecarService {
         let visualStyle = extractTagValue("VisualStyle", from: xml)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .flatMap(ImageLibraryVisualStyle.init(rawValue:))
+        let semanticRole = extractTagValue("SemanticRole", from: xml)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .flatMap(ImageLibrarySemanticRole.init(rawValue:))
 
         let metadata = ImageLibraryReviewMetadata(
             rating: rating.map { min(max($0, 1), 5) },
             isRejected: isRejected,
+            isLiked: isRejected ? false : isLiked,
             notes: notes,
             updatedAt: updatedAt,
             characterTags: Array(Set(characterTags)).sorted(),
-            visualStyle: visualStyle
+            visualStyle: visualStyle,
+            semanticRole: semanticRole
         )
         return metadata.isEmpty ? nil : metadata
     }
@@ -98,8 +126,10 @@ enum ImageLibraryMetadataSidecarService {
             <rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:amira="https://amira.writer/ns/image-library/1.0/">
               \(metadata.rating.map { "<xmp:Rating>\($0)</xmp:Rating>" } ?? "")
               <amira:IsRejected>\(metadata.isRejected ? "true" : "false")</amira:IsRejected>
+              <amira:IsLiked>\((metadata.isLiked && !metadata.isRejected) ? "true" : "false")</amira:IsLiked>
               <amira:Notes>\(escapeXML(metadata.notes))</amira:Notes>
               \(metadata.visualStyle.map { "<amira:VisualStyle>\($0.rawValue)</amira:VisualStyle>" } ?? "")
+              \(metadata.semanticRole.map { "<amira:SemanticRole>\($0.rawValue)</amira:SemanticRole>" } ?? "")
               \(metadata.characterTags.map { "<amira:Character>\(escapeXML($0))</amira:Character>" }.joined(separator: "\n              "))
               <amira:UpdatedAt>\(iso8601Formatter().string(from: metadata.updatedAt ?? Date()))</amira:UpdatedAt>
             </rdf:Description>
@@ -123,7 +153,7 @@ enum ImageLibraryMetadataSidecarService {
 
     // Pre-compiled regex patterns keyed by tag name — avoids recompiling on every call.
     private static let tagRegexes: [String: NSRegularExpression] = {
-        let tags = ["Rating", "IsRejected", "Notes", "UpdatedAt", "Character", "VisualStyle"]
+        let tags = ["Rating", "IsRejected", "IsLiked", "Notes", "UpdatedAt", "Character", "VisualStyle", "SemanticRole"]
         var dict: [String: NSRegularExpression] = [:]
         for tag in tags {
             let pattern = "<(?:[A-Za-z0-9_\\-]+:)?\(tag)>(.*?)</(?:[A-Za-z0-9_\\-]+:)?\(tag)>"
@@ -229,12 +259,14 @@ final class AllProjectImagesState {
         let id: String
         let path: String
         let source: AllProjectImagesSource
+        let semanticRole: ImageLibrarySemanticRole?
         let originLabel: String
         let groupLabel: String
         let sceneID: UUID?
         let shotID: UUID?
         let rating: Int?
         let isRejected: Bool
+        let isLiked: Bool
         let notes: String
         let supportsLibraryCuration: Bool
     }
@@ -397,6 +429,7 @@ final class AllProjectImagesState {
                 mix(g.endImagePaths.count &<< 4)
             }
         }
+        mix(store.allImagesContentRevision &<< 28)
         return h
     }
 
@@ -551,14 +584,24 @@ final class AllProjectImagesState {
         }
     }
 
-    func updateReviewMetadata(for recordID: String, rating: Int?, isRejected: Bool, notes: String) {
+    func updateReviewMetadata(
+        for recordID: String,
+        rating: Int?,
+        isRejected: Bool,
+        isLiked: Bool? = nil,
+        notes: String,
+        semanticRole: ImageLibrarySemanticRole? = nil
+    ) {
         guard let index = cachedAllRecords.firstIndex(where: { $0.id == recordID }) else { return }
         let existing = cachedAllRecords[index]
+        let resolvedSemanticRole = semanticRole ?? existing.semanticRole
+        let resolvedIsLiked = isLiked ?? existing.isLiked
         let updated = ProjectImageRecord(
             id: cachedAllRecords[index].id,
             path: cachedAllRecords[index].path,
             resolvedPath: cachedAllRecords[index].resolvedPath,
             source: cachedAllRecords[index].source,
+            semanticRole: resolvedSemanticRole,
             originLabel: cachedAllRecords[index].originLabel,
             groupLabel: cachedAllRecords[index].groupLabel,
             sceneID: cachedAllRecords[index].sceneID,
@@ -575,8 +618,58 @@ final class AllProjectImagesState {
             sizeBytes: cachedAllRecords[index].sizeBytes,
             rating: rating,
             isRejected: isRejected,
+            isLiked: isRejected ? false : resolvedIsLiked,
             notes: notes,
             supportsLibraryCuration: cachedAllRecords[index].supportsLibraryCuration
+        )
+        cachedAllRecords[index] = updated
+        recordsByID[updated.id] = updated
+        if existing.source != updated.source || existing.groupLabel != updated.groupLabel {
+            rebuildAggregationCaches(from: cachedAllRecords)
+        }
+        contentRevision &+= 1
+        filteredCacheKey = nil
+        filteredCacheRecords = []
+        filteredRecordsByID = [:]
+        prefetchSignatureCache.removeAll(keepingCapacity: true)
+    }
+
+    func updateSemanticRoleMetadata(
+        for recordID: String,
+        semanticRole: ImageLibrarySemanticRole?
+    ) {
+        guard let index = cachedAllRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let existing = cachedAllRecords[index]
+        let updatedSource = Self.sourceAfterRecategorization(
+            recordID: existing.id,
+            originalSource: existing.source,
+            semanticRole: semanticRole
+        )
+        let updated = ProjectImageRecord(
+            id: existing.id,
+            path: existing.path,
+            resolvedPath: existing.resolvedPath,
+            source: updatedSource,
+            semanticRole: semanticRole,
+            originLabel: existing.originLabel,
+            groupLabel: existing.groupLabel,
+            sceneID: existing.sceneID,
+            shotID: existing.shotID,
+            searchHaystack: Self.searchHaystack(
+                path: existing.path,
+                resolvedPath: existing.resolvedPath,
+                source: updatedSource,
+                originLabel: existing.originLabel,
+                groupLabel: existing.groupLabel,
+                notes: existing.notes
+            ),
+            createdAt: existing.createdAt,
+            sizeBytes: existing.sizeBytes,
+            rating: existing.rating,
+            isRejected: existing.isRejected,
+            isLiked: existing.isLiked,
+            notes: existing.notes,
+            supportsLibraryCuration: existing.supportsLibraryCuration
         )
         cachedAllRecords[index] = updated
         recordsByID[updated.id] = updated
@@ -900,7 +993,9 @@ final class AllProjectImagesState {
         shotID: UUID? = nil,
         rating: Int? = nil,
         isRejected: Bool = false,
+        isLiked: Bool = false,
         notes: String = "",
+        semanticRole: ImageLibrarySemanticRole? = nil,
         supportsLibraryCuration: Bool = true,
         store: AnimateStore
     ) -> RecordSeed {
@@ -908,12 +1003,14 @@ final class AllProjectImagesState {
             id: id,
             path: path,
             source: source,
+            semanticRole: semanticRole,
             originLabel: originLabel,
             groupLabel: groupLabel,
             sceneID: sceneID,
             shotID: shotID,
             rating: rating,
             isRejected: isRejected,
+            isLiked: isLiked,
             notes: notes,
             supportsLibraryCuration: supportsLibraryCuration
         )
@@ -968,6 +1065,12 @@ final class AllProjectImagesState {
         let sidecarMetadata = (seed.source == .places || !hasSeedMetadata)
             ? ImageLibraryMetadataSidecarService.load(forImagePath: resolvedPath)
             : nil
+        let resolvedSemanticRole = sidecarMetadata?.semanticRole ?? seed.semanticRole ?? inferredSemanticRole(for: seed.source)
+        let resolvedSource = sourceAfterRecategorization(
+            recordID: seed.id,
+            originalSource: seed.source,
+            semanticRole: sidecarMetadata?.semanticRole ?? seed.semanticRole
+        )
         let mergedNotes = seed.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? (sidecarMetadata?.notes ?? "")
             : seed.notes
@@ -976,7 +1079,8 @@ final class AllProjectImagesState {
             id: seed.id,
             path: seed.path,
             resolvedPath: resolvedPath,
-            source: seed.source,
+            source: resolvedSource,
+            semanticRole: resolvedSemanticRole,
             originLabel: seed.originLabel,
             groupLabel: seed.groupLabel,
             sceneID: seed.sceneID,
@@ -993,6 +1097,7 @@ final class AllProjectImagesState {
             sizeBytes: metadata.sizeBytes,
             rating: seed.rating ?? sidecarMetadata?.rating,
             isRejected: seed.isRejected || (sidecarMetadata?.isRejected ?? false),
+            isLiked: (seed.isLiked || (sidecarMetadata?.isLiked ?? false)) && !(seed.isRejected || (sidecarMetadata?.isRejected ?? false)),
             notes: mergedNotes,
             supportsLibraryCuration: seed.supportsLibraryCuration
         )
@@ -1162,6 +1267,35 @@ final class AllProjectImagesState {
         .lowercased()
     }
 
+    nonisolated private static func inferredSemanticRole(for source: AllProjectImagesSource) -> ImageLibrarySemanticRole? {
+        switch source {
+        case .places, .landmarks, .map3dCaptures:
+            return .place
+        case .characters, .costumes:
+            return .character
+        case .props, .vehicles, .sceneShots, .canvas:
+            return nil
+        }
+    }
+
+    nonisolated private static func sourceAfterRecategorization(
+        recordID: String,
+        originalSource: AllProjectImagesSource,
+        semanticRole: ImageLibrarySemanticRole?
+    ) -> AllProjectImagesSource {
+        let recategorizesSource = recordID.hasPrefix("canvas-") || recordID.hasPrefix("shot-")
+        guard recategorizesSource else { return originalSource }
+        guard let semanticRole else {
+            return recordID.hasPrefix("shot-") ? .sceneShots : .canvas
+        }
+        switch semanticRole {
+        case .place:
+            return .places
+        case .character:
+            return .characters
+        }
+    }
+
     // MARK: - Filter + Sort
 
     var filteredRecords: [ProjectImageRecord] {
@@ -1253,6 +1387,11 @@ final class AllProjectImagesState {
         guard let id = selectedRecordID else { return nil }
         _ = filteredRecords
         return filteredRecordsByID[id] ?? recordsByID[id]
+    }
+
+    func recordsByIDForReview(_ id: String) -> ProjectImageRecord? {
+        _ = filteredRecords
+        return filteredRecordsByID[id] ?? recordsByID[id] ?? cachedAllRecords.first(where: { $0.id == id })
     }
 
     func count(for source: AllProjectImagesSource) -> Int {
@@ -1406,6 +1545,9 @@ public struct AllProjectImagesWorkspace: View {
             )
                 .environment(\.unifiedImageFlipHandler) { path in
                     controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
+                }
+                .environment(\.unifiedImageRecategorizeHandler) { path, category in
+                    controller.store.recategorizeImageReviewScope(path: path, semanticRole: category.semanticRole)
                 }
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
@@ -1677,7 +1819,8 @@ private struct AllProjectImagesWorkspaceContent: View {
                         prompt: draft.effectivePrompt,
                         model: draft.model,
                         aspectRatio: draft.aspectRatio,
-                        imageSize: draft.imageSize
+                        imageSize: draft.imageSize,
+                        referencePaths: draft.referenceItems.filter(\.isIncluded).map(\.path)
                     )
                     store.updateGeminiActivity(
                         activityID,
@@ -2219,6 +2362,7 @@ private struct AllProjectImagesSidebarView: View {
 private struct AllProjectImagesInspectorView: View {
     @Bindable var store: AnimateStore
     @Bindable var state: AllProjectImagesState
+    @State private var dictationSession = ImageReviewDictationSession()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2240,55 +2384,32 @@ private struct AllProjectImagesInspectorView: View {
                                 record: state.selectedRecord,
                                 onSetRating: { newRating in
                                     guard let record = state.selectedRecord else { return }
-                                    let updated = persistReviewUpdate(
-                                        store: store,
-                                        record: record,
-                                        rating: newRating,
-                                        isRejected: record.isRejected,
-                                        notes: record.notes
-                                    )
-                                    state.updateReviewMetadata(
-                                        for: record.id,
-                                        rating: updated.rating,
-                                        isRejected: updated.isRejected,
-                                        notes: updated.notes
-                                    )
+                                    persistAndRefresh(record: record, rating: newRating, isRejected: record.isRejected, isLiked: record.isLiked, notes: record.notes)
+                                },
+                                onToggleLiked: {
+                                    guard let record = state.selectedRecord else { return }
+                                    persistAndRefresh(record: record, rating: record.rating, isRejected: false, isLiked: !record.isLiked, notes: record.notes)
                                 },
                                 onToggleRejected: {
                                     guard let record = state.selectedRecord else { return }
-                                    let updated = persistReviewUpdate(
-                                        store: store,
-                                        record: record,
-                                        rating: record.rating,
-                                        isRejected: !record.isRejected,
-                                        notes: record.notes
-                                    )
-                                    state.updateReviewMetadata(
-                                        for: record.id,
-                                        rating: updated.rating,
-                                        isRejected: updated.isRejected,
-                                        notes: updated.notes
-                                    )
+                                    persistAndRefresh(record: record, rating: record.rating, isRejected: !record.isRejected, isLiked: record.isRejected ? record.isLiked : false, notes: record.notes)
                                 },
                                 onSetNotes: { newNotes in
                                     guard let record = state.selectedRecord else { return }
-                                    let updated = persistReviewUpdate(
-                                        store: store,
-                                        record: record,
-                                        rating: record.rating,
-                                        isRejected: record.isRejected,
-                                        notes: newNotes
-                                    )
-                                    state.updateReviewMetadata(
-                                        for: record.id,
-                                        rating: updated.rating,
-                                        isRejected: updated.isRejected,
-                                        notes: updated.notes
-                                    )
+                                    persistAndRefresh(record: record, rating: record.rating, isRejected: record.isRejected, isLiked: record.isLiked, notes: newNotes)
+                                },
+                                onReviewCommand: { command in
+                                    handleReviewCommand(command)
                                 }
                             )
                         ) {
-                            ProjectImageFileActionsSection(record: state.selectedRecord)
+                            VStack(alignment: .leading, spacing: 12) {
+                                ProjectImageReviewDictationSection(
+                                    projectRoot: store.fileOWPURL,
+                                    session: dictationSession
+                                )
+                                ProjectImageFileActionsSection(record: state.selectedRecord)
+                            }
                         }
 
                         if let record = state.selectedRecord {
@@ -2309,6 +2430,85 @@ private struct AllProjectImagesInspectorView: View {
                 } else {
                     emptyImageIntelligenceState
                 }
+            }
+        }
+    }
+
+    @discardableResult
+    private func persistAndRefresh(
+        record: ProjectImageRecord,
+        rating: Int?,
+        isRejected: Bool,
+        isLiked: Bool? = nil,
+        notes: String
+    ) -> ImageLibraryReviewMetadata {
+        let updated = persistReviewUpdate(
+            store: store,
+            record: record,
+            rating: rating,
+            isRejected: isRejected,
+            isLiked: isLiked,
+            notes: notes
+        )
+        state.updateReviewMetadata(
+            for: record.id,
+            rating: updated.rating,
+            isRejected: updated.isRejected,
+            isLiked: updated.isLiked,
+            notes: updated.notes,
+            semanticRole: updated.semanticRole
+        )
+        return updated
+    }
+
+    private func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool {
+        guard let record = state.selectedRecord else { return false }
+        Task { @MainActor in
+            let transcript = await dictationSession.cycleForReviewCommand(projectRoot: store.fileOWPURL)
+            let latestRecord = state.recordsByIDForReview(record.id) ?? record
+            let mergedNotes = appendTranscript(transcript, to: latestRecord.notes)
+            if mergedNotes != latestRecord.notes {
+                persistAndRefresh(
+                    record: latestRecord,
+                    rating: latestRecord.rating,
+                    isRejected: latestRecord.isRejected,
+                    isLiked: latestRecord.isLiked,
+                    notes: mergedNotes
+                )
+            }
+            applyReviewCommand(command, anchorRecordID: latestRecord.id)
+        }
+        return true
+    }
+
+    private func appendTranscript(_ transcript: String?, to notes: String) -> String {
+        guard let transcript = transcript?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !transcript.isEmpty else { return notes }
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return transcript }
+        return trimmed + "\n" + transcript
+    }
+
+    private func applyReviewCommand(_ command: ImageReviewKeyboardCommand, anchorRecordID: String) {
+        let record = state.recordsByIDForReview(anchorRecordID) ?? state.selectedRecord
+        switch command {
+        case .previous:
+            state.selectAdjacentRecord(in: state.filteredRecords, delta: -1)
+        case .next:
+            state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
+        case .reject:
+            if let record {
+                persistAndRefresh(record: record, rating: record.rating, isRejected: true, isLiked: false, notes: record.notes)
+            }
+            state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
+        case .fiveStars:
+            if let record {
+                persistAndRefresh(record: record, rating: 5, isRejected: false, isLiked: true, notes: record.notes)
+            }
+            state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
+        case .setRating(let rating):
+            if let record {
+                persistAndRefresh(record: record, rating: rating, isRejected: false, isLiked: record.isLiked, notes: record.notes)
             }
         }
     }
@@ -2459,6 +2659,48 @@ private struct AllProjectImagesInspectorView: View {
 }
 
 @available(macOS 26.0, *)
+private struct ProjectImageReviewDictationSection: View {
+    let projectRoot: URL?
+    @Bindable var session: ImageReviewDictationSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Review Dictation")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Button {
+                    session.toggle(projectRoot: projectRoot)
+                } label: {
+                    Label(session.isEnabled ? "Mic On" : "Mic", systemImage: session.isRecording ? "mic.fill" : "mic")
+                }
+                .buttonStyle(.bordered)
+                .tint(session.isEnabled ? .red : nil)
+
+                Text(session.statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(session.isEnabled ? .primary : .secondary)
+                    .lineLimit(3)
+            }
+
+            Text("Review keys while Notes is focused: [ previous, ] next, / reject, ; five stars. If Parakeet is configured, each key commits the current recording to Notes before moving on.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let lastAudioPath = session.lastAudioPath, !lastAudioPath.isEmpty {
+                Text(lastAudioPath)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+}
+
+@available(macOS 26.0, *)
 private struct ProjectImageFileActionsSection: View {
     let record: ProjectImageRecord?
 
@@ -2525,7 +2767,9 @@ func persistReviewUpdate(
     record: ProjectImageRecord,
     rating: Int?,
     isRejected: Bool,
-    notes: String
+    isLiked: Bool? = nil,
+    notes: String,
+    semanticRole: ImageLibrarySemanticRole? = nil
 ) -> ImageLibraryReviewMetadata {
     switch allProjectImageReviewContext(store: store, record: record) {
     case .generatedBackground(let recordID):
@@ -2551,15 +2795,26 @@ func persistReviewUpdate(
     }
 
     let existingMetadata = ImageLibraryMetadataSidecarService.load(forImagePath: record.resolvedPath)
+    let resolvedSemanticRole = semanticRole ?? existingMetadata?.semanticRole ?? record.semanticRole
+    let resolvedIsLiked = isRejected ? false : (isLiked ?? existingMetadata?.isLiked ?? record.isLiked)
     let metadata = ImageLibraryReviewMetadata(
         rating: rating,
         isRejected: isRejected,
+        isLiked: resolvedIsLiked,
         notes: notes,
         updatedAt: Date(),
         characterTags: existingMetadata?.characterTags ?? [],
-        visualStyle: existingMetadata?.visualStyle
+        visualStyle: existingMetadata?.visualStyle,
+        semanticRole: resolvedSemanticRole
     )
     ImageLibraryMetadataSidecarService.saveAsync(metadata, forImagePath: record.resolvedPath)
+    ImageReviewFeedbackService.recordFeedback(
+        store: store,
+        projectRoot: store.fileOWPURL,
+        record: record,
+        metadata: metadata
+    )
+    ImagePreferenceProfileService.scheduleRebuild(store: store, projectRoot: store.fileOWPURL)
     return metadata
 }
 
@@ -2568,8 +2823,10 @@ private struct AllProjectImageSelection: DetailedImageSelection {
     let store: AnimateStore
     let record: ProjectImageRecord?
     let onSetRating: (Int?) -> Void
+    let onToggleLiked: () -> Void
     let onToggleRejected: () -> Void
     let onSetNotes: (String) -> Void
+    let onReviewCommand: (ImageReviewKeyboardCommand) -> Bool
 
     private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
@@ -2627,8 +2884,22 @@ private struct AllProjectImageSelection: DetailedImageSelection {
         record?.isRejected ?? false
     }
 
+    var isLiked: Bool {
+        record?.isLiked ?? false
+    }
+
     var notes: String {
         record?.notes ?? ""
+    }
+
+    var projectRootURL: URL? { store.fileOWPURL }
+
+    var generationReferenceImages: [GenerationReferenceImageItem] {
+        guard let record else { return [] }
+        return GenerationReferenceImageResolver.referenceItems(
+            forImagePath: record.resolvedPath,
+            projectRoot: store.fileOWPURL
+        )
     }
 
     var supportsRating: Bool {
@@ -2646,6 +2917,9 @@ private struct AllProjectImageSelection: DetailedImageSelection {
             ("Source", record.source.displayName),
             ("Origin", record.originLabel)
         ]
+        if let semanticRole = record.semanticRole {
+            rows.append(("Review Scope", semanticRole.displayName))
+        }
 
         if let placeRecord {
             rows.append(("Workflow", placeRecord.workflow.displayName))
@@ -2717,12 +2991,20 @@ private struct AllProjectImageSelection: DetailedImageSelection {
         onSetRating(newValue)
     }
 
+    func toggleLiked() {
+        onToggleLiked()
+    }
+
     func toggleRejected() {
         onToggleRejected()
     }
 
     func setNotes(_ newValue: String) {
         onSetNotes(newValue)
+    }
+
+    func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool {
+        onReviewCommand(command)
     }
 }
 
@@ -3202,10 +3484,8 @@ private struct InspectorImageIntelligenceTab: View {
         store.registerImageAsset(
             path: record.resolvedPath,
             linkKind: .sceneShotImage,
-            enqueueForAnalysis: true
+            analysisMode: .immediate
         )
-        // Start the worker so the queued job actually gets processed.
-        store.startImageAnalysisWorker()
         await refresh()
     }
 

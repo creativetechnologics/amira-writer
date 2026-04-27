@@ -48,6 +48,15 @@ struct SharedInspectorTabBar<Value: Hashable & Identifiable>: View {
 // MARK: - Protocol
 
 @available(macOS 26.0, *)
+enum ImageReviewKeyboardCommand: Sendable, Hashable {
+    case previous
+    case next
+    case reject
+    case fiveStars
+    case setRating(Int?)
+}
+
+@available(macOS 26.0, *)
 @MainActor
 protocol DetailedImageSelection {
     var imageURL: URL? { get }
@@ -55,21 +64,34 @@ protocol DetailedImageSelection {
     var subtitle: String? { get }
     var rating: Int? { get }
     var isRejected: Bool { get }
+    var isLiked: Bool { get }
     var notes: String { get }
     var metadataRows: [(label: String, value: String)] { get }
     var emptyStateMessage: String { get }
     var supportsRating: Bool { get }
     var supportsNotes: Bool { get }
+    var projectRootURL: URL? { get }
+    var generationReferenceImages: [GenerationReferenceImageItem] { get }
 
     func setRating(_ newValue: Int?)
+    func toggleLiked()
     func toggleRejected()
     func setNotes(_ newValue: String)
+    func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool
 }
 
 @available(macOS 26.0, *)
 extension DetailedImageSelection {
     var supportsRating: Bool { true }
     var supportsNotes: Bool { true }
+    var isLiked: Bool { false }
+    var projectRootURL: URL? { nil }
+    var generationReferenceImages: [GenerationReferenceImageItem] {
+        guard let path = imageURL?.path else { return [] }
+        return GenerationReferenceImageResolver.referenceItems(forImagePath: path, projectRoot: projectRootURL)
+    }
+    func toggleLiked() {}
+    func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool { false }
 }
 
 // MARK: - Shared View
@@ -101,6 +123,7 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
 
     var body: some View {
         let metadataRows = selection.metadataRows
+        let referenceImages = selection.generationReferenceImages
         VStack(alignment: .leading, spacing: 14) {
             Label("Details", systemImage: "info.circle")
                 .font(.headline)
@@ -117,6 +140,10 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                 if !metadataRows.isEmpty {
                     Divider()
                     metadataSection(rows: metadataRows)
+                }
+                if !referenceImages.isEmpty {
+                    Divider()
+                    referenceImagesSection(referenceImages)
                 }
             } else {
                 emptyState
@@ -274,6 +301,25 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
+                Button {
+                    selection.toggleLiked()
+                } label: {
+                    Label(selection.isLiked ? "Liked" : "Like", systemImage: selection.isLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                }
+                .buttonStyle(.bordered)
+                .tint(selection.isLiked ? .green : nil)
+
+                Button {
+                    selection.toggleRejected()
+                } label: {
+                    Label(selection.isRejected ? "Rejected" : "Reject", systemImage: selection.isRejected ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+                }
+                .buttonStyle(.bordered)
+                .tint(selection.isRejected ? .red : nil)
+
+                Divider()
+                    .frame(height: 18)
+
                 ForEach(1...5, id: \.self) { star in
                     Button {
                         selection.setRating(selection.rating == star ? nil : star)
@@ -286,11 +332,6 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
 
                 Divider()
                     .frame(height: 18)
-
-                Button(selection.isRejected ? "Unreject" : "Reject") {
-                    selection.toggleRejected()
-                }
-                .buttonStyle(.bordered)
             }
         }
     }
@@ -300,7 +341,8 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
     private var notesEditor: some View {
         DebouncedNotesEditor(
             initialValue: selection.notes,
-            onCommit: { newValue in selection.setNotes(newValue) }
+            onCommit: { newValue in selection.setNotes(newValue) },
+            onReviewCommand: { command in selection.handleReviewCommand(command) }
         )
         // Recreate state when the selected image changes; without this two
         // images that both have empty notes wouldn't trigger onChange(of:
@@ -333,6 +375,86 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                 }
             }
         }
+    }
+
+    // MARK: - Reference Images
+
+    private func referenceImagesSection(_ items: [GenerationReferenceImageItem]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("Reference Images")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("\(items.count)")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
+                    .foregroundStyle(.secondary)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 78, maximum: 90), spacing: 8)],
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ForEach(items) { item in
+                    let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: item.resolvedPath)
+                    UnifiedImageTile(
+                        path: item.rawPath,
+                        resolvedPath: item.resolvedPath,
+                        thumbnailSize: 72,
+                        sourceLabel: referenceSourceLabel(for: item),
+                        sourceSystemImage: referenceSourceIcon(for: item),
+                        isRejected: metadata?.isRejected ?? false,
+                        isLiked: metadata?.isLiked ?? false,
+                        hasNotes: !(metadata?.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+                        rating: metadata?.rating
+                    )
+                    .frame(width: 84, height: 84)
+                    .help(referenceHelpText(for: item))
+                }
+            }
+        }
+    }
+
+    private func referenceSourceLabel(for item: GenerationReferenceImageItem) -> String {
+        let role = (item.role ?? "").lowercased()
+        if role.contains("edit") || role.contains("source") { return "Edit" }
+        if role.contains("map") || role.contains("spatial") { return "Map" }
+        if role.contains("costume") { return "Costume" }
+        if role.contains("identity") || role.contains("face") { return "Identity" }
+        if role.contains("storyboard") || role.contains("layout") { return "Board" }
+        if role.contains("style") { return "Style" }
+        if role.contains("continuity") { return "Ref" }
+        if let label = item.label, !label.isEmpty {
+            return String(label.prefix(10))
+        }
+        return "Ref"
+    }
+
+    private func referenceSourceIcon(for item: GenerationReferenceImageItem) -> String {
+        let role = (item.role ?? "").lowercased()
+        if role.contains("edit") || role.contains("source") { return "pencil.and.outline" }
+        if role.contains("map") || role.contains("spatial") { return "map" }
+        if role.contains("costume") { return "tshirt" }
+        if role.contains("identity") || role.contains("face") { return "person.crop.circle" }
+        if role.contains("storyboard") || role.contains("layout") { return "rectangle.on.rectangle" }
+        if role.contains("style") { return "paintpalette" }
+        return "photo.on.rectangle"
+    }
+
+    private func referenceHelpText(for item: GenerationReferenceImageItem) -> String {
+        [
+            item.label,
+            item.role,
+            item.rawPath
+        ]
+        .compactMap { value in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        .joined(separator: "\n")
     }
 
     // MARK: - Empty State
@@ -471,7 +593,17 @@ struct PlaceImageSelection: DetailedImageSelection {
 
     var rating: Int? { record?.rating }
     var isRejected: Bool { record?.isRejected ?? false }
+    var isLiked: Bool {
+        guard let record else { return false }
+        return store.imageLibraryIsLiked(for: record.activePath)
+    }
     var notes: String { record?.draftEditNotes ?? "" }
+    var projectRootURL: URL? { store.fileOWPURL }
+
+    var generationReferenceImages: [GenerationReferenceImageItem] {
+        guard let path = imageURL?.path else { return [] }
+        return GenerationReferenceImageResolver.referenceItems(forImagePath: path, projectRoot: store.fileOWPURL)
+    }
 
     var metadataRows: [(label: String, value: String)] {
         guard let record else { return [] }
@@ -514,6 +646,11 @@ struct PlaceImageSelection: DetailedImageSelection {
     func setRating(_ newValue: Int?) {
         guard let record else { return }
         store.setGeneratedBackgroundRating(newValue, for: record.id)
+    }
+
+    func toggleLiked() {
+        guard let record else { return }
+        store.setImageLibraryLiked(!isLiked, for: record.activePath)
     }
 
     func toggleRejected() {
@@ -560,9 +697,21 @@ struct CharacterImageSelection: DetailedImageSelection {
         return character?.inspirationRejectedPaths.contains(path) ?? false
     }
 
+    var isLiked: Bool {
+        guard let path = currentPath else { return false }
+        return store.imageLibraryIsLiked(for: path)
+    }
+
     var notes: String {
         guard let path = currentPath else { return "" }
         return character?.inspirationNotes?[path] ?? ""
+    }
+
+    var projectRootURL: URL? { store.fileOWPURL }
+
+    var generationReferenceImages: [GenerationReferenceImageItem] {
+        guard let path = imageURL?.path else { return [] }
+        return GenerationReferenceImageResolver.referenceItems(forImagePath: path, projectRoot: store.fileOWPURL)
     }
 
     var metadataRows: [(label: String, value: String)] {
@@ -587,6 +736,11 @@ struct CharacterImageSelection: DetailedImageSelection {
         store.setInspirationRating(newValue, path: path, for: charID)
     }
 
+    func toggleLiked() {
+        guard let path = currentPath else { return }
+        store.setImageLibraryLiked(!isLiked, for: path)
+    }
+
     func toggleRejected() {
         guard let path = currentPath, let charID = character?.id else { return }
         store.toggleInspirationRejected(path: path, for: charID)
@@ -609,6 +763,7 @@ struct PropImageSelection: DetailedImageSelection {
     var subtitle: String? { nil }
     var rating: Int? { nil }
     var isRejected: Bool { false }
+    var isLiked: Bool { false }
     var notes: String { "" }
     var metadataRows: [(label: String, value: String)] { [] }
     var emptyStateMessage: String { "No prop image selected." }
@@ -627,13 +782,19 @@ struct PropImageSelection: DetailedImageSelection {
 private struct DebouncedNotesEditor: View {
     let initialValue: String
     let onCommit: (String) -> Void
+    let onReviewCommand: (ImageReviewKeyboardCommand) -> Bool
 
     @State private var draft: String
     @State private var commitTask: Task<Void, Never>?
 
-    init(initialValue: String, onCommit: @escaping (String) -> Void) {
+    init(
+        initialValue: String,
+        onCommit: @escaping (String) -> Void,
+        onReviewCommand: @escaping (ImageReviewKeyboardCommand) -> Bool = { _ in false }
+    ) {
         self.initialValue = initialValue
         self.onCommit = onCommit
+        self.onReviewCommand = onReviewCommand
         _draft = State(initialValue: initialValue)
     }
 
@@ -643,14 +804,21 @@ private struct DebouncedNotesEditor: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            TextEditor(text: $draft)
-                .font(.system(.body, design: .default))
-                .frame(minHeight: 120)
-                .padding(8)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.secondary.opacity(0.08))
-                )
+            ReviewNotesTextView(
+                text: $draft,
+                onReviewCommand: { command in
+                    commitTask?.cancel()
+                    if draft != initialValue {
+                        onCommit(draft)
+                    }
+                    return onReviewCommand(command)
+                }
+            )
+            .frame(minHeight: 120)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+            )
                 .onChange(of: draft) { _, newValue in
                     commitTask?.cancel()
                     commitTask = Task { @MainActor in
@@ -674,5 +842,118 @@ private struct DebouncedNotesEditor: View {
                     }
                 }
         }
+    }
+}
+
+@available(macOS 26.0, *)
+struct ReviewNotesTextView: NSViewRepresentable {
+    @Binding var text: String
+    var onReviewCommand: (ImageReviewKeyboardCommand) -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onReviewCommand: onReviewCommand)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+
+        let textView = ReviewNotesNSTextView()
+        textView.isRichText = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        textView.backgroundColor = .clear
+        textView.textColor = .labelColor
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.minSize = NSSize(width: 0, height: 120)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.delegate = context.coordinator
+        textView.onReviewCommand = { command in
+            context.coordinator.onReviewCommand(command)
+        }
+        textView.string = text
+        scroll.documentView = textView
+        context.coordinator.textView = textView
+        return scroll
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.parentText = $text
+        context.coordinator.onReviewCommand = onReviewCommand
+        guard let textView = nsView.documentView as? ReviewNotesNSTextView else { return }
+        textView.onReviewCommand = { command in
+            context.coordinator.onReviewCommand(command)
+        }
+        if textView.string != text {
+            textView.string = text
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parentText: Binding<String>
+        var onReviewCommand: (ImageReviewKeyboardCommand) -> Bool
+        weak var textView: NSTextView?
+
+        init(text: Binding<String>, onReviewCommand: @escaping (ImageReviewKeyboardCommand) -> Bool) {
+            self.parentText = text
+            self.onReviewCommand = onReviewCommand
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parentText.wrappedValue = textView.string
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private final class ReviewNotesNSTextView: NSTextView {
+    var onReviewCommand: ((ImageReviewKeyboardCommand) -> Bool)?
+
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let hasBlockingModifier = flags.contains(.command) || flags.contains(.option) || flags.contains(.control)
+        guard !hasBlockingModifier else {
+            super.keyDown(with: event)
+            return
+        }
+
+        let chars = event.charactersIgnoringModifiers ?? event.characters ?? ""
+        let command: ImageReviewKeyboardCommand?
+        switch chars {
+        case "[":
+            command = .previous
+        case "]":
+            command = .next
+        case "/", "?", "\\":
+            command = .reject
+        case ";", ":":
+            command = .fiveStars
+        case "1":
+            command = .setRating(1)
+        case "2":
+            command = .setRating(2)
+        case "3":
+            command = .setRating(3)
+        case "4":
+            command = .setRating(4)
+        case "5":
+            command = .setRating(5)
+        case "0":
+            command = .setRating(nil)
+        default:
+            command = nil
+        }
+
+        if let command, onReviewCommand?(command) == true {
+            return
+        }
+        super.keyDown(with: event)
     }
 }

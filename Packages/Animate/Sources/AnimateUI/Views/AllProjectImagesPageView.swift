@@ -91,6 +91,7 @@ struct ProjectImageRecord: Identifiable, Hashable, Sendable {
     let path: String
     let resolvedPath: String
     let source: AllProjectImagesSource
+    let semanticRole: ImageLibrarySemanticRole?
     let originLabel: String
     let groupLabel: String
     let sceneID: UUID?
@@ -100,6 +101,7 @@ struct ProjectImageRecord: Identifiable, Hashable, Sendable {
     let sizeBytes: Int64?
     let rating: Int?
     let isRejected: Bool
+    let isLiked: Bool
     let notes: String
     let supportsLibraryCuration: Bool
 }
@@ -638,7 +640,7 @@ struct AllProjectImagesPageView: View {
                 .focused($filmstripKeyboardFocused)
                 .focusEffectDisabled()
                 .onTapGesture {
-                    filmstripKeyboardFocused = true
+                    claimGridKeyboardFocus()
                 }
                 .onKeyPress(.space) {
                     toggleGridQuickLook()
@@ -656,6 +658,17 @@ struct AllProjectImagesPageView: View {
                 .onKeyPress(.init("0")) { applyGridRating(nil) }
                 .onKeyPress(.init("x")) { toggleGridRejected() }
                 .onKeyPress(.init("X")) { toggleGridRejected() }
+                .onKeyPress(.init("p")) { applySemanticRole(.place) }
+                .onKeyPress(.init("P")) { applySemanticRole(.place) }
+                .onKeyPress(.init("c")) { applySemanticRole(.character) }
+                .onKeyPress(.init("C")) { applySemanticRole(.character) }
+                .onKeyPress(.init("]")) { navigateGrid(.right) }
+                .onKeyPress(.init("[")) { navigateGrid(.left) }
+                .onKeyPress(.init("/")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init("?")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init("\\")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init(";")) { fiveStarSelectedAndAdvance() }
+                .onKeyPress(.init(":")) { fiveStarSelectedAndAdvance() }
                 .onKeyPress(phases: .down) { press in
                     handleGridRatingKeyPress(press)
                 }
@@ -773,6 +786,7 @@ struct AllProjectImagesPageView: View {
                                 sourceSystemImage: record.source.systemImage,
                                 isSelected: state.selectedRecordID == record.id,
                                 isRejected: record.isRejected,
+                                isLiked: record.isLiked,
                                 hasNotes: !record.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                                 rating: record.rating,
                                 actions: UnifiedImageActions(
@@ -785,6 +799,7 @@ struct AllProjectImagesPageView: View {
                                     onCopy: {
                                         copyImageToPasteboardAsync(path: record.resolvedPath)
                                     },
+                                    recategorizeEntries: recategorizeEntries(for: record),
                                     onEditWithGemini: {
                                         state.selectedRecordID = record.id
                                         state.inspectorTab = .generate
@@ -802,6 +817,10 @@ struct AllProjectImagesPageView: View {
                                         updateRating(rating, for: record)
                                     },
                                     currentRating: record.rating,
+                                    onToggleLiked: {
+                                        toggleLiked(for: record)
+                                    },
+                                    isLiked: record.isLiked,
                                     onToggleRejected: {
                                         toggleRejected(for: record)
                                     },
@@ -811,8 +830,8 @@ struct AllProjectImagesPageView: View {
                                     }
                                 ),
                                 onTap: {
+                                    claimGridKeyboardFocus()
                                     state.selectRecord(record, in: records, modifiers: .none)
-                                    filmstripKeyboardFocused = true
                                 }
                             )
                             .onDrag {
@@ -833,7 +852,7 @@ struct AllProjectImagesPageView: View {
                 .focused($filmstripKeyboardFocused)
                 .focusEffectDisabled()
                 .onTapGesture {
-                    filmstripKeyboardFocused = true
+                    claimGridKeyboardFocus()
                 }
                 .onKeyPress(.leftArrow) {
                     state.selectAdjacentRecord(in: records, delta: -1)
@@ -855,6 +874,23 @@ struct AllProjectImagesPageView: View {
                 .onKeyPress(.init("0")) { applyGridRating(nil) }
                 .onKeyPress(.init("x")) { toggleGridRejected() }
                 .onKeyPress(.init("X")) { toggleGridRejected() }
+                .onKeyPress(.init("p")) { applySemanticRole(.place) }
+                .onKeyPress(.init("P")) { applySemanticRole(.place) }
+                .onKeyPress(.init("c")) { applySemanticRole(.character) }
+                .onKeyPress(.init("C")) { applySemanticRole(.character) }
+                .onKeyPress(.init("]")) {
+                    state.selectAdjacentRecord(in: records, delta: 1)
+                    return .handled
+                }
+                .onKeyPress(.init("[")) {
+                    state.selectAdjacentRecord(in: records, delta: -1)
+                    return .handled
+                }
+                .onKeyPress(.init("/")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init("?")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init("\\")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init(";")) { fiveStarSelectedAndAdvance() }
+                .onKeyPress(.init(":")) { fiveStarSelectedAndAdvance() }
                 .onKeyPress(phases: .down) { press in
                     handleGridRatingKeyPress(press)
                 }
@@ -891,6 +927,7 @@ struct AllProjectImagesPageView: View {
             sourceSystemImage: record.source.systemImage,
             isSelected: isSelected,
             isRejected: record.isRejected,
+            isLiked: record.isLiked,
             hasNotes: hasNotes,
             rating: record.rating,
             showsSelectionCheckmark: selectedCount > 1,
@@ -905,6 +942,7 @@ struct AllProjectImagesPageView: View {
                 onCopy: {
                     copyImageToPasteboardAsync(path: record.resolvedPath)
                 },
+                recategorizeEntries: recategorizeEntries(for: record),
                 onEditWithGemini: {
                     // Open the preflight sheet immediately so the user can
                     // type the adjustment there and hit Generate. Also
@@ -927,6 +965,10 @@ struct AllProjectImagesPageView: View {
                     updateRating(rating, for: record)
                 },
                 currentRating: record.rating,
+                onToggleLiked: {
+                    toggleLiked(for: record)
+                },
+                isLiked: record.isLiked,
                 onToggleRejected: {
                     toggleRejected(for: record)
                 },
@@ -936,7 +978,7 @@ struct AllProjectImagesPageView: View {
                 }
             ),
             onTap: {
-                filmstripKeyboardFocused = true
+                claimGridKeyboardFocus()
                 let flags = NSEvent.modifierFlags
                 let modifiers: GalleryClickEvent.Modifiers = flags.contains(.command) ? .command : (flags.contains(.shift) ? .shift : .none)
                 state.selectRecord(record, in: records, modifiers: modifiers)
@@ -977,9 +1019,56 @@ struct AllProjectImagesPageView: View {
         }
     }
 
+    private func recategorizeEntries(for record: ProjectImageRecord) -> [UnifiedImageRecategorizeEntry] {
+        UnifiedImageRecategorization.allCases.map { category in
+            UnifiedImageRecategorizeEntry(
+                id: category.id,
+                label: category.displayName,
+                systemImage: category.systemImage,
+                isSelected: record.semanticRole == category.semanticRole,
+                action: { recategorize(category, for: record) }
+            )
+        }
+    }
+
+    private func recategorize(_ category: UnifiedImageRecategorization, for record: ProjectImageRecord) {
+        let targets = actionRecords(anchor: record)
+        for target in targets {
+            let existingMetadata = ImageLibraryMetadataSidecarService.load(forImagePath: target.resolvedPath)
+            let metadata = ImageLibraryReviewMetadata(
+                rating: existingMetadata?.rating ?? target.rating,
+                isRejected: existingMetadata?.isRejected ?? target.isRejected,
+                isLiked: existingMetadata?.isLiked ?? target.isLiked,
+                notes: existingMetadata?.notes ?? target.notes,
+                updatedAt: Date(),
+                characterTags: existingMetadata?.characterTags ?? [],
+                visualStyle: existingMetadata?.visualStyle,
+                semanticRole: category.semanticRole
+            )
+            ImageLibraryMetadataSidecarService.saveAsync(metadata, forImagePath: target.resolvedPath)
+            ImageReviewFeedbackService.recordFeedback(
+                store: store,
+                projectRoot: store.fileOWPURL,
+                record: target,
+                metadata: metadata
+            )
+            state.updateSemanticRoleMetadata(for: target.id, semanticRole: category.semanticRole)
+        }
+        ImagePreferenceProfileService.scheduleRebuild(store: store, projectRoot: store.fileOWPURL)
+
+        let suffix = targets.count == 1 ? "" : "s"
+        let actionLabel = category == .clear
+            ? "Cleared category for"
+            : "Recategorized"
+        let targetLabel = category == .clear
+            ? "\(targets.count) image\(suffix)"
+            : "\(targets.count) image\(suffix) as \(category.displayName.lowercased())"
+        store.statusMessage = "\(actionLabel) \(targetLabel)"
+    }
+
     private func toggleCharacterTag(_ name: String, for record: ProjectImageRecord) {
         var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: record.resolvedPath)
-            ?? ImageLibraryReviewMetadata(rating: record.rating, isRejected: record.isRejected, notes: record.notes, updatedAt: nil)
+            ?? ImageLibraryReviewMetadata(rating: record.rating, isRejected: record.isRejected, isLiked: record.isLiked, notes: record.notes, updatedAt: nil)
         if metadata.characterTags.contains(name) {
             metadata.characterTags.removeAll { $0 == name }
         } else {
@@ -1019,10 +1108,37 @@ struct AllProjectImagesPageView: View {
                 record: target,
                 rating: rating,
                 isRejected: target.isRejected,
+                isLiked: target.isLiked,
                 notes: target.notes
             )
-            state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+            state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, isLiked: updated.isLiked, notes: updated.notes)
         }
+    }
+
+    private func toggleLiked(for record: ProjectImageRecord) {
+        let targetLikedState = !record.isLiked
+        for target in actionRecords(anchor: record) {
+            let updated = persistReviewUpdate(
+                store: store,
+                record: target,
+                rating: target.rating,
+                isRejected: targetLikedState ? false : target.isRejected,
+                isLiked: targetLikedState,
+                notes: target.notes
+            )
+            state.updateReviewMetadata(
+                for: target.id,
+                rating: updated.rating,
+                isRejected: updated.isRejected,
+                isLiked: updated.isLiked,
+                notes: updated.notes
+            )
+        }
+    }
+
+    private func updateSemanticRole(_ semanticRole: ImageLibrarySemanticRole, for record: ProjectImageRecord) {
+        let category: UnifiedImageRecategorization = semanticRole == .place ? .place : .character
+        recategorize(category, for: record)
     }
 
     private func toggleRejected(for record: ProjectImageRecord) {
@@ -1033,9 +1149,10 @@ struct AllProjectImagesPageView: View {
                 record: target,
                 rating: target.rating,
                 isRejected: targetRejectedState,
+                isLiked: targetRejectedState ? false : target.isLiked,
                 notes: target.notes
             )
-            state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+            state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, isLiked: updated.isLiked, notes: updated.notes)
         }
     }
 
@@ -1205,6 +1322,11 @@ struct AllProjectImagesPageView: View {
             .background(.ultraThinMaterial, in: Capsule())
     }
 
+    private func claimGridKeyboardFocus() {
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        filmstripKeyboardFocused = true
+    }
+
     private func navigateGrid(_ direction: UnifiedGridNavigation.Direction) -> KeyPress.Result {
         let records = state.filteredRecords
         guard !records.isEmpty else { return .ignored }
@@ -1239,6 +1361,12 @@ struct AllProjectImagesPageView: View {
         return .handled
     }
 
+    private func applySemanticRole(_ semanticRole: ImageLibrarySemanticRole) -> KeyPress.Result {
+        guard let record = state.selectedRecord else { return .ignored }
+        updateSemanticRole(semanticRole, for: record)
+        return .handled
+    }
+
     private func handleGridRatingKeyPress(_ press: KeyPress) -> KeyPress.Result {
         switch press.key {
         case "1":
@@ -1255,9 +1383,47 @@ struct AllProjectImagesPageView: View {
             return applyGridRating(nil)
         case "x", "X":
             return toggleGridRejected()
+        case "p", "P":
+            return applySemanticRole(.place)
+        case "c", "C":
+            return applySemanticRole(.character)
+        case "/", "?", "\\":
+            return rejectSelectedAndAdvance()
+        case ";", ":":
+            return fiveStarSelectedAndAdvance()
         default:
             return .ignored
         }
+    }
+
+    private func rejectSelectedAndAdvance() -> KeyPress.Result {
+        guard let record = state.selectedRecord else { return .ignored }
+        let updated = persistReviewUpdate(
+            store: store,
+            record: record,
+            rating: record.rating,
+            isRejected: true,
+            isLiked: false,
+            notes: record.notes
+        )
+        state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, isLiked: updated.isLiked, notes: updated.notes)
+        state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
+        return .handled
+    }
+
+    private func fiveStarSelectedAndAdvance() -> KeyPress.Result {
+        guard let record = state.selectedRecord else { return .ignored }
+        let updated = persistReviewUpdate(
+            store: store,
+            record: record,
+            rating: 5,
+            isRejected: false,
+            isLiked: true,
+            notes: record.notes
+        )
+        state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, isLiked: updated.isLiked, notes: updated.notes)
+        state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
+        return .handled
     }
 
     private func toggleGridQuickLook() -> KeyPress.Result {

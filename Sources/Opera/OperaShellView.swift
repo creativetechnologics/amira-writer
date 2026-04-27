@@ -18,6 +18,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
     case scenes
     case animate
     case allImages
+    case continuityBuilder
     case canvas
 
     var id: String { rawValue }
@@ -33,6 +34,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .scenes: return "Scenes"
         case .animate: return "Animate"
         case .allImages: return "All Images"
+        case .continuityBuilder: return "Continuity Builder"
         case .canvas: return "Canvas"
         }
     }
@@ -48,6 +50,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .scenes: return "Scene image generation"
         case .animate: return "Staging, scenes, and timeline animation"
         case .allImages: return "Every generated image across the project"
+        case .continuityBuilder: return "Guided image-feedback training for world, scene, character, costume, and style continuity"
         case .canvas: return "Free-form image generation canvas"
         }
     }
@@ -63,13 +66,22 @@ enum OperaMode: String, CaseIterable, Identifiable {
         case .scenes: return "film.stack"
         case .animate: return "sparkles.tv"
         case .allImages: return "photo.on.rectangle.angled"
+        case .continuityBuilder: return "point.3.connected.trianglepath.dotted"
         case .canvas: return "paintpalette"
         }
     }
 
-    /// Legacy compatibility mode; hidden from navigation and surfaced as All Images.
+    /// Legacy/archived compatibility modes; hidden from navigation and routed
+    /// to their replacement workspaces so stale saved state cannot reopen them.
     var navigationMode: OperaMode {
-        self == .props ? .allImages : self
+        switch self {
+        case .props:
+            return .allImages
+        case .continuityBuilder:
+            return .canvas
+        default:
+            return self
+        }
     }
 
     static let sidebarModes: [OperaMode] = [
@@ -258,6 +270,7 @@ struct OperaShellView: View {
     @AppStorage("novotro.mix.sidebarVisible") private var mixSidebarVisible: Bool = true
     @AppStorage("novotro.imagine.sidebarVisible") private var imagineSidebarVisible: Bool = true
     @AppStorage("novotro.allImages.sidebarVisible") private var allImagesSidebarVisible: Bool = true
+    @AppStorage("novotro.continuityBuilder.sidebarVisible") private var continuityBuilderSidebarVisible: Bool = true
     @AppStorage("novotro.canvas.sidebarVisible") private var canvasSidebarVisible: Bool = true
 
     // Inspector visibility (per-mode, shared with each mode's ContentView via same AppStorage key)
@@ -269,13 +282,14 @@ struct OperaShellView: View {
     @AppStorage("novotro.mix.inspector.visible") private var mixInspectorVisible: Bool = true
     @AppStorage("novotro.imagine.showInspector") private var imagineInspectorVisible: Bool = true
     @AppStorage("novotro.allImages.showInspector") private var allImagesInspectorVisible: Bool = true
+    @AppStorage("novotro.continuityBuilder.showInspector") private var continuityBuilderInspectorVisible: Bool = true
     @AppStorage("novotro.canvas.showInspector") private var canvasInspectorVisible: Bool = true
     private static let controlFileCandidates = [
         "Metadata/project.json",
         "project.json"
     ]
     private static let animateClusterModes: Set<OperaMode> = [
-        .scenes, .characters, .places, .props, .animate, .allImages, .canvas
+        .scenes, .characters, .places, .props, .animate, .allImages, .continuityBuilder, .canvas
     ]
 
     private var currentMode: OperaMode {
@@ -459,7 +473,7 @@ struct OperaShellView: View {
         case .write: return writeController.saveIndicator
         case .score: return scoreController.saveIndicator
         case .mix: return mixController.saveIndicator
-        case .scenes, .characters, .places, .animate, .allImages, .canvas:
+        case .scenes, .characters, .places, .animate, .allImages, .continuityBuilder, .canvas:
             return animateController.saveIndicator
         case .props:
             return animateController.saveIndicator
@@ -476,6 +490,7 @@ struct OperaShellView: View {
         case .places: return placesSidebarVisible
         case .animate: return animateSidebarVisible
         case .allImages: return allImagesSidebarVisible
+        case .continuityBuilder: return continuityBuilderSidebarVisible
         case .canvas: return canvasSidebarVisible
         case .props: return allImagesSidebarVisible
         }
@@ -545,6 +560,7 @@ struct OperaShellView: View {
             case .places: placesSidebarVisible.toggle()
             case .animate: animateSidebarVisible.toggle()
             case .allImages: allImagesSidebarVisible.toggle()
+            case .continuityBuilder: continuityBuilderSidebarVisible.toggle()
             case .canvas: canvasSidebarVisible.toggle()
             case .props: allImagesSidebarVisible.toggle()
             }
@@ -561,6 +577,7 @@ struct OperaShellView: View {
         case .places: return placesInspectorVisible
         case .animate: return animateInspectorVisible
         case .allImages: return allImagesInspectorVisible
+        case .continuityBuilder: return continuityBuilderInspectorVisible
         case .canvas: return canvasInspectorVisible
         case .props: return allImagesInspectorVisible
         }
@@ -577,6 +594,7 @@ struct OperaShellView: View {
             case .places: placesInspectorVisible.toggle()
             case .animate: animateInspectorVisible.toggle()
             case .allImages: allImagesInspectorVisible.toggle()
+            case .continuityBuilder: continuityBuilderInspectorVisible.toggle()
             case .canvas: canvasInspectorVisible.toggle()
             case .props: allImagesInspectorVisible.toggle()
             }
@@ -643,6 +661,7 @@ struct OperaShellView: View {
                     ) {
                         selectedMode = .canvas
                     }
+                    .help("Canvas")
 
                     animateController.globalSettingsGearView()
 
@@ -696,6 +715,8 @@ struct OperaShellView: View {
             PlacesWorkspace(controller: animateController)
         case .animate:
             AnimateWorkspace(controller: animateController)
+        case .continuityBuilder:
+            ContinuityBuilderWorkspace(controller: animateController)
         case .canvas:
             CanvasWorkspace(controller: animateController)
         }
@@ -1056,7 +1077,7 @@ struct OperaShellView: View {
             return scoreController.isProjectDisplayReady(projectURL)
         case .mix:
             return mixController.isProjectDisplayReady(projectURL)
-        case .scenes, .characters, .places, .props, .animate, .allImages, .canvas:
+        case .scenes, .characters, .places, .props, .animate, .allImages, .continuityBuilder, .canvas:
             return animateController.isProjectDisplayReady(projectURL)
         }
     }
@@ -1070,7 +1091,7 @@ struct OperaShellView: View {
             scoreController.suspendBackgroundWork()
         case .mix:
             mixController.suspendBackgroundWork()
-        case .scenes, .characters, .places, .props, .animate, .allImages, .canvas:
+        case .scenes, .characters, .places, .props, .animate, .allImages, .continuityBuilder, .canvas:
             animateController.suspendBackgroundWork()
         }
     }
@@ -1084,7 +1105,7 @@ struct OperaShellView: View {
             scoreController.resumeBackgroundWork()
         case .mix:
             mixController.resumeBackgroundWork()
-        case .scenes, .characters, .places, .props, .animate, .allImages, .canvas:
+        case .scenes, .characters, .places, .props, .animate, .allImages, .continuityBuilder, .canvas:
             animateController.resumeBackgroundWork()
         }
     }
@@ -1140,6 +1161,8 @@ struct OperaShellView: View {
         case .animate:
             return await animateController.ensureProjectLoaded(projectURL)
         case .allImages:
+            return await animateController.ensureProjectLoaded(projectURL)
+        case .continuityBuilder:
             return await animateController.ensureProjectLoaded(projectURL)
         case .canvas:
             return await animateController.ensureProjectLoaded(projectURL)
@@ -1352,6 +1375,8 @@ struct OperaShellView: View {
             return animateController.activeProjectPath
         case .allImages:
             return animateController.activeProjectPath
+        case .continuityBuilder:
+            return animateController.activeProjectPath
         case .canvas:
             return animateController.activeProjectPath
         }
@@ -1376,6 +1401,8 @@ struct OperaShellView: View {
         case .animate:
             return animateController.currentSelectionPath()
         case .allImages:
+            return nil
+        case .continuityBuilder:
             return nil
         case .canvas:
             return nil
@@ -1403,6 +1430,8 @@ struct OperaShellView: View {
             return animateController.applySelectionPath(relativePath)
         case .allImages:
             return false
+        case .continuityBuilder:
+            return false
         case .canvas:
             return false
         }
@@ -1410,7 +1439,7 @@ struct OperaShellView: View {
 
     private func setSelectionRestorePending(_ isPending: Bool, for mode: OperaMode) {
         switch mode {
-        case .write, .score, .allImages, .canvas:
+        case .write, .score, .allImages, .continuityBuilder, .canvas:
             return
         case .mix:
             mixController.setSelectionRestorePending(isPending)
@@ -1529,6 +1558,8 @@ struct OperaShellView: View {
             return "Loading scene, character, and timeline data from local files."
         case .allImages:
             return "Scanning every generated image across the project."
+        case .continuityBuilder:
+            return "Loading guided continuity training prompts from local assets."
         case .canvas:
             return "Loading canvas and free-form generation data."
         }
@@ -1553,6 +1584,8 @@ struct OperaShellView: View {
         case .animate:
             return animateController.loadStatusMessage
         case .allImages:
+            return animateController.loadStatusMessage
+        case .continuityBuilder:
             return animateController.loadStatusMessage
         case .canvas:
             return animateController.loadStatusMessage
@@ -1579,6 +1612,8 @@ struct OperaShellView: View {
             return Color(red: 0.72, green: 0.58, blue: 0.82)
         case .allImages:
             return Color(red: 0.66, green: 0.66, blue: 0.78)
+        case .continuityBuilder:
+            return Color(red: 0.52, green: 0.76, blue: 0.72)
         case .canvas:
             return Color(red: 0.72, green: 0.58, blue: 0.82)
         }
@@ -1594,7 +1629,7 @@ struct OperaShellView: View {
             scoreController.save()
         case .mix:
             mixController.save()
-        case .scenes, .characters, .places, .animate, .allImages, .canvas:
+        case .scenes, .characters, .places, .animate, .allImages, .continuityBuilder, .canvas:
             animateController.save()
         case .props:
             animateController.save()

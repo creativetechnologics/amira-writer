@@ -70,6 +70,22 @@ enum UnattachedGeneratedImageKind: Sendable {
     }
 }
 
+@available(macOS 26.0, *)
+public enum ImageAssetAnalysisMode: Sendable {
+    /// Register the image and leave a durable job for the Image Intelligence
+    /// worker. This remains the default for imported/manual references.
+    case enqueue
+
+    /// Register the image, then immediately run Image Intelligence in a
+    /// detached background task. This is intended for newly generated images:
+    /// the generation call returns, the image is indexed, and analysis starts
+    /// without waiting for the long-running worker to be started.
+    case immediate
+
+    /// Register/link only.
+    case none
+}
+
 private struct PersistedPlacesScriptIndexSong: Codable, Sendable {
     let songPath: String
     let sceneName: String
@@ -126,6 +142,7 @@ struct StoredImageGenerationMetadata: Hashable, Sendable {
     let mapPlacementStatus: GeneratedBackgroundMapPlacementStatus?
     let buildingAnchorNodeID: UUID?
     let orientationState: GeneratedBackgroundOrientationState?
+    let referencePaths: [String]
 }
 
 enum GeneratedBackgroundFlagFilterMode: String, CaseIterable, Sendable {
@@ -207,6 +224,33 @@ final class AnimateStore {
 
     private func bumpCanvasGenerationsRevision() {
         canvasGenerationsRevision &+= 1
+    }
+
+    func recategorizeImageReviewScope(path: String, semanticRole: ImageLibrarySemanticRole?) {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else { return }
+        let resolvedPath = GenerationReferenceImageResolver
+            .resolveReferencePath(trimmedPath, projectRoot: fileOWPURL) ?? trimmedPath
+
+        var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: resolvedPath)
+            ?? ImageLibraryReviewMetadata(
+                rating: nil,
+                isRejected: false,
+                notes: "",
+                updatedAt: nil
+            )
+        metadata.semanticRole = semanticRole
+        metadata.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: resolvedPath)
+        bumpAllImagesContentRevision()
+        ImagePreferenceProfileService.scheduleRebuild(store: self, projectRoot: fileOWPURL)
+
+        let filename = URL(fileURLWithPath: resolvedPath).lastPathComponent
+        if let semanticRole {
+            statusMessage = "Recategorized \(filename) as \(semanticRole.displayName.lowercased())"
+        } else {
+            statusMessage = "Cleared category for \(filename)"
+        }
     }
 
     /// The Animate/ subdirectory inside the OWP package — all writes go here.
@@ -927,6 +971,38 @@ final class AnimateStore {
     @ObservationIgnored private var imageAnalysisCoordinator: ImageAnalysisCoordinator?
     @ObservationIgnored private var imageAssetDiscovery: ImageAssetDiscoveryService?
     @ObservationIgnored private var imageAnalysisBackfill: ImageAnalysisBackfillService?
+    @ObservationIgnored private var imageAnalysisWorkerActivityID: UUID?
+    @ObservationIgnored private var imageAnalysisActivityMonitorTask: Task<Void, Never>?
+
+    struct ImageIntelligenceContinuityTextCandidate: Sendable, Hashable {
+        var assetID: String
+        var resolvedPath: String
+        var projectRelativePath: String?
+        var summary: String?
+        var shortCaption: String?
+        var longCaption: String?
+        var retrievalJSON: String?
+        var entitiesJSON: String?
+        var sceneJSON: String?
+        var styleJSON: String?
+
+        var searchableText: String {
+            [
+                resolvedPath,
+                projectRelativePath,
+                summary,
+                shortCaption,
+                longCaption,
+                retrievalJSON,
+                entitiesJSON,
+                sceneJSON,
+                styleJSON
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        }
+    }
     
     private func setupImageIntelligence() {
         guard let projectURL = fileOWPURL else { return }
@@ -950,16 +1026,17 @@ final class AnimateStore {
                 await coordinator.configure(apiKey: imageAnalysisGeminiAPIKey)
                 await recoverStoryboardAnalysisQueue(projectRoot: projectURL)
 
-                // Auto-start the worker if there are pending jobs left
-                // from a previous session.
+                // Do not auto-start the worker at project open. Newly
+                // generated images can opt into immediate post-generation
+                // analysis, while old pending jobs remain inspectable and
+                // explicitly startable from the Image Intelligence controls/API.
                 let pending = try? await store.query(
                     "SELECT COUNT(*) as cnt FROM image_analysis_jobs WHERE status = 'pending'",
                     []
                 )
                 let pendingCount = (pending?.first?["cnt"] as? Int) ?? 0
                 if pendingCount > 0 {
-                    await coordinator.startWorker()
-                    AppLog.log("IMAGE_INTELLIGENCE", "Auto-started worker for \(pendingCount) pending job(s)")
+                    AppLog.log("IMAGE_INTELLIGENCE", "Image Intelligence has \(pendingCount) pending job(s); worker not auto-started.")
                 }
             } catch {
                 AppLog.log("IMAGE_INTELLIGENCE", "Failed to open image intelligence store: \(error.localizedDescription)")
@@ -1185,12 +1262,29 @@ final class AnimateStore {
         moment: String? = nil,
         workflow: String? = nil,
         context: [String: String] = [:],
-        enqueueForAnalysis: Bool = true
+        enqueueForAnalysis: Bool = true,
+        analysisMode: ImageAssetAnalysisMode? = nil
     ) {
         guard let store = imageIntelligenceStore else { return }
         let inspectionPath = URL(fileURLWithPath: path).standardizedFileURL.path
         let inspectionFilename = URL(fileURLWithPath: inspectionPath).lastPathComponent
         let coordinator = imageAnalysisCoordinator
+        let apiKey = imageAnalysisGeminiAPIKey
+        let resolvedAnalysisMode: ImageAssetAnalysisMode
+        if let analysisMode {
+            resolvedAnalysisMode = analysisMode
+        } else {
+            resolvedAnalysisMode = enqueueForAnalysis ? .enqueue : .none
+        }
+        let activityID: UUID? = {
+            guard resolvedAnalysisMode == .immediate else { return nil }
+            return registerGeminiActivity(
+                kind: .analysis,
+                title: "Analyze \(inspectionFilename)",
+                source: "Image Intelligence • \(linkKind.rawValue)",
+                initialStatus: .running
+            )
+        }()
 
         Task.detached(priority: .utility) {
             do {
@@ -1215,11 +1309,59 @@ final class AnimateStore {
                     workflow: workflow,
                     context: context
                 )
-                
-                if enqueueForAnalysis {
+
+                switch resolvedAnalysisMode {
+                case .enqueue:
                     try await coordinator?.enqueue(assetID: assetID)
+                case .immediate:
+                    guard let coordinator else { return }
+                    let completedRuns = try await store.querySingle("""
+                        SELECT id
+                        FROM image_analysis_runs
+                        WHERE image_asset_id = ?
+                          AND source_content_hash = ?
+                          AND status = 'completed'
+                        LIMIT 1
+                    """, [assetID, inspection.contentHashSHA256]) != nil
+                    guard !completedRuns else {
+                        if let activityID {
+                            await MainActor.run {
+                                self.updateGeminiActivity(
+                                    activityID,
+                                    status: .completed,
+                                    outputFilename: "Already analyzed"
+                                )
+                            }
+                        }
+                        return
+                    }
+                    await coordinator.configure(apiKey: apiKey)
+                    try await coordinator.analyzeAssetNow(
+                        assetID: assetID,
+                        reason: "post_generation_immediate"
+                    )
+                    if let activityID {
+                        await MainActor.run {
+                            self.updateGeminiActivity(
+                                activityID,
+                                status: .completed,
+                                outputFilename: inspectionFilename
+                            )
+                        }
+                    }
+                case .none:
+                    break
                 }
             } catch {
+                if let activityID {
+                    await MainActor.run {
+                        self.updateGeminiActivity(
+                            activityID,
+                            status: .failed,
+                            errorMessage: error.localizedDescription
+                        )
+                    }
+                }
                 print("[AnimateStore] Failed to register image asset: \(error)")
             }
         }
@@ -1650,6 +1792,27 @@ final class AnimateStore {
         return try? await store.latestVisualMetadataForAsset(record.id)
     }
 
+    func imageIntelligenceContinuityCandidates(matchingTerms terms: [String], limit: Int = 80) async -> [ImageIntelligenceContinuityTextCandidate] {
+        guard let store = imageIntelligenceStore else { return [] }
+        guard let rows = try? await store.continuityCandidateRows(matchingTerms: terms, limit: limit) else { return [] }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String,
+                  let path = row["resolved_path"] as? String else { return nil }
+            return ImageIntelligenceContinuityTextCandidate(
+                assetID: id,
+                resolvedPath: path,
+                projectRelativePath: row["project_relative_path"] as? String,
+                summary: row["summary"] as? String,
+                shortCaption: row["short_caption"] as? String,
+                longCaption: row["long_caption"] as? String,
+                retrievalJSON: row["retrieval_json"] as? String,
+                entitiesJSON: row["entities_json"] as? String,
+                sceneJSON: row["scene_json"] as? String,
+                styleJSON: row["style_json"] as? String
+            )
+        }
+    }
+
     public func imageCharacterRegionTags(for path: String) async -> [ImageCharacterRegionTagRecord] {
         guard let store = imageIntelligenceStore,
               let record = try? await store.assetByPath(URL(fileURLWithPath: path).standardizedFileURL.path) else { return [] }
@@ -1832,6 +1995,7 @@ final class AnimateStore {
         forceReanalysis: Bool = false,
         linkKinds: [ImageAssetLinkKind]? = nil,
         enqueueExistingWithoutRuns: Bool = false,
+        enqueueExistingMissingAnalysis: Bool = false,
         markMissingAssets: Bool = true
     ) async -> ImageAnalysisBackfillService.BackfillReport? {
         guard let backfill = imageAnalysisBackfill else { return nil }
@@ -1842,6 +2006,7 @@ final class AnimateStore {
                 forceReanalysis: forceReanalysis,
                 linkKinds: linkKinds,
                 enqueueExistingWithoutRuns: enqueueExistingWithoutRuns,
+                enqueueExistingMissingAnalysis: enqueueExistingMissingAnalysis,
                 markMissingAssets: markMissingAssets
             )
         )
@@ -1875,6 +2040,7 @@ final class AnimateStore {
 
     /// Start the image analysis worker.
     public func startImageAnalysisWorker() {
+        startImageAnalysisActivityMonitor()
         Task {
             await imageAnalysisCoordinator?.startWorker()
         }
@@ -1882,9 +2048,96 @@ final class AnimateStore {
     
     /// Stop the image analysis worker.
     public func stopImageAnalysisWorker() {
+        imageAnalysisActivityMonitorTask?.cancel()
+        imageAnalysisActivityMonitorTask = nil
+        let coordinator = imageAnalysisCoordinator
         Task {
-            await imageAnalysisCoordinator?.stopWorker()
+            let stats = try? await coordinator?.stats()
+            await coordinator?.stopWorker()
+            await MainActor.run {
+                self.finishImageAnalysisWorkerActivity(stats: stats, stopped: true)
+            }
         }
+    }
+
+    private func startImageAnalysisActivityMonitor() {
+        let coordinator = imageAnalysisCoordinator
+        let activityID = ensureImageAnalysisWorkerActivity()
+        imageAnalysisActivityMonitorTask?.cancel()
+        imageAnalysisActivityMonitorTask = Task { [weak self, coordinator, activityID] in
+            while !Task.isCancelled {
+                let stats = try? await coordinator?.stats()
+                let shouldContinue = await MainActor.run { () -> Bool in
+                    guard let self else { return false }
+                    return self.updateImageAnalysisWorkerActivity(activityID: activityID, stats: stats)
+                }
+                if !shouldContinue { break }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    @discardableResult
+    private func ensureImageAnalysisWorkerActivity() -> UUID {
+        if let existingID = imageAnalysisWorkerActivityID,
+           geminiActivityLog.contains(where: { entry in
+               entry.id == existingID && (entry.status == .queued || entry.status == .running)
+           }) {
+            return existingID
+        }
+        let activityID = registerGeminiActivity(
+            kind: .analysis,
+            title: "Image Intelligence analysis",
+            source: "Image Intelligence worker",
+            initialStatus: .running
+        )
+        imageAnalysisWorkerActivityID = activityID
+        return activityID
+    }
+
+    private func updateImageAnalysisWorkerActivity(
+        activityID: UUID,
+        stats: ImageAnalysisCoordinator.WorkerStats?
+    ) -> Bool {
+        guard imageAnalysisWorkerActivityID == activityID else { return false }
+        guard let stats else {
+            updateGeminiActivity(
+                activityID,
+                status: .running,
+                outputFilename: "Waiting for Image Intelligence stats…"
+            )
+            return true
+        }
+
+        let activeJobs = stats.pendingJobs + stats.runningJobs
+        let progress = "\(stats.completedJobs) done · \(activeJobs) active · \(stats.failedJobs) failed"
+        if activeJobs > 0 || stats.isRunning {
+            updateGeminiActivity(activityID, status: .running, outputFilename: progress)
+            return true
+        }
+
+        updateGeminiActivity(activityID, status: .completed, outputFilename: progress)
+        imageAnalysisWorkerActivityID = nil
+        imageAnalysisActivityMonitorTask = nil
+        return false
+    }
+
+    private func finishImageAnalysisWorkerActivity(
+        stats: ImageAnalysisCoordinator.WorkerStats?,
+        stopped: Bool
+    ) {
+        guard let activityID = imageAnalysisWorkerActivityID else { return }
+        let pending = stats.map { $0.pendingJobs + $0.runningJobs } ?? 0
+        let output: String
+        if let stats {
+            output = stopped && pending > 0
+                ? "Stopped · \(pending) pending · \(stats.completedJobs) done"
+                : "\(stats.completedJobs) done · \(pending) active · \(stats.failedJobs) failed"
+        } else {
+            output = stopped ? "Stopped" : "Finished"
+        }
+        updateGeminiActivity(activityID, status: .completed, outputFilename: output)
+        imageAnalysisWorkerActivityID = nil
     }
     
     private var backgroundIndexRefreshTask: Task<Void, Never>?
@@ -4330,6 +4583,17 @@ final class AnimateStore {
         }
 
         let standardizedAbsolutePath = standardizedAbsoluteURL.path
+        if let projectURL = fileOWPURL {
+            let unescapedProjectName = projectURL.standardizedFileURL.lastPathComponent
+            if let projectRange = standardizedAbsolutePath.range(of: "/\(unescapedProjectName)/") {
+                return String(standardizedAbsolutePath[projectRange.upperBound...])
+            }
+            if let projectName = unescapedProjectName.addingPercentEncoding(withAllowedCharacters: CharacterSet.urlPathAllowed),
+               projectName != unescapedProjectName,
+               let projectRange = standardizedAbsolutePath.range(of: "/\(projectName)/") {
+                return String(standardizedAbsolutePath[projectRange.upperBound...]).removingPercentEncoding
+            }
+        }
         if let animateRange = standardizedAbsolutePath.range(of: "/Animate/") {
             return "Animate/" + standardizedAbsolutePath[animateRange.upperBound...]
         }
@@ -7742,6 +8006,7 @@ final class AnimateStore {
         mutate(&metadata)
         metadata.updatedAt = Date()
         ImageLibraryMetadataSidecarService.save(metadata, forImagePath: resolvedPath)
+        ImagePreferenceProfileService.scheduleRebuild(store: self, projectRoot: fileOWPURL)
     }
 
     func imageLibraryReviewMetadata(for imagePath: String) -> ImageLibraryReviewMetadata? {
@@ -7756,6 +8021,10 @@ final class AnimateStore {
 
     func imageLibraryIsRejected(for imagePath: String) -> Bool {
         imageLibraryReviewMetadata(for: imagePath)?.isRejected ?? false
+    }
+
+    func imageLibraryIsLiked(for imagePath: String) -> Bool {
+        imageLibraryReviewMetadata(for: imagePath)?.isLiked ?? false
     }
 
     private func isRejectedCharacterImagePath(
@@ -7795,11 +8064,25 @@ final class AnimateStore {
         mutateImageLibrarySidecar(for: imagePath) { metadata in
             metadata.rating = rating.flatMap { $0 > 0 ? min(max($0, 1), 5) : nil }
         }
+        bumpAllImagesContentRevision()
+    }
+
+    func setImageLibraryLiked(_ isLiked: Bool, for imagePath: String) {
+        mutateImageLibrarySidecar(for: imagePath) { metadata in
+            metadata.isLiked = isLiked
+            if isLiked {
+                metadata.isRejected = false
+            }
+        }
+        bumpAllImagesContentRevision()
     }
 
     func setImageLibraryRejected(_ isRejected: Bool, for imagePath: String) {
         mutateImageLibrarySidecar(for: imagePath) { metadata in
             metadata.isRejected = isRejected
+            if isRejected {
+                metadata.isLiked = false
+            }
         }
         guard let normalizedPath = normalizedCharacterAssetPath(imagePath) else { return }
         var didMutateCharacterState = false
@@ -7820,6 +8103,7 @@ final class AnimateStore {
         if didMutateCharacterState {
             save()
         }
+        bumpAllImagesContentRevision()
     }
 
     func setInspirationRating(_ rating: Int?, path: String, for characterID: UUID) {
@@ -8072,7 +8356,8 @@ final class AnimateStore {
                 "model": model.rawValue,
                 "aspectRatio": aspectRatio,
                 "imageSize": imageSize
-            ]
+            ],
+            analysisMode: .immediate
         )
         return storedPath
     }
@@ -8089,7 +8374,8 @@ final class AnimateStore {
         routeID: UUID? = nil,
         worldNodeID: UUID? = nil,
         mapPoint: WorldMapPoint? = nil,
-        cameraPose: WorldCameraPose? = nil
+        cameraPose: WorldCameraPose? = nil,
+        referencePaths: [String] = []
     ) throws -> String {
         let animateURL = try requireAnimateURL()
         guard let placeIndex = backgrounds.firstIndex(where: { $0.id == placeID }) else { return "" }
@@ -8118,6 +8404,7 @@ final class AnimateStore {
             worldNodeID: worldNodeID,
             mapPoint: mapPoint,
             cameraPose: cameraPose,
+            referencePaths: referencePaths,
             to: storedURL
         )
 
@@ -8148,7 +8435,8 @@ final class AnimateStore {
                 "model": model.rawValue,
                 "aspectRatio": aspectRatio,
                 "imageSize": imageSize
-            ]
+            ],
+            analysisMode: .immediate
         )
         return storedPath
     }
@@ -8163,7 +8451,8 @@ final class AnimateStore {
         model: GeminiModel,
         aspectRatio: String,
         imageSize: String,
-        kind: UnattachedGeneratedImageKind = .library
+        kind: UnattachedGeneratedImageKind = .library,
+        referencePaths: [String] = []
     ) throws -> String {
         let animateURL = try requireAnimateURL()
         let directory = ProjectPaths(root: animateURL.deletingLastPathComponent())
@@ -8182,6 +8471,7 @@ final class AnimateStore {
             model: model,
             aspectRatio: aspectRatio,
             imageSize: imageSize,
+            referencePaths: referencePaths,
             to: storedURL
         )
 
@@ -8201,6 +8491,19 @@ final class AnimateStore {
         placesWorkflowLibrary.generatedImageRecords.append(record)
 
         scheduleDebouncedSave(writePlaces: true)
+        registerImageAsset(
+            path: storedURL.path,
+            linkKind: kind == .map3DCapture ? .map3DCapture : .canvasGeneration,
+            ownerID: record.id.uuidString,
+            workflow: kind.directoryName,
+            context: [
+                "prompt": prompt,
+                "model": model.rawValue,
+                "aspectRatio": aspectRatio,
+                "imageSize": imageSize
+            ],
+            analysisMode: .immediate
+        )
         return storedPath
     }
 
@@ -9845,6 +10148,7 @@ final class AnimateStore {
         mapPlacementStatus: GeneratedBackgroundMapPlacementStatus? = nil,
         buildingAnchorNodeID: UUID? = nil,
         orientationState: GeneratedBackgroundOrientationState? = nil,
+        referencePaths: [String] = [],
         to imageURL: URL
     ) throws {
         var requestPayload: [String: Any] = [
@@ -9893,6 +10197,13 @@ final class AnimateStore {
         }
         if let orientationState {
             requestPayload["orientation_state"] = orientationState.rawValue
+        }
+        let cleanedReferencePaths = referencePaths
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if !cleanedReferencePaths.isEmpty {
+            requestPayload["referencePaths"] = cleanedReferencePaths
+            requestPayload["reference_paths"] = cleanedReferencePaths
         }
         let payload: [String: Any] = ["request": requestPayload]
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
@@ -10274,6 +10585,13 @@ final class AnimateStore {
         let buildingAnchorNodeID = (request["building_anchor_node_id"] as? String).flatMap(UUID.init(uuidString:))
         let orientationState = (request["orientation_state"] as? String)
             .flatMap(GeneratedBackgroundOrientationState.init(rawValue:))
+        let referencePaths = ((request["referencePaths"] as? [String])
+            ?? (request["reference_paths"] as? [String])
+            ?? (request["referenceImagePaths"] as? [String])
+            ?? (request["reference_image_paths"] as? [String])
+            ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
 
         let metadata = StoredImageGenerationMetadata(
             prompt: prompt,
@@ -10287,7 +10605,8 @@ final class AnimateStore {
             cameraPose: cameraPose,
             mapPlacementStatus: mapPlacementStatus,
             buildingAnchorNodeID: buildingAnchorNodeID,
-            orientationState: orientationState
+            orientationState: orientationState,
+            referencePaths: referencePaths
         )
         generationMetadataCache[metadataURL.path] = (snapshot, metadata)
         return metadata
@@ -13476,7 +13795,7 @@ final class AnimateStore {
 
     /// A single registered Gemini generation (immediate or batch-submitted).
     struct GeminiActivityEntry: Identifiable, Sendable, Hashable {
-        enum Kind: String, Codable, Sendable { case immediate, batch }
+        enum Kind: String, Codable, Sendable { case immediate, batch, analysis }
         enum Status: String, Codable, Sendable { case queued, running, completed, failed }
 
         let id: UUID
@@ -15122,7 +15441,8 @@ final class AnimateStore {
                     for: place.id,
                     workflow: workflow,
                     aspectRatio: config.aspectRatio,
-                    imageSize: config.imageSize
+                    imageSize: config.imageSize,
+                    referencePaths: Array(referencePaths.prefix(referenceImages.count))
                 )
                 storedPaths.append(storedPath)
                 updateGeminiActivity(activityID, status: .completed,
@@ -15353,9 +15673,20 @@ final class AnimateStore {
     }
 
     func loadPlacesWorldContextBlocks(from animateDir: URL) -> PlacesWorldContextBlocks {
-        let url = ProjectPaths(root: animateDir.deletingLastPathComponent()).animate.appendingPathComponent("places-world-context.json")
-        guard FileManager.default.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
+        let paths = ProjectPaths(root: animateDir.deletingLastPathComponent())
+        let canonicalURL = paths.placesWorldContextJSON
+        if FileManager.default.fileExists(atPath: canonicalURL.path),
+           let data = try? Data(contentsOf: canonicalURL),
+           let decoded = try? JSONDecoder().decode(PlacesWorldContextBlocks.self, from: data) {
+            return decoded
+        }
+
+        // Legacy fallback only for projects that have not migrated yet. New
+        // automation must treat Places/places-world-context.json as canonical
+        // so stale Animate/ duplicates (including mid-2020s copies) do not win.
+        let legacyURL = paths.animate.appendingPathComponent("places-world-context.json")
+        guard FileManager.default.fileExists(atPath: legacyURL.path),
+              let data = try? Data(contentsOf: legacyURL),
               let decoded = try? JSONDecoder().decode(PlacesWorldContextBlocks.self, from: data) else {
             return .init()
         }
@@ -18531,7 +18862,8 @@ extension AnimateStore {
                 "model": gen.model.rawValue,
                 "aspectRatio": gen.aspectRatio,
                 "imageSize": gen.imageSize
-            ]
+            ],
+            analysisMode: .immediate
         )
     }
 

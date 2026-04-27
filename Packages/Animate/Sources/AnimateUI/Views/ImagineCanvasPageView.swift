@@ -43,6 +43,11 @@ final class CanvasFormState {
     var isGenerating: Bool { activeGenerationJobCount > 0 }
     var generationProgressMessage: String? = nil
     var errorMessage: String? = nil
+    var promptGeneratorText: String = ""
+    var isGeneratingPrompt: Bool = false
+    var promptGeneratorStatusMessage: String? = nil
+    var promptGeneratorErrorMessage: String? = nil
+    var promptGeneratorReferenceSummaries: [String] = []
     var filledPromptDraftCount = 0
     var totalRequestedImages = 0
     var promptDraftsRevision = 0
@@ -76,6 +81,7 @@ final class CanvasFormState {
 struct ImagineCanvasPageView: View {
     @Bindable var store: AnimateStore
     @Bindable var canvasState: CanvasFormState
+    @Bindable var libraryState: AllProjectImagesState
     @Binding var selectedGenerationID: UUID?
     @AppStorage(AnimatedLookPromptSettings.canvasToggleDefaultsKey) private var applyMasterAnimatedLookPrompt = false
 
@@ -92,9 +98,15 @@ struct ImagineCanvasPageView: View {
     private let imageSizeOptions = ["1K", "2K", "4K"]
     private let galleryColumns = [GridItem(.adaptive(minimum: 180, maximum: 260), spacing: 12)]
 
-    init(store: AnimateStore, canvasState: CanvasFormState, selectedGenerationID: Binding<UUID?> = .constant(nil)) {
+    init(
+        store: AnimateStore,
+        canvasState: CanvasFormState,
+        libraryState: AllProjectImagesState,
+        selectedGenerationID: Binding<UUID?> = .constant(nil)
+    ) {
         _store = Bindable(store)
         _canvasState = Bindable(canvasState)
+        _libraryState = Bindable(libraryState)
         _selectedGenerationID = selectedGenerationID
     }
 
@@ -112,6 +124,7 @@ struct ImagineCanvasPageView: View {
             VStack(alignment: .leading, spacing: 20) {
                 promptBuilderSection
                 referenceImagesSection
+                promptGeneratorSection
             }
             .padding(20)
         }
@@ -125,6 +138,9 @@ struct ImagineCanvasPageView: View {
         }
         .onChange(of: canvasGenerationSelectionSignature) { _, _ in
             ensureCanvasSelection()
+        }
+        .task(id: libraryState.recordsRefreshKey(store: store)) {
+            libraryState.requestRebuildIfNeeded(store: store)
         }
         .sheet(isPresented: $showPromptImportSheet) {
             promptImportSheet
@@ -480,6 +496,82 @@ struct ImagineCanvasPageView: View {
         }
     }
 
+    private var promptGeneratorSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("Prompt Generator", systemImage: "wand.and.stars")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                    Text("Plain English in; MiniMax writes the Canvas prompt and attaches eligible rated references.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                }
+
+                Spacer()
+
+                if canvasState.isGeneratingPrompt {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .controlSize(.small)
+                }
+
+                Button {
+                    generatePromptWithMiniMax()
+                } label: {
+                    Label("Generate Prompt", systemImage: "sparkles")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(canvasState.isGeneratingPrompt || canvasState.promptGeneratorText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            TextEditor(text: $canvasState.promptGeneratorText)
+                .font(.system(size: 12))
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 72)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(nsColor: .textBackgroundColor).opacity(0.7))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                )
+
+            if !canvasState.promptGeneratorReferenceSummaries.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Attached by Prompt Generator")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                    ForEach(Array(canvasState.promptGeneratorReferenceSummaries.prefix(8).enumerated()), id: \.offset) { _, summary in
+                        Text("• \(summary)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+
+            if let message = canvasState.promptGeneratorStatusMessage {
+                Label(message, systemImage: "checkmark.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+            }
+
+            if let message = canvasState.promptGeneratorErrorMessage {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .background(cardBackground)
+    }
+
     private var gallerySection: some View {
         let sorted = store.canvasGenerationsNewestFirst()
         return VStack(alignment: .leading, spacing: 10) {
@@ -789,6 +881,69 @@ struct ImagineCanvasPageView: View {
         return (remainder, nil)
     }
 
+    private func generatePromptWithMiniMax() {
+        let brief = canvasState.promptGeneratorText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !brief.isEmpty else {
+            canvasState.promptGeneratorErrorMessage = "Enter what you want first."
+            return
+        }
+        guard let projectRoot = store.fileOWPURL else {
+            canvasState.promptGeneratorErrorMessage = "Open a project before using Prompt Generator."
+            return
+        }
+
+        canvasState.isGeneratingPrompt = true
+        canvasState.promptGeneratorErrorMessage = nil
+        canvasState.promptGeneratorStatusMessage = "MiniMax is building a prompt and choosing references…"
+        canvasState.promptGeneratorReferenceSummaries = []
+        store.statusMessage = "MiniMax Prompt Generator is working…"
+
+        let request = CanvasPromptGeneratorService.Request(
+            userBrief: brief,
+            projectRoot: projectRoot,
+            worldContext: store.placesWorldContextBlocks,
+            animatedLookPrompt: AnimatedLookPromptSettings.loadMasterPrompt(),
+            records: libraryState.cachedAllRecords,
+            apiKey: store.miniMaxAPIKey,
+            maxReferences: 8
+        )
+
+        Task { @MainActor in
+            defer {
+                canvasState.isGeneratingPrompt = false
+            }
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try await CanvasPromptGeneratorService().generate(request)
+                }.value
+                ensurePromptDraft()
+                let targetIndex = canvasState.promptDrafts.firstIndex {
+                    $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                } ?? 0
+                if canvasState.promptDrafts.indices.contains(targetIndex) {
+                    canvasState.promptDrafts[targetIndex].title = "Prompt Generator"
+                    canvasState.promptDrafts[targetIndex].text = result.prompt
+                } else {
+                    canvasState.promptDrafts.append(CanvasPromptDraft(title: "Prompt Generator", text: result.prompt, iterationCount: bulkIterationCount))
+                }
+                if AnimatedLookPromptSettings.hasConfiguredMasterPrompt() {
+                    applyMasterAnimatedLookPrompt = true
+                }
+                let urls = result.referencePaths.map { URL(fileURLWithPath: $0) }
+                appendReferenceURLs(urls)
+                canvasState.promptGeneratorReferenceSummaries = result.referenceSummaries
+                let refSummary = result.referencePaths.isEmpty ? "No eligible rated references were found." : "Attached \(result.referencePaths.count) reference\(result.referencePaths.count == 1 ? "" : "s")."
+                canvasState.promptGeneratorStatusMessage = "\(refSummary) Prompt filled in Prompt \(targetIndex + 1)."
+                canvasState.promptGeneratorErrorMessage = result.warning
+                store.statusMessage = "MiniMax filled a Canvas prompt"
+            } catch {
+                canvasState.promptGeneratorStatusMessage = nil
+                canvasState.promptGeneratorErrorMessage = error.localizedDescription
+                store.statusMessage = "MiniMax Prompt Generator failed"
+            }
+        }
+    }
+
     private func generate() {
         if let error = store.geminiImageGenerationAvailabilityError {
             canvasState.errorMessage = error.localizedDescription
@@ -863,7 +1018,8 @@ struct ImagineCanvasPageView: View {
                         model: capturedModel,
                         aspectRatio: capturedRatio,
                         imageSize: capturedSize,
-                        referenceCount: capturedRefs.count
+                        referenceCount: capturedRefs.count,
+                        referencePaths: capturedRefs.map { $0.url.path }
                     )
                     store.appendCanvasGeneration(generation)
                     selectedGenerationID = generation.id
@@ -905,7 +1061,8 @@ struct ImagineCanvasPageView: View {
         model: GeminiModel,
         aspectRatio: String,
         imageSize: String,
-        referenceCount: Int
+        referenceCount: Int,
+        referencePaths: [String]
     ) async throws -> AnimateStore.CanvasGeneration {
         let canvasDir: URL
         if let animateURL = store.animateURL {
@@ -935,6 +1092,21 @@ struct ImagineCanvasPageView: View {
             let filename = "\(timestamp)-\(slug.isEmpty ? "canvas" : slug)-\(uniqueSuffix).png"
             let fileURL = canvasDir.appendingPathComponent(filename)
             try data.write(to: fileURL, options: .atomic)
+            let cleanedReferencePaths = referencePaths
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let requestPayload: [String: Any] = [
+                "prompt": prompt,
+                "model_alias": model.displayName,
+                "model": model.rawValue,
+                "image_size": imageSize,
+                "aspect_ratio": aspectRatio,
+                "referencePaths": cleanedReferencePaths,
+                "reference_paths": cleanedReferencePaths
+            ]
+            let metadataPayload: [String: Any] = ["request": requestPayload]
+            let metadataData = try JSONSerialization.data(withJSONObject: metadataPayload, options: [.prettyPrinted, .sortedKeys])
+            try metadataData.write(to: fileURL.deletingPathExtension().appendingPathExtension("json"), options: .atomic)
 
             return AnimateStore.CanvasGeneration(
                 createdAt: Date(),
