@@ -135,9 +135,9 @@ struct ContinuityBuilderService {
         let styleLock = animatedLookPrompt(projectRoot: projectRoot) ?? ""
         let geographyPrompt = [
             "Build a canonical 4:3 open-matte continuity reference for the Persian-Afghan highland valley world.",
-            "World period: \(world?.timePeriod ?? "UNKNOWN — read Places/places-world-context.json before paid generation.")",
+            "World period: \(world?.timePeriod ?? "UNKNOWN — read Places/places-world-context.json before generation.")",
             "Environmental rules: \(world?.environmental ?? "Use canonical Places/places-world-context.json cues.")",
-            "Style lock: \(styleLock.isEmpty ? "Use Settings/animated-look-prompt.json before paid generation." : styleLock)",
+            "Style lock: \(styleLock.isEmpty ? "Use Settings/animated-look-prompt.json before generation." : styleLock)",
             "Emphasize river direction, north-bank settlement only, bridge/ravine relationship, hill placement, sparse early-2000s infrastructure, and camera-room for later 21:9 crops."
         ].joined(separator: "\n")
 
@@ -241,7 +241,7 @@ struct ContinuityBuilderService {
         ].joined(separator: "\n\n")
         next.contextTags = Array(Set(next.contextTags + feedback.interpretedFocus)).sorted()
         next.requiresPaidGeneration = false
-        next.generationStatus = "needs_execute_approval_before_paid_generation"
+        next.generationStatus = "ready_for_generation"
         return next
     }
 
@@ -400,7 +400,7 @@ struct ContinuityBuilderService {
         var rules = [
             "No future technology in frame.",
             "No generic modern skyline or glossy contemporary architecture.",
-            "No extra bridges or wrong-side settlement unless explicitly approved.",
+            "No extra bridges or wrong-side settlement unless explicitly requested.",
             "No soldiers/vehicles in a scene before the story calls for them.",
             "No narrow crop-only composition; generate 4:3 open matte with wider-than-needed camera FOV."
         ]

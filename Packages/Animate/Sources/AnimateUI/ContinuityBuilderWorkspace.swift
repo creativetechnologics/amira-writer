@@ -38,7 +38,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
     @State private var selectedLabel: ContinuityBuilderCandidateLabel?
     @State private var closenessPercent: Double = 55
     @State private var notesText = ""
-    @State private var statusMessage = "Continuity Builder is dry-run only until paid generation is explicitly approved."
+    @State private var statusMessage = "Review mode is active. Click Smart Generate whenever you want a new Gemini candidate."
     @State private var isLoading = false
     @State private var dictationSession = ImageReviewDictationSession()
 
@@ -265,7 +265,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
             Text(turn.question)
                 .font(.system(size: 14))
                 .foregroundStyle(OperaChromeTheme.textPrimary)
-            Text("Generation is execute-gated and cost-capped; feedback writes project-local continuity artifacts.")
+            Text("Use this image to teach the continuity system what should stay, what should change, and what future prompts must remember.")
                 .font(.system(size: 11))
                 .foregroundStyle(OperaChromeTheme.textTertiary)
         }
@@ -296,7 +296,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                             .font(.system(size: 34, weight: .light))
                         Text("No existing reference image found for this prompt.")
                             .font(.system(size: 14, weight: .semibold))
-                        Text("Use Smart Generate 1K to create the minimum useful candidate, or add approved refs to the project library.")
+                        Text("Use Smart Generate 1K to create the minimum useful candidate, or add selected reference images to the project library.")
                             .font(.system(size: 12))
                             .multilineTextAlignment(.center)
                             .foregroundStyle(OperaChromeTheme.textSecondary)
@@ -443,7 +443,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                         inspectorSection("Prompt seed", turn.promptSeed)
                         inspectorSection("Negative guardrails", turn.negativeGuardrails.joined(separator: "\n• "))
                         inspectorSection("Context tags", turn.contextTags.joined(separator: ", "))
-                        inspectorSection("Status", turn.generationStatus)
+                        inspectorSection("Status", displayStatus(for: turn.generationStatus))
                     }
                 }
                 .padding(14)
@@ -493,6 +493,27 @@ private struct ContinuityBuilderWorkspaceContent: View {
         ].compactMap { $0 }.joined(separator: "\n\n")
     }
 
+    private func displayStatus(for status: String) -> String {
+        switch status {
+        case "dry_run_ready", "ready_for_generation":
+            return "ready_for_generation"
+        case "generated_candidates_ready_for_feedback":
+            return "ready_for_feedback"
+        default:
+            return status
+        }
+    }
+
+    private func statusMessage(for loadedSession: ContinuityBuilderSession) -> String {
+        guard loadedSession.hasStarted else {
+            return "Ready to begin one continuous Continuity Builder stream."
+        }
+        if loadedSession.activeTurn?.candidates.contains(where: { $0.imagePath != nil }) == true {
+            return "Review mode is active. Rate/reject the displayed image, add notes, or click Smart Generate for a new 1K candidate."
+        }
+        return "No candidate is displayed yet. Click Smart Generate to create a new 1K candidate."
+    }
+
     private func selectedCandidate(in turn: ContinuityBuilderTurn) -> ContinuityBuilderCandidate? {
         if let selectedLabel, let match = turn.candidates.first(where: { $0.label == selectedLabel }) {
             return match
@@ -538,6 +559,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
         session = loaded
         selectedLabel = loaded.activeTurn?.candidates.first?.label
         notesText = ""
+        statusMessage = statusMessage(for: loaded)
         isLoading = false
     }
 
@@ -616,8 +638,8 @@ private struct ContinuityBuilderWorkspaceContent: View {
         let count = smartGenerationCount(for: turn)
         isLoading = true
         statusMessage = count == 1
-            ? "Gemini is generating one smart 1K Continuity Builder candidate with a $0.50 cap…"
-            : "Gemini is generating \(count) smart 1K Continuity Builder candidates with a $0.50 cap…"
+            ? "Gemini is generating one smart 1K Continuity Builder candidate…"
+            : "Gemini is generating \(count) smart 1K Continuity Builder candidates…"
         Task {
             let result = await ContinuityBuilderGenerationService(store: store).generate(
                 .init(
