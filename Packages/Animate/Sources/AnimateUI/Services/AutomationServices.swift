@@ -129,18 +129,25 @@ struct EffectiveShotSpecBuilder {
             blockers.append(.init(code: .blockedMissingReferenceRole, message: "Missing canonical world context from Places/places-world-context.json.", field: "worldContext"))
         }
         let negativeGuardrails = guardrails(world: world, background: background)
+        let feedbackQuery = joinedNonEmpty([
+            scene.name,
+            shot.name,
+            action,
+            background?.name,
+            background?.visualBrief,
+            focus?.name,
+            focus?.description
+        ], separator: "\n")
         let reviewFeedback = ImageReviewFeedbackService.promptClauses(
             from: ImageReviewFeedbackService.relevantFeedback(
                 projectRoot: projectRoot,
-                query: joinedNonEmpty([
-                    scene.name,
-                    shot.name,
-                    action,
-                    background?.name,
-                    background?.visualBrief,
-                    focus?.name,
-                    focus?.description
-                ], separator: "\n"),
+                query: feedbackQuery,
+                limit: 6
+            )
+        ) + ContinuityBuilderService.promptClauses(
+            from: ContinuityBuilderService.relevantFeedback(
+                projectRoot: projectRoot,
+                query: feedbackQuery,
                 limit: 6
             )
         )

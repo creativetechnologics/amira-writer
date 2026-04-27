@@ -192,3 +192,22 @@ Settings/parakeet-review-dictation.json
 ```
 
 The command must print the transcript to stdout. This keeps transcription project-local and avoids any paid provider call.
+
+## Continuity Builder
+
+Continuity Builder is a dry-run-first guided training workspace for turning Gary's fast visual feedback into reusable continuity memory. It lives in the Opera title bar between the Gemini activity pill and Canvas button.
+
+Current implementation:
+
+- Seeds a project-local training session from canonical world context, places, character packages, costume refs, and `Animate/reference-registry.json`.
+- Shows one/two/three candidate references with stable labels (`single`, `left`, `middle`, `right`) so dictated feedback like “the middle one…” can be interpreted later.
+- Captures a closeness percentage plus notes, with optional Parakeet review dictation using the same project-local configuration as All Images review dictation.
+- Writes artifacts to `Metadata/automation/continuity-builder/` and indexes feedback for later prompt retrieval.
+- Injects matching Continuity Builder feedback into future `EffectiveShotSpec` prompts alongside All Images review feedback.
+- Does **not** call Gemini, MiniMax, or any paid provider yet. The Generate Candidate button is intentionally blocked until Gary explicitly approves paid testing.
+
+Design intent:
+
+- Keep training generations cheap (`1K`, `4:3` open matte) once execute mode is added.
+- Use guided pathways in priority order: world geography → bridge/ravine → place topography → character identity → costume/accessory → style continuity.
+- Preserve all existing workflows; this adds a new artifact-backed feedback layer instead of mutating `Scenes/scenes.json`, place records, or character rigs.

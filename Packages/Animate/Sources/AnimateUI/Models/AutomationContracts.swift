@@ -8,6 +8,8 @@ enum AutomationArtifactKind: String, Codable, Sendable, Hashable, CaseIterable {
     case referenceContract = "reference_contract"
     case shotFrameGenerationPlan = "shot_frame_generation_plan"
     case miniMaxAutomationScaffold = "minimax_automation_scaffold"
+    case continuityBuilderSession = "continuity_builder_session"
+    case continuityBuilderFeedback = "continuity_builder_feedback"
     case generatedFrameRecord = "generated_frame_record"
     case videoTaskRecord = "video_task_record"
     case qaResult = "qa_result"
