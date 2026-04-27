@@ -134,3 +134,61 @@ Generated-frame approvals are durable and local. The approval endpoint updates t
 ## Reference status behavior
 
 `ReferenceContract` sidecars are intentionally durable. If a user or later UI marks a reference as `pinned`, reruns preserve it. If a reference is marked `rejected`, reruns do not return it as an automatic candidate.
+
+## Image review feedback memory
+
+The All Images details inspector now treats the existing **Notes** field as structured plain-text feedback. When a reviewed image has notes, a rating, or a rejected flag, the app writes a project-local feedback artifact under:
+
+```text
+Metadata/automation/image-feedback/
+```
+
+Each artifact includes the image path, source/group context, rating/rejection state, notes, and the latest Image Intelligence caption/entities/scene/camera/style/retrieval JSON when available. Dry-run shot-spec building reads these feedback artifacts by simple relevance matching and injects matching notes into the prompt as "Review feedback memory" so repeated corrections such as bridge/ravine geography or Johnny's Polaroid satchel can influence future generations without editing the original prompt by hand.
+
+### Fast review keys
+
+When the Details → Notes field is focused:
+
+```text
+[  previous image
+]  next image
+/  reject current image and advance
+?  reject current image and advance
+\  reject current image and advance
+;  mark current image five stars and advance
+:  mark current image five stars and advance
+```
+
+The All Images grid/filmstrip also recognizes the same review keys when it has keyboard focus.
+
+### Parakeet review dictation
+
+The microphone button in the All Images details inspector starts a project-local review-dictation segment. Audio chunks are stored under:
+
+```text
+Metadata/automation/review-dictation/
+```
+
+On each review key, the app stops the current segment, tries to transcribe it, appends the transcript to Notes, performs the review action, and starts a new segment if dictation is still enabled.
+
+Configure Parakeet with either an executable script at:
+
+```text
+Scripts/parakeet-transcribe.sh
+```
+
+or a project-local settings file:
+
+```json
+{
+  "commandTemplate": "/path/to/parakeet-transcribe --audio {audio}"
+}
+```
+
+saved as:
+
+```text
+Settings/parakeet-review-dictation.json
+```
+
+The command must print the transcript to stdout. This keeps transcription project-local and avoids any paid provider call.

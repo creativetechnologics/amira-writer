@@ -129,6 +129,21 @@ struct EffectiveShotSpecBuilder {
             blockers.append(.init(code: .blockedMissingReferenceRole, message: "Missing canonical world context from Places/places-world-context.json.", field: "worldContext"))
         }
         let negativeGuardrails = guardrails(world: world, background: background)
+        let reviewFeedback = ImageReviewFeedbackService.promptClauses(
+            from: ImageReviewFeedbackService.relevantFeedback(
+                projectRoot: projectRoot,
+                query: joinedNonEmpty([
+                    scene.name,
+                    shot.name,
+                    action,
+                    background?.name,
+                    background?.visualBrief,
+                    focus?.name,
+                    focus?.description
+                ], separator: "\n"),
+                limit: 6
+            )
+        )
         let prompt = Self.prompt(
             scene: scene,
             shot: shot,
@@ -142,7 +157,8 @@ struct EffectiveShotSpecBuilder {
             lighting: lighting,
             camera: camera,
             visualTone: resolvedVisualTone,
-            negativeGuardrails: negativeGuardrails
+            negativeGuardrails: negativeGuardrails,
+            reviewFeedback: reviewFeedback
         )
         return EffectiveShotSpec(
             id: shot.id,
@@ -238,7 +254,8 @@ struct EffectiveShotSpecBuilder {
         lighting: String,
         camera: String,
         visualTone: String,
-        negativeGuardrails: [String]
+        negativeGuardrails: [String],
+        reviewFeedback: [String]
     ) -> String {
         let characterText = characters.isEmpty
             ? "No named focus character resolved for this shot."
@@ -256,8 +273,9 @@ struct EffectiveShotSpecBuilder {
             "Camera/framing: \(camera.isEmpty ? "Use the shot's existing camera metadata and keep geography readable." : camera)",
             "Lighting: \(lighting)",
             "Visual tone: \(visualTone)",
+            reviewFeedback.isEmpty ? nil : "Review feedback memory (apply when relevant; these are corrections from prior rejects/ratings):\n\(reviewFeedback.joined(separator: "\n"))",
             "Negative guardrails: \(negativeGuardrails.joined(separator: " | "))"
-        ].joined(separator: "\n")
+        ].compactMap { $0 }.joined(separator: "\n")
     }
 }
 

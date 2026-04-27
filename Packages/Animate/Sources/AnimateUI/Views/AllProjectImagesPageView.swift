@@ -656,6 +656,13 @@ struct AllProjectImagesPageView: View {
                 .onKeyPress(.init("0")) { applyGridRating(nil) }
                 .onKeyPress(.init("x")) { toggleGridRejected() }
                 .onKeyPress(.init("X")) { toggleGridRejected() }
+                .onKeyPress(.init("]")) { navigateGrid(.right) }
+                .onKeyPress(.init("[")) { navigateGrid(.left) }
+                .onKeyPress(.init("/")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init("?")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init("\\")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init(";")) { fiveStarSelectedAndAdvance() }
+                .onKeyPress(.init(":")) { fiveStarSelectedAndAdvance() }
                 .onKeyPress(phases: .down) { press in
                     handleGridRatingKeyPress(press)
                 }
@@ -855,6 +862,19 @@ struct AllProjectImagesPageView: View {
                 .onKeyPress(.init("0")) { applyGridRating(nil) }
                 .onKeyPress(.init("x")) { toggleGridRejected() }
                 .onKeyPress(.init("X")) { toggleGridRejected() }
+                .onKeyPress(.init("]")) {
+                    state.selectAdjacentRecord(in: records, delta: 1)
+                    return .handled
+                }
+                .onKeyPress(.init("[")) {
+                    state.selectAdjacentRecord(in: records, delta: -1)
+                    return .handled
+                }
+                .onKeyPress(.init("/")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init("?")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init("\\")) { rejectSelectedAndAdvance() }
+                .onKeyPress(.init(";")) { fiveStarSelectedAndAdvance() }
+                .onKeyPress(.init(":")) { fiveStarSelectedAndAdvance() }
                 .onKeyPress(phases: .down) { press in
                     handleGridRatingKeyPress(press)
                 }
@@ -1255,9 +1275,41 @@ struct AllProjectImagesPageView: View {
             return applyGridRating(nil)
         case "x", "X":
             return toggleGridRejected()
+        case "/", "?", "\\":
+            return rejectSelectedAndAdvance()
+        case ";", ":":
+            return fiveStarSelectedAndAdvance()
         default:
             return .ignored
         }
+    }
+
+    private func rejectSelectedAndAdvance() -> KeyPress.Result {
+        guard let record = state.selectedRecord else { return .ignored }
+        let updated = persistReviewUpdate(
+            store: store,
+            record: record,
+            rating: record.rating,
+            isRejected: true,
+            notes: record.notes
+        )
+        state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+        state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
+        return .handled
+    }
+
+    private func fiveStarSelectedAndAdvance() -> KeyPress.Result {
+        guard let record = state.selectedRecord else { return .ignored }
+        let updated = persistReviewUpdate(
+            store: store,
+            record: record,
+            rating: 5,
+            isRejected: false,
+            notes: record.notes
+        )
+        state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+        state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
+        return .handled
     }
 
     private func toggleGridQuickLook() -> KeyPress.Result {

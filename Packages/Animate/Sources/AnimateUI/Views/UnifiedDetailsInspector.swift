@@ -48,6 +48,14 @@ struct SharedInspectorTabBar<Value: Hashable & Identifiable>: View {
 // MARK: - Protocol
 
 @available(macOS 26.0, *)
+enum ImageReviewKeyboardCommand: String, Sendable, Hashable {
+    case previous
+    case next
+    case reject
+    case fiveStars
+}
+
+@available(macOS 26.0, *)
 @MainActor
 protocol DetailedImageSelection {
     var imageURL: URL? { get }
@@ -64,12 +72,14 @@ protocol DetailedImageSelection {
     func setRating(_ newValue: Int?)
     func toggleRejected()
     func setNotes(_ newValue: String)
+    func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool
 }
 
 @available(macOS 26.0, *)
 extension DetailedImageSelection {
     var supportsRating: Bool { true }
     var supportsNotes: Bool { true }
+    func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool { false }
 }
 
 // MARK: - Shared View
@@ -300,7 +310,8 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
     private var notesEditor: some View {
         DebouncedNotesEditor(
             initialValue: selection.notes,
-            onCommit: { newValue in selection.setNotes(newValue) }
+            onCommit: { newValue in selection.setNotes(newValue) },
+            onReviewCommand: { command in selection.handleReviewCommand(command) }
         )
         // Recreate state when the selected image changes; without this two
         // images that both have empty notes wouldn't trigger onChange(of:
@@ -627,13 +638,19 @@ struct PropImageSelection: DetailedImageSelection {
 private struct DebouncedNotesEditor: View {
     let initialValue: String
     let onCommit: (String) -> Void
+    let onReviewCommand: (ImageReviewKeyboardCommand) -> Bool
 
     @State private var draft: String
     @State private var commitTask: Task<Void, Never>?
 
-    init(initialValue: String, onCommit: @escaping (String) -> Void) {
+    init(
+        initialValue: String,
+        onCommit: @escaping (String) -> Void,
+        onReviewCommand: @escaping (ImageReviewKeyboardCommand) -> Bool = { _ in false }
+    ) {
         self.initialValue = initialValue
         self.onCommit = onCommit
+        self.onReviewCommand = onReviewCommand
         _draft = State(initialValue: initialValue)
     }
 
@@ -643,14 +660,21 @@ private struct DebouncedNotesEditor: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            TextEditor(text: $draft)
-                .font(.system(.body, design: .default))
-                .frame(minHeight: 120)
-                .padding(8)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.secondary.opacity(0.08))
-                )
+            ReviewNotesTextView(
+                text: $draft,
+                onReviewCommand: { command in
+                    commitTask?.cancel()
+                    if draft != initialValue {
+                        onCommit(draft)
+                    }
+                    return onReviewCommand(command)
+                }
+            )
+            .frame(minHeight: 120)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+            )
                 .onChange(of: draft) { _, newValue in
                     commitTask?.cancel()
                     commitTask = Task { @MainActor in
@@ -674,5 +698,111 @@ private struct DebouncedNotesEditor: View {
                     }
                 }
         }
+    }
+}
+
+@available(macOS 26.0, *)
+private struct ReviewNotesTextView: NSViewRepresentable {
+    @Binding var text: String
+    var onReviewCommand: (ImageReviewKeyboardCommand) -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, onReviewCommand: onReviewCommand)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+
+        let textView = ReviewNotesNSTextView()
+        textView.isRichText = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        textView.backgroundColor = .clear
+        textView.textColor = .labelColor
+        textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.minSize = NSSize(width: 0, height: 120)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.delegate = context.coordinator
+        textView.onReviewCommand = { command in
+            context.coordinator.onReviewCommand(command)
+        }
+        textView.string = text
+        scroll.documentView = textView
+        context.coordinator.textView = textView
+        return scroll
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.parentText = $text
+        context.coordinator.onReviewCommand = onReviewCommand
+        guard let textView = nsView.documentView as? ReviewNotesNSTextView else { return }
+        textView.onReviewCommand = { command in
+            context.coordinator.onReviewCommand(command)
+        }
+        if textView.string != text {
+            textView.string = text
+        }
+        DispatchQueue.main.async {
+            if textView.window?.firstResponder !== textView {
+                textView.window?.makeFirstResponder(textView)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parentText: Binding<String>
+        var onReviewCommand: (ImageReviewKeyboardCommand) -> Bool
+        weak var textView: NSTextView?
+
+        init(text: Binding<String>, onReviewCommand: @escaping (ImageReviewKeyboardCommand) -> Bool) {
+            self.parentText = text
+            self.onReviewCommand = onReviewCommand
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parentText.wrappedValue = textView.string
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+private final class ReviewNotesNSTextView: NSTextView {
+    var onReviewCommand: ((ImageReviewKeyboardCommand) -> Bool)?
+
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let hasBlockingModifier = flags.contains(.command) || flags.contains(.option) || flags.contains(.control)
+        guard !hasBlockingModifier else {
+            super.keyDown(with: event)
+            return
+        }
+
+        let chars = event.charactersIgnoringModifiers ?? event.characters ?? ""
+        let command: ImageReviewKeyboardCommand?
+        switch chars {
+        case "[":
+            command = .previous
+        case "]":
+            command = .next
+        case "/", "?", "\\":
+            command = .reject
+        case ";", ":":
+            command = .fiveStars
+        default:
+            command = nil
+        }
+
+        if let command, onReviewCommand?(command) == true {
+            return
+        }
+        super.keyDown(with: event)
     }
 }

@@ -1255,6 +1255,11 @@ final class AllProjectImagesState {
         return filteredRecordsByID[id] ?? recordsByID[id]
     }
 
+    func recordsByIDForReview(_ id: String) -> ProjectImageRecord? {
+        _ = filteredRecords
+        return filteredRecordsByID[id] ?? recordsByID[id] ?? cachedAllRecords.first(where: { $0.id == id })
+    }
+
     func count(for source: AllProjectImagesSource) -> Int {
         countsBySource[source] ?? 0
     }
@@ -2219,6 +2224,7 @@ private struct AllProjectImagesSidebarView: View {
 private struct AllProjectImagesInspectorView: View {
     @Bindable var store: AnimateStore
     @Bindable var state: AllProjectImagesState
+    @State private var dictationSession = ImageReviewDictationSession()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2240,55 +2246,28 @@ private struct AllProjectImagesInspectorView: View {
                                 record: state.selectedRecord,
                                 onSetRating: { newRating in
                                     guard let record = state.selectedRecord else { return }
-                                    let updated = persistReviewUpdate(
-                                        store: store,
-                                        record: record,
-                                        rating: newRating,
-                                        isRejected: record.isRejected,
-                                        notes: record.notes
-                                    )
-                                    state.updateReviewMetadata(
-                                        for: record.id,
-                                        rating: updated.rating,
-                                        isRejected: updated.isRejected,
-                                        notes: updated.notes
-                                    )
+                                    persistAndRefresh(record: record, rating: newRating, isRejected: record.isRejected, notes: record.notes)
                                 },
                                 onToggleRejected: {
                                     guard let record = state.selectedRecord else { return }
-                                    let updated = persistReviewUpdate(
-                                        store: store,
-                                        record: record,
-                                        rating: record.rating,
-                                        isRejected: !record.isRejected,
-                                        notes: record.notes
-                                    )
-                                    state.updateReviewMetadata(
-                                        for: record.id,
-                                        rating: updated.rating,
-                                        isRejected: updated.isRejected,
-                                        notes: updated.notes
-                                    )
+                                    persistAndRefresh(record: record, rating: record.rating, isRejected: !record.isRejected, notes: record.notes)
                                 },
                                 onSetNotes: { newNotes in
                                     guard let record = state.selectedRecord else { return }
-                                    let updated = persistReviewUpdate(
-                                        store: store,
-                                        record: record,
-                                        rating: record.rating,
-                                        isRejected: record.isRejected,
-                                        notes: newNotes
-                                    )
-                                    state.updateReviewMetadata(
-                                        for: record.id,
-                                        rating: updated.rating,
-                                        isRejected: updated.isRejected,
-                                        notes: updated.notes
-                                    )
+                                    persistAndRefresh(record: record, rating: record.rating, isRejected: record.isRejected, notes: newNotes)
+                                },
+                                onReviewCommand: { command in
+                                    handleReviewCommand(command)
                                 }
                             )
                         ) {
-                            ProjectImageFileActionsSection(record: state.selectedRecord)
+                            VStack(alignment: .leading, spacing: 12) {
+                                ProjectImageReviewDictationSection(
+                                    projectRoot: store.fileOWPURL,
+                                    session: dictationSession
+                                )
+                                ProjectImageFileActionsSection(record: state.selectedRecord)
+                            }
                         }
 
                         if let record = state.selectedRecord {
@@ -2310,6 +2289,76 @@ private struct AllProjectImagesInspectorView: View {
                     emptyImageIntelligenceState
                 }
             }
+        }
+    }
+
+    @discardableResult
+    private func persistAndRefresh(
+        record: ProjectImageRecord,
+        rating: Int?,
+        isRejected: Bool,
+        notes: String
+    ) -> ImageLibraryReviewMetadata {
+        let updated = persistReviewUpdate(
+            store: store,
+            record: record,
+            rating: rating,
+            isRejected: isRejected,
+            notes: notes
+        )
+        state.updateReviewMetadata(
+            for: record.id,
+            rating: updated.rating,
+            isRejected: updated.isRejected,
+            notes: updated.notes
+        )
+        return updated
+    }
+
+    private func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool {
+        guard let record = state.selectedRecord else { return false }
+        Task { @MainActor in
+            let transcript = await dictationSession.cycleForReviewCommand(projectRoot: store.fileOWPURL)
+            let latestRecord = state.recordsByIDForReview(record.id) ?? record
+            let mergedNotes = appendTranscript(transcript, to: latestRecord.notes)
+            if mergedNotes != latestRecord.notes {
+                persistAndRefresh(
+                    record: latestRecord,
+                    rating: latestRecord.rating,
+                    isRejected: latestRecord.isRejected,
+                    notes: mergedNotes
+                )
+            }
+            applyReviewCommand(command, anchorRecordID: latestRecord.id)
+        }
+        return true
+    }
+
+    private func appendTranscript(_ transcript: String?, to notes: String) -> String {
+        guard let transcript = transcript?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !transcript.isEmpty else { return notes }
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return transcript }
+        return trimmed + "\n" + transcript
+    }
+
+    private func applyReviewCommand(_ command: ImageReviewKeyboardCommand, anchorRecordID: String) {
+        let record = state.recordsByIDForReview(anchorRecordID) ?? state.selectedRecord
+        switch command {
+        case .previous:
+            state.selectAdjacentRecord(in: state.filteredRecords, delta: -1)
+        case .next:
+            state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
+        case .reject:
+            if let record {
+                persistAndRefresh(record: record, rating: record.rating, isRejected: true, notes: record.notes)
+            }
+            state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
+        case .fiveStars:
+            if let record {
+                persistAndRefresh(record: record, rating: 5, isRejected: false, notes: record.notes)
+            }
+            state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
         }
     }
 
@@ -2459,6 +2508,48 @@ private struct AllProjectImagesInspectorView: View {
 }
 
 @available(macOS 26.0, *)
+private struct ProjectImageReviewDictationSection: View {
+    let projectRoot: URL?
+    @Bindable var session: ImageReviewDictationSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Review Dictation")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Button {
+                    session.toggle(projectRoot: projectRoot)
+                } label: {
+                    Label(session.isEnabled ? "Mic On" : "Mic", systemImage: session.isRecording ? "mic.fill" : "mic")
+                }
+                .buttonStyle(.bordered)
+                .tint(session.isEnabled ? .red : nil)
+
+                Text(session.statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(session.isEnabled ? .primary : .secondary)
+                    .lineLimit(3)
+            }
+
+            Text("Review keys while Notes is focused: [ previous, ] next, / reject, ; five stars. If Parakeet is configured, each key commits the current recording to Notes before moving on.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let lastAudioPath = session.lastAudioPath, !lastAudioPath.isEmpty {
+                Text(lastAudioPath)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+}
+
+@available(macOS 26.0, *)
 private struct ProjectImageFileActionsSection: View {
     let record: ProjectImageRecord?
 
@@ -2560,6 +2651,12 @@ func persistReviewUpdate(
         visualStyle: existingMetadata?.visualStyle
     )
     ImageLibraryMetadataSidecarService.saveAsync(metadata, forImagePath: record.resolvedPath)
+    ImageReviewFeedbackService.recordFeedback(
+        store: store,
+        projectRoot: store.fileOWPURL,
+        record: record,
+        metadata: metadata
+    )
     return metadata
 }
 
@@ -2570,6 +2667,7 @@ private struct AllProjectImageSelection: DetailedImageSelection {
     let onSetRating: (Int?) -> Void
     let onToggleRejected: () -> Void
     let onSetNotes: (String) -> Void
+    let onReviewCommand: (ImageReviewKeyboardCommand) -> Bool
 
     private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
@@ -2723,6 +2821,10 @@ private struct AllProjectImageSelection: DetailedImageSelection {
 
     func setNotes(_ newValue: String) {
         onSetNotes(newValue)
+    }
+
+    func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool {
+        onReviewCommand(command)
     }
 }
 
