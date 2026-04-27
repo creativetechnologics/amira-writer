@@ -142,6 +142,7 @@ struct StoredImageGenerationMetadata: Hashable, Sendable {
     let mapPlacementStatus: GeneratedBackgroundMapPlacementStatus?
     let buildingAnchorNodeID: UUID?
     let orientationState: GeneratedBackgroundOrientationState?
+    let referencePaths: [String]
 }
 
 enum GeneratedBackgroundFlagFilterMode: String, CaseIterable, Sendable {
@@ -8346,7 +8347,8 @@ final class AnimateStore {
         routeID: UUID? = nil,
         worldNodeID: UUID? = nil,
         mapPoint: WorldMapPoint? = nil,
-        cameraPose: WorldCameraPose? = nil
+        cameraPose: WorldCameraPose? = nil,
+        referencePaths: [String] = []
     ) throws -> String {
         let animateURL = try requireAnimateURL()
         guard let placeIndex = backgrounds.firstIndex(where: { $0.id == placeID }) else { return "" }
@@ -8375,6 +8377,7 @@ final class AnimateStore {
             worldNodeID: worldNodeID,
             mapPoint: mapPoint,
             cameraPose: cameraPose,
+            referencePaths: referencePaths,
             to: storedURL
         )
 
@@ -8421,7 +8424,8 @@ final class AnimateStore {
         model: GeminiModel,
         aspectRatio: String,
         imageSize: String,
-        kind: UnattachedGeneratedImageKind = .library
+        kind: UnattachedGeneratedImageKind = .library,
+        referencePaths: [String] = []
     ) throws -> String {
         let animateURL = try requireAnimateURL()
         let directory = ProjectPaths(root: animateURL.deletingLastPathComponent())
@@ -8440,6 +8444,7 @@ final class AnimateStore {
             model: model,
             aspectRatio: aspectRatio,
             imageSize: imageSize,
+            referencePaths: referencePaths,
             to: storedURL
         )
 
@@ -10116,6 +10121,7 @@ final class AnimateStore {
         mapPlacementStatus: GeneratedBackgroundMapPlacementStatus? = nil,
         buildingAnchorNodeID: UUID? = nil,
         orientationState: GeneratedBackgroundOrientationState? = nil,
+        referencePaths: [String] = [],
         to imageURL: URL
     ) throws {
         var requestPayload: [String: Any] = [
@@ -10164,6 +10170,13 @@ final class AnimateStore {
         }
         if let orientationState {
             requestPayload["orientation_state"] = orientationState.rawValue
+        }
+        let cleanedReferencePaths = referencePaths
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if !cleanedReferencePaths.isEmpty {
+            requestPayload["referencePaths"] = cleanedReferencePaths
+            requestPayload["reference_paths"] = cleanedReferencePaths
         }
         let payload: [String: Any] = ["request": requestPayload]
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
@@ -10545,6 +10558,13 @@ final class AnimateStore {
         let buildingAnchorNodeID = (request["building_anchor_node_id"] as? String).flatMap(UUID.init(uuidString:))
         let orientationState = (request["orientation_state"] as? String)
             .flatMap(GeneratedBackgroundOrientationState.init(rawValue:))
+        let referencePaths = ((request["referencePaths"] as? [String])
+            ?? (request["reference_paths"] as? [String])
+            ?? (request["referenceImagePaths"] as? [String])
+            ?? (request["reference_image_paths"] as? [String])
+            ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
 
         let metadata = StoredImageGenerationMetadata(
             prompt: prompt,
@@ -10558,7 +10578,8 @@ final class AnimateStore {
             cameraPose: cameraPose,
             mapPlacementStatus: mapPlacementStatus,
             buildingAnchorNodeID: buildingAnchorNodeID,
-            orientationState: orientationState
+            orientationState: orientationState,
+            referencePaths: referencePaths
         )
         generationMetadataCache[metadataURL.path] = (snapshot, metadata)
         return metadata
@@ -15393,7 +15414,8 @@ final class AnimateStore {
                     for: place.id,
                     workflow: workflow,
                     aspectRatio: config.aspectRatio,
-                    imageSize: config.imageSize
+                    imageSize: config.imageSize,
+                    referencePaths: Array(referencePaths.prefix(referenceImages.count))
                 )
                 storedPaths.append(storedPath)
                 updateGeminiActivity(activityID, status: .completed,

@@ -70,6 +70,8 @@ protocol DetailedImageSelection {
     var emptyStateMessage: String { get }
     var supportsRating: Bool { get }
     var supportsNotes: Bool { get }
+    var projectRootURL: URL? { get }
+    var generationReferenceImages: [GenerationReferenceImageItem] { get }
 
     func setRating(_ newValue: Int?)
     func toggleLiked()
@@ -83,6 +85,11 @@ extension DetailedImageSelection {
     var supportsRating: Bool { true }
     var supportsNotes: Bool { true }
     var isLiked: Bool { false }
+    var projectRootURL: URL? { nil }
+    var generationReferenceImages: [GenerationReferenceImageItem] {
+        guard let path = imageURL?.path else { return [] }
+        return GenerationReferenceImageResolver.referenceItems(forImagePath: path, projectRoot: projectRootURL)
+    }
     func toggleLiked() {}
     func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool { false }
 }
@@ -116,6 +123,7 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
 
     var body: some View {
         let metadataRows = selection.metadataRows
+        let referenceImages = selection.generationReferenceImages
         VStack(alignment: .leading, spacing: 14) {
             Label("Details", systemImage: "info.circle")
                 .font(.headline)
@@ -132,6 +140,10 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                 if !metadataRows.isEmpty {
                     Divider()
                     metadataSection(rows: metadataRows)
+                }
+                if !referenceImages.isEmpty {
+                    Divider()
+                    referenceImagesSection(referenceImages)
                 }
             } else {
                 emptyState
@@ -365,6 +377,86 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
         }
     }
 
+    // MARK: - Reference Images
+
+    private func referenceImagesSection(_ items: [GenerationReferenceImageItem]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("Reference Images")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("\(items.count)")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
+                    .foregroundStyle(.secondary)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 78, maximum: 90), spacing: 8)],
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ForEach(items) { item in
+                    let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: item.resolvedPath)
+                    UnifiedImageTile(
+                        path: item.rawPath,
+                        resolvedPath: item.resolvedPath,
+                        thumbnailSize: 72,
+                        sourceLabel: referenceSourceLabel(for: item),
+                        sourceSystemImage: referenceSourceIcon(for: item),
+                        isRejected: metadata?.isRejected ?? false,
+                        isLiked: metadata?.isLiked ?? false,
+                        hasNotes: !(metadata?.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+                        rating: metadata?.rating
+                    )
+                    .frame(width: 84, height: 84)
+                    .help(referenceHelpText(for: item))
+                }
+            }
+        }
+    }
+
+    private func referenceSourceLabel(for item: GenerationReferenceImageItem) -> String {
+        let role = (item.role ?? "").lowercased()
+        if role.contains("edit") || role.contains("source") { return "Edit" }
+        if role.contains("map") || role.contains("spatial") { return "Map" }
+        if role.contains("costume") { return "Costume" }
+        if role.contains("identity") || role.contains("face") { return "Identity" }
+        if role.contains("storyboard") || role.contains("layout") { return "Board" }
+        if role.contains("style") { return "Style" }
+        if role.contains("continuity") { return "Ref" }
+        if let label = item.label, !label.isEmpty {
+            return String(label.prefix(10))
+        }
+        return "Ref"
+    }
+
+    private func referenceSourceIcon(for item: GenerationReferenceImageItem) -> String {
+        let role = (item.role ?? "").lowercased()
+        if role.contains("edit") || role.contains("source") { return "pencil.and.outline" }
+        if role.contains("map") || role.contains("spatial") { return "map" }
+        if role.contains("costume") { return "tshirt" }
+        if role.contains("identity") || role.contains("face") { return "person.crop.circle" }
+        if role.contains("storyboard") || role.contains("layout") { return "rectangle.on.rectangle" }
+        if role.contains("style") { return "paintpalette" }
+        return "photo.on.rectangle"
+    }
+
+    private func referenceHelpText(for item: GenerationReferenceImageItem) -> String {
+        [
+            item.label,
+            item.role,
+            item.rawPath
+        ]
+        .compactMap { value in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        .joined(separator: "\n")
+    }
+
     // MARK: - Empty State
 
     private var emptyState: some View {
@@ -506,6 +598,12 @@ struct PlaceImageSelection: DetailedImageSelection {
         return store.imageLibraryIsLiked(for: record.activePath)
     }
     var notes: String { record?.draftEditNotes ?? "" }
+    var projectRootURL: URL? { store.fileOWPURL }
+
+    var generationReferenceImages: [GenerationReferenceImageItem] {
+        guard let path = imageURL?.path else { return [] }
+        return GenerationReferenceImageResolver.referenceItems(forImagePath: path, projectRoot: store.fileOWPURL)
+    }
 
     var metadataRows: [(label: String, value: String)] {
         guard let record else { return [] }
@@ -607,6 +705,13 @@ struct CharacterImageSelection: DetailedImageSelection {
     var notes: String {
         guard let path = currentPath else { return "" }
         return character?.inspirationNotes?[path] ?? ""
+    }
+
+    var projectRootURL: URL? { store.fileOWPURL }
+
+    var generationReferenceImages: [GenerationReferenceImageItem] {
+        guard let path = imageURL?.path else { return [] }
+        return GenerationReferenceImageResolver.referenceItems(forImagePath: path, projectRoot: store.fileOWPURL)
     }
 
     var metadataRows: [(label: String, value: String)] {

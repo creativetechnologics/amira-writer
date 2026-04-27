@@ -309,7 +309,8 @@ private struct CanvasWorkspaceContent: View {
                         prompt: draft.effectivePrompt,
                         model: draft.model,
                         aspectRatio: draft.aspectRatio,
-                        imageSize: draft.imageSize
+                        imageSize: draft.imageSize,
+                        referencePaths: draft.referenceItems.filter(\.isIncluded).map(\.path)
                     )
                     store.updateGeminiActivity(
                         activityID,

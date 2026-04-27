@@ -863,7 +863,8 @@ struct ImagineCanvasPageView: View {
                         model: capturedModel,
                         aspectRatio: capturedRatio,
                         imageSize: capturedSize,
-                        referenceCount: capturedRefs.count
+                        referenceCount: capturedRefs.count,
+                        referencePaths: capturedRefs.map { $0.url.path }
                     )
                     store.appendCanvasGeneration(generation)
                     selectedGenerationID = generation.id
@@ -905,7 +906,8 @@ struct ImagineCanvasPageView: View {
         model: GeminiModel,
         aspectRatio: String,
         imageSize: String,
-        referenceCount: Int
+        referenceCount: Int,
+        referencePaths: [String]
     ) async throws -> AnimateStore.CanvasGeneration {
         let canvasDir: URL
         if let animateURL = store.animateURL {
@@ -935,6 +937,21 @@ struct ImagineCanvasPageView: View {
             let filename = "\(timestamp)-\(slug.isEmpty ? "canvas" : slug)-\(uniqueSuffix).png"
             let fileURL = canvasDir.appendingPathComponent(filename)
             try data.write(to: fileURL, options: .atomic)
+            let cleanedReferencePaths = referencePaths
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            let requestPayload: [String: Any] = [
+                "prompt": prompt,
+                "model_alias": model.displayName,
+                "model": model.rawValue,
+                "image_size": imageSize,
+                "aspect_ratio": aspectRatio,
+                "referencePaths": cleanedReferencePaths,
+                "reference_paths": cleanedReferencePaths
+            ]
+            let metadataPayload: [String: Any] = ["request": requestPayload]
+            let metadataData = try JSONSerialization.data(withJSONObject: metadataPayload, options: [.prettyPrinted, .sortedKeys])
+            try metadataData.write(to: fileURL.deletingPathExtension().appendingPathExtension("json"), options: .atomic)
 
             return AnimateStore.CanvasGeneration(
                 createdAt: Date(),

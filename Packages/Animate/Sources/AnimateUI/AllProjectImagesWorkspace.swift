@@ -1742,7 +1742,8 @@ private struct AllProjectImagesWorkspaceContent: View {
                         prompt: draft.effectivePrompt,
                         model: draft.model,
                         aspectRatio: draft.aspectRatio,
-                        imageSize: draft.imageSize
+                        imageSize: draft.imageSize,
+                        referencePaths: draft.referenceItems.filter(\.isIncluded).map(\.path)
                     )
                     store.updateGeminiActivity(
                         activityID,
@@ -2812,6 +2813,16 @@ private struct AllProjectImageSelection: DetailedImageSelection {
 
     var notes: String {
         record?.notes ?? ""
+    }
+
+    var projectRootURL: URL? { store.fileOWPURL }
+
+    var generationReferenceImages: [GenerationReferenceImageItem] {
+        guard let record else { return [] }
+        return GenerationReferenceImageResolver.referenceItems(
+            forImagePath: record.resolvedPath,
+            projectRoot: store.fileOWPURL
+        )
     }
 
     var supportsRating: Bool {

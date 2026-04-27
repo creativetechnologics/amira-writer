@@ -1718,6 +1718,14 @@ struct SceneShotImageSelection: DetailedImageSelection {
         return ImageLibraryMetadataSidecarService.load(forImagePath: path)?.notes ?? ""
     }
 
+    var projectRootURL: URL? { store.fileOWPURL }
+
+    var generationReferenceImages: [GenerationReferenceImageItem] {
+        guard let path else { return [] }
+        let resolvedPath = store.resolvedCharacterAssetURL(for: path)?.path ?? path
+        return GenerationReferenceImageResolver.referenceItems(forImagePath: resolvedPath, projectRoot: store.fileOWPURL)
+    }
+
     var metadataRows: [(label: String, value: String)] {
         guard let path else { return [] }
         var rows: [(label: String, value: String)] = []
