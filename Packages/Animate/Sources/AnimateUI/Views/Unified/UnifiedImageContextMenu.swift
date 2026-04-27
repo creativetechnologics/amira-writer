@@ -47,6 +47,10 @@ struct UnifiedImageActions {
     var onCopy: (() -> Void)? = nil
     var onFlipHorizontally: (() -> Void)? = nil
     var onQuickLook: (() -> Void)? = nil
+    /// Category/scope reassignment actions for images that were born in one
+    /// surface (often Canvas) but should train/search as a different image
+    /// type (place, character, etc.).
+    var recategorizeEntries: [UnifiedImageRecategorizeEntry] = []
     var onEditWithGemini: (() -> Void)? = nil
     var onAdjustCrop: (() -> Void)? = nil
     /// Called with variation count (usually 1 or 27). Caller decides what
@@ -77,6 +81,48 @@ struct UnifiedImageActions {
     var onSetAsFrame: ((ImagineShotMoment) -> Void)? = nil
     /// Which moment (if any) this image is already the featured frame for, so the menu can show a checkmark.
     var featuredFrameMoment: ImagineShotMoment? = nil
+}
+
+@available(macOS 26.0, *)
+enum UnifiedImageRecategorization: String, CaseIterable, Identifiable, Sendable, Hashable {
+    case place
+    case character
+    case clear
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .place: "Places"
+        case .character: "Characters"
+        case .clear: "Clear Category"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .place: "map"
+        case .character: "person.2"
+        case .clear: "xmark.circle"
+        }
+    }
+
+    var semanticRole: ImageLibrarySemanticRole? {
+        switch self {
+        case .place: .place
+        case .character: .character
+        case .clear: nil
+        }
+    }
+}
+
+@available(macOS 26.0, *)
+struct UnifiedImageRecategorizeEntry: Identifiable {
+    let id: String
+    let label: String
+    let systemImage: String
+    let isSelected: Bool
+    let action: () -> Void
 }
 
 @available(macOS 26.0, *)
@@ -119,6 +165,7 @@ struct UnifiedImageContextMenuContent: View {
             setAsFrameSection
             promptSection
             fileSection
+            recategorizeSection
             geminiSection
             likeSection
             ratingSection
@@ -216,6 +263,22 @@ struct UnifiedImageContextMenuContent: View {
         }
         if let onQuickLook = actions.onQuickLook {
             Button("Quick Look", systemImage: "eye") { onQuickLook() }
+        }
+    }
+
+    @ViewBuilder
+    private var recategorizeSection: some View {
+        if !actions.recategorizeEntries.isEmpty {
+            Divider()
+            Menu("Recategorize", systemImage: "rectangle.2.swap") {
+                ForEach(actions.recategorizeEntries) { entry in
+                    Button {
+                        entry.action()
+                    } label: {
+                        Label(entry.label, systemImage: entry.isSelected ? "checkmark.circle.fill" : entry.systemImage)
+                    }
+                }
+            }
         }
     }
 

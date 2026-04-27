@@ -799,6 +799,7 @@ struct AllProjectImagesPageView: View {
                                     onCopy: {
                                         copyImageToPasteboardAsync(path: record.resolvedPath)
                                     },
+                                    recategorizeEntries: recategorizeEntries(for: record),
                                     onEditWithGemini: {
                                         state.selectedRecordID = record.id
                                         state.inspectorTab = .generate
@@ -941,6 +942,7 @@ struct AllProjectImagesPageView: View {
                 onCopy: {
                     copyImageToPasteboardAsync(path: record.resolvedPath)
                 },
+                recategorizeEntries: recategorizeEntries(for: record),
                 onEditWithGemini: {
                     // Open the preflight sheet immediately so the user can
                     // type the adjustment there and hit Generate. Also
@@ -1017,6 +1019,53 @@ struct AllProjectImagesPageView: View {
         }
     }
 
+    private func recategorizeEntries(for record: ProjectImageRecord) -> [UnifiedImageRecategorizeEntry] {
+        UnifiedImageRecategorization.allCases.map { category in
+            UnifiedImageRecategorizeEntry(
+                id: category.id,
+                label: category.displayName,
+                systemImage: category.systemImage,
+                isSelected: record.semanticRole == category.semanticRole,
+                action: { recategorize(category, for: record) }
+            )
+        }
+    }
+
+    private func recategorize(_ category: UnifiedImageRecategorization, for record: ProjectImageRecord) {
+        let targets = actionRecords(anchor: record)
+        for target in targets {
+            let existingMetadata = ImageLibraryMetadataSidecarService.load(forImagePath: target.resolvedPath)
+            let metadata = ImageLibraryReviewMetadata(
+                rating: existingMetadata?.rating ?? target.rating,
+                isRejected: existingMetadata?.isRejected ?? target.isRejected,
+                isLiked: existingMetadata?.isLiked ?? target.isLiked,
+                notes: existingMetadata?.notes ?? target.notes,
+                updatedAt: Date(),
+                characterTags: existingMetadata?.characterTags ?? [],
+                visualStyle: existingMetadata?.visualStyle,
+                semanticRole: category.semanticRole
+            )
+            ImageLibraryMetadataSidecarService.saveAsync(metadata, forImagePath: target.resolvedPath)
+            ImageReviewFeedbackService.recordFeedback(
+                store: store,
+                projectRoot: store.fileOWPURL,
+                record: target,
+                metadata: metadata
+            )
+            state.updateSemanticRoleMetadata(for: target.id, semanticRole: category.semanticRole)
+        }
+        ImagePreferenceProfileService.scheduleRebuild(store: store, projectRoot: store.fileOWPURL)
+
+        let suffix = targets.count == 1 ? "" : "s"
+        let actionLabel = category == .clear
+            ? "Cleared category for"
+            : "Recategorized"
+        let targetLabel = category == .clear
+            ? "\(targets.count) image\(suffix)"
+            : "\(targets.count) image\(suffix) as \(category.displayName.lowercased())"
+        store.statusMessage = "\(actionLabel) \(targetLabel)"
+    }
+
     private func toggleCharacterTag(_ name: String, for record: ProjectImageRecord) {
         var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: record.resolvedPath)
             ?? ImageLibraryReviewMetadata(rating: record.rating, isRejected: record.isRejected, isLiked: record.isLiked, notes: record.notes, updatedAt: nil)
@@ -1088,28 +1137,8 @@ struct AllProjectImagesPageView: View {
     }
 
     private func updateSemanticRole(_ semanticRole: ImageLibrarySemanticRole, for record: ProjectImageRecord) {
-        let targets = actionRecords(anchor: record)
-        for target in targets {
-            let updated = persistReviewUpdate(
-                store: store,
-                record: target,
-                rating: target.rating,
-                isRejected: target.isRejected,
-                isLiked: target.isLiked,
-                notes: target.notes,
-                semanticRole: semanticRole
-            )
-            state.updateReviewMetadata(
-                for: target.id,
-                rating: updated.rating,
-                isRejected: updated.isRejected,
-                isLiked: updated.isLiked,
-                notes: updated.notes,
-                semanticRole: updated.semanticRole
-            )
-        }
-        let suffix = targets.count == 1 ? "" : "s"
-        store.statusMessage = "Tagged \(targets.count) image\(suffix) as \(semanticRole.displayName.lowercased()) review scope"
+        let category: UnifiedImageRecategorization = semanticRole == .place ? .place : .character
+        recategorize(category, for: record)
     }
 
     private func toggleRejected(for record: ProjectImageRecord) {

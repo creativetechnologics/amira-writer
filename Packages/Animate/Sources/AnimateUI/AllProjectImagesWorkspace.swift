@@ -429,6 +429,7 @@ final class AllProjectImagesState {
                 mix(g.endImagePaths.count &<< 4)
             }
         }
+        mix(store.allImagesContentRevision &<< 28)
         return h
     }
 
@@ -620,6 +621,55 @@ final class AllProjectImagesState {
             isLiked: isRejected ? false : resolvedIsLiked,
             notes: notes,
             supportsLibraryCuration: cachedAllRecords[index].supportsLibraryCuration
+        )
+        cachedAllRecords[index] = updated
+        recordsByID[updated.id] = updated
+        if existing.source != updated.source || existing.groupLabel != updated.groupLabel {
+            rebuildAggregationCaches(from: cachedAllRecords)
+        }
+        contentRevision &+= 1
+        filteredCacheKey = nil
+        filteredCacheRecords = []
+        filteredRecordsByID = [:]
+        prefetchSignatureCache.removeAll(keepingCapacity: true)
+    }
+
+    func updateSemanticRoleMetadata(
+        for recordID: String,
+        semanticRole: ImageLibrarySemanticRole?
+    ) {
+        guard let index = cachedAllRecords.firstIndex(where: { $0.id == recordID }) else { return }
+        let existing = cachedAllRecords[index]
+        let updatedSource = Self.sourceAfterRecategorization(
+            recordID: existing.id,
+            originalSource: existing.source,
+            semanticRole: semanticRole
+        )
+        let updated = ProjectImageRecord(
+            id: existing.id,
+            path: existing.path,
+            resolvedPath: existing.resolvedPath,
+            source: updatedSource,
+            semanticRole: semanticRole,
+            originLabel: existing.originLabel,
+            groupLabel: existing.groupLabel,
+            sceneID: existing.sceneID,
+            shotID: existing.shotID,
+            searchHaystack: Self.searchHaystack(
+                path: existing.path,
+                resolvedPath: existing.resolvedPath,
+                source: updatedSource,
+                originLabel: existing.originLabel,
+                groupLabel: existing.groupLabel,
+                notes: existing.notes
+            ),
+            createdAt: existing.createdAt,
+            sizeBytes: existing.sizeBytes,
+            rating: existing.rating,
+            isRejected: existing.isRejected,
+            isLiked: existing.isLiked,
+            notes: existing.notes,
+            supportsLibraryCuration: existing.supportsLibraryCuration
         )
         cachedAllRecords[index] = updated
         recordsByID[updated.id] = updated
@@ -1015,6 +1065,12 @@ final class AllProjectImagesState {
         let sidecarMetadata = (seed.source == .places || !hasSeedMetadata)
             ? ImageLibraryMetadataSidecarService.load(forImagePath: resolvedPath)
             : nil
+        let resolvedSemanticRole = sidecarMetadata?.semanticRole ?? seed.semanticRole ?? inferredSemanticRole(for: seed.source)
+        let resolvedSource = sourceAfterRecategorization(
+            recordID: seed.id,
+            originalSource: seed.source,
+            semanticRole: sidecarMetadata?.semanticRole ?? seed.semanticRole
+        )
         let mergedNotes = seed.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? (sidecarMetadata?.notes ?? "")
             : seed.notes
@@ -1023,8 +1079,8 @@ final class AllProjectImagesState {
             id: seed.id,
             path: seed.path,
             resolvedPath: resolvedPath,
-            source: seed.source,
-            semanticRole: sidecarMetadata?.semanticRole ?? seed.semanticRole ?? inferredSemanticRole(for: seed.source),
+            source: resolvedSource,
+            semanticRole: resolvedSemanticRole,
             originLabel: seed.originLabel,
             groupLabel: seed.groupLabel,
             sceneID: seed.sceneID,
@@ -1219,6 +1275,24 @@ final class AllProjectImagesState {
             return .character
         case .props, .vehicles, .sceneShots, .canvas:
             return nil
+        }
+    }
+
+    nonisolated private static func sourceAfterRecategorization(
+        recordID: String,
+        originalSource: AllProjectImagesSource,
+        semanticRole: ImageLibrarySemanticRole?
+    ) -> AllProjectImagesSource {
+        let recategorizesSource = recordID.hasPrefix("canvas-") || recordID.hasPrefix("shot-")
+        guard recategorizesSource else { return originalSource }
+        guard let semanticRole else {
+            return recordID.hasPrefix("shot-") ? .sceneShots : .canvas
+        }
+        switch semanticRole {
+        case .place:
+            return .places
+        case .character:
+            return .characters
         }
     }
 
@@ -1471,6 +1545,9 @@ public struct AllProjectImagesWorkspace: View {
             )
                 .environment(\.unifiedImageFlipHandler) { path in
                     controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
+                }
+                .environment(\.unifiedImageRecategorizeHandler) { path, category in
+                    controller.store.recategorizeImageReviewScope(path: path, semanticRole: category.semanticRole)
                 }
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 

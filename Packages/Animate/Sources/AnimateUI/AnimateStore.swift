@@ -226,6 +226,33 @@ final class AnimateStore {
         canvasGenerationsRevision &+= 1
     }
 
+    func recategorizeImageReviewScope(path: String, semanticRole: ImageLibrarySemanticRole?) {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else { return }
+        let resolvedPath = GenerationReferenceImageResolver
+            .resolveReferencePath(trimmedPath, projectRoot: fileOWPURL) ?? trimmedPath
+
+        var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: resolvedPath)
+            ?? ImageLibraryReviewMetadata(
+                rating: nil,
+                isRejected: false,
+                notes: "",
+                updatedAt: nil
+            )
+        metadata.semanticRole = semanticRole
+        metadata.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: resolvedPath)
+        bumpAllImagesContentRevision()
+        ImagePreferenceProfileService.scheduleRebuild(store: self, projectRoot: fileOWPURL)
+
+        let filename = URL(fileURLWithPath: resolvedPath).lastPathComponent
+        if let semanticRole {
+            statusMessage = "Recategorized \(filename) as \(semanticRole.displayName.lowercased())"
+        } else {
+            statusMessage = "Cleared category for \(filename)"
+        }
+    }
+
     /// The Animate/ subdirectory inside the OWP package — all writes go here.
     var animateURL: URL? {
         (workingOWPURL ?? owpURL)?.appendingPathComponent("Animate")

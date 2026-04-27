@@ -19,6 +19,9 @@ public struct PropsWorkspace: View {
                 .environment(\.unifiedImageFlipHandler) { path in
                     controller.store.flipImageHorizontallyAndAttachLikeOriginal(path: path)
                 }
+                .environment(\.unifiedImageRecategorizeHandler) { path, category in
+                    controller.store.recategorizeImageReviewScope(path: path, semanticRole: category.semanticRole)
+                }
                 .allowsHitTesting(!(controller.isLoadingProject || controller.isSelectionRestorePending))
 
             if controller.isLoadingProject || controller.isSelectionRestorePending {

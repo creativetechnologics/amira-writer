@@ -5,8 +5,16 @@ import SwiftUI
 typealias UnifiedImageFlipHandler = @MainActor (String) -> Void
 
 @available(macOS 26.0, *)
+typealias UnifiedImageRecategorizeHandler = @MainActor (String, UnifiedImageRecategorization) -> Void
+
+@available(macOS 26.0, *)
 private struct UnifiedImageFlipHandlerKey: EnvironmentKey {
     static let defaultValue: UnifiedImageFlipHandler? = nil
+}
+
+@available(macOS 26.0, *)
+private struct UnifiedImageRecategorizeHandlerKey: EnvironmentKey {
+    static let defaultValue: UnifiedImageRecategorizeHandler? = nil
 }
 
 @available(macOS 26.0, *)
@@ -14,6 +22,11 @@ extension EnvironmentValues {
     var unifiedImageFlipHandler: UnifiedImageFlipHandler? {
         get { self[UnifiedImageFlipHandlerKey.self] }
         set { self[UnifiedImageFlipHandlerKey.self] = newValue }
+    }
+
+    var unifiedImageRecategorizeHandler: UnifiedImageRecategorizeHandler? {
+        get { self[UnifiedImageRecategorizeHandlerKey.self] }
+        set { self[UnifiedImageRecategorizeHandlerKey.self] = newValue }
     }
 }
 
@@ -43,6 +56,7 @@ extension EnvironmentValues {
 @available(macOS 26.0, *)
 struct UnifiedImageTile: View {
     @Environment(\.unifiedImageFlipHandler) private var flipHandler
+    @Environment(\.unifiedImageRecategorizeHandler) private var recategorizeHandler
 
     /// Identity/display path (may be relative). Kept separate from
     /// `resolvedPath` so callers pass whatever their selection/persistence
@@ -90,6 +104,20 @@ struct UnifiedImageTile: View {
             let flipPath = resolvedPath ?? path
             if !flipPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 updated.onFlipHorizontally = { flipHandler(flipPath) }
+            }
+        }
+        if updated.recategorizeEntries.isEmpty, let recategorizeHandler {
+            let recategorizePath = resolvedPath ?? path
+            if !recategorizePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                updated.recategorizeEntries = UnifiedImageRecategorization.allCases.map { category in
+                    UnifiedImageRecategorizeEntry(
+                        id: category.id,
+                        label: category.displayName,
+                        systemImage: category.systemImage,
+                        isSelected: false,
+                        action: { recategorizeHandler(recategorizePath, category) }
+                    )
+                }
             }
         }
         return updated
