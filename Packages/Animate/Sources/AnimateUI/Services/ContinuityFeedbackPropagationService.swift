@@ -129,6 +129,7 @@ struct ContinuityFeedbackPropagationService {
         let metadata = ImageLibraryReviewMetadata(
             rating: existing.rating,
             isRejected: true,
+            isLiked: false,
             notes: notes,
             updatedAt: Date(),
             characterTags: existing.characterTags,

@@ -64,6 +64,7 @@ protocol DetailedImageSelection {
     var subtitle: String? { get }
     var rating: Int? { get }
     var isRejected: Bool { get }
+    var isLiked: Bool { get }
     var notes: String { get }
     var metadataRows: [(label: String, value: String)] { get }
     var emptyStateMessage: String { get }
@@ -71,6 +72,7 @@ protocol DetailedImageSelection {
     var supportsNotes: Bool { get }
 
     func setRating(_ newValue: Int?)
+    func toggleLiked()
     func toggleRejected()
     func setNotes(_ newValue: String)
     func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool
@@ -80,6 +82,8 @@ protocol DetailedImageSelection {
 extension DetailedImageSelection {
     var supportsRating: Bool { true }
     var supportsNotes: Bool { true }
+    var isLiked: Bool { false }
+    func toggleLiked() {}
     func handleReviewCommand(_ command: ImageReviewKeyboardCommand) -> Bool { false }
 }
 
@@ -285,6 +289,25 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
+                Button {
+                    selection.toggleLiked()
+                } label: {
+                    Label(selection.isLiked ? "Liked" : "Like", systemImage: selection.isLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                }
+                .buttonStyle(.bordered)
+                .tint(selection.isLiked ? .green : nil)
+
+                Button {
+                    selection.toggleRejected()
+                } label: {
+                    Label(selection.isRejected ? "Rejected" : "Reject", systemImage: selection.isRejected ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+                }
+                .buttonStyle(.bordered)
+                .tint(selection.isRejected ? .red : nil)
+
+                Divider()
+                    .frame(height: 18)
+
                 ForEach(1...5, id: \.self) { star in
                     Button {
                         selection.setRating(selection.rating == star ? nil : star)
@@ -297,11 +320,6 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
 
                 Divider()
                     .frame(height: 18)
-
-                Button(selection.isRejected ? "Unreject" : "Reject") {
-                    selection.toggleRejected()
-                }
-                .buttonStyle(.bordered)
             }
         }
     }
@@ -483,6 +501,10 @@ struct PlaceImageSelection: DetailedImageSelection {
 
     var rating: Int? { record?.rating }
     var isRejected: Bool { record?.isRejected ?? false }
+    var isLiked: Bool {
+        guard let record else { return false }
+        return store.imageLibraryIsLiked(for: record.activePath)
+    }
     var notes: String { record?.draftEditNotes ?? "" }
 
     var metadataRows: [(label: String, value: String)] {
@@ -526,6 +548,11 @@ struct PlaceImageSelection: DetailedImageSelection {
     func setRating(_ newValue: Int?) {
         guard let record else { return }
         store.setGeneratedBackgroundRating(newValue, for: record.id)
+    }
+
+    func toggleLiked() {
+        guard let record else { return }
+        store.setImageLibraryLiked(!isLiked, for: record.activePath)
     }
 
     func toggleRejected() {
@@ -572,6 +599,11 @@ struct CharacterImageSelection: DetailedImageSelection {
         return character?.inspirationRejectedPaths.contains(path) ?? false
     }
 
+    var isLiked: Bool {
+        guard let path = currentPath else { return false }
+        return store.imageLibraryIsLiked(for: path)
+    }
+
     var notes: String {
         guard let path = currentPath else { return "" }
         return character?.inspirationNotes?[path] ?? ""
@@ -599,6 +631,11 @@ struct CharacterImageSelection: DetailedImageSelection {
         store.setInspirationRating(newValue, path: path, for: charID)
     }
 
+    func toggleLiked() {
+        guard let path = currentPath else { return }
+        store.setImageLibraryLiked(!isLiked, for: path)
+    }
+
     func toggleRejected() {
         guard let path = currentPath, let charID = character?.id else { return }
         store.toggleInspirationRejected(path: path, for: charID)
@@ -621,6 +658,7 @@ struct PropImageSelection: DetailedImageSelection {
     var subtitle: String? { nil }
     var rating: Int? { nil }
     var isRejected: Bool { false }
+    var isLiked: Bool { false }
     var notes: String { "" }
     var metadataRows: [(label: String, value: String)] { [] }
     var emptyStateMessage: String { "No prop image selected." }

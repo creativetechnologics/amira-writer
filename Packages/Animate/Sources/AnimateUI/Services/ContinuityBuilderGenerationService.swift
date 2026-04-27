@@ -61,7 +61,7 @@ struct ContinuityBuilderGenerationService {
     func generate(_ request: Request) async -> ContinuityBuilderGenerationResult {
         let normalizedMode = request.mode.lowercased() == "execute" ? "execute" : "dry_run"
         let isDryRun = normalizedMode != "execute"
-        let count = min(max(request.candidateCount, 1), 2)
+        let count = 1
         let imageSize = request.imageSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "1K" : request.imageSize
         let aspectRatio = request.aspectRatio.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "4:3" : request.aspectRatio
         let estimatedCost = Double(count) * request.model.estimatedCost(for: imageSize)
@@ -85,9 +85,12 @@ struct ContinuityBuilderGenerationService {
         let referencePaths = Array(turn.candidates.compactMap(\.imagePath).filter {
             FileManager.default.fileExists(atPath: $0) && ContinuityBuilderService.isReferenceEligibleImagePath($0)
         }.sorted { lhs, rhs in
-            let lhsRating = ContinuityBuilderService.referenceRating(forImagePath: lhs) ?? 0
-            let rhsRating = ContinuityBuilderService.referenceRating(forImagePath: rhs) ?? 0
-            if lhsRating != rhsRating { return lhsRating > rhsRating }
+            let lhsScore = ContinuityBuilderService.referencePreferenceScore(forImagePath: lhs) ?? 0
+            let rhsScore = ContinuityBuilderService.referencePreferenceScore(forImagePath: rhs) ?? 0
+            if lhsScore != rhsScore { return lhsScore > rhsScore }
+            let lhsDate = ImagePreferenceProfileService.referenceUpdatedAt(forImagePath: lhs) ?? .distantPast
+            let rhsDate = ImagePreferenceProfileService.referenceUpdatedAt(forImagePath: rhs) ?? .distantPast
+            if lhsDate != rhsDate { return lhsDate > rhsDate }
             return lhs < rhs
         }.prefix(6))
         let references = await Task.detached(priority: .userInitiated) {
@@ -151,6 +154,7 @@ struct ContinuityBuilderGenerationService {
                     turn: turn,
                     label: label
                 )
+                writeReviewScopeSidecar(for: savedURL.path, turn: turn)
                 try writeGenerationSidecars(imageURL: savedURL, prompt: prompt, textResponse: result.textResponse, turn: turn, referencePaths: referencePaths)
                 let generation = AnimateStore.CanvasGeneration(
                     createdAt: Date(),
@@ -190,21 +194,60 @@ struct ContinuityBuilderGenerationService {
         }
 
         if !generatedCandidates.isEmpty {
-            session.turns[turnIndex].candidates = generatedCandidates
-            session.turns[turnIndex].requiresPaidGeneration = false
-            session.turns[turnIndex].generationStatus = "generated_candidates_ready_for_feedback"
-            session.updatedAt = Date()
-            try? ContinuityBuilderService(store: store).writeSessionForGeneration(session, projectRoot: request.projectRoot)
+            if let merged = try? ContinuityBuilderService(store: store).mergeGeneratedCandidates(
+                sessionID: session.id,
+                fallbackSession: session,
+                turnID: turn.id,
+                generatedCandidates: generatedCandidates,
+                projectRoot: request.projectRoot
+            ) {
+                session = merged
+            } else {
+                session.turns[turnIndex].candidates = generatedCandidates
+                session.turns[turnIndex].requiresPaidGeneration = false
+                session.turns[turnIndex].generationStatus = "generated_candidates_ready_for_feedback"
+                session.updatedAt = Date()
+                try? ContinuityBuilderService(store: store).writeSessionForGeneration(session, projectRoot: request.projectRoot)
+            }
         }
         let ok = blockers.filter { $0.severity == "blocking" }.isEmpty && !records.contains { $0.status.hasPrefix("failed") }
         return .init(ok: ok, mode: normalizedMode, isDryRun: isDryRun, estimatedCostUSD: estimatedCost, maxCostUSD: request.maxCostUSD, records: records, session: session, blockers: blockers)
     }
 
-    private func labels(for count: Int) -> [ContinuityBuilderCandidateLabel] {
-        switch count {
-        case 1: return [.single]
-        default: return [.left, .right]
+    private func writeReviewScopeSidecar(for path: String, turn: ContinuityBuilderTurn) {
+        var existing = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+        existing.semanticRole = semanticRole(for: turn.category)
+        existing.characterTags = Array(Set(existing.characterTags + matchingCharacterTags(for: turn))).sorted()
+        existing.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(existing, forImagePath: path)
+    }
+
+    private func semanticRole(for category: ContinuityBuilderCategory) -> ImageLibrarySemanticRole? {
+        switch category {
+        case .worldGeography, .placeTopography, .landmarkBridge, .vehicleProp, .sceneContinuity:
+            return .place
+        case .characterIdentity, .costumeContinuity:
+            return .character
+        case .styleContinuity:
+            return nil
         }
+    }
+
+    private func matchingCharacterTags(for turn: ContinuityBuilderTurn) -> [String] {
+        guard semanticRole(for: turn.category) == .character else { return [] }
+        let haystack = [turn.title, turn.question, turn.promptSeed, turn.contextTags.joined(separator: " ")]
+            .joined(separator: "\n")
+            .lowercased()
+        return store.characters.compactMap { character in
+            let name = character.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, haystack.contains(name.lowercased()) else { return nil }
+            return name
+        }
+    }
+
+    private func labels(for count: Int) -> [ContinuityBuilderCandidateLabel] {
+        [.single]
     }
 
     private func executionPrompt(turn: ContinuityBuilderTurn, label: ContinuityBuilderCandidateLabel, variantIndex: Int, imageSize: String, aspectRatio: String, projectRoot: URL) -> String {

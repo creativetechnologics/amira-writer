@@ -7995,6 +7995,10 @@ final class AnimateStore {
         imageLibraryReviewMetadata(for: imagePath)?.isRejected ?? false
     }
 
+    func imageLibraryIsLiked(for imagePath: String) -> Bool {
+        imageLibraryReviewMetadata(for: imagePath)?.isLiked ?? false
+    }
+
     private func isRejectedCharacterImagePath(
         _ path: String,
         for character: AnimationCharacter,
@@ -8035,9 +8039,22 @@ final class AnimateStore {
         bumpAllImagesContentRevision()
     }
 
+    func setImageLibraryLiked(_ isLiked: Bool, for imagePath: String) {
+        mutateImageLibrarySidecar(for: imagePath) { metadata in
+            metadata.isLiked = isLiked
+            if isLiked {
+                metadata.isRejected = false
+            }
+        }
+        bumpAllImagesContentRevision()
+    }
+
     func setImageLibraryRejected(_ isRejected: Bool, for imagePath: String) {
         mutateImageLibrarySidecar(for: imagePath) { metadata in
             metadata.isRejected = isRejected
+            if isRejected {
+                metadata.isLiked = false
+            }
         }
         guard let normalizedPath = normalizedCharacterAssetPath(imagePath) else { return }
         var didMutateCharacterState = false

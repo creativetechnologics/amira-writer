@@ -57,6 +57,7 @@ struct UnifiedImageTile: View {
     var isSelected: Bool = false
     var isCurated: Bool = false
     var isRejected: Bool = false
+    var isLiked: Bool = false
     var hasNotes: Bool = false
     /// 1...5 star rating. Nil or 0 hides the badge.
     var rating: Int? = nil
@@ -215,7 +216,13 @@ struct UnifiedImageTile: View {
         if let bottomCenterOverlay {
             bottomCenterOverlay
         } else if isRejected {
-            Image(systemName: "eye.slash.fill")
+            Image(systemName: "hand.thumbsdown.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.55), radius: 3, x: 0, y: 1)
+                .padding(6)
+        } else if isLiked {
+            Image(systemName: "hand.thumbsup.fill")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.55), radius: 3, x: 0, y: 1)

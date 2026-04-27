@@ -780,6 +780,7 @@ struct ImagineScenesPageView: View {
             thumbnailSize: galleryThumbnailSize,
             isSelected: isSelected,
             isRejected: metadata?.isRejected ?? false,
+            isLiked: metadata?.isLiked ?? false,
             rating: metadata?.rating,
             actions: UnifiedImageActions(
                 onShowPrompt: { showPromptForImage(path: path) },
@@ -792,6 +793,10 @@ struct ImagineScenesPageView: View {
                     setSceneShotImageRating(newRating, path: path)
                 },
                 currentRating: metadata?.rating,
+                onToggleLiked: {
+                    toggleSceneShotImageLiked(path)
+                },
+                isLiked: metadata?.isLiked ?? false,
                 onToggleRejected: {
                     toggleSceneShotImageRejected(path)
                 },
@@ -835,6 +840,7 @@ struct ImagineScenesPageView: View {
         metadata.rating = rating
         metadata.updatedAt = Date()
         ImageLibraryMetadataSidecarService.save(metadata, forImagePath: path)
+        ImagePreferenceProfileService.scheduleRebuild(store: store, projectRoot: store.fileOWPURL)
         galleryMetadataRevision += 1
     }
 
@@ -842,8 +848,25 @@ struct ImagineScenesPageView: View {
         var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path)
             ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
         metadata.isRejected.toggle()
+        if metadata.isRejected {
+            metadata.isLiked = false
+        }
         metadata.updatedAt = Date()
         ImageLibraryMetadataSidecarService.save(metadata, forImagePath: path)
+        ImagePreferenceProfileService.scheduleRebuild(store: store, projectRoot: store.fileOWPURL)
+        galleryMetadataRevision += 1
+    }
+
+    private func toggleSceneShotImageLiked(_ path: String) {
+        var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+        metadata.isLiked.toggle()
+        if metadata.isLiked {
+            metadata.isRejected = false
+        }
+        metadata.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: path)
+        ImagePreferenceProfileService.scheduleRebuild(store: store, projectRoot: store.fileOWPURL)
         galleryMetadataRevision += 1
     }
 
@@ -853,6 +876,7 @@ struct ImagineScenesPageView: View {
         metadata.notes = notes
         metadata.updatedAt = Date()
         ImageLibraryMetadataSidecarService.save(metadata, forImagePath: path)
+        ImagePreferenceProfileService.scheduleRebuild(store: store, projectRoot: store.fileOWPURL)
         galleryMetadataRevision += 1
     }
 

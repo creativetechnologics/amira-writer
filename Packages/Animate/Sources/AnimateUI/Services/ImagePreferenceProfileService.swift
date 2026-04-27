@@ -71,6 +71,7 @@ struct ImagePreferenceExample: Codable, Sendable, Hashable {
     var projectRelativePath: String?
     var rating: Int?
     var isRejected: Bool
+    var isLiked: Bool?
     var notes: String
     var analysisSummary: String?
     var linkKinds: [String]
@@ -155,7 +156,7 @@ enum ImagePreferenceProfileService {
     }
 
     static func isPositiveReferenceEligible(_ imagePath: String) -> Bool {
-        referenceRating(forImagePath: imagePath) != nil
+        referencePreferenceScore(forImagePath: imagePath) != nil
     }
 
     static func referenceRating(forImagePath imagePath: String) -> Int? {
@@ -166,12 +167,29 @@ enum ImagePreferenceProfileService {
         return min(max(rating, 1), 5)
     }
 
+    static func referencePreferenceScore(forImagePath imagePath: String) -> Double? {
+        guard let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: imagePath),
+              metadata.isRejected == false else { return nil }
+        let rating = metadata.rating.map { Double(min(max($0, 1), 5)) } ?? 0
+        if metadata.isLiked {
+            return max(5.5, rating + 0.75)
+        }
+        guard rating > 0 else { return nil }
+        return rating
+    }
+
+    static func referenceUpdatedAt(forImagePath imagePath: String) -> Date? {
+        ImageLibraryMetadataSidecarService.load(forImagePath: imagePath)?.updatedAt
+            ?? (try? FileManager.default.attributesOfItem(atPath: imagePath)[.modificationDate] as? Date)
+    }
+
     private struct Sample: Sendable, Hashable {
         var resolvedPath: String
         var projectRelativePath: String?
         var role: ImageLibrarySemanticRole
         var rating: Int?
         var isRejected: Bool
+        var isLiked: Bool
         var notes: String
         var updatedAt: Date
         var analysisSummary: String?
@@ -238,6 +256,7 @@ enum ImagePreferenceProfileService {
                 role: role,
                 rating: metadata.rating,
                 isRejected: metadata.isRejected,
+                isLiked: metadata.isLiked,
                 notes: notes,
                 updatedAt: metadata.updatedAt ?? Date.distantPast,
                 analysisSummary: lookup.metadata?.summary,
@@ -277,7 +296,7 @@ enum ImagePreferenceProfileService {
                 version: ImagePreferenceProfileArtifact.currentSchemaVersion,
                 notes: [
                     "Manual review scope wins over source folder: canvas images tagged P become place samples; canvas images tagged C become character/costume samples.",
-                    "Accepted visual centroids use non-rejected images rated 3★ or higher; rejected or 1–2★ images build the avoid centroid.",
+                    "Accepted visual centroids use non-rejected liked images plus non-rejected images rated 3★ or higher; rejected or 1–2★ images build the avoid centroid.",
                     "Rejected image pixels are never positive references, but their notes still become prompt-memory clauses.",
                     "Prompt builders should combine relevant promptMemory clauses with the vector preferenceDirection when ranking future references."
                 ]
@@ -299,12 +318,12 @@ enum ImagePreferenceProfileService {
             let polarity: ImagePreferencePromptMemoryClause.Polarity
             if sample.isRejected || (sample.rating ?? 3) <= 2 {
                 polarity = sample.notes.localizedCaseInsensitiveContains("i like") ? .mixed : .avoid
-            } else if (sample.rating ?? 0) >= 4 {
+            } else if sample.isLiked || (sample.rating ?? 0) >= 4 {
                 polarity = sample.notes.localizedCaseInsensitiveContains("but") ? .mixed : .prefer
             } else {
                 polarity = .mixed
             }
-            let ratingWeight = Double(sample.rating ?? 3)
+            let ratingWeight = sample.isLiked ? 5.5 : Double(sample.rating ?? 3)
             let rejectionWeight = sample.isRejected ? 3.0 : 0.0
             let noteWeight = min(3.0, Double(sample.notes.count) / 180.0)
             let text = sample.notes
@@ -416,8 +435,8 @@ enum ImagePreferenceProfileService {
 
     private static func examples(from samples: [Sample], accepted: Bool) -> [ImagePreferenceExample] {
         samples.sorted { lhs, rhs in
-            let lhsScore = accepted ? (lhs.rating ?? 0) : ((lhs.isRejected ? 10 : 0) + (5 - (lhs.rating ?? 3)))
-            let rhsScore = accepted ? (rhs.rating ?? 0) : ((rhs.isRejected ? 10 : 0) + (5 - (rhs.rating ?? 3)))
+            let lhsScore = accepted ? ((lhs.isLiked ? 10 : 0) + (lhs.rating ?? 0)) : ((lhs.isRejected ? 10 : 0) + (5 - (lhs.rating ?? 3)))
+            let rhsScore = accepted ? ((rhs.isLiked ? 10 : 0) + (rhs.rating ?? 0)) : ((rhs.isRejected ? 10 : 0) + (5 - (rhs.rating ?? 3)))
             if lhsScore != rhsScore { return lhsScore > rhsScore }
             return lhs.updatedAt > rhs.updatedAt
         }
@@ -428,6 +447,7 @@ enum ImagePreferenceProfileService {
                 projectRelativePath: sample.projectRelativePath,
                 rating: sample.rating,
                 isRejected: sample.isRejected,
+                isLiked: sample.isLiked,
                 notes: sample.notes,
                 analysisSummary: sample.analysisSummary,
                 linkKinds: sample.linkKinds
@@ -502,7 +522,7 @@ enum ImagePreferenceProfileService {
     }
 
     private static func isAccepted(_ sample: Sample) -> Bool {
-        !sample.isRejected && (sample.rating ?? 0) >= 3
+        !sample.isRejected && (sample.isLiked || (sample.rating ?? 0) >= 3)
     }
 
     private static func isRejectedOrLowRated(_ sample: Sample) -> Bool {

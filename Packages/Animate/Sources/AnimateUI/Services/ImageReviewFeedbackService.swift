@@ -31,6 +31,7 @@ struct ImageReviewFeedbackArtifact: Codable, Sendable, Hashable, Identifiable {
     var shotID: UUID?
     var rating: Int?
     var isRejected: Bool
+    var isLiked: Bool?
     var notes: String
     var updatedAt: Date
     var analysis: ImageReviewFeedbackAnalysisSnapshot?
@@ -79,6 +80,7 @@ enum ImageReviewFeedbackService {
                 shotID: record.shotID,
                 rating: metadata.rating,
                 isRejected: metadata.isRejected,
+                isLiked: metadata.isLiked,
                 notes: metadata.notes,
                 updatedAt: metadata.updatedAt ?? Date(),
                 analysis: snapshot
@@ -127,7 +129,7 @@ enum ImageReviewFeedbackService {
         artifacts.compactMap { artifact in
             let notes = artifact.notes.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !notes.isEmpty else { return nil }
-            let verdict = artifact.isRejected ? "Rejected image feedback" : "Review feedback"
+            let verdict = artifact.isRejected ? "Rejected image feedback" : ((artifact.isLiked ?? false) ? "Liked image feedback" : "Review feedback")
             let scope = artifact.semanticRole.map { " [review scope: \($0.rawValue)]" } ?? ""
             return "\(verdict)\(scope) from \(artifact.originLabel): \(notes)"
         }

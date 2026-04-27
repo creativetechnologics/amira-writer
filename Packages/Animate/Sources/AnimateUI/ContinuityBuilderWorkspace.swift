@@ -41,12 +41,14 @@ private struct ContinuityBuilderWorkspaceContent: View {
     @State private var statusMessage = "Review mode is active. Submit feedback to generate the next 1K continuity candidate."
     @State private var isLoading = false
     @State private var generatingTurnIDs: Set<UUID> = []
+    @State private var isPrebuffering = false
     @State private var dictationSession = ImageReviewDictationSession()
 
     private var projectRoot: URL? { Self.projectRoot(from: store.fileOWPURL ?? store.owpURL) }
     private var activeTurn: ContinuityBuilderTurn? { session?.activeTurn }
     private var projectTitle: String { projectRoot?.lastPathComponent ?? "Untitled Opera" }
     private var hasStarted: Bool { session?.hasStarted == true }
+    private let maxBufferedContinuityImages = 5
 
     var body: some View {
         Group {
@@ -277,8 +279,8 @@ private struct ContinuityBuilderWorkspaceContent: View {
         guard !turn.candidates.isEmpty else {
             return AnyView(noCandidateCard(turn))
         }
-        let visibleCandidates = Array(turn.candidates.prefix(2))
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: max(1, min(2, visibleCandidates.count)))
+        let visibleCandidates = Array(turn.candidates.prefix(1))
+        let columns = [GridItem(.flexible(), spacing: 12)]
         return AnyView(VStack(alignment: .leading, spacing: 10) {
             if !turnHasGeneratedCandidates(turn) {
                 Label("Reference inputs for the next generation — not regenerated results yet.", systemImage: "info.circle")
@@ -287,17 +289,10 @@ private struct ContinuityBuilderWorkspaceContent: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
                     .background(OperaChromeTheme.selection, in: Capsule())
-            } else if visibleCandidates.count == 2 {
-                Label("A/B comparison: choose the better candidate before submitting feedback.", systemImage: "rectangle.split.2x1")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(OperaChromeTheme.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(OperaChromeTheme.selection, in: Capsule())
             }
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(visibleCandidates) { candidate in
-                    candidateCard(candidate, showSelection: visibleCandidates.count > 1)
+                    candidateCard(candidate, showSelection: false)
                 }
             }
         })
@@ -416,12 +411,22 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 Text("Closeness: \(Int(closenessPercent))%")
                     .font(.system(size: 12, weight: .medium))
                 Slider(value: $closenessPercent, in: 0...100, step: 5)
-                Button("Reject Image") { reviewSelectedImage(rejected: true, rating: nil, advance: true) }
+                Button {
+                    reviewSelectedImage(rejected: true, liked: false, rating: nil, closenessOverride: 0, advance: true)
+                } label: {
+                    Label("Reject", systemImage: "hand.thumbsdown.fill")
+                }
                     .disabled(selectedCandidate(in: turn)?.imagePath == nil)
                     .keyboardShortcut("/", modifiers: [])
-                Button("5★ Image") { reviewSelectedImage(rejected: false, rating: 5, advance: true) }
+                Button {
+                    reviewSelectedImage(rejected: false, liked: true, rating: nil, closenessOverride: 100, advance: true)
+                } label: {
+                    Label("Like", systemImage: "hand.thumbsup.fill")
+                }
                     .disabled(selectedCandidate(in: turn)?.imagePath == nil)
                     .keyboardShortcut(";", modifiers: [])
+                Button("5★") { reviewSelectedImage(rejected: false, liked: true, rating: 5, closenessOverride: 100, advance: false) }
+                    .disabled(selectedCandidate(in: turn)?.imagePath == nil)
                 Button(submitButtonTitle(for: turn)) { submit(turn) }
                     .keyboardShortcut(.return, modifiers: [])
                 Button(generateButtonTitle(for: turn)) {
@@ -549,27 +554,37 @@ private struct ContinuityBuilderWorkspaceContent: View {
         case .next:
             submit(turn)
         case .reject:
-            reviewSelectedImage(rejected: true, rating: nil, advance: true)
+            reviewSelectedImage(rejected: true, liked: false, rating: nil, closenessOverride: 0, advance: true)
         case .fiveStars:
-            reviewSelectedImage(rejected: false, rating: 5, advance: true)
+            reviewSelectedImage(rejected: false, liked: true, rating: 5, closenessOverride: 100, advance: true)
         case .setRating(let rating):
-            reviewSelectedImage(rejected: false, rating: rating, advance: false)
+            reviewSelectedImage(rejected: false, liked: rating.map { $0 >= 4 } ?? false, rating: rating, closenessOverride: nil, advance: false)
         }
         return true
     }
 
-    private func reviewSelectedImage(rejected: Bool, rating: Int?, advance: Bool) {
+    private func reviewSelectedImage(
+        rejected: Bool,
+        liked: Bool,
+        rating: Int?,
+        closenessOverride: Int?,
+        advance: Bool
+    ) {
         guard let currentTurn = activeTurn,
               let candidate = selectedCandidate(in: currentTurn),
               let path = candidate.imagePath else {
             statusMessage = "No displayed image is selected for review."
             return
         }
+        if let closenessOverride {
+            closenessPercent = Double(closenessOverride)
+        }
         store.setImageLibraryRating(rating, for: path)
+        store.setImageLibraryLiked(liked && !rejected, for: path)
         store.setImageLibraryRejected(rejected, for: path)
         statusMessage = rejected
             ? "Marked displayed Continuity Builder image rejected; it will not be reused as a future continuity reference."
-            : "Marked displayed Continuity Builder image 5★ and available as a strong future continuity reference."
+            : "Marked displayed Continuity Builder image liked and available as a strong future continuity reference."
         if advance {
             submit(currentTurn)
         }
@@ -584,6 +599,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
         notesText = ""
         statusMessage = statusMessage(for: loaded)
         isLoading = false
+        schedulePrebufferIfUseful()
     }
 
     private func beginContinuityStream() {
@@ -616,6 +632,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 statusMessage = "Could not begin Continuity Builder: \(error.localizedDescription)"
             }
             isLoading = false
+            schedulePrebufferIfUseful()
         }
     }
 
@@ -653,24 +670,30 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 notesText = ""
                 closenessPercent = 55
                 if let nextTurn = updated.activeTurn {
-                    generatingTurnIDs.insert(nextTurn.id)
-                    statusMessage = "Saved feedback. Updating continuity memory, then Gemini will generate the next 1K image…"
+                    statusMessage = "Saved feedback. Updating continuity memory…"
                     await refreshContinuityRules(projectRoot: projectRoot)
-                    statusMessage = "Continuity memory updated. Gemini is generating the next 1K continuity image now…"
-                    let generation = await generateAndApply(session: updated, turn: nextTurn, count: generationCount(for: nextTurn))
-                    generatingTurnIDs.remove(nextTurn.id)
-                    session = generation.session
-                    selectedLabel = generation.session.activeTurn?.candidates.first?.label
-                    if generation.ok {
-                        let completed = generation.records.filter { $0.status == "completed" }.count
-                        statusMessage = completed == 1
-                            ? "Generated the next 1K continuity image from your latest feedback."
-                            : "Generated \(completed) A/B continuity candidates from your latest feedback."
-                    } else {
-                        statusMessage = (generation.blockers.first?.message ?? generation.records.first(where: { $0.errorMessage != nil })?.errorMessage)
-                            ?? "Feedback was saved, but the next continuity image did not generate."
+                    if turnHasGeneratedCandidates(nextTurn) {
                         session = updated
-                        selectedLabel = updated.activeTurn?.candidates.first?.label
+                        selectedLabel = nextTurn.candidates.first?.label
+                        statusMessage = "Continuity memory updated. Showing the next prebuffered 1K image while Gemini prepares another independent candidate."
+                    } else {
+                        generatingTurnIDs.insert(nextTurn.id)
+                        statusMessage = "Continuity memory updated. Gemini is generating the next 1K continuity image now…"
+                        let generation = await generateAndApply(session: updated, turn: nextTurn, count: generationCount(for: nextTurn))
+                        generatingTurnIDs.remove(nextTurn.id)
+                        session = generation.session
+                        selectedLabel = generation.session.activeTurn?.candidates.first?.label
+                        if generation.ok {
+                            let completed = generation.records.filter { $0.status == "completed" }.count
+                            statusMessage = completed == 1
+                                ? "Generated the next 1K continuity image from your latest feedback."
+                                : "Generated \(completed) buffered 1K continuity images."
+                        } else {
+                            statusMessage = (generation.blockers.first?.message ?? generation.records.first(where: { $0.errorMessage != nil })?.errorMessage)
+                                ?? "Feedback was saved, but the next continuity image did not generate."
+                            session = updated
+                            selectedLabel = updated.activeTurn?.candidates.first?.label
+                        }
                     }
                 }
                 if let feedback = updated.feedback.first(where: { $0.turnID == turn.id }) {
@@ -698,6 +721,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 generatingTurnIDs.remove(activeID)
             }
             isLoading = false
+            schedulePrebufferIfUseful()
         }
     }
 
@@ -732,9 +756,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
         let count = generationCount(for: turn)
         isLoading = true
         generatingTurnIDs.insert(turn.id)
-        statusMessage = count == 1
-            ? "Gemini is generating one smart 1K Continuity Builder candidate…"
-            : "Gemini is generating an A/B pair of 1K Continuity Builder candidates…"
+        statusMessage = "Gemini is generating one smart 1K Continuity Builder candidate…"
         Task {
             let result = await generateAndApply(session: currentSession, turn: turn, count: count)
             generatingTurnIDs.remove(turn.id)
@@ -743,6 +765,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
             isLoading = false
             if result.ok {
                 statusMessage = "Generated \(result.records.filter { $0.status == "completed" }.count) Continuity Builder candidate(s); immediate Image Intelligence analysis is queued/running."
+                schedulePrebufferIfUseful()
             } else {
                 statusMessage = (result.blockers.first?.message ?? result.records.first(where: { $0.errorMessage != nil })?.errorMessage) ?? "Continuity generation did not complete."
             }
@@ -750,8 +773,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
     }
 
     private func generateButtonTitle(for turn: ContinuityBuilderTurn) -> String {
-        let count = generationCount(for: turn)
-        return count == 1 ? "Generate 1K" : "Generate A/B 1K"
+        "Generate 1K"
     }
 
     private func submitButtonTitle(for turn: ContinuityBuilderTurn) -> String {
@@ -759,11 +781,54 @@ private struct ContinuityBuilderWorkspaceContent: View {
     }
 
     private func generationCount(for turn: ContinuityBuilderTurn) -> Int {
-        let compareText = [turn.title, turn.question, turn.promptSeed].joined(separator: " ").lowercased()
-        if compareText.contains("a/b") || compareText.contains("which image is better") || compareText.contains("choose the better") {
-            return 2
-        }
         return 1
+    }
+
+    private func schedulePrebufferIfUseful() {
+        guard !isPrebuffering,
+              !isLoading,
+              let projectRoot,
+              let currentSession = session,
+              let activeTurn = currentSession.activeTurn,
+              turnHasGeneratedCandidates(activeTurn) else { return }
+        let futureGeneratedCount = currentSession.turns
+            .dropFirst(currentSession.activeTurnIndex + 1)
+            .filter { turnHasGeneratedCandidates($0) || generatingTurnIDs.contains($0.id) }
+            .count
+        guard futureGeneratedCount < maxBufferedContinuityImages else { return }
+
+        isPrebuffering = true
+        Task {
+            var shouldContinue = false
+            do {
+                let prepared = try await ContinuityBuilderService(store: store).ensureBufferedTurn(
+                    session: currentSession,
+                    projectRoot: projectRoot,
+                    maxBuffered: maxBufferedContinuityImages
+                )
+                session = prepared
+                guard let pending = prepared.turns
+                    .dropFirst(prepared.activeTurnIndex + 1)
+                    .first(where: { $0.generationStatus == "ready_for_generation" }) else {
+                    isPrebuffering = false
+                    return
+                }
+                generatingTurnIDs.insert(pending.id)
+                let result = await generateAndApply(session: prepared, turn: pending, count: 1)
+                generatingTurnIDs.remove(pending.id)
+                if result.ok {
+                    session = result.session
+                    shouldContinue = true
+                }
+            } catch {
+                // Keep the current review flow silent; the title-bar Gemini pill
+                // already exposes provider activity and failures for generated jobs.
+            }
+            isPrebuffering = false
+            if shouldContinue {
+                schedulePrebufferIfUseful()
+            }
+        }
     }
 
     private func generateAndApply(
@@ -790,7 +855,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 projectRoot: projectRoot,
                 mode: "execute",
                 maxCostUSD: 0.50,
-                candidateCount: min(max(count, 1), 2),
+                candidateCount: 1,
                 model: store.selectedGeminiModel,
                 imageSize: "1K",
                 aspectRatio: "4:3",

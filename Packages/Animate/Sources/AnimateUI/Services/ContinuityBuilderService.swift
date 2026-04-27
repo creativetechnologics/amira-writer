@@ -67,11 +67,17 @@ struct ContinuityBuilderService {
         updated.feedback.removeAll { $0.turnID == turn.id }
         updated.feedback.append(feedback)
         let currentIndex = updated.turns.firstIndex(where: { $0.id == turn.id }) ?? updated.activeTurnIndex
-        if updated.turns.indices.contains(currentIndex) {
-            updated.turns = Array(updated.turns.prefix(currentIndex + 1))
-        }
-        updated.turns.append(nextStreamTurn(after: turn, feedback: feedback, projectRoot: projectRoot))
-        updated.activeTurnIndex = max(updated.turns.count - 1, 0)
+        let completedPrefix = updated.turns.indices.contains(currentIndex)
+            ? Array(updated.turns.prefix(currentIndex + 1))
+            : updated.turns
+        let futureTurns = updated.turns.indices.contains(currentIndex)
+            ? Array(updated.turns.dropFirst(currentIndex + 1))
+            : []
+        let bufferedChoice = Self.selectBufferedTurn(from: futureTurns, after: turn, feedback: feedback)
+        let nextTurn = bufferedChoice ?? nextStreamTurn(after: turn, feedback: feedback, projectRoot: projectRoot)
+        let remainingFuture = futureTurns.filter { $0.id != nextTurn.id }
+        updated.turns = completedPrefix + [nextTurn] + Array(remainingFuture.prefix(4))
+        updated.activeTurnIndex = completedPrefix.count
         updated.updatedAt = Date()
         try writeFeedback(feedback, sessionID: session.id, projectRoot: projectRoot)
         try writeSession(updated, projectRoot: projectRoot)
@@ -90,6 +96,59 @@ struct ContinuityBuilderService {
     func writeSessionForGeneration(_ session: ContinuityBuilderSession, projectRoot: URL) throws {
         try writeSession(session, projectRoot: projectRoot)
         try writeIndex(projectRoot: projectRoot)
+    }
+
+    func mergeGeneratedCandidates(
+        sessionID: UUID,
+        fallbackSession: ContinuityBuilderSession,
+        turnID: UUID,
+        generatedCandidates: [ContinuityBuilderCandidate],
+        projectRoot: URL
+    ) throws -> ContinuityBuilderSession {
+        var latest = readSession(id: sessionID.uuidString, projectRoot: projectRoot) ?? fallbackSession
+        guard let turnIndex = latest.turns.firstIndex(where: { $0.id == turnID }) else {
+            return latest
+        }
+        latest.turns[turnIndex].candidates = generatedCandidates
+        latest.turns[turnIndex].requiresPaidGeneration = false
+        latest.turns[turnIndex].generationStatus = "generated_candidates_ready_for_feedback"
+        latest.updatedAt = Date()
+        try writeSession(latest, projectRoot: projectRoot)
+        try writeIndex(projectRoot: projectRoot)
+        return Self.runtimeSession(latest, projectRoot: projectRoot)
+    }
+
+    func ensureBufferedTurn(
+        session: ContinuityBuilderSession,
+        projectRoot: URL,
+        maxBuffered: Int
+    ) async throws -> ContinuityBuilderSession {
+        guard session.hasStarted,
+              let activeTurn = session.activeTurn else { return session }
+        let futureTurns = Array(session.turns.dropFirst(session.activeTurnIndex + 1))
+        guard futureTurns.count < maxBuffered else { return session }
+        if futureTurns.contains(where: { $0.generationStatus == "ready_for_generation" }) {
+            return session
+        }
+        let categoriesAlreadyBuffered = Set(futureTurns.map(\.category))
+        let templates = await seedTurns(projectRoot: projectRoot)
+        guard let category = Self.bufferCategory(after: activeTurn.category, excluding: categoriesAlreadyBuffered),
+              var buffered = templates.first(where: { $0.category == category }) else { return session }
+        buffered.id = UUID()
+        buffered.createdAt = Date()
+        buffered.title = "Continuity stream: \(buffered.category.displayName)"
+        buffered.priorityReason = "Pre-buffered in the background from an independent continuity lane so the next image can be ready without waiting."
+        buffered.requiresPaidGeneration = false
+        buffered.generationStatus = "ready_for_generation"
+
+        var updated = session
+        updated.turns.append(buffered)
+        let activePrefix = Array(updated.turns.prefix(updated.activeTurnIndex + 1))
+        let cappedFuture = Array(updated.turns.dropFirst(updated.activeTurnIndex + 1).prefix(maxBuffered))
+        updated.turns = activePrefix + cappedFuture
+        updated.updatedAt = Date()
+        try writeSession(updated, projectRoot: projectRoot)
+        return Self.runtimeSession(updated, projectRoot: projectRoot)
     }
 
     static func relevantFeedback(projectRoot: URL, query: String, limit: Int = 6) -> [ContinuityBuilderFeedback] {
@@ -245,6 +304,22 @@ struct ContinuityBuilderService {
         return next
     }
 
+    nonisolated private static func bufferCategory(
+        after category: ContinuityBuilderCategory,
+        excluding excluded: Set<ContinuityBuilderCategory>
+    ) -> ContinuityBuilderCategory? {
+        let candidates: [ContinuityBuilderCategory]
+        switch category {
+        case .worldGeography, .placeTopography, .landmarkBridge, .vehicleProp, .sceneContinuity:
+            candidates = [.characterIdentity, .costumeContinuity, .styleContinuity]
+        case .characterIdentity, .costumeContinuity:
+            candidates = [.landmarkBridge, .placeTopography, .worldGeography, .styleContinuity]
+        case .styleContinuity:
+            candidates = [.worldGeography, .characterIdentity, .landmarkBridge, .costumeContinuity]
+        }
+        return candidates.first { !excluded.contains($0) }
+    }
+
     nonisolated private static func nextCategory(after turn: ContinuityBuilderTurn, feedback: ContinuityBuilderFeedback) -> ContinuityBuilderCategory {
         let haystack = ([feedback.notes] + feedback.interpretedFocus).joined(separator: " ").lowercased()
         let categoryMatches: [(ContinuityBuilderCategory, [String])] = [
@@ -270,6 +345,34 @@ struct ContinuityBuilderService {
         case .vehicleProp: return .styleContinuity
         case .sceneContinuity: return .styleContinuity
         case .styleContinuity: return .worldGeography
+        }
+    }
+
+    nonisolated private static func selectBufferedTurn(
+        from futureTurns: [ContinuityBuilderTurn],
+        after turn: ContinuityBuilderTurn,
+        feedback: ContinuityBuilderFeedback
+    ) -> ContinuityBuilderTurn? {
+        let desiredNext = nextCategory(after: turn, feedback: feedback)
+        let currentRole = semanticLane(for: turn.category)
+        let desiredRole = semanticLane(for: desiredNext)
+        return futureTurns
+            .filter { $0.generationStatus == "generated_candidates_ready_for_feedback" }
+            .sorted { lhs, rhs in lhs.createdAt < rhs.createdAt }
+            .first { buffered in
+                let bufferedRole = semanticLane(for: buffered.category)
+                return buffered.category == desiredNext || bufferedRole != currentRole || bufferedRole != desiredRole
+            }
+    }
+
+    nonisolated private static func semanticLane(for category: ContinuityBuilderCategory) -> ImageLibrarySemanticRole? {
+        switch category {
+        case .worldGeography, .placeTopography, .landmarkBridge, .vehicleProp, .sceneContinuity:
+            return .place
+        case .characterIdentity, .costumeContinuity:
+            return .character
+        case .styleContinuity:
+            return nil
         }
     }
 
@@ -371,7 +474,8 @@ struct ContinuityBuilderService {
     nonisolated private static func acceptedExistingPath(_ rawPaths: [String?], projectRoot: URL) -> String? {
         rawPaths.compactMap { acceptedExistingRatedPath($0, projectRoot: projectRoot) }
             .sorted { lhs, rhs in
-                if lhs.rating != rhs.rating { return lhs.rating > rhs.rating }
+                if lhs.score != rhs.score { return lhs.score > rhs.score }
+                if lhs.updatedAt != rhs.updatedAt { return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast) }
                 return lhs.path < rhs.path
             }
             .map(\.path)
@@ -382,11 +486,11 @@ struct ContinuityBuilderService {
         acceptedExistingRatedPath(rawPath, projectRoot: projectRoot)?.path
     }
 
-    nonisolated private static func acceptedExistingRatedPath(_ rawPath: String?, projectRoot: URL) -> (path: String, rating: Int)? {
+    nonisolated private static func acceptedExistingRatedPath(_ rawPath: String?, projectRoot: URL) -> (path: String, score: Double, updatedAt: Date?)? {
         guard let path = resolvedPath(rawPath, projectRoot: projectRoot),
               FileManager.default.fileExists(atPath: path),
-              let rating = referenceRating(forImagePath: path) else { return nil }
-        return (path, rating)
+              let score = referencePreferenceScore(forImagePath: path) else { return nil }
+        return (path, score, ImagePreferenceProfileService.referenceUpdatedAt(forImagePath: path))
     }
 
     nonisolated static func isRejectedImagePath(_ path: String) -> Bool {
@@ -394,26 +498,27 @@ struct ContinuityBuilderService {
     }
 
     nonisolated static func referenceRating(forImagePath path: String) -> Int? {
-        guard let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path),
-              metadata.isRejected == false,
-              let rating = metadata.rating,
-              rating > 0 else { return nil }
-        return min(max(rating, 1), 5)
+        ImagePreferenceProfileService.referenceRating(forImagePath: path)
+    }
+
+    nonisolated static func referencePreferenceScore(forImagePath path: String) -> Double? {
+        ImagePreferenceProfileService.referencePreferenceScore(forImagePath: path)
     }
 
     nonisolated static func isReferenceEligibleImagePath(_ path: String) -> Bool {
-        referenceRating(forImagePath: path) != nil
+        referencePreferenceScore(forImagePath: path) != nil
     }
 
     nonisolated private static func rankedRatedCandidates(_ candidates: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
         candidates
-            .compactMap { candidate -> (ContinuityBuilderCandidate, Int)? in
+            .compactMap { candidate -> (ContinuityBuilderCandidate, Double, Date?)? in
                 guard let path = candidate.imagePath,
-                      let rating = referenceRating(forImagePath: path) else { return nil }
-                return (candidate, rating)
+                      let score = referencePreferenceScore(forImagePath: path) else { return nil }
+                return (candidate, score, ImagePreferenceProfileService.referenceUpdatedAt(forImagePath: path))
             }
             .sorted { lhs, rhs in
                 if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+                if lhs.2 != rhs.2 { return (lhs.2 ?? .distantPast) > (rhs.2 ?? .distantPast) }
                 return lhs.0.title.localizedCaseInsensitiveCompare(rhs.0.title) == .orderedAscending
             }
             .map(\.0)

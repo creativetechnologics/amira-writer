@@ -101,6 +101,7 @@ struct ProjectImageRecord: Identifiable, Hashable, Sendable {
     let sizeBytes: Int64?
     let rating: Int?
     let isRejected: Bool
+    let isLiked: Bool
     let notes: String
     let supportsLibraryCuration: Bool
 }
@@ -785,6 +786,7 @@ struct AllProjectImagesPageView: View {
                                 sourceSystemImage: record.source.systemImage,
                                 isSelected: state.selectedRecordID == record.id,
                                 isRejected: record.isRejected,
+                                isLiked: record.isLiked,
                                 hasNotes: !record.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                                 rating: record.rating,
                                 actions: UnifiedImageActions(
@@ -814,6 +816,10 @@ struct AllProjectImagesPageView: View {
                                         updateRating(rating, for: record)
                                     },
                                     currentRating: record.rating,
+                                    onToggleLiked: {
+                                        toggleLiked(for: record)
+                                    },
+                                    isLiked: record.isLiked,
                                     onToggleRejected: {
                                         toggleRejected(for: record)
                                     },
@@ -920,6 +926,7 @@ struct AllProjectImagesPageView: View {
             sourceSystemImage: record.source.systemImage,
             isSelected: isSelected,
             isRejected: record.isRejected,
+            isLiked: record.isLiked,
             hasNotes: hasNotes,
             rating: record.rating,
             showsSelectionCheckmark: selectedCount > 1,
@@ -956,6 +963,10 @@ struct AllProjectImagesPageView: View {
                     updateRating(rating, for: record)
                 },
                 currentRating: record.rating,
+                onToggleLiked: {
+                    toggleLiked(for: record)
+                },
+                isLiked: record.isLiked,
                 onToggleRejected: {
                     toggleRejected(for: record)
                 },
@@ -1008,7 +1019,7 @@ struct AllProjectImagesPageView: View {
 
     private func toggleCharacterTag(_ name: String, for record: ProjectImageRecord) {
         var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: record.resolvedPath)
-            ?? ImageLibraryReviewMetadata(rating: record.rating, isRejected: record.isRejected, notes: record.notes, updatedAt: nil)
+            ?? ImageLibraryReviewMetadata(rating: record.rating, isRejected: record.isRejected, isLiked: record.isLiked, notes: record.notes, updatedAt: nil)
         if metadata.characterTags.contains(name) {
             metadata.characterTags.removeAll { $0 == name }
         } else {
@@ -1048,9 +1059,31 @@ struct AllProjectImagesPageView: View {
                 record: target,
                 rating: rating,
                 isRejected: target.isRejected,
+                isLiked: target.isLiked,
                 notes: target.notes
             )
-            state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+            state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, isLiked: updated.isLiked, notes: updated.notes)
+        }
+    }
+
+    private func toggleLiked(for record: ProjectImageRecord) {
+        let targetLikedState = !record.isLiked
+        for target in actionRecords(anchor: record) {
+            let updated = persistReviewUpdate(
+                store: store,
+                record: target,
+                rating: target.rating,
+                isRejected: targetLikedState ? false : target.isRejected,
+                isLiked: targetLikedState,
+                notes: target.notes
+            )
+            state.updateReviewMetadata(
+                for: target.id,
+                rating: updated.rating,
+                isRejected: updated.isRejected,
+                isLiked: updated.isLiked,
+                notes: updated.notes
+            )
         }
     }
 
@@ -1062,6 +1095,7 @@ struct AllProjectImagesPageView: View {
                 record: target,
                 rating: target.rating,
                 isRejected: target.isRejected,
+                isLiked: target.isLiked,
                 notes: target.notes,
                 semanticRole: semanticRole
             )
@@ -1069,6 +1103,7 @@ struct AllProjectImagesPageView: View {
                 for: target.id,
                 rating: updated.rating,
                 isRejected: updated.isRejected,
+                isLiked: updated.isLiked,
                 notes: updated.notes,
                 semanticRole: updated.semanticRole
             )
@@ -1085,9 +1120,10 @@ struct AllProjectImagesPageView: View {
                 record: target,
                 rating: target.rating,
                 isRejected: targetRejectedState,
+                isLiked: targetRejectedState ? false : target.isLiked,
                 notes: target.notes
             )
-            state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+            state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, isLiked: updated.isLiked, notes: updated.notes)
         }
     }
 
@@ -1338,9 +1374,10 @@ struct AllProjectImagesPageView: View {
             record: record,
             rating: record.rating,
             isRejected: true,
+            isLiked: false,
             notes: record.notes
         )
-        state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+        state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, isLiked: updated.isLiked, notes: updated.notes)
         state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
         return .handled
     }
@@ -1352,9 +1389,10 @@ struct AllProjectImagesPageView: View {
             record: record,
             rating: 5,
             isRejected: false,
+            isLiked: true,
             notes: record.notes
         )
-        state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
+        state.updateReviewMetadata(for: record.id, rating: updated.rating, isRejected: updated.isRejected, isLiked: updated.isLiked, notes: updated.notes)
         state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
         return .handled
     }

@@ -63,6 +63,8 @@ struct UnifiedImageActions {
     var extraGeminiGenerateEntries: [UnifiedGeminiGenerateEntry] = []
     var onSetRating: ((Int?) -> Void)? = nil
     var currentRating: Int? = nil
+    var onToggleLiked: (() -> Void)? = nil
+    var isLiked: Bool = false
     var onToggleRejected: (() -> Void)? = nil
     var isRejected: Bool = false
     /// Called when the user wants to remove this item from the current
@@ -118,6 +120,7 @@ struct UnifiedImageContextMenuContent: View {
             promptSection
             fileSection
             geminiSection
+            likeSection
             ratingSection
             rejectionSection
             trashSection
@@ -268,6 +271,19 @@ struct UnifiedImageContextMenuContent: View {
     }
 
     @ViewBuilder
+    private var likeSection: some View {
+        if let onToggleLiked = actions.onToggleLiked {
+            Divider()
+            Button(
+                actions.isLiked ? "Unlike" : "Like",
+                systemImage: actions.isLiked ? "hand.thumbsup.fill" : "hand.thumbsup"
+            ) {
+                onToggleLiked()
+            }
+        }
+    }
+
+    @ViewBuilder
     private var ratingSection: some View {
         if let onSetRating = actions.onSetRating {
             Divider()
@@ -297,8 +313,8 @@ struct UnifiedImageContextMenuContent: View {
     private var rejectionSection: some View {
         if let onToggleRejected = actions.onToggleRejected {
             Button(
-                actions.isRejected ? "Show (Unreject)" : "Reject (Hide)",
-                systemImage: actions.isRejected ? "eye" : "eye.slash"
+                actions.isRejected ? "Show (Unreject)" : "Reject (Thumbs Down)",
+                systemImage: actions.isRejected ? "hand.thumbsdown.fill" : "hand.thumbsdown"
             ) {
                 onToggleRejected()
             }
