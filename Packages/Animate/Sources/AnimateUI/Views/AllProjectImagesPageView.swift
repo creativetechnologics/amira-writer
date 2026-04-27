@@ -638,7 +638,7 @@ struct AllProjectImagesPageView: View {
                 .focused($filmstripKeyboardFocused)
                 .focusEffectDisabled()
                 .onTapGesture {
-                    filmstripKeyboardFocused = true
+                    claimGridKeyboardFocus()
                 }
                 .onKeyPress(.space) {
                     toggleGridQuickLook()
@@ -818,8 +818,8 @@ struct AllProjectImagesPageView: View {
                                     }
                                 ),
                                 onTap: {
+                                    claimGridKeyboardFocus()
                                     state.selectRecord(record, in: records, modifiers: .none)
-                                    filmstripKeyboardFocused = true
                                 }
                             )
                             .onDrag {
@@ -840,7 +840,7 @@ struct AllProjectImagesPageView: View {
                 .focused($filmstripKeyboardFocused)
                 .focusEffectDisabled()
                 .onTapGesture {
-                    filmstripKeyboardFocused = true
+                    claimGridKeyboardFocus()
                 }
                 .onKeyPress(.leftArrow) {
                     state.selectAdjacentRecord(in: records, delta: -1)
@@ -956,7 +956,7 @@ struct AllProjectImagesPageView: View {
                 }
             ),
             onTap: {
-                filmstripKeyboardFocused = true
+                claimGridKeyboardFocus()
                 let flags = NSEvent.modifierFlags
                 let modifiers: GalleryClickEvent.Modifiers = flags.contains(.command) ? .command : (flags.contains(.shift) ? .shift : .none)
                 state.selectRecord(record, in: records, modifiers: modifiers)
@@ -1223,6 +1223,11 @@ struct AllProjectImagesPageView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .background(.ultraThinMaterial, in: Capsule())
+    }
+
+    private func claimGridKeyboardFocus() {
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        filmstripKeyboardFocused = true
     }
 
     private func navigateGrid(_ direction: UnifiedGridNavigation.Direction) -> KeyPress.Result {

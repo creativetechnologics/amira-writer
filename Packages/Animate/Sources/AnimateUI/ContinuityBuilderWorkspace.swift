@@ -145,7 +145,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
             OperaChromePaneHeader(
                 eyebrow: "CONTINUITY",
                 title: "Builder",
-                subtitle: session.map { "\($0.turns.count) prompts • \($0.feedback.count) notes" } ?? "Loading…"
+                subtitle: session.map { "One stream • prompt #\($0.activeTurnIndex + 1) • \($0.feedback.count) notes" } ?? "Loading…"
             ) {
                 OperaChromeActionButton(systemImage: "sidebar.left") {
                     withAnimation(.easeInOut(duration: 0.2)) { sidebarVisible = false }
@@ -153,33 +153,35 @@ private struct ContinuityBuilderWorkspaceContent: View {
             }
         } content: {
             ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Continuous stream")
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("One continuous stream")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(OperaChromeTheme.textSecondary)
-                    ForEach(Array((session?.turns ?? []).enumerated()), id: \.element.id) { index, turn in
-                        Button {
-                            jump(to: index)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(index == session?.activeTurnIndex ? OperaChromeTheme.accent : OperaChromeTheme.stroke)
-                                    .frame(width: 8, height: 8)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(turn.title)
-                                        .font(.system(size: 12, weight: index == session?.activeTurnIndex ? .semibold : .regular))
-                                        .foregroundStyle(OperaChromeTheme.textPrimary)
-                                        .lineLimit(2)
-                                    Text(turn.category.displayName)
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(OperaChromeTheme.textTertiary)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(8)
-                            .background(index == session?.activeTurnIndex ? OperaChromeTheme.selection : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(OperaChromeTheme.accent)
+                                .frame(width: 8, height: 8)
+                            Text("Current continuity judgment")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(OperaChromeTheme.textPrimary)
                         }
-                        .buttonStyle(.plain)
+                        Text(activeTurn?.title ?? "Waiting for next prompt")
+                            .font(.system(size: 11))
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                            .lineLimit(3)
+                        Text("The builder dynamically chooses what to ask next; it is not a menu of separate tracks.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(OperaChromeTheme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(10)
+                    .background(OperaChromeTheme.selection, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                    if let session {
+                        sidebarMetric("Judgments", "\(session.feedback.count)")
+                        sidebarMetric("Prompt", "#\(session.activeTurnIndex + 1)")
+                        sidebarMetric("Learned notes", "\(session.feedback.filter { !$0.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count)")
                     }
                 }
                 .padding(14)
@@ -385,20 +387,23 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 .buttonStyle(.bordered)
             }
 
-            TextEditor(text: $notesText)
-                .font(.system(size: 13))
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .frame(minHeight: 90)
-                .background(OperaChromeTheme.workspaceBackground, in: RoundedRectangle(cornerRadius: 10))
-                .onSubmit {
-                    if autoSubmit { submit(turn) }
-                }
+            ReviewNotesTextView(text: $notesText) { command in
+                handleReviewCommand(command, turn: turn)
+            }
+            .font(.system(size: 13))
+            .frame(minHeight: 90)
+            .background(OperaChromeTheme.workspaceBackground, in: RoundedRectangle(cornerRadius: 10))
 
             HStack(spacing: 12) {
                 Text("Closeness: \(Int(closenessPercent))%")
                     .font(.system(size: 12, weight: .medium))
                 Slider(value: $closenessPercent, in: 0...100, step: 5)
+                Button("Reject Image") { reviewSelectedImage(rejected: true, rating: nil, advance: true) }
+                    .disabled(selectedCandidate(in: turn)?.imagePath == nil)
+                    .keyboardShortcut("/", modifiers: [])
+                Button("5★ Image") { reviewSelectedImage(rejected: false, rating: 5, advance: true) }
+                    .disabled(selectedCandidate(in: turn)?.imagePath == nil)
+                    .keyboardShortcut(";", modifiers: [])
                 Button("Submit & Next") { submit(turn) }
                     .keyboardShortcut(.return, modifiers: [])
                 Button(generateButtonTitle(for: turn)) {
@@ -406,6 +411,15 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isLoading)
+            }
+            if isLoading {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(statusMessage)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
+                }
             }
             Text(dictationSession.statusMessage.isEmpty ? statusMessage : "\(statusMessage) • \(dictationSession.statusMessage)")
                 .font(.system(size: 11))
@@ -450,6 +464,73 @@ private struct ContinuityBuilderWorkspaceContent: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+
+    private func sidebarMetric(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(OperaChromeTheme.textTertiary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func livePromptSeed(for turn: ContinuityBuilderTurn) -> String {
+        guard let projectRoot else { return turn.promptSeed }
+        let rules = ContinuityRuleExtractionService.relevantPromptClauses(
+            projectRoot: projectRoot,
+            query: [turn.title, turn.question, turn.promptSeed, turn.contextTags.joined(separator: " ")].joined(separator: "\n"),
+            limit: 8
+        )
+        return [
+            turn.promptSeed,
+            rules.isEmpty ? nil : "Latest relevant continuity memory injected at generation time:\n\(rules.joined(separator: "\n"))"
+        ].compactMap { $0 }.joined(separator: "\n\n")
+    }
+
+    private func selectedCandidate(in turn: ContinuityBuilderTurn) -> ContinuityBuilderCandidate? {
+        if let selectedLabel, let match = turn.candidates.first(where: { $0.label == selectedLabel }) {
+            return match
+        }
+        return turn.candidates.first
+    }
+
+    private func handleReviewCommand(_ command: ImageReviewKeyboardCommand, turn: ContinuityBuilderTurn) -> Bool {
+        switch command {
+        case .previous:
+            move(delta: -1)
+        case .next:
+            submit(turn)
+        case .reject:
+            reviewSelectedImage(rejected: true, rating: nil, advance: true)
+        case .fiveStars:
+            reviewSelectedImage(rejected: false, rating: 5, advance: true)
+        }
+        return true
+    }
+
+    private func reviewSelectedImage(rejected: Bool, rating: Int?, advance: Bool) {
+        guard let currentTurn = activeTurn,
+              let candidate = selectedCandidate(in: currentTurn),
+              let path = candidate.imagePath else {
+            statusMessage = "No displayed image is selected for review."
+            return
+        }
+        store.setImageLibraryRating(rating, for: path)
+        store.setImageLibraryRejected(rejected, for: path)
+        statusMessage = rejected
+            ? "Marked displayed Continuity Builder image rejected; it will not be reused as a future continuity reference."
+            : "Marked displayed Continuity Builder image 5★ and available as a strong future continuity reference."
+        if advance {
+            submit(currentTurn)
+        }
+    }
+
     private func loadSession() async {
         guard let projectRoot else { return }
         isLoading = true
@@ -482,6 +563,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
     private func submit(_ turn: ContinuityBuilderTurn) {
         guard let projectRoot, let currentSession = session else { return }
         let submittedLabel = selectedLabel
+        statusMessage = "Saving continuity feedback and preparing the next prompt…"
         Task {
             let transcript = await dictationSession.cycleForReviewCommand(projectRoot: projectRoot)
             let combined = [notesText, transcript].compactMap { text in
@@ -503,6 +585,9 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 notesText = ""
                 closenessPercent = 55
                 if let feedback = updated.feedback.first(where: { $0.turnID == turn.id }) {
+                    statusMessage = store.miniMaxAPIKey.isEmpty
+                        ? "Checking similar images and updating local continuity memory…"
+                        : "Checking similar images and making the feedback available for MiniMax rule extraction…"
                     let selectedCandidate = turn.candidates.first { $0.label == submittedLabel }
                     let propagation = await ContinuityFeedbackPropagationService(store: store).propagate(
                         feedback: feedback,
@@ -531,8 +616,8 @@ private struct ContinuityBuilderWorkspaceContent: View {
         let count = smartGenerationCount(for: turn)
         isLoading = true
         statusMessage = count == 1
-            ? "Generating one smart 1K Continuity Builder candidate with a $0.50 cap…"
-            : "Generating \(count) smart 1K Continuity Builder candidates with a $0.50 cap…"
+            ? "Gemini is generating one smart 1K Continuity Builder candidate with a $0.50 cap…"
+            : "Gemini is generating \(count) smart 1K Continuity Builder candidates with a $0.50 cap…"
         Task {
             let result = await ContinuityBuilderGenerationService(store: store).generate(
                 .init(

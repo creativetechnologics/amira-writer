@@ -702,7 +702,7 @@ private struct DebouncedNotesEditor: View {
 }
 
 @available(macOS 26.0, *)
-private struct ReviewNotesTextView: NSViewRepresentable {
+struct ReviewNotesTextView: NSViewRepresentable {
     @Binding var text: String
     var onReviewCommand: (ImageReviewKeyboardCommand) -> Bool
 
@@ -748,11 +748,6 @@ private struct ReviewNotesTextView: NSViewRepresentable {
         }
         if textView.string != text {
             textView.string = text
-        }
-        DispatchQueue.main.async {
-            if textView.window?.firstResponder !== textView {
-                textView.window?.makeFirstResponder(textView)
-            }
         }
     }
 

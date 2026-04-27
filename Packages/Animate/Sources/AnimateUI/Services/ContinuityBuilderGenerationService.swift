@@ -82,7 +82,9 @@ struct ContinuityBuilderGenerationService {
             return .init(ok: false, mode: normalizedMode, isDryRun: isDryRun, estimatedCostUSD: estimatedCost, maxCostUSD: request.maxCostUSD, records: [], session: session, blockers: blockers)
         }
 
-        let referencePaths = Array(turn.candidates.compactMap(\.imagePath).filter { FileManager.default.fileExists(atPath: $0) }.prefix(6))
+        let referencePaths = Array(turn.candidates.compactMap(\.imagePath).filter {
+            FileManager.default.fileExists(atPath: $0) && !ContinuityBuilderService.isRejectedImagePath($0)
+        }.prefix(6))
         let references = await Task.detached(priority: .userInitiated) {
             referencePaths.compactMap { GeminiImageService.referenceImage(from: URL(fileURLWithPath: $0)) }
         }.value

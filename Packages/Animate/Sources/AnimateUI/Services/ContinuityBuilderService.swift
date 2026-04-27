@@ -21,12 +21,12 @@ struct ContinuityBuilderService {
                 existing.updatedAt = Date()
                 try? writeSession(existing, projectRoot: projectRoot)
             }
-            return Self.runtimeSession(existing, projectRoot: projectRoot)
+            return Self.runtimeSession(Self.sessionWithLatestGeneratedCandidates(existing, projectRoot: projectRoot), projectRoot: projectRoot)
         }
         let session = ContinuityBuilderSession(projectRoot: projectRoot.path)
         try? writeSession(session, projectRoot: projectRoot)
         try? writeLatestPointer(sessionID: session.id, projectRoot: projectRoot)
-        return Self.runtimeSession(session, projectRoot: projectRoot)
+        return Self.runtimeSession(Self.sessionWithLatestGeneratedCandidates(session, projectRoot: projectRoot), projectRoot: projectRoot)
     }
 
     func begin(session: ContinuityBuilderSession, projectRoot: URL) async throws -> ContinuityBuilderSession {
@@ -38,11 +38,11 @@ struct ContinuityBuilderService {
         updated.feedback = []
         updated.notes = ""
         updated.turns = await Task.detached(priority: .userInitiated) {
-            Self.seedTurns(projectRoot: projectRoot, backgrounds: backgrounds, characters: characters)
+            Array(Self.seedTurns(projectRoot: projectRoot, backgrounds: backgrounds, characters: characters).prefix(1))
         }.value
         updated.updatedAt = Date()
         try writeSession(updated, projectRoot: projectRoot)
-        return Self.runtimeSession(updated, projectRoot: projectRoot)
+        return Self.runtimeSession(Self.sessionWithLatestGeneratedCandidates(updated, projectRoot: projectRoot), projectRoot: projectRoot)
     }
 
     func recordFeedback(
@@ -66,11 +66,12 @@ struct ContinuityBuilderService {
         var updated = session
         updated.feedback.removeAll { $0.turnID == turn.id }
         updated.feedback.append(feedback)
-        updated.activeTurnIndex = min(session.activeTurnIndex + 1, max(updated.turns.count - 1, 0))
-        if updated.activeTurnIndex == session.activeTurnIndex, updated.turns.count <= session.activeTurnIndex + 1 {
-            updated.turns.append(followUpTurn(after: turn, feedback: feedback, projectRoot: projectRoot))
-            updated.activeTurnIndex = updated.turns.count - 1
+        let currentIndex = updated.turns.firstIndex(where: { $0.id == turn.id }) ?? updated.activeTurnIndex
+        if updated.turns.indices.contains(currentIndex) {
+            updated.turns = Array(updated.turns.prefix(currentIndex + 1))
         }
+        updated.turns.append(nextStreamTurn(after: turn, feedback: feedback, projectRoot: projectRoot))
+        updated.activeTurnIndex = max(updated.turns.count - 1, 0)
         updated.updatedAt = Date()
         try writeFeedback(feedback, sessionID: session.id, projectRoot: projectRoot)
         try writeSession(updated, projectRoot: projectRoot)
@@ -223,19 +224,64 @@ struct ContinuityBuilderService {
         return turns
     }
 
-    private func followUpTurn(after turn: ContinuityBuilderTurn, feedback: ContinuityBuilderFeedback, projectRoot: URL) -> ContinuityBuilderTurn {
-        ContinuityBuilderTurn(
-            category: turn.category,
-            title: "Follow-up: \(turn.category.displayName)",
-            question: "Based on your last note, what correction should become a hard rule and what can remain flexible?",
-            priorityReason: "Follow-up turns turn raw speech feedback into reusable prompt memory before any more paid generation.",
-            promptSeed: [turn.promptSeed, "Last feedback: \(feedback.notes)", "Next generated candidate should specifically repair that feedback while preserving accepted details."].joined(separator: "\n\n"),
-            negativeGuardrails: turn.negativeGuardrails,
-            candidates: turn.candidates,
-            contextTags: Array(Set(turn.contextTags + feedback.interpretedFocus)).sorted(),
-            requiresPaidGeneration: false,
-            generationStatus: "needs_execute_approval_before_paid_generation"
-        )
+    private func nextStreamTurn(after turn: ContinuityBuilderTurn, feedback: ContinuityBuilderFeedback, projectRoot: URL) -> ContinuityBuilderTurn {
+        let category = Self.nextCategory(after: turn, feedback: feedback)
+        let templates = Self.seedTurns(projectRoot: projectRoot, backgrounds: store.backgrounds, characters: store.characters)
+        var next = templates.first(where: { $0.category == category }) ?? turn
+        next.id = UUID()
+        next.createdAt = Date()
+        next.title = Self.nextTitle(for: category, feedback: feedback)
+        next.question = Self.nextQuestion(for: category, feedback: feedback)
+        next.priorityReason = "Chosen dynamically from the latest continuity note and accumulated prompt-memory tags; this is one continuous stream, not a separate sidebar track."
+        next.promptSeed = [
+            next.promptSeed,
+            "Latest Gary feedback to repair or preserve: \(feedback.notes)",
+            "Selected candidate label: \(feedback.selectedCandidateLabel?.displayName ?? "shown candidate"). Closeness score: \(feedback.closenessPercent)%.",
+            "Next generated candidate should specifically respond to that feedback while preserving any accepted continuity facts."
+        ].joined(separator: "\n\n")
+        next.contextTags = Array(Set(next.contextTags + feedback.interpretedFocus)).sorted()
+        next.requiresPaidGeneration = false
+        next.generationStatus = "needs_execute_approval_before_paid_generation"
+        return next
+    }
+
+    nonisolated private static func nextCategory(after turn: ContinuityBuilderTurn, feedback: ContinuityBuilderFeedback) -> ContinuityBuilderCategory {
+        let haystack = ([feedback.notes] + feedback.interpretedFocus).joined(separator: " ").lowercased()
+        let categoryMatches: [(ContinuityBuilderCategory, [String])] = [
+            (.landmarkBridge, ["bridge", "ravine", "flood", "river", "water", "bank"]),
+            (.placeTopography, ["town", "hill", "slope", "road", "building", "north", "south", "soil", "topography"]),
+            (.characterIdentity, ["face", "head", "hair", "johnny", "amira", "character", "identity"]),
+            (.costumeContinuity, ["costume", "camouflage", "satchel", "polaroid", "belt", "uniform", "accessory", "boots"]),
+            (.vehicleProp, ["vehicle", "humvee", "truck", "prop", "camera", "weapon"]),
+            (.styleContinuity, ["style", "grain", "palette", "lens", "lighting", "anime", "cgi", "texture"]),
+            (.worldGeography, ["map", "geography", "valley", "sun", "direction", "mountain"])
+        ]
+        if let match = categoryMatches.max(by: { lhs, rhs in
+            lhs.1.filter { haystack.contains($0) }.count < rhs.1.filter { haystack.contains($0) }.count
+        }), match.1.contains(where: { haystack.contains($0) }) {
+            return match.0
+        }
+        switch turn.category {
+        case .worldGeography: return .landmarkBridge
+        case .landmarkBridge: return .placeTopography
+        case .placeTopography: return .characterIdentity
+        case .characterIdentity: return .costumeContinuity
+        case .costumeContinuity: return .styleContinuity
+        case .vehicleProp: return .styleContinuity
+        case .sceneContinuity: return .styleContinuity
+        case .styleContinuity: return .worldGeography
+        }
+    }
+
+    nonisolated private static func nextTitle(for category: ContinuityBuilderCategory, feedback: ContinuityBuilderFeedback) -> String {
+        let focus = feedback.interpretedFocus.prefix(3).joined(separator: " / ")
+        return focus.isEmpty ? "Next continuity judgment: \(category.displayName)" : "Next continuity judgment: \(focus)"
+    }
+
+    nonisolated private static func nextQuestion(for category: ContinuityBuilderCategory, feedback: ContinuityBuilderFeedback) -> String {
+        let note = feedback.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let repaired = note.isEmpty ? "the last continuity judgment" : "this note: \(note)"
+        return "What is still wrong or right after applying \(repaired)? Give concrete visual rules that future prompts can reuse."
     }
 
     nonisolated private static func registryCandidates(projectRoot: URL, names: [String], fallback: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
@@ -250,8 +296,8 @@ struct ContinuityBuilderService {
             guard wanted.contains(name) else { continue }
             for file in (entry["files"] as? [[String: Any]] ?? []) {
                 let rawPath = file["path"] as? String ?? file["absolute_path"] as? String
-                let path = Self.runtimePath(rawPath, projectRoot: projectRoot)
-                guard let path, FileManager.default.fileExists(atPath: path) else { continue }
+                let path = Self.acceptedExistingPath(rawPath, projectRoot: projectRoot)
+                guard let path else { continue }
                 candidates.append(.init(label: .single, title: "Registry \(name)", imagePath: path, source: "reference-registry.json", referenceRole: name == "map" ? "spatial_map" : "landmark_design", promptRole: "continuity candidate"))
             }
         }
@@ -262,7 +308,7 @@ struct ContinuityBuilderService {
         var candidates: [ContinuityBuilderCandidate] = []
         for place in backgrounds {
             let rawPaths = [place.resolvedAnimatedApprovedImagePath, place.resolvedApprovedImagePath] + place.referenceImages.prefix(2).map { Optional($0.imagePath) }
-            if let path = rawPaths.compactMap({ resolvedPath($0, projectRoot: projectRoot) }).first(where: { FileManager.default.fileExists(atPath: $0) }) {
+            if let path = acceptedExistingPath(rawPaths, projectRoot: projectRoot) {
                 candidates.append(.init(label: .single, title: place.name, imagePath: path, source: "Places/places.json", referenceRole: "location_identity", promptRole: "place/topography candidate"))
             }
             if candidates.count >= limit { break }
@@ -278,9 +324,7 @@ struct ContinuityBuilderService {
         }
         var candidates: [ContinuityBuilderCandidate] = []
         for place in matches {
-            if let path = [place.resolvedAnimatedApprovedImagePath, place.resolvedApprovedImagePath]
-                .compactMap({ resolvedPath($0, projectRoot: projectRoot) })
-                .first(where: { FileManager.default.fileExists(atPath: $0) }) {
+            if let path = acceptedExistingPath([place.resolvedAnimatedApprovedImagePath, place.resolvedApprovedImagePath], projectRoot: projectRoot) {
                 candidates.append(.init(label: .single, title: place.name, imagePath: path, source: "Places/places.json", referenceRole: "landmark_design", promptRole: "bridge/ravine candidate"))
             }
             if candidates.count >= limit { break }
@@ -294,7 +338,7 @@ struct ContinuityBuilderService {
             let approvedMaster = (character.masterReferenceSheetVariants.first { $0.id == character.approvedMasterReferenceSheetVariantID } ?? character.masterReferenceSheetVariants.last)?.imagePath
             let approvedHead = (character.headTurnaroundSheetVariants.first { $0.id == character.approvedHeadTurnaroundSheetVariantID } ?? character.headTurnaroundSheetVariants.last)?.imagePath
             let raw = [approvedHead, approvedMaster, character.profileImagePath, character.inspirationReferenceImagePath] + character.referenceImagePaths.prefix(2).map(Optional.init)
-            if let path = raw.compactMap({ resolvedPath($0, projectRoot: projectRoot) }).first(where: { FileManager.default.fileExists(atPath: $0) }) {
+            if let path = acceptedExistingPath(raw, projectRoot: projectRoot) {
                 candidates.append(.init(label: .single, title: character.name, imagePath: path, source: "Characters/*/rig.json", referenceRole: "character_identity", promptRole: "character identity candidate"))
             }
             if candidates.count >= limit { break }
@@ -308,7 +352,7 @@ struct ContinuityBuilderService {
             for costume in character.costumeReferenceSets {
                 let approved = costume.approvedSheetVariant?.imagePath ?? costume.sheetVariants.last?.imagePath
                 let raw = [approved] + costume.costumeReferenceImagePaths.prefix(2).map(Optional.init)
-                if let path = raw.compactMap({ resolvedPath($0, projectRoot: projectRoot) }).first(where: { FileManager.default.fileExists(atPath: $0) }) {
+                if let path = acceptedExistingPath(raw, projectRoot: projectRoot) {
                     candidates.append(.init(label: .single, title: "\(character.name): \(costume.name)", imagePath: path, source: "Characters/*/rig.json", referenceRole: "character_costume", promptRole: "costume continuity candidate"))
                 }
                 if candidates.count >= limit { break }
@@ -316,6 +360,25 @@ struct ContinuityBuilderService {
             if candidates.count >= limit { break }
         }
         return withLabels(candidates.isEmpty ? fallback : candidates)
+    }
+
+    nonisolated private static func resolvedPath(_ rawPath: String?, projectRoot: URL) -> String? {
+        runtimePath(rawPath, projectRoot: projectRoot)
+    }
+
+    nonisolated private static func acceptedExistingPath(_ rawPaths: [String?], projectRoot: URL) -> String? {
+        rawPaths.compactMap { acceptedExistingPath($0, projectRoot: projectRoot) }.first
+    }
+
+    nonisolated private static func acceptedExistingPath(_ rawPath: String?, projectRoot: URL) -> String? {
+        guard let path = resolvedPath(rawPath, projectRoot: projectRoot),
+              FileManager.default.fileExists(atPath: path),
+              !isRejectedImagePath(path) else { return nil }
+        return path
+    }
+
+    nonisolated static func isRejectedImagePath(_ path: String) -> Bool {
+        ImageLibraryMetadataSidecarService.load(forImagePath: path)?.isRejected == true
     }
 
     nonisolated private static func withLabels(_ candidates: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
@@ -461,12 +524,16 @@ struct ContinuityBuilderService {
         var copy = session
         copy.projectRoot = projectRoot.path
         for turnIndex in copy.turns.indices {
+            var retained: [ContinuityBuilderCandidate] = []
             for candidateIndex in copy.turns[turnIndex].candidates.indices {
-                copy.turns[turnIndex].candidates[candidateIndex].imagePath = runtimePath(
-                    copy.turns[turnIndex].candidates[candidateIndex].imagePath,
-                    projectRoot: projectRoot
-                )
+                var candidate = copy.turns[turnIndex].candidates[candidateIndex]
+                candidate.imagePath = runtimePath(candidate.imagePath, projectRoot: projectRoot)
+                if let imagePath = candidate.imagePath, isRejectedImagePath(imagePath) {
+                    continue
+                }
+                retained.append(candidate)
             }
+            copy.turns[turnIndex].candidates = withLabels(retained)
         }
         return copy
     }
@@ -484,4 +551,94 @@ struct ContinuityBuilderService {
         }
         return copy
     }
+
+    nonisolated static func sessionWithLatestGeneratedCandidates(_ session: ContinuityBuilderSession, projectRoot: URL) -> ContinuityBuilderSession {
+        var copy = session
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sessionGenerationsDir = continuityDirectory(projectRoot: projectRoot)
+            .appendingPathComponent("generations", isDirectory: true)
+            .appendingPathComponent(copy.id.uuidString, isDirectory: true)
+
+        for turnIndex in copy.turns.indices {
+            let turn = copy.turns[turnIndex]
+            let turnID = turn.id.uuidString
+            let currentTurnDir = sessionGenerationsDir.appendingPathComponent(turnID, isDirectory: true)
+            var urls = (try? FileManager.default.contentsOfDirectory(at: currentTurnDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+
+            let completedForCurrentTurn = urls.contains { url in
+                guard url.pathExtension == "json",
+                      let data = try? Data(contentsOf: url),
+                      let record = try? decoder.decode(ContinuityBuilderGenerationRecord.self, from: data) else { return false }
+                return record.status == "completed"
+            }
+
+            if !completedForCurrentTurn,
+               let turnDirs = try? FileManager.default.contentsOfDirectory(at: sessionGenerationsDir, includingPropertiesForKeys: [.isDirectoryKey]) {
+                let titleNeedle = turn.title.lowercased()
+                let slugNeedle = turn.title.lowercased().split { !$0.isLetter && !$0.isNumber }.prefix(5).joined(separator: "-")
+                var fallbackURLs: [URL] = []
+                for dir in turnDirs where dir.lastPathComponent != turnID {
+                    guard let recordURLs = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
+                    for url in recordURLs where url.pathExtension == "json" {
+                        guard let data = try? Data(contentsOf: url),
+                              let record = try? decoder.decode(ContinuityBuilderGenerationRecord.self, from: data),
+                              record.status == "completed" else { continue }
+                        let haystack = [record.prompt, record.imagePath ?? ""].joined(separator: " ").lowercased()
+                        if haystack.contains(titleNeedle) || (!slugNeedle.isEmpty && haystack.contains(slugNeedle)) {
+                            fallbackURLs.append(url)
+                        }
+                    }
+                }
+                urls.append(contentsOf: fallbackURLs)
+            }
+
+            let records = urls
+                .filter { $0.pathExtension == "json" }
+                .compactMap { url -> ContinuityBuilderGenerationRecord? in
+                    guard let data = try? Data(contentsOf: url),
+                          let record = try? decoder.decode(ContinuityBuilderGenerationRecord.self, from: data),
+                          record.status == "completed",
+                          let imagePath = runtimePath(record.imagePath, projectRoot: projectRoot),
+                          FileManager.default.fileExists(atPath: imagePath),
+                          !isRejectedImagePath(imagePath) else { return nil }
+                    var copy = record
+                    copy.imagePath = imagePath
+                    return copy
+                }
+                .sorted { lhs, rhs in
+                    if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+                    return lhs.createdAt > rhs.createdAt
+                }
+            guard !records.isEmpty else { continue }
+            var latestByLabel: [ContinuityBuilderCandidateLabel: ContinuityBuilderGenerationRecord] = [:]
+            for record in records where latestByLabel[record.label] == nil {
+                latestByLabel[record.label] = record
+            }
+            let orderedLabels: [ContinuityBuilderCandidateLabel] = records.count == 1
+                ? [.single, .left, .middle, .right]
+                : [.left, .middle, .right, .single]
+            let generated = orderedLabels.compactMap { label -> ContinuityBuilderCandidate? in
+                guard let record = latestByLabel[label],
+                      let imagePath = record.imagePath else { return nil }
+                return ContinuityBuilderCandidate(
+                    id: record.candidateID ?? UUID(),
+                    label: label,
+                    title: "Generated \(label.displayName): \(copy.turns[turnIndex].title)",
+                    imagePath: imagePath,
+                    source: "Continuity Builder generated candidate",
+                    referenceRole: "generated_candidate",
+                    promptRole: "candidate for Gary feedback",
+                    analysisSummary: nil
+                )
+            }
+            if !generated.isEmpty {
+                copy.turns[turnIndex].candidates = withLabels(generated)
+                copy.turns[turnIndex].requiresPaidGeneration = false
+                copy.turns[turnIndex].generationStatus = "generated_candidates_ready_for_feedback"
+            }
+        }
+        return copy
+    }
+
 }

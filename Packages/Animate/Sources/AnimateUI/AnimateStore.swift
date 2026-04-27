@@ -8031,6 +8031,7 @@ final class AnimateStore {
         mutateImageLibrarySidecar(for: imagePath) { metadata in
             metadata.rating = rating.flatMap { $0 > 0 ? min(max($0, 1), 5) : nil }
         }
+        bumpAllImagesContentRevision()
     }
 
     func setImageLibraryRejected(_ isRejected: Bool, for imagePath: String) {
