@@ -39,9 +39,9 @@ enum ContinuityBuilderCandidateLabel: String, Codable, Sendable, Hashable, CaseI
     var displayName: String {
         switch self {
         case .single: return "Single"
-        case .left: return "Left"
+        case .left: return "A"
         case .middle: return "Middle"
-        case .right: return "Right"
+        case .right: return "B"
         }
     }
 }

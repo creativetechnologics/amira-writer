@@ -61,7 +61,7 @@ struct ContinuityBuilderGenerationService {
     func generate(_ request: Request) async -> ContinuityBuilderGenerationResult {
         let normalizedMode = request.mode.lowercased() == "execute" ? "execute" : "dry_run"
         let isDryRun = normalizedMode != "execute"
-        let count = min(max(request.candidateCount, 1), 3)
+        let count = min(max(request.candidateCount, 1), 2)
         let imageSize = request.imageSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "1K" : request.imageSize
         let aspectRatio = request.aspectRatio.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "4:3" : request.aspectRatio
         let estimatedCost = Double(count) * request.model.estimatedCost(for: imageSize)
@@ -198,8 +198,7 @@ struct ContinuityBuilderGenerationService {
     private func labels(for count: Int) -> [ContinuityBuilderCandidateLabel] {
         switch count {
         case 1: return [.single]
-        case 2: return [.left, .right]
-        default: return [.left, .middle, .right]
+        default: return [.left, .right]
         }
     }
 

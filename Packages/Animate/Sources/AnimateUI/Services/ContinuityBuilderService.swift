@@ -281,7 +281,7 @@ struct ContinuityBuilderService {
     nonisolated private static func nextQuestion(for category: ContinuityBuilderCategory, feedback: ContinuityBuilderFeedback) -> String {
         let note = feedback.notes.trimmingCharacters(in: .whitespacesAndNewlines)
         let repaired = note.isEmpty ? "the last continuity judgment" : "this note: \(note)"
-        return "What is still wrong or right after applying \(repaired)? Give concrete visual rules that future prompts can reuse."
+        return "The next generated image should respond to \(repaired). Once it appears, what is still wrong or right? Give concrete visual rules that future prompts can reuse."
     }
 
     nonisolated private static func registryCandidates(projectRoot: URL, names: [String], fallback: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
@@ -382,14 +382,14 @@ struct ContinuityBuilderService {
     }
 
     nonisolated private static func withLabels(_ candidates: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
+        let limited = Array(candidates.prefix(2))
         let labels: [ContinuityBuilderCandidateLabel]
-        switch candidates.count {
+        switch limited.count {
         case 0: labels = []
         case 1: labels = [.single]
-        case 2: labels = [.left, .right]
-        default: labels = [.left, .middle, .right]
+        default: labels = [.left, .right]
         }
-        return candidates.enumerated().map { index, candidate in
+        return limited.enumerated().map { index, candidate in
             var copy = candidate
             if labels.indices.contains(index) { copy.label = labels[index] }
             return copy
@@ -564,34 +564,10 @@ struct ContinuityBuilderService {
             let turn = copy.turns[turnIndex]
             let turnID = turn.id.uuidString
             let currentTurnDir = sessionGenerationsDir.appendingPathComponent(turnID, isDirectory: true)
-            var urls = (try? FileManager.default.contentsOfDirectory(at: currentTurnDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            let urls = (try? FileManager.default.contentsOfDirectory(at: currentTurnDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
 
-            let completedForCurrentTurn = urls.contains { url in
-                guard url.pathExtension == "json",
-                      let data = try? Data(contentsOf: url),
-                      let record = try? decoder.decode(ContinuityBuilderGenerationRecord.self, from: data) else { return false }
-                return record.status == "completed"
-            }
-
-            if !completedForCurrentTurn,
-               let turnDirs = try? FileManager.default.contentsOfDirectory(at: sessionGenerationsDir, includingPropertiesForKeys: [.isDirectoryKey]) {
-                let titleNeedle = turn.title.lowercased()
-                let slugNeedle = turn.title.lowercased().split { !$0.isLetter && !$0.isNumber }.prefix(5).joined(separator: "-")
-                var fallbackURLs: [URL] = []
-                for dir in turnDirs where dir.lastPathComponent != turnID {
-                    guard let recordURLs = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
-                    for url in recordURLs where url.pathExtension == "json" {
-                        guard let data = try? Data(contentsOf: url),
-                              let record = try? decoder.decode(ContinuityBuilderGenerationRecord.self, from: data),
-                              record.status == "completed" else { continue }
-                        let haystack = [record.prompt, record.imagePath ?? ""].joined(separator: " ").lowercased()
-                        if haystack.contains(titleNeedle) || (!slugNeedle.isEmpty && haystack.contains(slugNeedle)) {
-                            fallbackURLs.append(url)
-                        }
-                    }
-                }
-                urls.append(contentsOf: fallbackURLs)
-            }
+            // Do not borrow generated images from older turns. Each continuity judgment must
+            // either show references honestly or display a fresh image generated for this exact turn.
 
             let records = urls
                 .filter { $0.pathExtension == "json" }

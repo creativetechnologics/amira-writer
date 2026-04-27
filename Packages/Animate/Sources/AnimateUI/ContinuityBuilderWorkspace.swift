@@ -38,7 +38,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
     @State private var selectedLabel: ContinuityBuilderCandidateLabel?
     @State private var closenessPercent: Double = 55
     @State private var notesText = ""
-    @State private var statusMessage = "Review mode is active. Click Smart Generate whenever you want a new Gemini candidate."
+    @State private var statusMessage = "Review mode is active. Submit feedback to generate the next 1K continuity candidate."
     @State private var isLoading = false
     @State private var dictationSession = ImageReviewDictationSession()
 
@@ -220,7 +220,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
         } content: {
             VStack(spacing: 0) {
                 if isLoading {
-                    ProgressView("Preparing continuity prompt…")
+                    ProgressView(statusMessage)
                         .padding()
                 }
                 ScrollView {
@@ -277,10 +277,28 @@ private struct ContinuityBuilderWorkspaceContent: View {
         guard !turn.candidates.isEmpty else {
             return AnyView(noCandidateCard(turn))
         }
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: max(1, min(3, turn.candidates.count)))
-        return AnyView(LazyVGrid(columns: columns, spacing: 12) {
-            ForEach(turn.candidates) { candidate in
-                candidateCard(candidate)
+        let visibleCandidates = Array(turn.candidates.prefix(2))
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: max(1, min(2, visibleCandidates.count)))
+        return AnyView(VStack(alignment: .leading, spacing: 10) {
+            if !turnHasGeneratedCandidates(turn) {
+                Label("Reference inputs for the next generation — not regenerated results yet.", systemImage: "info.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(OperaChromeTheme.selection, in: Capsule())
+            } else if visibleCandidates.count == 2 {
+                Label("A/B comparison: choose the better candidate before submitting feedback.", systemImage: "rectangle.split.2x1")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(OperaChromeTheme.selection, in: Capsule())
+            }
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(visibleCandidates) { candidate in
+                    candidateCard(candidate, showSelection: visibleCandidates.count > 1)
+                }
             }
         })
     }
@@ -315,7 +333,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
         .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private func candidateCard(_ candidate: ContinuityBuilderCandidate) -> some View {
+    private func candidateCard(_ candidate: ContinuityBuilderCandidate, showSelection: Bool) -> some View {
         Button {
             selectedLabel = candidate.label
         } label: {
@@ -343,7 +361,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                                 .foregroundStyle(OperaChromeTheme.textTertiary)
                             }
                     }
-                    Text(candidate.label.displayName.uppercased())
+                    Text(candidateBadge(for: candidate).uppercased())
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -364,7 +382,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
             .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(selectedLabel == candidate.label ? OperaChromeTheme.accent : OperaChromeTheme.stroke, lineWidth: selectedLabel == candidate.label ? 2 : 1)
+                    .stroke(showSelection && selectedLabel == candidate.label ? OperaChromeTheme.accent : OperaChromeTheme.stroke, lineWidth: showSelection && selectedLabel == candidate.label ? 2 : 1)
             }
         }
         .buttonStyle(.plain)
@@ -404,7 +422,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 Button("5★ Image") { reviewSelectedImage(rejected: false, rating: 5, advance: true) }
                     .disabled(selectedCandidate(in: turn)?.imagePath == nil)
                     .keyboardShortcut(";", modifiers: [])
-                Button("Submit & Next") { submit(turn) }
+                Button(submitButtonTitle(for: turn)) { submit(turn) }
                     .keyboardShortcut(.return, modifiers: [])
                 Button(generateButtonTitle(for: turn)) {
                     generateCandidates(turn)
@@ -431,7 +449,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
 
     private var inspector: some View {
         OperaChromeFlatPane {
-            OperaChromePaneHeader(eyebrow: "CONTINUITY", title: "Prompt Seed", subtitle: "Dry-run scaffold") {
+            OperaChromePaneHeader(eyebrow: "CONTINUITY", title: "Generation Prompt", subtitle: "Live prompt context") {
                 OperaChromeActionButton(systemImage: "xmark") {
                     withAnimation(.easeInOut(duration: 0.2)) { inspectorVisible = false }
                 }
@@ -504,14 +522,26 @@ private struct ContinuityBuilderWorkspaceContent: View {
         }
     }
 
+    private func turnHasGeneratedCandidates(_ turn: ContinuityBuilderTurn) -> Bool {
+        turn.generationStatus == "generated_candidates_ready_for_feedback"
+            && turn.candidates.contains { $0.source == "Continuity Builder generated candidate" }
+    }
+
+    private func candidateBadge(for candidate: ContinuityBuilderCandidate) -> String {
+        if candidate.source == "Continuity Builder generated candidate" {
+            return candidate.label == .single ? "Current image" : "Candidate \(candidate.label.displayName)"
+        }
+        return "Reference input"
+    }
+
     private func statusMessage(for loadedSession: ContinuityBuilderSession) -> String {
         guard loadedSession.hasStarted else {
             return "Ready to begin one continuous Continuity Builder stream."
         }
-        if loadedSession.activeTurn?.candidates.contains(where: { $0.imagePath != nil }) == true {
-            return "Review mode is active. Rate/reject the displayed image, add notes, or click Smart Generate for a new 1K candidate."
+        if let activeTurn = loadedSession.activeTurn, turnHasGeneratedCandidates(activeTurn) {
+            return "Review mode is active. Rate/reject the generated image, add notes, then submit to generate the next 1K candidate."
         }
-        return "No candidate is displayed yet. Click Smart Generate to create a new 1K candidate."
+        return "No generated candidate is ready yet. Submit feedback or click Generate 1K to create one."
     }
 
     private func selectedCandidate(in turn: ContinuityBuilderTurn) -> ContinuityBuilderCandidate? {
@@ -574,7 +604,17 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 selectedLabel = updated.activeTurn?.candidates.first?.label
                 notesText = ""
                 closenessPercent = 55
-                statusMessage = "Started one continuous Continuity Builder session."
+                if let firstTurn = updated.activeTurn {
+                    statusMessage = "Started one continuous Continuity Builder session. Gemini is generating the first 1K image…"
+                    let generation = await generateAndApply(session: updated, turn: firstTurn, count: generationCount(for: firstTurn))
+                    session = generation.session
+                    selectedLabel = generation.session.activeTurn?.candidates.first?.label
+                    statusMessage = generation.ok
+                        ? "Generated the first 1K continuity image. Add feedback, then submit to generate the next one."
+                        : (generation.blockers.first?.message ?? generation.records.first(where: { $0.errorMessage != nil })?.errorMessage ?? "Started the continuity session, but the first image did not generate.")
+                } else {
+                    statusMessage = "Started one continuous Continuity Builder session."
+                }
             } catch {
                 statusMessage = "Could not begin Continuity Builder: \(error.localizedDescription)"
             }
@@ -583,9 +623,14 @@ private struct ContinuityBuilderWorkspaceContent: View {
     }
 
     private func submit(_ turn: ContinuityBuilderTurn) {
+        guard turnHasGeneratedCandidates(turn) else {
+            generateCandidates(turn)
+            return
+        }
         guard let projectRoot, let currentSession = session else { return }
         let submittedLabel = selectedLabel
-        statusMessage = "Saving continuity feedback and preparing the next prompt…"
+        isLoading = true
+        statusMessage = "Saving continuity feedback, then Gemini will generate the next 1K image…"
         Task {
             let transcript = await dictationSession.cycleForReviewCommand(projectRoot: projectRoot)
             let combined = [notesText, transcript].compactMap { text in
@@ -606,10 +651,23 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 selectedLabel = updated.activeTurn?.candidates.first?.label
                 notesText = ""
                 closenessPercent = 55
+                if let nextTurn = updated.activeTurn {
+                    statusMessage = "Saved feedback. Gemini is generating the next 1K continuity image now…"
+                    let generation = await generateAndApply(session: updated, turn: nextTurn, count: generationCount(for: nextTurn))
+                    session = generation.session
+                    selectedLabel = generation.session.activeTurn?.candidates.first?.label
+                    if generation.ok {
+                        let completed = generation.records.filter { $0.status == "completed" }.count
+                        statusMessage = completed == 1
+                            ? "Generated the next 1K continuity image from your latest feedback."
+                            : "Generated \(completed) A/B continuity candidates from your latest feedback."
+                    } else {
+                        statusMessage = (generation.blockers.first?.message ?? generation.records.first(where: { $0.errorMessage != nil })?.errorMessage)
+                            ?? "Feedback was saved, but the next continuity image did not generate."
+                    }
+                }
                 if let feedback = updated.feedback.first(where: { $0.turnID == turn.id }) {
-                    statusMessage = store.miniMaxAPIKey.isEmpty
-                        ? "Checking similar images and updating local continuity memory…"
-                        : "Checking similar images and making the feedback available for MiniMax rule extraction…"
+                    let baseStatus = statusMessage
                     let selectedCandidate = turn.candidates.first { $0.label == submittedLabel }
                     let propagation = await ContinuityFeedbackPropagationService(store: store).propagate(
                         feedback: feedback,
@@ -622,39 +680,27 @@ private struct ContinuityBuilderWorkspaceContent: View {
                         : propagation.reviewCandidateCount > 0
                             ? " Found \(propagation.reviewCandidateCount) possible similar issue(s) for review; none auto-rejected."
                             : ""
-                    statusMessage = "Saved continuity feedback to Metadata/automation/continuity-builder.\(suffix)"
-                } else {
-                    statusMessage = "Saved continuity feedback to Metadata/automation/continuity-builder."
+                    if !suffix.isEmpty {
+                        statusMessage = "\(baseStatus)\(suffix)"
+                    }
                 }
             } catch {
                 statusMessage = "Could not save continuity feedback: \(error.localizedDescription)"
             }
+            isLoading = false
         }
     }
 
 
     private func generateCandidates(_ turn: ContinuityBuilderTurn) {
-        guard let projectRoot, let currentSession = session else { return }
-        let count = smartGenerationCount(for: turn)
+        guard let currentSession = session else { return }
+        let count = generationCount(for: turn)
         isLoading = true
         statusMessage = count == 1
             ? "Gemini is generating one smart 1K Continuity Builder candidate…"
-            : "Gemini is generating \(count) smart 1K Continuity Builder candidates…"
+            : "Gemini is generating an A/B pair of 1K Continuity Builder candidates…"
         Task {
-            let result = await ContinuityBuilderGenerationService(store: store).generate(
-                .init(
-                    session: currentSession,
-                    turnID: turn.id,
-                    projectRoot: projectRoot,
-                    mode: "execute",
-                    maxCostUSD: 0.50,
-                    candidateCount: count,
-                    model: store.selectedGeminiModel,
-                    imageSize: "1K",
-                    aspectRatio: "4:3",
-                    apiKey: store.geminiAPIKey
-                )
-            )
+            let result = await generateAndApply(session: currentSession, turn: turn, count: count)
             session = result.session
             selectedLabel = result.session.activeTurn?.candidates.first?.label
             isLoading = false
@@ -667,21 +713,53 @@ private struct ContinuityBuilderWorkspaceContent: View {
     }
 
     private func generateButtonTitle(for turn: ContinuityBuilderTurn) -> String {
-        let count = smartGenerationCount(for: turn)
-        return count == 1 ? "Smart Generate 1K" : "Smart Generate \(count) × 1K"
+        let count = generationCount(for: turn)
+        return count == 1 ? "Generate 1K" : "Generate A/B 1K"
     }
 
-    private func smartGenerationCount(for turn: ContinuityBuilderTurn) -> Int {
-        if turn.candidates.isEmpty { return 1 }
-        if let session,
-           session.feedback.contains(where: { $0.turnID == turn.id && $0.closenessPercent < 35 }) {
-            return 2
-        }
-        let comparisonCategories: Set<ContinuityBuilderCategory> = [.costumeContinuity, .styleContinuity]
-        if comparisonCategories.contains(turn.category), turn.candidates.count < 2 {
+    private func submitButtonTitle(for turn: ContinuityBuilderTurn) -> String {
+        turnHasGeneratedCandidates(turn) ? "Submit & Generate Next" : "Generate Current"
+    }
+
+    private func generationCount(for turn: ContinuityBuilderTurn) -> Int {
+        let compareText = [turn.title, turn.question, turn.promptSeed].joined(separator: " ").lowercased()
+        if compareText.contains("a/b") || compareText.contains("which image is better") || compareText.contains("choose the better") {
             return 2
         }
         return 1
+    }
+
+    private func generateAndApply(
+        session currentSession: ContinuityBuilderSession,
+        turn: ContinuityBuilderTurn,
+        count: Int
+    ) async -> ContinuityBuilderGenerationResult {
+        guard let projectRoot else {
+            return ContinuityBuilderGenerationResult(
+                ok: false,
+                mode: "execute",
+                isDryRun: false,
+                estimatedCostUSD: 0,
+                maxCostUSD: 0.50,
+                records: [],
+                session: currentSession,
+                blockers: [.init(code: .needsManualReview, message: "Project root is unavailable.", field: "projectRoot")]
+            )
+        }
+        return await ContinuityBuilderGenerationService(store: store).generate(
+            .init(
+                session: currentSession,
+                turnID: turn.id,
+                projectRoot: projectRoot,
+                mode: "execute",
+                maxCostUSD: 0.50,
+                candidateCount: min(max(count, 1), 2),
+                model: store.selectedGeminiModel,
+                imageSize: "1K",
+                aspectRatio: "4:3",
+                apiKey: store.geminiAPIKey
+            )
+        )
     }
 
     private static func projectRoot(from url: URL?) -> URL? {
