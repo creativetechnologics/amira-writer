@@ -240,6 +240,10 @@ final class AnimateAPIRouter {
             await ensureProjectHydrated()
             return await automationContinuityBuilderSessionResponse()
         }
+        if request.method == "POST", request.path == "/automation/continuity-builder/begin" {
+            await ensureProjectHydrated()
+            return await automationContinuityBuilderBeginResponse()
+        }
         if request.method == "POST", request.path == "/automation/continuity-builder/generate" {
             await ensureProjectHydrated()
             return await automationContinuityBuilderGenerateResponse(request)
@@ -691,6 +695,19 @@ final class AnimateAPIRouter {
         return .okCodable(session)
     }
 
+    private func automationContinuityBuilderBeginResponse() async -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        do {
+            let session = await ContinuityBuilderService(store: store).loadOrCreateSession(projectRoot: projectRoot)
+            let updated = try await ContinuityBuilderService(store: store).begin(session: session, projectRoot: projectRoot)
+            return .okCodable(updated)
+        } catch {
+            return .error(500, error.localizedDescription)
+        }
+    }
+
     private func automationContinuityBuilderGenerateResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
         guard let projectRoot = store.fileOWPURL else {
             return .error(400, "No project is loaded.")
@@ -709,7 +726,7 @@ final class AnimateAPIRouter {
         let model = resolvedGeminiModel(from: stringValue(body["model"]))
         let imageSize = stringValue(body["imageSize"]) ?? "1K"
         let aspectRatio = stringValue(body["aspectRatio"]) ?? "4:3"
-        let candidateCount = intValue(body["candidateCount"]) ?? intValue(body["count"]) ?? 3
+        let candidateCount = intValue(body["candidateCount"]) ?? intValue(body["count"]) ?? 1
         let maxCostUSD = doubleValue(body["maxCostUSD"]) ?? 0
         let turnID = uuidValue(body["turnID"])
 

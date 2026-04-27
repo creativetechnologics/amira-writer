@@ -42,7 +42,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
     @State private var isLoading = false
     @State private var dictationSession = ImageReviewDictationSession()
 
-    private var projectRoot: URL? { store.owpURL?.deletingLastPathComponent() }
+    private var projectRoot: URL? { Self.projectRoot(from: store.fileOWPURL ?? store.owpURL) }
     private var activeTurn: ContinuityBuilderTurn? { session?.activeTurn }
     private var projectTitle: String { projectRoot?.lastPathComponent ?? "Untitled Opera" }
     private var hasStarted: Bool { session?.hasStarted == true }
@@ -272,12 +272,45 @@ private struct ContinuityBuilderWorkspaceContent: View {
     }
 
     private func candidateGrid(_ turn: ContinuityBuilderTurn) -> some View {
+        guard !turn.candidates.isEmpty else {
+            return AnyView(noCandidateCard(turn))
+        }
         let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: max(1, min(3, turn.candidates.count)))
-        return LazyVGrid(columns: columns, spacing: 12) {
+        return AnyView(LazyVGrid(columns: columns, spacing: 12) {
             ForEach(turn.candidates) { candidate in
                 candidateCard(candidate)
             }
+        })
+    }
+
+    private func noCandidateCard(_ turn: ContinuityBuilderTurn) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(OperaChromeTheme.selection)
+                .frame(height: 240)
+                .overlay {
+                    VStack(spacing: 10) {
+                        Image(systemName: "photo.badge.plus")
+                            .font(.system(size: 34, weight: .light))
+                        Text("No existing reference image found for this prompt.")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Use Smart Generate 1K to create the minimum useful candidate, or add approved refs to the project library.")
+                            .font(.system(size: 12))
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(OperaChromeTheme.textSecondary)
+                    }
+                    .foregroundStyle(OperaChromeTheme.textTertiary)
+                    .padding()
+                }
+            Text(turn.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(OperaChromeTheme.textPrimary)
+            Text("No candidate image • \(turn.category.displayName)")
+                .font(.system(size: 10))
+                .foregroundStyle(OperaChromeTheme.textTertiary)
         }
+        .padding(10)
+        .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func candidateCard(_ candidate: ContinuityBuilderCandidate) -> some View {
@@ -368,7 +401,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 Slider(value: $closenessPercent, in: 0...100, step: 5)
                 Button("Submit & Next") { submit(turn) }
                     .keyboardShortcut(.return, modifiers: [])
-                Button("Generate 3 × 1K") {
+                Button(generateButtonTitle(for: turn)) {
                     generateCandidates(turn)
                 }
                 .buttonStyle(.borderedProminent)
@@ -495,8 +528,11 @@ private struct ContinuityBuilderWorkspaceContent: View {
 
     private func generateCandidates(_ turn: ContinuityBuilderTurn) {
         guard let projectRoot, let currentSession = session else { return }
+        let count = smartGenerationCount(for: turn)
         isLoading = true
-        statusMessage = "Generating Continuity Builder candidates with a $0.50 cap…"
+        statusMessage = count == 1
+            ? "Generating one smart 1K Continuity Builder candidate with a $0.50 cap…"
+            : "Generating \(count) smart 1K Continuity Builder candidates with a $0.50 cap…"
         Task {
             let result = await ContinuityBuilderGenerationService(store: store).generate(
                 .init(
@@ -505,7 +541,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                     projectRoot: projectRoot,
                     mode: "execute",
                     maxCostUSD: 0.50,
-                    candidateCount: 3,
+                    candidateCount: count,
                     model: store.selectedGeminiModel,
                     imageSize: "1K",
                     aspectRatio: "4:3",
@@ -521,6 +557,35 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 statusMessage = (result.blockers.first?.message ?? result.records.first(where: { $0.errorMessage != nil })?.errorMessage) ?? "Continuity generation did not complete."
             }
         }
+    }
+
+    private func generateButtonTitle(for turn: ContinuityBuilderTurn) -> String {
+        let count = smartGenerationCount(for: turn)
+        return count == 1 ? "Smart Generate 1K" : "Smart Generate \(count) × 1K"
+    }
+
+    private func smartGenerationCount(for turn: ContinuityBuilderTurn) -> Int {
+        if turn.candidates.isEmpty { return 1 }
+        if let session,
+           session.feedback.contains(where: { $0.turnID == turn.id && $0.closenessPercent < 35 }) {
+            return 2
+        }
+        let comparisonCategories: Set<ContinuityBuilderCategory> = [.costumeContinuity, .styleContinuity]
+        if comparisonCategories.contains(turn.category), turn.candidates.count < 2 {
+            return 2
+        }
+        return 1
+    }
+
+    private static func projectRoot(from url: URL?) -> URL? {
+        guard let url else { return nil }
+        if url.lastPathComponent == "Animate" {
+            return url.deletingLastPathComponent()
+        }
+        if url.pathExtension.lowercased() == "owp" {
+            return url.deletingLastPathComponent()
+        }
+        return url
     }
 
     private func move(delta: Int) {

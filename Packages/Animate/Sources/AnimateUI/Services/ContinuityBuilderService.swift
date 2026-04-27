@@ -30,15 +30,18 @@ struct ContinuityBuilderService {
     }
 
     func begin(session: ContinuityBuilderSession, projectRoot: URL) async throws -> ContinuityBuilderSession {
+        let backgrounds = store.backgrounds
+        let characters = store.characters
         var updated = session
         updated.startedAt = updated.startedAt ?? Date()
         updated.activeTurnIndex = 0
         updated.feedback = []
         updated.notes = ""
-        updated.turns = await seedTurns(projectRoot: projectRoot)
+        updated.turns = await Task.detached(priority: .userInitiated) {
+            Self.seedTurns(projectRoot: projectRoot, backgrounds: backgrounds, characters: characters)
+        }.value
         updated.updatedAt = Date()
         try writeSession(updated, projectRoot: projectRoot)
-        try writeIndex(projectRoot: projectRoot)
         return Self.runtimeSession(updated, projectRoot: projectRoot)
     }
 
@@ -118,6 +121,14 @@ struct ContinuityBuilderService {
     }
 
     private func seedTurns(projectRoot: URL) async -> [ContinuityBuilderTurn] {
+        Self.seedTurns(projectRoot: projectRoot, backgrounds: store.backgrounds, characters: store.characters)
+    }
+
+    nonisolated private static func seedTurns(
+        projectRoot: URL,
+        backgrounds: [BackgroundPlate],
+        characters: [AnimationCharacter]
+    ) -> [ContinuityBuilderTurn] {
         var warnings: [String] = []
         let world = AutomationSourceResolver.worldContext(projectRoot: projectRoot, warnings: &warnings)
         let styleLock = animatedLookPrompt(projectRoot: projectRoot) ?? ""
@@ -138,7 +149,7 @@ struct ContinuityBuilderService {
                 priorityReason: "World geography mistakes poison every later scene prompt, so this is the first knowledge pathway.",
                 promptSeed: geographyPrompt,
                 negativeGuardrails: baseNegativeGuardrails(world: world),
-                candidates: registryCandidates(projectRoot: projectRoot, names: ["map"], fallback: firstPlaceCandidates(projectRoot: projectRoot, limit: 3)),
+                candidates: registryCandidates(projectRoot: projectRoot, names: ["map"], fallback: firstPlaceCandidates(backgrounds: backgrounds, projectRoot: projectRoot, limit: 3)),
                 contextTags: ["map", "river", "bridge", "ravine", "town", "topography"]
             )
         )
@@ -151,12 +162,12 @@ struct ContinuityBuilderService {
                 priorityReason: "The bridge/ravine/town relationship is a high-frequency continuity anchor and a story-critical geography rule.",
                 promptSeed: [geographyPrompt, "Now isolate the bridge as the landmark: it sits down in a ravine, can become impassable in flooding, and should not create a forest of extra bridges."].joined(separator: "\n\n"),
                 negativeGuardrails: baseNegativeGuardrails(world: world) + ["No extra bridges unless explicitly requested.", "No buildings on the wrong side of the river."],
-                candidates: registryCandidates(projectRoot: projectRoot, names: ["bridge", "map"], fallback: bridgePlaceCandidates(projectRoot: projectRoot, limit: 3)),
+                candidates: registryCandidates(projectRoot: projectRoot, names: ["bridge", "map"], fallback: bridgePlaceCandidates(backgrounds: backgrounds, projectRoot: projectRoot, limit: 3)),
                 contextTags: ["bridge", "ravine", "flood", "river", "town"]
             )
         )
 
-        let placeCandidates = firstPlaceCandidates(projectRoot: projectRoot, limit: 3)
+        let placeCandidates = firstPlaceCandidates(backgrounds: backgrounds, projectRoot: projectRoot, limit: 3)
         turns.append(
             ContinuityBuilderTurn(
                 category: .placeTopography,
@@ -170,7 +181,7 @@ struct ContinuityBuilderService {
             )
         )
 
-        let characterCandidates = firstCharacterCandidates(projectRoot: projectRoot, limit: 3)
+        let characterCandidates = firstCharacterCandidates(characters: characters, projectRoot: projectRoot, limit: 3)
         turns.append(
             ContinuityBuilderTurn(
                 category: .characterIdentity,
@@ -192,7 +203,7 @@ struct ContinuityBuilderService {
                 priorityReason: "Costume/accessory drift is one of the easiest continuity breaks for viewers to notice.",
                 promptSeed: "Extract script-supervisor costume continuity rules. Treat camouflage pattern, color blocking, accessories, and carried objects as hard constraints.",
                 negativeGuardrails: ["Do not simplify camouflage into generic green texture.", "Do not move carried objects to the neck/hand if the continuity rule says belt/satchel."],
-                candidates: firstCostumeCandidates(projectRoot: projectRoot, limit: 3, fallback: characterCandidates),
+                candidates: firstCostumeCandidates(characters: characters, projectRoot: projectRoot, limit: 3, fallback: characterCandidates),
                 contextTags: ["costume", "camouflage", "accessory", "satchel", "polaroid"]
             )
         )
@@ -227,7 +238,7 @@ struct ContinuityBuilderService {
         )
     }
 
-    private func registryCandidates(projectRoot: URL, names: [String], fallback: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
+    nonisolated private static func registryCandidates(projectRoot: URL, names: [String], fallback: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
         let url = ProjectPaths(root: projectRoot).animate.appendingPathComponent("reference-registry.json")
         guard let data = try? Data(contentsOf: url),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -247,9 +258,9 @@ struct ContinuityBuilderService {
         return withLabels(Array(candidates.prefix(3))).isEmpty ? fallback : withLabels(Array(candidates.prefix(3)))
     }
 
-    private func firstPlaceCandidates(projectRoot: URL, limit: Int) -> [ContinuityBuilderCandidate] {
+    nonisolated private static func firstPlaceCandidates(backgrounds: [BackgroundPlate], projectRoot: URL, limit: Int) -> [ContinuityBuilderCandidate] {
         var candidates: [ContinuityBuilderCandidate] = []
-        for place in store.backgrounds {
+        for place in backgrounds {
             let rawPaths = [place.resolvedAnimatedApprovedImagePath, place.resolvedApprovedImagePath] + place.referenceImages.prefix(2).map { Optional($0.imagePath) }
             if let path = rawPaths.compactMap({ resolvedPath($0, projectRoot: projectRoot) }).first(where: { FileManager.default.fileExists(atPath: $0) }) {
                 candidates.append(.init(label: .single, title: place.name, imagePath: path, source: "Places/places.json", referenceRole: "location_identity", promptRole: "place/topography candidate"))
@@ -259,8 +270,8 @@ struct ContinuityBuilderService {
         return withLabels(candidates)
     }
 
-    private func bridgePlaceCandidates(projectRoot: URL, limit: Int) -> [ContinuityBuilderCandidate] {
-        let matches = store.backgrounds.filter { place in
+    nonisolated private static func bridgePlaceCandidates(backgrounds: [BackgroundPlate], projectRoot: URL, limit: Int) -> [ContinuityBuilderCandidate] {
+        let matches = backgrounds.filter { place in
             [place.name, place.visualBrief, place.physicalLayoutAndTopography, place.geographicPlacement, place.imageGenerationGuardrails]
                 .joined(separator: " ")
                 .localizedCaseInsensitiveContains("bridge")
@@ -277,9 +288,9 @@ struct ContinuityBuilderService {
         return withLabels(candidates)
     }
 
-    private func firstCharacterCandidates(projectRoot: URL, limit: Int) -> [ContinuityBuilderCandidate] {
+    nonisolated private static func firstCharacterCandidates(characters: [AnimationCharacter], projectRoot: URL, limit: Int) -> [ContinuityBuilderCandidate] {
         var candidates: [ContinuityBuilderCandidate] = []
-        for character in store.characters {
+        for character in characters {
             let approvedMaster = (character.masterReferenceSheetVariants.first { $0.id == character.approvedMasterReferenceSheetVariantID } ?? character.masterReferenceSheetVariants.last)?.imagePath
             let approvedHead = (character.headTurnaroundSheetVariants.first { $0.id == character.approvedHeadTurnaroundSheetVariantID } ?? character.headTurnaroundSheetVariants.last)?.imagePath
             let raw = [approvedHead, approvedMaster, character.profileImagePath, character.inspirationReferenceImagePath] + character.referenceImagePaths.prefix(2).map(Optional.init)
@@ -291,9 +302,9 @@ struct ContinuityBuilderService {
         return withLabels(candidates)
     }
 
-    private func firstCostumeCandidates(projectRoot: URL, limit: Int, fallback: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
+    nonisolated private static func firstCostumeCandidates(characters: [AnimationCharacter], projectRoot: URL, limit: Int, fallback: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
         var candidates: [ContinuityBuilderCandidate] = []
-        for character in store.characters {
+        for character in characters {
             for costume in character.costumeReferenceSets {
                 let approved = costume.approvedSheetVariant?.imagePath ?? costume.sheetVariants.last?.imagePath
                 let raw = [approved] + costume.costumeReferenceImagePaths.prefix(2).map(Optional.init)
@@ -307,7 +318,7 @@ struct ContinuityBuilderService {
         return withLabels(candidates.isEmpty ? fallback : candidates)
     }
 
-    private func withLabels(_ candidates: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
+    nonisolated private static func withLabels(_ candidates: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
         let labels: [ContinuityBuilderCandidateLabel]
         switch candidates.count {
         case 0: labels = []
@@ -322,7 +333,7 @@ struct ContinuityBuilderService {
         }
     }
 
-    private func baseNegativeGuardrails(world: AutomationWorldContext?) -> [String] {
+    nonisolated private static func baseNegativeGuardrails(world: AutomationWorldContext?) -> [String] {
         var rules = [
             "No future technology in frame.",
             "No generic modern skyline or glossy contemporary architecture.",
@@ -412,13 +423,13 @@ struct ContinuityBuilderService {
         return all
     }
 
-    static func continuityDirectory(projectRoot: URL) -> URL {
+    nonisolated static func continuityDirectory(projectRoot: URL) -> URL {
         ProjectPaths(root: projectRoot).metadata
             .appendingPathComponent("automation", isDirectory: true)
             .appendingPathComponent("continuity-builder", isDirectory: true)
     }
 
-    static func runtimePath(_ rawPath: String?, projectRoot: URL) -> String? {
+    nonisolated static func runtimePath(_ rawPath: String?, projectRoot: URL) -> String? {
         guard let rawPath = rawPath?.trimmingCharacters(in: .whitespacesAndNewlines), !rawPath.isEmpty else { return nil }
         if !rawPath.hasPrefix("/") {
             return projectRoot.appendingPathComponent(rawPath).path
@@ -436,7 +447,7 @@ struct ContinuityBuilderService {
         return rawPath
     }
 
-    static func portablePath(_ rawPath: String?, projectRoot: URL) -> String? {
+    nonisolated static func portablePath(_ rawPath: String?, projectRoot: URL) -> String? {
         guard let runtime = runtimePath(rawPath, projectRoot: projectRoot) else { return nil }
         let projectPath = projectRoot.standardizedFileURL.path
         if runtime == projectPath { return nil }
@@ -446,7 +457,7 @@ struct ContinuityBuilderService {
         return rawPath
     }
 
-    static func runtimeSession(_ session: ContinuityBuilderSession, projectRoot: URL) -> ContinuityBuilderSession {
+    nonisolated static func runtimeSession(_ session: ContinuityBuilderSession, projectRoot: URL) -> ContinuityBuilderSession {
         var copy = session
         copy.projectRoot = projectRoot.path
         for turnIndex in copy.turns.indices {
@@ -460,7 +471,7 @@ struct ContinuityBuilderService {
         return copy
     }
 
-    static func portableSession(_ session: ContinuityBuilderSession, projectRoot: URL) -> ContinuityBuilderSession {
+    nonisolated static func portableSession(_ session: ContinuityBuilderSession, projectRoot: URL) -> ContinuityBuilderSession {
         var copy = session
         copy.projectRoot = projectRoot.lastPathComponent
         for turnIndex in copy.turns.indices {

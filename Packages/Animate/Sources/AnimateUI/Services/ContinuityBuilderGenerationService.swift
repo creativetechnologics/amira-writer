@@ -72,7 +72,7 @@ struct ContinuityBuilderGenerationService {
         }
         var session = request.session
         let turn = session.turns[turnIndex]
-        if estimatedCost > request.maxCostUSD {
+        if !isDryRun, estimatedCost > request.maxCostUSD {
             blockers.append(.init(code: .blockedCostCap, message: "Estimated Vertex image cost $\(String(format: "%.3f", estimatedCost)) exceeds maxCostUSD $\(String(format: "%.3f", request.maxCostUSD)).", field: "maxCostUSD"))
         }
         if normalizedMode == "execute", let availability = store.geminiImageGenerationAvailabilityError {
