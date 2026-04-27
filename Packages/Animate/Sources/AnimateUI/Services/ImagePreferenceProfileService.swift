@@ -144,14 +144,18 @@ enum ImagePreferenceProfileService {
 
         return scored
             .prefix(max(1, limit))
-            .map { clause, _ in
+            .compactMap { clause, _ in
                 let prefix: String
                 switch clause.polarity {
-                case .prefer: prefix = "Gary preference (role=\(clause.role.rawValue), prefer)"
-                case .avoid: prefix = "Gary preference (role=\(clause.role.rawValue), avoid/repair)"
-                case .mixed: prefix = "Gary preference (role=\(clause.role.rawValue), mixed)"
+                case .prefer: prefix = "Prefer"
+                case .avoid: prefix = "Avoid"
+                case .mixed: prefix = "Use"
                 }
-                return "\(prefix): \(clause.text)"
+                return ContinuityPromptMemoryCompiler.visualInstruction(
+                    from: clause.text,
+                    prefix: prefix,
+                    maxCharacters: 180
+                )
             }
     }
 
@@ -326,7 +330,9 @@ enum ImagePreferenceProfileService {
             let ratingWeight = sample.isLiked ? 5.5 : Double(sample.rating ?? 3)
             let rejectionWeight = sample.isRejected ? 3.0 : 0.0
             let noteWeight = min(3.0, Double(sample.notes.count) / 180.0)
-            let text = sample.notes
+            guard let text = ContinuityPromptMemoryCompiler.visualInstruction(from: sample.notes, maxCharacters: 180) else {
+                return nil
+            }
             let tags = Array(terms(from: [sample.notes, sample.analysisText, sample.linkKinds.joined(separator: " ")].joined(separator: "\n")).prefix(24))
             return ImagePreferencePromptMemoryClause(
                 id: stableID(sample.resolvedPath + "|" + role.rawValue + "|" + sample.notes),

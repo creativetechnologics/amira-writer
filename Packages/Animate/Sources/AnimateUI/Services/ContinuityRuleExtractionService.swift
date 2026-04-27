@@ -10,6 +10,10 @@ struct ContinuityFeedbackSource: Identifiable, Codable, Sendable, Hashable {
     var imagePath: String?
     var label: String
     var notes: String
+    var reviewStatus: String? = nil
+    var rating: Int? = nil
+    var isRejected: Bool? = nil
+    var reviewScope: String? = nil
     var analysisSummary: String?
     var tags: [String]
     var vector: [Double]
@@ -159,10 +163,19 @@ struct ContinuityRuleExtractionService {
         return try? decoder.decode(ContinuityRuleExtractionArtifact.self, from: data)
     }
 
-    static func relevantPromptClauses(projectRoot: URL, query: String, limit: Int = 8) -> [String] {
+    static func relevantPromptClauses(
+        projectRoot: URL,
+        query: String,
+        categories: Set<String>? = nil,
+        limit: Int = 8
+    ) -> [String] {
         guard let artifact = latest(projectRoot: projectRoot) else { return [] }
         let queryVector = ContinuityTextVectorizer.vector(for: query)
         let scored = artifact.fingerprints
+            .filter { rule in
+                guard let categories else { return true }
+                return categories.contains(rule.category.lowercased())
+            }
             .map { rule -> (ContinuityRuleFingerprint, Double) in
                 let tagScore = rule.requiredTags.reduce(0.0) { partial, tag in
                     partial + (query.localizedCaseInsensitiveContains(tag) ? 0.15 : 0)
@@ -176,28 +189,30 @@ struct ContinuityRuleExtractionService {
         let relevant = scored.filter { $0.1 > 0.04 }
         return (relevant.isEmpty ? scored : relevant)
             .prefix(max(1, limit))
-            .map { $0.0.promptClause }
+            .compactMap { ContinuityPromptMemoryCompiler.sanitizedPromptClause($0.0.promptClause) }
     }
 
     private func collectSources(projectRoot: URL, limit: Int) async -> [ContinuityFeedbackSource] {
         var sources: [ContinuityFeedbackSource] = []
         for artifact in ImageReviewFeedbackService.loadAllFeedback(projectRoot: projectRoot) {
-            let reviewStatus = artifact.isRejected
-                ? "Image review status: rejected. Use the written notes as continuity learning input, but never treat the rejected image itself as a positive reference."
-                : "Image review status: rated \(artifact.rating.map(String.init) ?? "unrated")."
-            let reviewScope = artifact.semanticRole.map { "Review scope: \($0.rawValue). Interpret this rating/feedback as about the \($0.displayName.lowercased()) content, not unrelated foreground/background material." }
-            let reviewNotes = ([reviewStatus, reviewScope, artifact.notes].compactMap { $0 }).joined(separator: "\n")
+            let reviewStatus = artifact.isRejected ? "rejected" : artifact.rating.map { "rated_\($0)" } ?? "unrated"
+            let reviewScope = artifact.semanticRole?.rawValue
+            let notes = ContinuityPromptMemoryCompiler.cleaned(artifact.notes)
             let text = [artifact.notes, artifact.originLabel, artifact.groupLabel, artifact.semanticRole?.rawValue, artifact.analysis?.summary, artifact.analysis?.retrievalJSON]
                 .compactMap { $0 }
                 .joined(separator: "\n")
-            let tags = Self.tags(from: text)
+            let tags = Array(Set(Self.tags(from: text) + [reviewStatus, reviewScope].compactMap { $0 })).sorted()
             sources.append(.init(
                 id: "image-feedback:\(artifact.id.uuidString)",
                 sourceKind: "image_feedback",
                 category: artifact.semanticRole?.rawValue ?? artifact.source,
                 imagePath: artifact.imagePath,
                 label: artifact.originLabel,
-                notes: reviewNotes,
+                notes: notes,
+                reviewStatus: reviewStatus,
+                rating: artifact.rating,
+                isRejected: artifact.isRejected,
+                reviewScope: reviewScope,
                 analysisSummary: artifact.analysis?.summary ?? artifact.analysis?.shortCaption,
                 tags: tags,
                 vector: ContinuityTextVectorizer.vector(for: text),
@@ -212,7 +227,11 @@ struct ContinuityRuleExtractionService {
                 category: feedback.selectedCandidateLabel?.rawValue,
                 imagePath: nil,
                 label: feedback.selectedCandidateLabel?.displayName ?? "Continuity Builder",
-                notes: feedback.notes,
+                notes: ContinuityPromptMemoryCompiler.cleaned(feedback.notes),
+                reviewStatus: feedback.closenessPercent >= 75 ? "positive_feedback" : "correction_feedback",
+                rating: nil,
+                isRejected: feedback.closenessPercent < 45,
+                reviewScope: nil,
                 analysisSummary: nil,
                 tags: feedback.interpretedFocus,
                 vector: ContinuityTextVectorizer.vector(for: text),
@@ -225,16 +244,17 @@ struct ContinuityRuleExtractionService {
     private static func heuristicFingerprints(from sources: [ContinuityFeedbackSource]) -> [ContinuityRuleFingerprint] {
         let buckets = Dictionary(grouping: sources) { source in category(for: source.notes + " " + source.tags.joined(separator: " ")) }
         return buckets.compactMap { category, grouped in
-            let notes = grouped.map(\.notes).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            let notes = grouped
+                .map(\.notes)
+                .compactMap { ContinuityPromptMemoryCompiler.visualInstruction(from: $0, maxCharacters: 180) }
             guard !notes.isEmpty else { return nil }
-            let joined = notes.prefix(6).joined(separator: " | ")
             let tags = Array(Set(grouped.flatMap(\.tags))).sorted()
-            let ruleText = heuristicRuleText(category: category, notes: joined, tags: tags)
+            guard let ruleText = heuristicRuleText(category: category, notes: Array(notes.prefix(6)), tags: tags) else { return nil }
             return ContinuityRuleFingerprint(
                 category: category,
                 title: title(for: category, tags: tags),
                 canonicalRule: ruleText,
-                promptClause: "Continuity rule (\(category), support \(grouped.count)): \(ruleText)",
+                promptClause: ruleText,
                 positiveSignals: [],
                 negativeSignals: notes,
                 requiredTags: tags,
@@ -254,16 +274,21 @@ struct ContinuityRuleExtractionService {
         Output JSON only. Do not include markdown. Be conservative: rules must trace to source feedback.
         Prefer concrete geography/costume/prop/style constraints over generic advice.
         """
-        let sourcePayload = sources.prefix(80).map { source in
-            [
-                "id": source.id,
-                "kind": source.sourceKind,
-                "label": source.label,
-                "notes": source.notes,
-                "analysis": source.analysisSummary ?? "",
-                "tags": source.tags.joined(separator: ", ")
-            ].map { "\($0): \($1)" }.joined(separator: "\n")
-        }.joined(separator: "\n---\n")
+        let sourcePayloadItems: [String] = sources.prefix(80).map { source in
+            let rows: [String] = [
+                "id: \(source.id)",
+                "kind: \(source.sourceKind)",
+                "label: \(source.label)",
+                "reviewStatus: \(source.reviewStatus ?? "")",
+                "reviewScope: \(source.reviewScope ?? "")",
+                "rating: \(source.rating.map(String.init) ?? "")",
+                "notes: \(source.notes)",
+                "analysis: \(source.analysisSummary ?? "")",
+                "tags: \(source.tags.joined(separator: ", "))"
+            ]
+            return rows.joined(separator: "\n")
+        }
+        let sourcePayload = sourcePayloadItems.joined(separator: "\n---\n")
         let user = """
         Produce this exact JSON shape:
         {
@@ -404,8 +429,8 @@ struct ContinuityRuleExtractionService {
         return suffix.isEmpty ? category.replacingOccurrences(of: "_", with: " ").capitalized : "\(category.replacingOccurrences(of: "_", with: " ").capitalized): \(suffix)"
     }
 
-    private static func heuristicRuleText(category: String, notes: String, tags: [String]) -> String {
-        "Apply this \(category.replacingOccurrences(of: "_", with: " ")) correction when relevant: \(notes)"
+    private static func heuristicRuleText(category: String, notes: [String], tags: [String]) -> String? {
+        ContinuityPromptMemoryCompiler.visualRule(category: category, notes: notes, tags: tags)
     }
 }
 

@@ -596,16 +596,11 @@ struct ContinuityBuilderGenerationService {
         let continuityRules = ContinuityRuleExtractionService.relevantPromptClauses(
             projectRoot: projectRoot,
             query: query,
-            limit: 12
+            categories: continuityRuleCategories(for: turn.category),
+            limit: 4
         )
         let targetedFeedbackClauses = ContinuityBuilderService.promptClauses(
-            from: ContinuityBuilderService.relevantFeedback(projectRoot: projectRoot, query: query, limit: 10)
-        )
-        let recentFeedbackClauses = ContinuityBuilderService.promptClauses(
-            from: ContinuityBuilderService.loadAllFeedback(projectRoot: projectRoot)
-                .sorted { $0.submittedAt > $1.submittedAt }
-                .prefix(8)
-                .map { $0 }
+            from: ContinuityBuilderService.relevantFeedback(projectRoot: projectRoot, query: query, limit: 3)
         )
         let semanticRoles: [ImageLibrarySemanticRole]? = {
             switch turn.category {
@@ -621,31 +616,33 @@ struct ContinuityBuilderGenerationService {
             projectRoot: projectRoot,
             query: query,
             semanticRoles: semanticRoles,
-            limit: 10
+            limit: 3
         )
-        let memoryClauses = Array(Self.uniqueClauses(continuityRules + targetedFeedbackClauses + recentFeedbackClauses + preferenceClauses).prefix(30))
+        let memoryClauses = Array(
+            Self.uniqueClauses(continuityRules + targetedFeedbackClauses + preferenceClauses)
+                .filter { memoryClause($0, appliesTo: turn.category) }
+                .prefix(6)
+        )
+        let cleanedPromptSeed = ContinuityPromptMemoryCompiler.cleaned(turn.promptSeed)
+        let isCharacterTurn = isCharacterCategory(turn.category)
         return [
-            "Continuity Builder training candidate. Generate a single image for Gary to critique.",
-            "Review category: \(turn.category.reviewSubjectLabel).",
+            "Create one finished \(aspectRatio) open-matte \(imageSize) image.",
+            "Visual subject: \(turn.category.reviewSubjectLabel).",
             subjectIsolationPrompt(for: turn.category),
-            "Candidate label visible to the system: \(label.displayName). Do not render any label text in the image.",
-            "Output format: \(aspectRatio) open-matte, \(imageSize). Keep a wider-than-needed field of view so later 21:9/vertical crops and camera moves remain possible.",
-            isEditRequest ? "EDIT MODE: the first attached image is the source image to edit. Apply Gary's direct edit request from the prompt seed while preserving everything already correct: composition, layout, identity, costume, lighting, camera, style, and continuity facts. Do not start over from a blank generation unless the source image is impossible to edit." : nil,
+            "Composition: keep a wider-than-needed field of view so later 21:9/vertical crops and camera moves remain possible.",
+            isEditRequest ? "Edit mode: the first attached image is the source image. Apply the edit instruction while preserving everything already correct: composition, layout, identity, costume, lighting, camera, style, and continuity facts. Do not restart from a blank scene unless the source image is impossible to edit." : nil,
             hasMasterMapReference ? "MASTER MAP HARD RULE: the attached master valley top-down map is the canonical geography/layout reference. Follow it for river direction, north-bank settlement placement, town/hill distance from river, bridge/ravine relationship, road approach, cemetery/base placement, and forbidden wrong-side buildings. Do not invent a different town/river/bridge layout." : nil,
-            "Human wardrobe hard rule: every visible person must be fully clothed in story-appropriate wardrobe. Soldier characters must wear their approved military uniform/camouflage, boots, belts, and assigned accessories. Civilian characters must wear their approved plain clothes. If an attached reference is an unclothed/neutral/body model sheet, use it only for face/body identity and replace the clothing with the correct approved costume; never copy nudity, underwear, bare torsos, or missing wardrobe into the generated image.",
+            isCharacterTurn ? "Human wardrobe hard rule: every visible person must be fully clothed in story-appropriate wardrobe. Soldier characters must wear their approved military uniform/camouflage, boots, belts, and assigned accessories. Civilian characters must wear their approved plain clothes. If an attached reference is an unclothed/neutral/body model sheet, use it only for face/body identity and replace the clothing with the correct approved costume; never copy nudity, underwear, bare torsos, or missing wardrobe into the generated image." : nil,
             characterContract?.promptClause,
-            turn.promptSeed,
-            "Question this image is meant to answer: \(turn.question)",
+            cleanedPromptSeed.isEmpty ? nil : "Primary visual brief:\n\(cleanedPromptSeed)",
             memoryClauses.isEmpty ? nil : [
-                "AUTHORITATIVE CONTINUITY MEMORY — these rules override attached images, older generated examples, and any ambiguous visual reference.",
-                "Do not reintroduce mistakes called out in negative feedback. If a prior image had a flat bridge and feedback says the bridge must be arched, the new image must use an arched bridge.",
+                "Visual continuity rules:",
                 memoryClauses.joined(separator: "\n")
             ].joined(separator: "\n"),
-            "Reference usage: attached images are continuity references, not collage panels. Preserve only the relevant geography/identity/costume/style facts that do not conflict with the authoritative continuity memory.",
-            "Character reference usage: identity references control face, age, hair, proportions, and silhouette; costume references and continuity memory control clothing. Do not let an unclothed or neutral character reference override the required costume.",
+            "Reference usage: attached images are continuity references, not collage panels. Preserve only the relevant geography/identity/costume/style facts that do not conflict with the visual continuity rules.",
+            isCharacterTurn ? "Character reference usage: identity references control face, age, hair, proportions, and silhouette; costume references and continuity memory control clothing. Do not let an unclothed or neutral character reference override the required costume." : nil,
             characterContract == nil ? nil : "Final character override: if any other instruction or attached image conflicts with the named character/costume contract, follow the character/costume contract. Generate no background landmarks; the image is for character/costume judgment only.",
-            "Negative guardrails: \(turn.negativeGuardrails.joined(separator: " | "))",
-            "Variant guidance: produce a distinct but plausible candidate \(variantIndex + 1), changing composition only enough to test the continuity question."
+            "Negative guardrails: \(turn.negativeGuardrails.joined(separator: " | "))"
         ].compactMap { $0 }.joined(separator: "\n\n")
     }
 
@@ -660,16 +657,62 @@ struct ContinuityBuilderGenerationService {
         return unique
     }
 
+    private func continuityRuleCategories(for category: ContinuityBuilderCategory) -> Set<String> {
+        switch category {
+        case .worldGeography, .landmarkBridge, .placeTopography, .sceneContinuity:
+            return ["geography", "scene_continuity"]
+        case .characterIdentity:
+            return ["character_identity", "costume"]
+        case .costumeContinuity:
+            return ["costume", "character_identity"]
+        case .vehicleProp:
+            return ["vehicle_prop"]
+        case .styleContinuity:
+            return ["style"]
+        }
+    }
+
+    private func isCharacterCategory(_ category: ContinuityBuilderCategory) -> Bool {
+        switch category {
+        case .characterIdentity, .costumeContinuity:
+            return true
+        case .worldGeography, .placeTopography, .landmarkBridge, .vehicleProp, .sceneContinuity, .styleContinuity:
+            return false
+        }
+    }
+
+    private func memoryClause(_ clause: String, appliesTo category: ContinuityBuilderCategory) -> Bool {
+        let lower = clause.lowercased()
+        let placeTerms = ["river", "bridge", "ravine", "town", "hill", "slope", "road", "building", "architecture", "market", "passage", "cobblestone", "awning", "mud-brick", "stone", "map", "valley", "mountain", "north bank", "south bank", "landscape", "terrain"]
+        let characterTerms = ["character", "face", "head", "hair", "skin", "costume", "uniform", "camouflage", "boots", "belt", "satchel", "polaroid", "camera", "medic", "soldier"]
+        let styleTerms = ["style", "palette", "grain", "line", "texture", "lighting", "anime", "cgi", "lens", "matte", "4:3"]
+        let hasPlace = placeTerms.contains { lower.contains($0) }
+        let hasCharacter = characterTerms.contains { lower.contains($0) }
+        let hasStyle = styleTerms.contains { lower.contains($0) }
+        switch category {
+        case .worldGeography, .landmarkBridge, .placeTopography, .sceneContinuity:
+            guard !hasCharacter else { return false }
+            return hasPlace || hasStyle
+        case .characterIdentity, .costumeContinuity:
+            guard !hasPlace else { return false }
+            return hasCharacter || hasStyle
+        case .vehicleProp:
+            return lower.contains("vehicle") || lower.contains("humvee") || lower.contains("prop") || (hasStyle && !hasPlace && !hasCharacter)
+        case .styleContinuity:
+            return hasStyle && !hasPlace && !hasCharacter
+        }
+    }
+
     private func subjectIsolationPrompt(for category: ContinuityBuilderCategory) -> String {
         switch category {
         case .worldGeography, .placeTopography, .landmarkBridge, .sceneContinuity:
-            return "Subject isolation hard rule: this is a PLACE training image. Generate geography, architecture, materials, roads, river, bridge, ravine, and other place/landmark facts only. Do not include named characters, character portraits, soldiers, civilians, or full-body people as review subjects. If scale would require people, omit people instead. Gary's like/reject decision applies only to place continuity."
+            return "Visual scope: place-only geography, architecture, materials, roads, river, bridge, ravine, and other place/landmark facts. Do not include named characters, character portraits, soldiers, civilians, or full-body people."
         case .characterIdentity, .costumeContinuity:
-            return "Subject isolation hard rule: this is a CHARACTER training image. Generate the character or costume reference only, not a place/landscape shot. Use a plain, neutral, or extremely simple non-canonical background with no recognizable town, bridge, valley, river, road network, or landmark. Gary's like/reject decision applies only to character/costume continuity."
+            return "Visual scope: character/costume reference only, not a place or landscape shot. Use a plain, neutral, non-canonical background with no recognizable town, bridge, valley, river, road network, or landmark."
         case .vehicleProp:
-            return "Subject isolation hard rule: this is a VEHICLE / PROP training image. Isolate the vehicle or prop; do not include named characters and do not turn it into a canonical place/landscape composition. Gary's like/reject decision applies only to the object."
+            return "Visual scope: isolated vehicle/prop. Do not include named characters and do not turn it into a canonical place or landscape composition."
         case .styleContinuity:
-            return "Subject isolation hard rule: this is a STYLE training image. Use a simple unpopulated frame that demonstrates line, color, texture, grain, lighting, and open-matte composition without teaching character identity or place geography."
+            return "Visual scope: style sample. Use a simple unpopulated frame that demonstrates line, color, texture, grain, lighting, and open-matte composition without teaching character identity or place geography."
         }
     }
 

@@ -134,7 +134,7 @@ struct ContinuityBuilderService {
         next.priorityReason = "Gary's feedback was interpreted as a direct edit request, so the next candidate edits the displayed image instead of starting from a blank generation."
         next.promptSeed = [
             turn.promptSeed,
-            "Direct edit request from Gary: \(editInstruction)",
+            "Edit instruction: \(ContinuityPromptMemoryCompiler.cleaned(editInstruction))",
             "Use the previous displayed image as the edit source. Preserve all correct composition, identity, costume, lighting, style, geometry, and continuity facts not explicitly changed by the edit instruction."
         ].joined(separator: "\n\n")
         next.candidates = [editSource] + templateCandidates
@@ -232,10 +232,19 @@ struct ContinuityBuilderService {
 
     static func promptClauses(from feedback: [ContinuityBuilderFeedback]) -> [String] {
         feedback.compactMap { item in
-            let notes = item.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !notes.isEmpty else { return nil }
-            let label = item.selectedCandidateLabel?.displayName ?? "shown candidate"
-            return "Continuity Builder feedback for \(label) (\(item.closenessPercent)% close): \(notes)"
+            let prefix: String?
+            if item.closenessPercent >= 80 {
+                prefix = "Preserve"
+            } else if item.closenessPercent <= 40 {
+                prefix = "Avoid"
+            } else {
+                prefix = nil
+            }
+            return ContinuityPromptMemoryCompiler.visualInstruction(
+                from: item.notes,
+                prefix: prefix,
+                maxCharacters: 180
+            )
         }
     }
 
@@ -403,12 +412,16 @@ struct ContinuityBuilderService {
         next.title = Self.nextTitle(for: category, feedback: feedback)
         next.question = Self.nextQuestion(for: category, feedback: feedback)
         next.priorityReason = "Chosen dynamically from the latest continuity note and accumulated prompt-memory tags; this is one continuous stream, not a separate sidebar track."
+        let feedbackInstruction = ContinuityPromptMemoryCompiler.visualInstruction(
+            from: feedback.notes,
+            prefix: feedback.closenessPercent >= 80 ? "Preserve" : "Repair",
+            maxCharacters: 180
+        )
         next.promptSeed = [
             next.promptSeed,
-            "Latest Gary feedback to repair or preserve: \(feedback.notes)",
-            "Selected candidate label: \(feedback.selectedCandidateLabel?.displayName ?? "shown candidate"). Closeness score: \(feedback.closenessPercent)%.",
-            "Next generated candidate should specifically respond to that feedback while preserving any accepted continuity facts."
-        ].joined(separator: "\n\n")
+            feedbackInstruction,
+            "Carry forward established accepted continuity facts."
+        ].compactMap { $0 }.joined(separator: "\n\n")
         next.contextTags = Array(Set(next.contextTags + feedback.interpretedFocus)).sorted()
         next.requiresPaidGeneration = false
         next.generationStatus = "ready_for_generation"
