@@ -7,6 +7,11 @@ import ProjectKit
 struct ContinuityBuilderService {
     var store: AnimateStore
 
+    nonisolated static let currentGenerationPolicyMarker = "Subject isolation hard rule:"
+    nonisolated static let currentGenerationCategoryMarker = "Review category:"
+    nonisolated static let generatedCandidateSource = "Continuity Builder generated candidate"
+    nonisolated static let editSourceCandidateSource = "Continuity Builder edit source"
+
     func loadOrCreateSession(projectRoot: URL) async -> ContinuityBuilderSession {
         if var existing = readLatestSession(projectRoot: projectRoot) {
             if existing.hasStarted, existing.turns.isEmpty {
@@ -21,12 +26,26 @@ struct ContinuityBuilderService {
                 existing.updatedAt = Date()
                 try? writeSession(existing, projectRoot: projectRoot)
             }
-            return Self.runtimeSession(Self.sessionWithLatestGeneratedCandidates(existing, projectRoot: projectRoot), projectRoot: projectRoot)
+            var hydrated = Self.runtimeSession(Self.sessionWithLatestGeneratedCandidates(existing, projectRoot: projectRoot), projectRoot: projectRoot)
+            Self.restoreReferenceCandidatesForUngeneratedTurns(
+                &hydrated,
+                projectRoot: projectRoot,
+                backgrounds: store.backgrounds,
+                characters: store.characters
+            )
+            return hydrated
         }
         let session = ContinuityBuilderSession(projectRoot: projectRoot.path)
         try? writeSession(session, projectRoot: projectRoot)
         try? writeLatestPointer(sessionID: session.id, projectRoot: projectRoot)
-        return Self.runtimeSession(Self.sessionWithLatestGeneratedCandidates(session, projectRoot: projectRoot), projectRoot: projectRoot)
+        var hydrated = Self.runtimeSession(Self.sessionWithLatestGeneratedCandidates(session, projectRoot: projectRoot), projectRoot: projectRoot)
+        Self.restoreReferenceCandidatesForUngeneratedTurns(
+            &hydrated,
+            projectRoot: projectRoot,
+            backgrounds: store.backgrounds,
+            characters: store.characters
+        )
+        return hydrated
     }
 
     func begin(session: ContinuityBuilderSession, projectRoot: URL) async throws -> ContinuityBuilderSession {
@@ -73,8 +92,13 @@ struct ContinuityBuilderService {
         let futureTurns = updated.turns.indices.contains(currentIndex)
             ? Array(updated.turns.dropFirst(currentIndex + 1))
             : []
-        let bufferedChoice = Self.selectBufferedTurn(from: futureTurns, after: turn, feedback: feedback)
-        let nextTurn = bufferedChoice ?? nextStreamTurn(after: turn, feedback: feedback, projectRoot: projectRoot)
+        let nextTurn: ContinuityBuilderTurn
+        if let editTurn = editTurn(after: turn, feedback: feedback, projectRoot: projectRoot) {
+            nextTurn = editTurn
+        } else {
+            let bufferedChoice = Self.selectBufferedTurn(from: futureTurns, after: turn, feedback: feedback, projectRoot: projectRoot)
+            nextTurn = bufferedChoice ?? nextStreamTurn(after: turn, feedback: feedback, projectRoot: projectRoot)
+        }
         let remainingFuture = futureTurns.filter { $0.id != nextTurn.id }
         updated.turns = completedPrefix + [nextTurn] + Array(remainingFuture.prefix(4))
         updated.activeTurnIndex = completedPrefix.count
@@ -83,6 +107,41 @@ struct ContinuityBuilderService {
         try writeSession(updated, projectRoot: projectRoot)
         try writeIndex(projectRoot: projectRoot)
         return updated
+    }
+
+    private func editTurn(after turn: ContinuityBuilderTurn, feedback: ContinuityBuilderFeedback, projectRoot: URL) -> ContinuityBuilderTurn? {
+        guard let editInstruction = Self.editInstruction(from: feedback.notes),
+              let selectedLabel = feedback.selectedCandidateLabel,
+              let sourceCandidate = turn.candidates.first(where: { $0.label == selectedLabel }),
+              let sourcePath = sourceCandidate.imagePath,
+              FileManager.default.fileExists(atPath: sourcePath) else { return nil }
+        let templates = Self.seedTurns(projectRoot: projectRoot, backgrounds: store.backgrounds, characters: store.characters)
+        let templateCandidates = templates.first(where: { $0.category == turn.category })?.candidates ?? []
+        let editSource = ContinuityBuilderCandidate(
+            label: .single,
+            title: "Previous image to edit",
+            imagePath: sourcePath,
+            source: Self.editSourceCandidateSource,
+            referenceRole: "edit_source",
+            promptRole: "source image for requested Gemini edit",
+            analysisSummary: nil
+        )
+        var next = turn
+        next.id = UUID()
+        next.createdAt = Date()
+        next.title = "Edit: \(turn.category.displayName)"
+        next.question = "Review the edited image. Did the requested change land while preserving everything else that was working?"
+        next.priorityReason = "Gary's feedback was interpreted as a direct edit request, so the next candidate edits the displayed image instead of starting from a blank generation."
+        next.promptSeed = [
+            turn.promptSeed,
+            "Direct edit request from Gary: \(editInstruction)",
+            "Use the previous displayed image as the edit source. Preserve all correct composition, identity, costume, lighting, style, geometry, and continuity facts not explicitly changed by the edit instruction."
+        ].joined(separator: "\n\n")
+        next.candidates = [editSource] + templateCandidates
+        next.contextTags = Array(Set(turn.contextTags + feedback.interpretedFocus + ["edit", "source-image"])).sorted()
+        next.requiresPaidGeneration = false
+        next.generationStatus = "ready_for_generation"
+        return next
     }
 
     func move(session: ContinuityBuilderSession, delta: Int, projectRoot: URL) throws -> ContinuityBuilderSession {
@@ -180,6 +239,45 @@ struct ContinuityBuilderService {
         }
     }
 
+    nonisolated static func editInstruction(from notes: String) -> String? {
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 8 else { return nil }
+        let lower = trimmed.lowercased()
+        let editMarkers = [
+            "edit this", "edit it", "change this", "change it", "make this", "make it",
+            "fix this", "fix it", "adjust this", "adjust it", "replace ", "remove ",
+            "add ", "move ", "turn this", "turn it", "keep everything else",
+            "preserve everything", "same image but", "same picture but"
+        ]
+        if editMarkers.contains(where: { lower.contains($0) }) {
+            return trimmed
+        }
+        if lower.contains("should be") || lower.contains("should not") || lower.contains("needs to") || lower.contains("too ") {
+            return trimmed
+        }
+        return nil
+    }
+
+    nonisolated static func isCurrentGeneratedCandidate(_ candidate: ContinuityBuilderCandidate, projectRoot: URL) -> Bool {
+        guard candidate.source == generatedCandidateSource,
+              let imagePath = candidate.imagePath else { return false }
+        let promptURL = promptURL(forImagePath: imagePath, projectRoot: projectRoot)
+        guard let prompt = try? String(contentsOf: promptURL, encoding: .utf8) else { return false }
+        return prompt.contains(currentGenerationPolicyMarker) && prompt.contains(currentGenerationCategoryMarker)
+    }
+
+    nonisolated static func turnHasCurrentGeneratedCandidate(_ turn: ContinuityBuilderTurn, projectRoot: URL) -> Bool {
+        turn.generationStatus == "generated_candidates_ready_for_feedback"
+            && turn.candidates.contains { isCurrentGeneratedCandidate($0, projectRoot: projectRoot) }
+    }
+
+    nonisolated private static func promptURL(forImagePath imagePath: String, projectRoot: URL) -> URL {
+        let imageURL = imagePath.hasPrefix("/")
+            ? URL(fileURLWithPath: imagePath)
+            : projectRoot.appendingPathComponent(imagePath)
+        return imageURL.deletingPathExtension().appendingPathExtension("prompt.txt")
+    }
+
     private func seedTurns(projectRoot: URL) async -> [ContinuityBuilderTurn] {
         Self.seedTurns(projectRoot: projectRoot, backgrounds: store.backgrounds, characters: store.characters)
     }
@@ -242,16 +340,25 @@ struct ContinuityBuilderService {
         )
 
         let characterCandidates = firstCharacterCandidates(characters: characters, projectRoot: projectRoot, limit: 3)
+        let costumeCandidates = firstCostumeCandidates(characters: characters, projectRoot: projectRoot, limit: 3, fallback: [])
         turns.append(
             ContinuityBuilderTurn(
                 category: .characterIdentity,
                 title: "Character identity anchors",
                 question: "Which identity details must be preserved? Mention face angle, age, hair/headgear, accessories, and whether this is the right type of reference for close-up vs full body.",
                 priorityReason: "Character identity references should be classified before they are reused as generation references.",
-                promptSeed: "Extract durable character identity rules from the shown reference candidates. Prefer close-up/head-turn refs for face angle and full-body refs for silhouette.",
-                negativeGuardrails: ["Do not mix characters.", "Do not use a full-frame scene as a face identity reference if a tighter head reference exists."],
-                candidates: characterCandidates,
-                contextTags: ["character", "identity", "head", "face", "turnaround"]
+                promptSeed: [
+                    "Extract durable character identity rules from the shown reference candidates. Prefer close-up/head-turn refs for face angle and full-body refs for silhouette.",
+                    "Every generated person must be fully clothed in story-appropriate wardrobe. Soldier characters must wear their approved military uniform/camouflage, boots, belts, and assigned accessories; civilian characters must wear their approved plain clothes."
+                ].joined(separator: "\n"),
+                negativeGuardrails: [
+                    "Do not mix characters.",
+                    "Do not use a full-frame scene as a face identity reference if a tighter head reference exists.",
+                    "No nudity, underwear, unclothed model-sheet bodies, bare torsos, or missing wardrobe.",
+                    "Do not copy unclothed/neutral reference clothing state into a generated continuity image."
+                ],
+                candidates: characterCandidates + costumeCandidates,
+                contextTags: ["character", "identity", "head", "face", "turnaround", "costume", "uniform"]
             )
         )
 
@@ -261,9 +368,13 @@ struct ContinuityBuilderService {
                 title: "Costume / accessory continuity",
                 question: "What clothing, camouflage, satchels, belts, cameras, footwear, dirt/wear, or accessories must be exact every time?",
                 priorityReason: "Costume/accessory drift is one of the easiest continuity breaks for viewers to notice.",
-                promptSeed: "Extract script-supervisor costume continuity rules. Treat camouflage pattern, color blocking, accessories, and carried objects as hard constraints.",
-                negativeGuardrails: ["Do not simplify camouflage into generic green texture.", "Do not move carried objects to the neck/hand if the continuity rule says belt/satchel."],
-                candidates: firstCostumeCandidates(characters: characters, projectRoot: projectRoot, limit: 3, fallback: characterCandidates),
+                promptSeed: "Extract script-supervisor costume continuity rules. Treat camouflage pattern, color blocking, accessories, and carried objects as hard constraints. Every generated person must be fully clothed; soldiers must always be in the approved uniform/camouflage unless a later explicit story rule says otherwise.",
+                negativeGuardrails: [
+                    "Do not simplify camouflage into generic green texture.",
+                    "Do not move carried objects to the neck/hand if the continuity rule says belt/satchel.",
+                    "No nudity, underwear, unclothed model-sheet bodies, bare torsos, or missing wardrobe."
+                ],
+                candidates: costumeCandidates.isEmpty ? characterCandidates : costumeCandidates,
                 contextTags: ["costume", "camouflage", "accessory", "satchel", "polaroid"]
             )
         )
@@ -311,7 +422,7 @@ struct ContinuityBuilderService {
         let candidates: [ContinuityBuilderCategory]
         switch category {
         case .worldGeography, .placeTopography, .landmarkBridge, .vehicleProp, .sceneContinuity:
-            candidates = [.characterIdentity, .costumeContinuity, .styleContinuity]
+            candidates = [.costumeContinuity, .characterIdentity, .styleContinuity]
         case .characterIdentity, .costumeContinuity:
             candidates = [.landmarkBridge, .placeTopography, .worldGeography, .styleContinuity]
         case .styleContinuity:
@@ -351,17 +462,22 @@ struct ContinuityBuilderService {
     nonisolated private static func selectBufferedTurn(
         from futureTurns: [ContinuityBuilderTurn],
         after turn: ContinuityBuilderTurn,
-        feedback: ContinuityBuilderFeedback
+        feedback: ContinuityBuilderFeedback,
+        projectRoot: URL
     ) -> ContinuityBuilderTurn? {
         let desiredNext = nextCategory(after: turn, feedback: feedback)
         let currentRole = semanticLane(for: turn.category)
         let desiredRole = semanticLane(for: desiredNext)
         return futureTurns
-            .filter { $0.generationStatus == "generated_candidates_ready_for_feedback" }
+            .filter { turnHasCurrentGeneratedCandidate($0, projectRoot: projectRoot) }
             .sorted { lhs, rhs in lhs.createdAt < rhs.createdAt }
             .first { buffered in
+                guard buffered.category != desiredNext else { return false }
                 let bufferedRole = semanticLane(for: buffered.category)
-                return buffered.category == desiredNext || bufferedRole != currentRole || bufferedRole != desiredRole
+                if bufferedRole == currentRole || bufferedRole == desiredRole {
+                    return false
+                }
+                return true
             }
     }
 
@@ -442,7 +558,7 @@ struct ContinuityBuilderService {
             let approvedMaster = (character.masterReferenceSheetVariants.first { $0.id == character.approvedMasterReferenceSheetVariantID } ?? character.masterReferenceSheetVariants.last)?.imagePath
             let approvedHead = (character.headTurnaroundSheetVariants.first { $0.id == character.approvedHeadTurnaroundSheetVariantID } ?? character.headTurnaroundSheetVariants.last)?.imagePath
             let raw = [approvedHead, approvedMaster, character.profileImagePath, character.inspirationReferenceImagePath] + character.referenceImagePaths.prefix(2).map(Optional.init)
-            if let path = acceptedExistingPath(raw, projectRoot: projectRoot) {
+            if let path = acceptedExistingPath(raw, projectRoot: projectRoot) ?? canonicalExistingPath(raw, projectRoot: projectRoot) {
                 candidates.append(.init(label: .single, title: character.name, imagePath: path, source: "Characters/*/rig.json", referenceRole: "character_identity", promptRole: "character identity candidate"))
             }
             if candidates.count >= limit { break }
@@ -456,7 +572,7 @@ struct ContinuityBuilderService {
             for costume in character.costumeReferenceSets {
                 let approved = costume.approvedSheetVariant?.imagePath ?? costume.sheetVariants.last?.imagePath
                 let raw = [approved] + costume.costumeReferenceImagePaths.prefix(2).map(Optional.init)
-                if let path = acceptedExistingPath(raw, projectRoot: projectRoot) {
+                if let path = acceptedExistingPath(raw, projectRoot: projectRoot) ?? canonicalExistingPath(raw, projectRoot: projectRoot) {
                     candidates.append(.init(label: .single, title: "\(character.name): \(costume.name)", imagePath: path, source: "Characters/*/rig.json", referenceRole: "character_costume", promptRole: "costume continuity candidate"))
                 }
                 if candidates.count >= limit { break }
@@ -486,6 +602,17 @@ struct ContinuityBuilderService {
         acceptedExistingRatedPath(rawPath, projectRoot: projectRoot)?.path
     }
 
+    nonisolated private static func canonicalExistingPath(_ rawPaths: [String?], projectRoot: URL) -> String? {
+        rawPaths.compactMap { canonicalExistingPath($0, projectRoot: projectRoot) }.first
+    }
+
+    nonisolated private static func canonicalExistingPath(_ rawPath: String?, projectRoot: URL) -> String? {
+        guard let path = resolvedPath(rawPath, projectRoot: projectRoot),
+              FileManager.default.fileExists(atPath: path),
+              !isRejectedImagePath(path) else { return nil }
+        return path
+    }
+
     nonisolated private static func acceptedExistingRatedPath(_ rawPath: String?, projectRoot: URL) -> (path: String, score: Double, updatedAt: Date?)? {
         guard let path = resolvedPath(rawPath, projectRoot: projectRoot),
               FileManager.default.fileExists(atPath: path),
@@ -507,6 +634,24 @@ struct ContinuityBuilderService {
 
     nonisolated static func isReferenceEligibleImagePath(_ path: String) -> Bool {
         referencePreferenceScore(forImagePath: path) != nil
+    }
+
+    nonisolated private static func restoreReferenceCandidatesForUngeneratedTurns(
+        _ session: inout ContinuityBuilderSession,
+        projectRoot: URL,
+        backgrounds: [BackgroundPlate],
+        characters: [AnimationCharacter]
+    ) {
+        guard session.hasStarted else { return }
+        let templates = seedTurns(projectRoot: projectRoot, backgrounds: backgrounds, characters: characters)
+        for index in session.turns.indices {
+            guard !turnHasCurrentGeneratedCandidate(session.turns[index], projectRoot: projectRoot) else { continue }
+            let onlyGeneratedCandidates = session.turns[index].candidates.isEmpty
+                || session.turns[index].candidates.allSatisfy { $0.source == generatedCandidateSource }
+            guard onlyGeneratedCandidates,
+                  let template = templates.first(where: { $0.category == session.turns[index].category }) else { continue }
+            session.turns[index].candidates = template.candidates
+        }
     }
 
     nonisolated private static func rankedRatedCandidates(_ candidates: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
@@ -671,7 +816,10 @@ struct ContinuityBuilderService {
             for candidateIndex in copy.turns[turnIndex].candidates.indices {
                 var candidate = copy.turns[turnIndex].candidates[candidateIndex]
                 candidate.imagePath = runtimePath(candidate.imagePath, projectRoot: projectRoot)
-                if let imagePath = candidate.imagePath, isRejectedImagePath(imagePath) {
+                if let imagePath = candidate.imagePath,
+                   candidate.source != editSourceCandidateSource,
+                   candidate.referenceRole != "edit_source",
+                   isRejectedImagePath(imagePath) {
                     continue
                 }
                 retained.append(candidate)
@@ -745,7 +893,7 @@ struct ContinuityBuilderService {
                     label: label,
                     title: "Generated \(label.displayName): \(copy.turns[turnIndex].title)",
                     imagePath: imagePath,
-                    source: "Continuity Builder generated candidate",
+                    source: generatedCandidateSource,
                     referenceRole: "generated_candidate",
                     promptRole: "candidate for Gary feedback",
                     analysisSummary: nil

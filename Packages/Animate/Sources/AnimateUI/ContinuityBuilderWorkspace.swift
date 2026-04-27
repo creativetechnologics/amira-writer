@@ -36,8 +36,13 @@ private struct ContinuityBuilderWorkspaceContent: View {
     @State private var notesText = ""
     @State private var statusMessage = "Review mode is active. Submit feedback to generate the next 1K continuity candidate."
     @State private var isLoading = false
+    @State private var reviewInFlightTurnID: UUID?
     @State private var generatingTurnIDs: Set<UUID> = []
     @State private var isPrebuffering = false
+    @State private var promptReferencePaths: [String] = []
+    @State private var promptReferenceDetails: [String: String] = [:]
+    @State private var promptReferenceSubjectName: String?
+    @State private var promptReferenceImagePath: String?
 
     private var projectRoot: URL? { Self.projectRoot(from: store.fileOWPURL ?? store.owpURL) }
     private var activeTurn: ContinuityBuilderTurn? { session?.activeTurn }
@@ -129,11 +134,17 @@ private struct ContinuityBuilderWorkspaceContent: View {
             Spacer(minLength: 24)
             if let turn = activeTurn {
                 VStack(spacing: 18) {
+                    Text(reviewHeader(for: turn).uppercased())
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .tracking(1.6)
+                        .foregroundStyle(OperaChromeTheme.textSecondary)
                     continuityImage(turn)
                         .frame(maxWidth: 980)
                     reviewControls(turn)
                         .frame(maxWidth: 520)
                     feedbackBox(turn)
+                        .frame(maxWidth: 760)
+                    promptReferencesStrip(turn)
                         .frame(maxWidth: 760)
                 }
                 .padding(.horizontal, 32)
@@ -151,12 +162,42 @@ private struct ContinuityBuilderWorkspaceContent: View {
         .background(OperaChromeTheme.workspaceBackground)
     }
 
+    private func reviewHeader(for turn: ContinuityBuilderTurn) -> String {
+        let base = turn.category.reviewSubjectLabel
+        guard turn.category == .characterIdentity || turn.category == .costumeContinuity else {
+            return base
+        }
+        let currentImagePath = generatedCandidate(in: turn)?.imagePath
+        let loadedSubject = promptReferenceImagePath == currentImagePath ? promptReferenceSubjectName : nil
+        let name = loadedSubject ?? inferredCharacterName(for: turn)
+        if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "\(base) — \(name)"
+        }
+        return base
+    }
+
+    private func inferredCharacterName(for turn: ContinuityBuilderTurn) -> String? {
+        for candidate in turn.candidates {
+            guard candidate.referenceRole == "character_identity" || candidate.referenceRole == "character_costume" else { continue }
+            let title = candidate.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { continue }
+            if let colon = title.firstIndex(of: ":") {
+                return String(title[..<colon]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return title
+        }
+        return nil
+    }
+
     private func continuityImage(_ turn: ContinuityBuilderTurn) -> some View {
         Group {
             if generatingTurnIDs.contains(turn.id) {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(OperaChromeTheme.panelBackground)
-                    .overlay { Color.clear }
+                    .overlay {
+                        ProgressView()
+                            .controlSize(.large)
+                    }
             } else if let candidate = generatedCandidate(in: turn), let path = candidate.imagePath {
                 AsyncStoreThumbnailImage.rounded(
                     store: store,
@@ -190,28 +231,49 @@ private struct ContinuityBuilderWorkspaceContent: View {
 
     private func reviewControls(_ turn: ContinuityBuilderTurn) -> some View {
         HStack(spacing: 18) {
-            Button {
+            reviewButton(
+                systemImage: "hand.thumbsdown.fill",
+                tint: .red,
+                isDisabled: isReviewDisabled(for: turn)
+            ) {
                 reviewSelectedImage(rejected: true, liked: false, rating: nil, closenessOverride: 0, advance: autoAdvance)
-            } label: {
-                Image(systemName: "hand.thumbsdown.fill")
-                    .font(.system(size: 32, weight: .semibold))
-                    .frame(width: 78, height: 56)
             }
-            .buttonStyle(.bordered)
-            .disabled(generatedCandidate(in: turn)?.imagePath == nil)
             .keyboardShortcut("/", modifiers: [])
 
-            Button {
+            reviewButton(
+                systemImage: "hand.thumbsup.fill",
+                tint: .green,
+                isDisabled: isReviewDisabled(for: turn)
+            ) {
                 reviewSelectedImage(rejected: false, liked: true, rating: nil, closenessOverride: 100, advance: autoAdvance)
-            } label: {
-                Image(systemName: "hand.thumbsup.fill")
-                    .font(.system(size: 32, weight: .semibold))
-                    .frame(width: 78, height: 56)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(generatedCandidate(in: turn)?.imagePath == nil)
             .keyboardShortcut(";", modifiers: [])
         }
+    }
+
+    private func reviewButton(systemImage: String, tint: Color, isDisabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 32, weight: .semibold))
+                .foregroundStyle(isDisabled ? OperaChromeTheme.textTertiary : tint)
+                .frame(width: 84, height: 60)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(OperaChromeTheme.panelBackground)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(isDisabled ? OperaChromeTheme.stroke : tint.opacity(0.8), lineWidth: 1.5)
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+    }
+
+    private func isReviewDisabled(for turn: ContinuityBuilderTurn) -> Bool {
+        reviewInFlightTurnID == turn.id
+            || generatingTurnIDs.contains(turn.id)
+            || generatedCandidate(in: turn)?.imagePath == nil
     }
 
     private func feedbackBox(_ turn: ContinuityBuilderTurn) -> some View {
@@ -229,23 +291,150 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 handleReviewCommand(command, turn: turn)
             }
             .font(.system(size: 13))
+            .padding(8)
             .frame(minHeight: 90)
-            .background(OperaChromeTheme.workspaceBackground, in: RoundedRectangle(cornerRadius: 10))
+            .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(OperaChromeTheme.stroke, lineWidth: 1)
+            }
         }
     }
 
+    private func promptReferencesStrip(_ turn: ContinuityBuilderTurn) -> some View {
+        let currentImagePath = generatedCandidate(in: turn)?.imagePath
+        let referencePaths = promptReferenceImagePath == currentImagePath ? promptReferencePaths : []
+        return VStack(alignment: .leading, spacing: 8) {
+            if !referencePaths.isEmpty {
+                Text("Prompt references used for this image")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .tracking(1.1)
+                    .foregroundStyle(OperaChromeTheme.textTertiary)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHGrid(rows: [GridItem(.fixed(84), spacing: 8)], spacing: 8) {
+                        ForEach(referencePaths, id: \.self) { path in
+                            UnifiedImageTile(
+                                path: path,
+                                resolvedPath: path,
+                                thumbnailSize: 72,
+                                sourceLabel: promptReferenceLabel(for: path),
+                                sourceSystemImage: promptReferenceIcon(for: path),
+                                isSelected: false,
+                                isRejected: false,
+                                isLiked: false,
+                                hasNotes: false,
+                                rating: nil
+                            )
+                            .frame(width: 84, height: 84)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(height: 92)
+            }
+        }
+        .task(id: generatedCandidate(in: turn)?.imagePath ?? "\(turn.id.uuidString)-none") {
+            await loadPromptReferenceMetadata(for: generatedCandidate(in: turn)?.imagePath)
+        }
+    }
+
+    private func promptReferenceLabel(for path: String) -> String {
+        switch promptReferenceDetails[path] {
+        case "edit_source":
+            return "EDIT"
+        case "spatial_map":
+            return "MAP"
+        default:
+            return "REF"
+        }
+    }
+
+    private func promptReferenceIcon(for path: String) -> String {
+        switch promptReferenceDetails[path] {
+        case "edit_source":
+            return "wand.and.stars"
+        case "spatial_map":
+            return "map"
+        default:
+            return "photo"
+        }
+    }
+
+    private func loadPromptReferenceMetadata(for imagePath: String?) async {
+        guard let imagePath else {
+            promptReferencePaths = []
+            promptReferenceDetails = [:]
+            promptReferenceSubjectName = nil
+            promptReferenceImagePath = nil
+            return
+        }
+        if promptReferenceImagePath != imagePath {
+            promptReferenceImagePath = imagePath
+            promptReferencePaths = []
+            promptReferenceDetails = [:]
+            promptReferenceSubjectName = nil
+        }
+        let metadata = await Task.detached(priority: .utility) { () -> (paths: [String], details: [String: String], subject: String?) in
+            let url = URL(fileURLWithPath: imagePath)
+                .deletingPathExtension()
+                .appendingPathExtension("continuity.json")
+            guard let data = try? Data(contentsOf: url),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return ([], [:], nil)
+            }
+            let paths = (object["referencePaths"] as? [String] ?? []).filter {
+                FileManager.default.fileExists(atPath: $0)
+            }
+            var details: [String: String] = [:]
+            for item in object["referenceDetails"] as? [[String: Any]] ?? [] {
+                guard let path = item["path"] as? String,
+                      let role = item["role"] as? String else { continue }
+                details[path] = role
+            }
+            return (paths, details, object["reviewSubjectName"] as? String)
+        }.value
+        guard imagePath == activeTurn.flatMap({ generatedCandidate(in: $0)?.imagePath }) else { return }
+        promptReferencePaths = metadata.paths
+        promptReferenceDetails = metadata.details
+        promptReferenceSubjectName = metadata.subject
+        promptReferenceImagePath = imagePath
+    }
+
     private func turnHasGeneratedCandidates(_ turn: ContinuityBuilderTurn) -> Bool {
-        turn.generationStatus == "generated_candidates_ready_for_feedback"
-            && turn.candidates.contains { $0.source == "Continuity Builder generated candidate" }
+        guard let projectRoot else { return false }
+        return turn.generationStatus == "generated_candidates_ready_for_feedback"
+            && turn.candidates.contains { ContinuityBuilderService.isCurrentGeneratedCandidate($0, projectRoot: projectRoot) }
     }
 
     private func generatedCandidate(in turn: ContinuityBuilderTurn) -> ContinuityBuilderCandidate? {
         guard turnHasGeneratedCandidates(turn) else { return nil }
         if let selectedLabel,
-           let match = turn.candidates.first(where: { $0.label == selectedLabel && $0.source == "Continuity Builder generated candidate" }) {
+           let projectRoot,
+           let match = turn.candidates.first(where: {
+               $0.label == selectedLabel && ContinuityBuilderService.isCurrentGeneratedCandidate($0, projectRoot: projectRoot)
+           }) {
             return match
         }
-        return turn.candidates.first { $0.source == "Continuity Builder generated candidate" }
+        guard let projectRoot else { return nil }
+        return turn.candidates.first { ContinuityBuilderService.isCurrentGeneratedCandidate($0, projectRoot: projectRoot) }
+    }
+
+    private func defaultSelectedLabel(for turn: ContinuityBuilderTurn?) -> ContinuityBuilderCandidateLabel? {
+        guard let turn else { return nil }
+        if let projectRoot,
+           let current = turn.candidates.first(where: { ContinuityBuilderService.isCurrentGeneratedCandidate($0, projectRoot: projectRoot) }) {
+            return current.label
+        }
+        return turn.candidates.first(where: { $0.source == ContinuityBuilderService.generatedCandidateSource })?.label
+            ?? turn.candidates.first?.label
+    }
+
+    @discardableResult
+    private func reloadLatestSession(projectRoot: URL) async -> ContinuityBuilderSession {
+        let latest = await ContinuityBuilderService(store: store).loadOrCreateSession(projectRoot: projectRoot)
+        session = latest
+        selectedLabel = defaultSelectedLabel(for: latest.activeTurn)
+        return latest
     }
 
     private func statusMessage(for loadedSession: ContinuityBuilderSession) -> String {
@@ -290,7 +479,10 @@ private struct ContinuityBuilderWorkspaceContent: View {
         if let closenessOverride {
             closenessPercent = Double(closenessOverride)
         }
-        store.setImageLibraryRating(rating, for: path)
+        if let rating {
+            store.setImageLibraryRating(rating, for: path)
+        }
+        selectedLabel = candidate.label
         store.setImageLibraryLiked(liked && !rejected, for: path)
         store.setImageLibraryRejected(rejected, for: path)
         statusMessage = rejected
@@ -306,11 +498,15 @@ private struct ContinuityBuilderWorkspaceContent: View {
         isLoading = true
         let loaded = await ContinuityBuilderService(store: store).loadOrCreateSession(projectRoot: projectRoot)
         session = loaded
-        selectedLabel = loaded.activeTurn?.candidates.first?.label
+        selectedLabel = defaultSelectedLabel(for: loaded.activeTurn)
         notesText = ""
         statusMessage = statusMessage(for: loaded)
         isLoading = false
-        schedulePrebufferIfUseful()
+        if loaded.hasStarted, let activeTurn = loaded.activeTurn, !turnHasGeneratedCandidates(activeTurn) {
+            generateCandidates(activeTurn)
+        } else {
+            schedulePrebufferIfUseful()
+        }
     }
 
     private func beginContinuityStream() {
@@ -329,14 +525,16 @@ private struct ContinuityBuilderWorkspaceContent: View {
                     statusMessage = "Started one continuous Continuity Builder session. Gemini is generating the first 1K image…"
                     let generation = await generateAndApply(session: updated, turn: firstTurn, count: generationCount(for: firstTurn))
                     generatingTurnIDs.remove(firstTurn.id)
-                    session = generation.session
-                    selectedLabel = generation.session.activeTurn?.candidates.first?.label
+                    let latest = await reloadLatestSession(projectRoot: projectRoot)
                     statusMessage = generation.ok
                         ? "Generated the first 1K continuity image. Add feedback, then submit to generate the next one."
                         : (generation.blockers.first?.message ?? generation.records.first(where: { $0.errorMessage != nil })?.errorMessage ?? "Started the continuity session, but the first image did not generate.")
+                    if !generation.ok {
+                        session = latest
+                    }
                 } else {
                     session = updated
-                    selectedLabel = updated.activeTurn?.candidates.first?.label
+                    selectedLabel = defaultSelectedLabel(for: updated.activeTurn)
                     statusMessage = "Started one continuous Continuity Builder session."
                 }
             } catch {
@@ -353,7 +551,8 @@ private struct ContinuityBuilderWorkspaceContent: View {
             return
         }
         guard let projectRoot, let currentSession = session else { return }
-        let submittedLabel = selectedLabel
+        let submittedLabel = generatedCandidate(in: turn)?.label ?? selectedLabel
+        reviewInFlightTurnID = turn.id
         isLoading = true
         statusMessage = "Saving continuity feedback, then Gemini will generate the next 1K image…"
         Task {
@@ -364,8 +563,13 @@ private struct ContinuityBuilderWorkspaceContent: View {
                    let path = selected.imagePath {
                     store.setImageLibraryRejected(true, for: path)
                 }
+                let service = ContinuityBuilderService(store: store)
+                let latestBeforeFeedback = await service.loadOrCreateSession(projectRoot: projectRoot)
+                let sessionForFeedback = latestBeforeFeedback.turns.contains(where: { $0.id == turn.id })
+                    ? latestBeforeFeedback
+                    : currentSession
                 let updated = try await ContinuityBuilderService(store: store).recordFeedback(
-                    session: currentSession,
+                    session: sessionForFeedback,
                     turn: turn,
                     selectedLabel: submittedLabel,
                     closenessPercent: Int(closenessPercent),
@@ -376,19 +580,18 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 notesText = ""
                 closenessPercent = 55
                 if let nextTurn = updated.activeTurn {
-                    statusMessage = "Saved feedback. Updating continuity memory…"
-                    await refreshContinuityRules(projectRoot: projectRoot)
                     if turnHasGeneratedCandidates(nextTurn) {
                         session = updated
-                        selectedLabel = nextTurn.candidates.first?.label
-                        statusMessage = "Continuity memory updated. Showing the next prebuffered 1K image while Gemini prepares another independent candidate."
+                        selectedLabel = defaultSelectedLabel(for: nextTurn)
+                        statusMessage = "Showing the next 1K continuity image."
                     } else {
                         generatingTurnIDs.insert(nextTurn.id)
-                        statusMessage = "Continuity memory updated. Gemini is generating the next 1K continuity image now…"
+                        session = updated
+                        selectedLabel = defaultSelectedLabel(for: nextTurn)
+                        statusMessage = "Gemini is generating the next 1K continuity image now…"
                         let generation = await generateAndApply(session: updated, turn: nextTurn, count: generationCount(for: nextTurn))
                         generatingTurnIDs.remove(nextTurn.id)
-                        session = generation.session
-                        selectedLabel = generation.session.activeTurn?.candidates.first?.label
+                        _ = await reloadLatestSession(projectRoot: projectRoot)
                         if generation.ok {
                             let completed = generation.records.filter { $0.status == "completed" }.count
                             statusMessage = completed == 1
@@ -398,36 +601,42 @@ private struct ContinuityBuilderWorkspaceContent: View {
                             statusMessage = (generation.blockers.first?.message ?? generation.records.first(where: { $0.errorMessage != nil })?.errorMessage)
                                 ?? "Feedback was saved, but the next continuity image did not generate."
                             session = updated
-                            selectedLabel = updated.activeTurn?.candidates.first?.label
+                            selectedLabel = defaultSelectedLabel(for: updated.activeTurn)
                         }
                     }
                 }
+                if let latestActive = session?.activeTurn, turnHasGeneratedCandidates(latestActive) {
+                    _ = await reloadLatestSession(projectRoot: projectRoot)
+                }
+                reviewInFlightTurnID = nil
+                isLoading = false
+                schedulePrebufferIfUseful()
+
                 if let feedback = updated.feedback.first(where: { $0.turnID == turn.id }) {
-                    let baseStatus = statusMessage
                     let selectedCandidate = turn.candidates.first { $0.label == submittedLabel }
-                    let propagation = await ContinuityFeedbackPropagationService(store: store).propagate(
-                        feedback: feedback,
-                        turn: turn,
-                        selectedCandidate: selectedCandidate,
-                        projectRoot: projectRoot
-                    )
-                    let suffix = propagation.autoRejectedCount > 0
-                        ? " Auto-rejected \(propagation.autoRejectedCount) high-confidence similar image(s)."
-                        : propagation.reviewCandidateCount > 0
-                            ? " Found \(propagation.reviewCandidateCount) possible similar issue(s) for review; none auto-rejected."
-                            : ""
-                    if !suffix.isEmpty {
-                        statusMessage = "\(baseStatus)\(suffix)"
+                    Task {
+                        _ = await ContinuityFeedbackPropagationService(store: store).propagate(
+                            feedback: feedback,
+                            turn: turn,
+                            selectedCandidate: selectedCandidate,
+                            projectRoot: projectRoot
+                        )
                     }
+                }
+                Task {
+                    await refreshContinuityRules(projectRoot: projectRoot)
                 }
             } catch {
                 statusMessage = "Could not save continuity feedback: \(error.localizedDescription)"
+                reviewInFlightTurnID = nil
+                isLoading = false
             }
-            if let activeID = session?.activeTurn?.id {
-                generatingTurnIDs.remove(activeID)
+            generatingTurnIDs.remove(turn.id)
+            if isLoading {
+                reviewInFlightTurnID = nil
+                isLoading = false
+                schedulePrebufferIfUseful()
             }
-            isLoading = false
-            schedulePrebufferIfUseful()
         }
     }
 
@@ -466,8 +675,12 @@ private struct ContinuityBuilderWorkspaceContent: View {
         Task {
             let result = await generateAndApply(session: currentSession, turn: turn, count: count)
             generatingTurnIDs.remove(turn.id)
-            session = result.session
-            selectedLabel = result.session.activeTurn?.candidates.first?.label
+            if let projectRoot {
+                _ = await reloadLatestSession(projectRoot: projectRoot)
+            } else {
+                session = result.session
+                selectedLabel = defaultSelectedLabel(for: result.session.activeTurn)
+            }
             isLoading = false
             if result.ok {
                 statusMessage = "Generated \(result.records.filter { $0.status == "completed" }.count) Continuity Builder candidate(s); immediate Image Intelligence analysis is queued/running."
@@ -504,15 +717,25 @@ private struct ContinuityBuilderWorkspaceContent: View {
         guard futureGeneratedCount < maxBufferedContinuityImages else { return }
 
         isPrebuffering = true
+        let expectedActiveTurnID = activeTurn.id
         Task {
             var shouldContinue = false
             do {
+                let service = ContinuityBuilderService(store: store)
+                let latest = await service.loadOrCreateSession(projectRoot: projectRoot)
+                guard latest.activeTurn?.id == expectedActiveTurnID else {
+                    isPrebuffering = false
+                    return
+                }
                 let prepared = try await ContinuityBuilderService(store: store).ensureBufferedTurn(
-                    session: currentSession,
+                    session: latest,
                     projectRoot: projectRoot,
                     maxBuffered: maxBufferedContinuityImages
                 )
-                session = prepared
+                if session?.activeTurn?.id == expectedActiveTurnID {
+                    session = prepared
+                    selectedLabel = defaultSelectedLabel(for: prepared.activeTurn)
+                }
                 guard let pending = prepared.turns
                     .dropFirst(prepared.activeTurnIndex + 1)
                     .first(where: { $0.generationStatus == "ready_for_generation" }) else {
@@ -523,7 +746,11 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 let result = await generateAndApply(session: prepared, turn: pending, count: 1)
                 generatingTurnIDs.remove(pending.id)
                 if result.ok {
-                    session = result.session
+                    let fresh = await service.loadOrCreateSession(projectRoot: projectRoot)
+                    if session?.activeTurn?.id == expectedActiveTurnID {
+                        session = fresh
+                        selectedLabel = defaultSelectedLabel(for: fresh.activeTurn)
+                    }
                     shouldContinue = true
                 }
             } catch {

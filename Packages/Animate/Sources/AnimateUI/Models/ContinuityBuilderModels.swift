@@ -25,6 +25,19 @@ enum ContinuityBuilderCategory: String, Codable, Sendable, Hashable, CaseIterabl
         case .styleContinuity: return "Style continuity"
         }
     }
+
+    var reviewSubjectLabel: String {
+        switch self {
+        case .worldGeography, .placeTopography, .landmarkBridge, .sceneContinuity:
+            return "Place"
+        case .characterIdentity, .costumeContinuity:
+            return "Character"
+        case .vehicleProp:
+            return "Vehicle / prop"
+        case .styleContinuity:
+            return "Style"
+        }
+    }
 }
 
 @available(macOS 26.0, *)
