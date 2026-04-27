@@ -138,6 +138,9 @@ struct EffectiveShotSpecBuilder {
             focus?.name,
             focus?.description
         ], separator: "\n")
+        var preferenceRoles: [ImageLibrarySemanticRole] = []
+        if background != nil { preferenceRoles.append(.place) }
+        if focus != nil || !sceneCharacters.isEmpty { preferenceRoles.append(.character) }
         let reviewFeedback = ImageReviewFeedbackService.promptClauses(
             from: ImageReviewFeedbackService.relevantFeedback(
                 projectRoot: projectRoot,
@@ -153,6 +156,11 @@ struct EffectiveShotSpecBuilder {
         ) + ContinuityRuleExtractionService.relevantPromptClauses(
             projectRoot: projectRoot,
             query: feedbackQuery,
+            limit: 8
+        ) + ImagePreferenceProfileService.relevantPromptClauses(
+            projectRoot: projectRoot,
+            query: feedbackQuery,
+            semanticRoles: preferenceRoles.isEmpty ? nil : preferenceRoles,
             limit: 8
         )
         let prompt = Self.prompt(

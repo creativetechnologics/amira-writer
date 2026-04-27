@@ -132,7 +132,8 @@ struct ContinuityFeedbackPropagationService {
             notes: notes,
             updatedAt: Date(),
             characterTags: existing.characterTags,
-            visualStyle: existing.visualStyle
+            visualStyle: existing.visualStyle,
+            semanticRole: existing.semanticRole
         )
         ImageLibraryMetadataSidecarService.save(metadata, forImagePath: path)
     }

@@ -217,7 +217,23 @@ struct ContinuityBuilderGenerationService {
         let recentFeedbackClauses = ContinuityBuilderService.promptClauses(
             from: ContinuityBuilderService.relevantFeedback(projectRoot: projectRoot, query: query, limit: 10)
         )
-        let memoryClauses = Array((continuityRules + recentFeedbackClauses).prefix(16))
+        let semanticRoles: [ImageLibrarySemanticRole]? = {
+            switch turn.category {
+            case .worldGeography, .landmarkBridge, .placeTopography, .vehicleProp, .sceneContinuity:
+                return [.place]
+            case .characterIdentity, .costumeContinuity:
+                return [.character]
+            case .styleContinuity:
+                return nil
+            }
+        }()
+        let preferenceClauses = ImagePreferenceProfileService.relevantPromptClauses(
+            projectRoot: projectRoot,
+            query: query,
+            semanticRoles: semanticRoles,
+            limit: 10
+        )
+        let memoryClauses = Array((continuityRules + recentFeedbackClauses + preferenceClauses).prefix(22))
         return [
             "Continuity Builder training candidate. Generate a single image for Gary to critique.",
             "Candidate label visible to the system: \(label.displayName). Do not render any label text in the image.",

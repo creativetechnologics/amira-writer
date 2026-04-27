@@ -185,15 +185,16 @@ struct ContinuityRuleExtractionService {
             let reviewStatus = artifact.isRejected
                 ? "Image review status: rejected. Use the written notes as continuity learning input, but never treat the rejected image itself as a positive reference."
                 : "Image review status: rated \(artifact.rating.map(String.init) ?? "unrated")."
-            let reviewNotes = [reviewStatus, artifact.notes].joined(separator: "\n")
-            let text = [artifact.notes, artifact.originLabel, artifact.groupLabel, artifact.analysis?.summary, artifact.analysis?.retrievalJSON]
+            let reviewScope = artifact.semanticRole.map { "Review scope: \($0.rawValue). Interpret this rating/feedback as about the \($0.displayName.lowercased()) content, not unrelated foreground/background material." }
+            let reviewNotes = ([reviewStatus, reviewScope, artifact.notes].compactMap { $0 }).joined(separator: "\n")
+            let text = [artifact.notes, artifact.originLabel, artifact.groupLabel, artifact.semanticRole?.rawValue, artifact.analysis?.summary, artifact.analysis?.retrievalJSON]
                 .compactMap { $0 }
                 .joined(separator: "\n")
             let tags = Self.tags(from: text)
             sources.append(.init(
                 id: "image-feedback:\(artifact.id.uuidString)",
                 sourceKind: "image_feedback",
-                category: artifact.source,
+                category: artifact.semanticRole?.rawValue ?? artifact.source,
                 imagePath: artifact.imagePath,
                 label: artifact.originLabel,
                 notes: reviewNotes,

@@ -7978,6 +7978,7 @@ final class AnimateStore {
         mutate(&metadata)
         metadata.updatedAt = Date()
         ImageLibraryMetadataSidecarService.save(metadata, forImagePath: resolvedPath)
+        ImagePreferenceProfileService.scheduleRebuild(store: self, projectRoot: fileOWPURL)
     }
 
     func imageLibraryReviewMetadata(for imagePath: String) -> ImageLibraryReviewMetadata? {

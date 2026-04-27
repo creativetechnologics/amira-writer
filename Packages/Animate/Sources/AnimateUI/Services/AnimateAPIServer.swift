@@ -256,6 +256,14 @@ final class AnimateAPIRouter {
             await ensureProjectHydrated()
             return automationFeedbackRulesQueryResponse(request)
         }
+        if request.method == "POST", request.path == "/automation/image-preferences/rebuild" {
+            await ensureProjectHydrated()
+            return await automationImagePreferencesRebuildResponse()
+        }
+        if request.method == "GET", request.path == "/automation/image-preferences/profile" {
+            await ensureProjectHydrated()
+            return automationImagePreferencesProfileResponse()
+        }
         if request.method == "GET", let ids = automationGeneratedFrameIDs(from: request.path), !ids.isApproval {
             await ensureProjectHydrated()
             return automationGeneratedFrameGetResponse(sceneID: ids.sceneID, shotID: ids.shotID, moment: ids.moment)
@@ -797,6 +805,53 @@ final class AnimateAPIRouter {
             "fingerprintCount": latest?.fingerprints.count ?? 0,
             "clauses": clauses
         ])
+    }
+
+    private func automationImagePreferencesRebuildResponse() async -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        do {
+            let artifact = try await ImagePreferenceProfileService.rebuildNow(store: store, projectRoot: projectRoot)
+            return .okJSON([
+                "ok": true,
+                "artifactPath": ImagePreferenceProfileService.latestProfileURL(projectRoot: projectRoot).path,
+                "sourceImageCount": artifact.sourceImageCount,
+                "reviewedImageCount": artifact.reviewedImageCount,
+                "roles": artifact.roleProfiles.map(imagePreferenceRoleSummaryPayload)
+            ])
+        } catch {
+            return .error(400, error.localizedDescription)
+        }
+    }
+
+    private func automationImagePreferencesProfileResponse() -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        guard let artifact = ImagePreferenceProfileService.latestProfile(projectRoot: projectRoot) else {
+            return .error(404, "No image preference profile has been built yet.")
+        }
+        return .okCodable(artifact)
+    }
+
+    private func imagePreferenceRoleSummaryPayload(_ profile: ImagePreferenceRoleProfile) -> [String: Any] {
+        [
+            "role": profile.role.rawValue,
+            "reviewedCount": profile.reviewedCount,
+            "acceptedCount": profile.acceptedCount,
+            "rejectedCount": profile.rejectedCount,
+            "notedCount": profile.notedCount,
+            "promptMemoryCount": profile.promptMemory.count,
+            "vectorProfiles": profile.vectorProfiles.map { vector in
+                [
+                    "embeddingKind": vector.embeddingKind,
+                    "dimension": vector.dimension,
+                    "acceptedCount": vector.acceptedCount,
+                    "rejectedCount": vector.rejectedCount
+                ] as [String: Any]
+            }
+        ]
     }
 
     private func automationGeneratedFrameGetResponse(sceneID: UUID, shotID: UUID, moment: ImagineShotMoment) -> AnimateHTTPResponse {

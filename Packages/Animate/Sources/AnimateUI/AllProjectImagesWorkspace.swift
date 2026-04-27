@@ -4,6 +4,19 @@ import SwiftUI
 import ProjectKit
 
 @available(macOS 26.0, *)
+enum ImageLibrarySemanticRole: String, CaseIterable, Codable, Sendable, Hashable {
+    case place
+    case character
+
+    var displayName: String {
+        switch self {
+        case .place: return "Place"
+        case .character: return "Character"
+        }
+    }
+}
+
+@available(macOS 26.0, *)
 struct ImageLibraryReviewMetadata: Equatable, Sendable {
     var rating: Int?
     var isRejected: Bool
@@ -11,6 +24,7 @@ struct ImageLibraryReviewMetadata: Equatable, Sendable {
     var updatedAt: Date?
     var characterTags: [String]
     var visualStyle: ImageLibraryVisualStyle?
+    var semanticRole: ImageLibrarySemanticRole?
 
     init(
         rating: Int?,
@@ -18,7 +32,8 @@ struct ImageLibraryReviewMetadata: Equatable, Sendable {
         notes: String,
         updatedAt: Date?,
         characterTags: [String] = [],
-        visualStyle: ImageLibraryVisualStyle? = nil
+        visualStyle: ImageLibraryVisualStyle? = nil,
+        semanticRole: ImageLibrarySemanticRole? = nil
     ) {
         self.rating = rating
         self.isRejected = isRejected
@@ -26,6 +41,7 @@ struct ImageLibraryReviewMetadata: Equatable, Sendable {
         self.updatedAt = updatedAt
         self.characterTags = characterTags
         self.visualStyle = visualStyle
+        self.semanticRole = semanticRole
     }
 
     var isEmpty: Bool {
@@ -34,6 +50,7 @@ struct ImageLibraryReviewMetadata: Equatable, Sendable {
             && notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && characterTags.isEmpty
             && visualStyle == nil
+            && semanticRole == nil
     }
 }
 
@@ -72,6 +89,9 @@ enum ImageLibraryMetadataSidecarService {
         let visualStyle = extractTagValue("VisualStyle", from: xml)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .flatMap(ImageLibraryVisualStyle.init(rawValue:))
+        let semanticRole = extractTagValue("SemanticRole", from: xml)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .flatMap(ImageLibrarySemanticRole.init(rawValue:))
 
         let metadata = ImageLibraryReviewMetadata(
             rating: rating.map { min(max($0, 1), 5) },
@@ -79,7 +99,8 @@ enum ImageLibraryMetadataSidecarService {
             notes: notes,
             updatedAt: updatedAt,
             characterTags: Array(Set(characterTags)).sorted(),
-            visualStyle: visualStyle
+            visualStyle: visualStyle,
+            semanticRole: semanticRole
         )
         return metadata.isEmpty ? nil : metadata
     }
@@ -100,6 +121,7 @@ enum ImageLibraryMetadataSidecarService {
               <amira:IsRejected>\(metadata.isRejected ? "true" : "false")</amira:IsRejected>
               <amira:Notes>\(escapeXML(metadata.notes))</amira:Notes>
               \(metadata.visualStyle.map { "<amira:VisualStyle>\($0.rawValue)</amira:VisualStyle>" } ?? "")
+              \(metadata.semanticRole.map { "<amira:SemanticRole>\($0.rawValue)</amira:SemanticRole>" } ?? "")
               \(metadata.characterTags.map { "<amira:Character>\(escapeXML($0))</amira:Character>" }.joined(separator: "\n              "))
               <amira:UpdatedAt>\(iso8601Formatter().string(from: metadata.updatedAt ?? Date()))</amira:UpdatedAt>
             </rdf:Description>
@@ -123,7 +145,7 @@ enum ImageLibraryMetadataSidecarService {
 
     // Pre-compiled regex patterns keyed by tag name — avoids recompiling on every call.
     private static let tagRegexes: [String: NSRegularExpression] = {
-        let tags = ["Rating", "IsRejected", "Notes", "UpdatedAt", "Character", "VisualStyle"]
+        let tags = ["Rating", "IsRejected", "Notes", "UpdatedAt", "Character", "VisualStyle", "SemanticRole"]
         var dict: [String: NSRegularExpression] = [:]
         for tag in tags {
             let pattern = "<(?:[A-Za-z0-9_\\-]+:)?\(tag)>(.*?)</(?:[A-Za-z0-9_\\-]+:)?\(tag)>"
@@ -229,6 +251,7 @@ final class AllProjectImagesState {
         let id: String
         let path: String
         let source: AllProjectImagesSource
+        let semanticRole: ImageLibrarySemanticRole?
         let originLabel: String
         let groupLabel: String
         let sceneID: UUID?
@@ -551,14 +574,22 @@ final class AllProjectImagesState {
         }
     }
 
-    func updateReviewMetadata(for recordID: String, rating: Int?, isRejected: Bool, notes: String) {
+    func updateReviewMetadata(
+        for recordID: String,
+        rating: Int?,
+        isRejected: Bool,
+        notes: String,
+        semanticRole: ImageLibrarySemanticRole? = nil
+    ) {
         guard let index = cachedAllRecords.firstIndex(where: { $0.id == recordID }) else { return }
         let existing = cachedAllRecords[index]
+        let resolvedSemanticRole = semanticRole ?? existing.semanticRole
         let updated = ProjectImageRecord(
             id: cachedAllRecords[index].id,
             path: cachedAllRecords[index].path,
             resolvedPath: cachedAllRecords[index].resolvedPath,
             source: cachedAllRecords[index].source,
+            semanticRole: resolvedSemanticRole,
             originLabel: cachedAllRecords[index].originLabel,
             groupLabel: cachedAllRecords[index].groupLabel,
             sceneID: cachedAllRecords[index].sceneID,
@@ -901,6 +932,7 @@ final class AllProjectImagesState {
         rating: Int? = nil,
         isRejected: Bool = false,
         notes: String = "",
+        semanticRole: ImageLibrarySemanticRole? = nil,
         supportsLibraryCuration: Bool = true,
         store: AnimateStore
     ) -> RecordSeed {
@@ -908,6 +940,7 @@ final class AllProjectImagesState {
             id: id,
             path: path,
             source: source,
+            semanticRole: semanticRole,
             originLabel: originLabel,
             groupLabel: groupLabel,
             sceneID: sceneID,
@@ -977,6 +1010,7 @@ final class AllProjectImagesState {
             path: seed.path,
             resolvedPath: resolvedPath,
             source: seed.source,
+            semanticRole: sidecarMetadata?.semanticRole ?? seed.semanticRole ?? inferredSemanticRole(for: seed.source),
             originLabel: seed.originLabel,
             groupLabel: seed.groupLabel,
             sceneID: seed.sceneID,
@@ -1160,6 +1194,17 @@ final class AllProjectImagesState {
         ]
         .joined(separator: "\n")
         .lowercased()
+    }
+
+    nonisolated private static func inferredSemanticRole(for source: AllProjectImagesSource) -> ImageLibrarySemanticRole? {
+        switch source {
+        case .places, .landmarks, .map3dCaptures:
+            return .place
+        case .characters, .costumes:
+            return .character
+        case .props, .vehicles, .sceneShots, .canvas:
+            return nil
+        }
     }
 
     // MARK: - Filter + Sort
@@ -2310,7 +2355,8 @@ private struct AllProjectImagesInspectorView: View {
             for: record.id,
             rating: updated.rating,
             isRejected: updated.isRejected,
-            notes: updated.notes
+            notes: updated.notes,
+            semanticRole: updated.semanticRole
         )
         return updated
     }
@@ -2620,7 +2666,8 @@ func persistReviewUpdate(
     record: ProjectImageRecord,
     rating: Int?,
     isRejected: Bool,
-    notes: String
+    notes: String,
+    semanticRole: ImageLibrarySemanticRole? = nil
 ) -> ImageLibraryReviewMetadata {
     switch allProjectImageReviewContext(store: store, record: record) {
     case .generatedBackground(let recordID):
@@ -2646,13 +2693,15 @@ func persistReviewUpdate(
     }
 
     let existingMetadata = ImageLibraryMetadataSidecarService.load(forImagePath: record.resolvedPath)
+    let resolvedSemanticRole = semanticRole ?? existingMetadata?.semanticRole ?? record.semanticRole
     let metadata = ImageLibraryReviewMetadata(
         rating: rating,
         isRejected: isRejected,
         notes: notes,
         updatedAt: Date(),
         characterTags: existingMetadata?.characterTags ?? [],
-        visualStyle: existingMetadata?.visualStyle
+        visualStyle: existingMetadata?.visualStyle,
+        semanticRole: resolvedSemanticRole
     )
     ImageLibraryMetadataSidecarService.saveAsync(metadata, forImagePath: record.resolvedPath)
     ImageReviewFeedbackService.recordFeedback(
@@ -2661,6 +2710,7 @@ func persistReviewUpdate(
         record: record,
         metadata: metadata
     )
+    ImagePreferenceProfileService.scheduleRebuild(store: store, projectRoot: store.fileOWPURL)
     return metadata
 }
 
@@ -2748,6 +2798,9 @@ private struct AllProjectImageSelection: DetailedImageSelection {
             ("Source", record.source.displayName),
             ("Origin", record.originLabel)
         ]
+        if let semanticRole = record.semanticRole {
+            rows.append(("Review Scope", semanticRole.displayName))
+        }
 
         if let placeRecord {
             rows.append(("Workflow", placeRecord.workflow.displayName))

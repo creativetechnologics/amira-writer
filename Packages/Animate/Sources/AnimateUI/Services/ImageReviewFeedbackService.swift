@@ -26,6 +26,7 @@ struct ImageReviewFeedbackArtifact: Codable, Sendable, Hashable, Identifiable {
     var source: String
     var originLabel: String
     var groupLabel: String
+    var semanticRole: ImageLibrarySemanticRole?
     var sceneID: UUID?
     var shotID: UUID?
     var rating: Int?
@@ -73,6 +74,7 @@ enum ImageReviewFeedbackService {
                 source: record.source.rawValue,
                 originLabel: record.originLabel,
                 groupLabel: record.groupLabel,
+                semanticRole: metadata.semanticRole ?? record.semanticRole,
                 sceneID: record.sceneID,
                 shotID: record.shotID,
                 rating: metadata.rating,
@@ -91,7 +93,7 @@ enum ImageReviewFeedbackService {
         let artifacts = loadAllFeedback(projectRoot: projectRoot)
         var scored: [(artifact: ImageReviewFeedbackArtifact, score: Int)] = []
         for artifact in artifacts {
-            var parts: [String] = [artifact.notes, artifact.originLabel, artifact.groupLabel]
+            var parts: [String] = [artifact.notes, artifact.originLabel, artifact.groupLabel, artifact.semanticRole?.rawValue ?? ""]
             if let analysis = artifact.analysis {
                 parts.append(contentsOf: [
                     analysis.shortCaption ?? "",
@@ -126,7 +128,8 @@ enum ImageReviewFeedbackService {
             let notes = artifact.notes.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !notes.isEmpty else { return nil }
             let verdict = artifact.isRejected ? "Rejected image feedback" : "Review feedback"
-            return "\(verdict) from \(artifact.originLabel): \(notes)"
+            let scope = artifact.semanticRole.map { " [review scope: \($0.rawValue)]" } ?? ""
+            return "\(verdict)\(scope) from \(artifact.originLabel): \(notes)"
         }
     }
 

@@ -91,6 +91,7 @@ struct ProjectImageRecord: Identifiable, Hashable, Sendable {
     let path: String
     let resolvedPath: String
     let source: AllProjectImagesSource
+    let semanticRole: ImageLibrarySemanticRole?
     let originLabel: String
     let groupLabel: String
     let sceneID: UUID?
@@ -656,6 +657,10 @@ struct AllProjectImagesPageView: View {
                 .onKeyPress(.init("0")) { applyGridRating(nil) }
                 .onKeyPress(.init("x")) { toggleGridRejected() }
                 .onKeyPress(.init("X")) { toggleGridRejected() }
+                .onKeyPress(.init("p")) { applySemanticRole(.place) }
+                .onKeyPress(.init("P")) { applySemanticRole(.place) }
+                .onKeyPress(.init("c")) { applySemanticRole(.character) }
+                .onKeyPress(.init("C")) { applySemanticRole(.character) }
                 .onKeyPress(.init("]")) { navigateGrid(.right) }
                 .onKeyPress(.init("[")) { navigateGrid(.left) }
                 .onKeyPress(.init("/")) { rejectSelectedAndAdvance() }
@@ -862,6 +867,10 @@ struct AllProjectImagesPageView: View {
                 .onKeyPress(.init("0")) { applyGridRating(nil) }
                 .onKeyPress(.init("x")) { toggleGridRejected() }
                 .onKeyPress(.init("X")) { toggleGridRejected() }
+                .onKeyPress(.init("p")) { applySemanticRole(.place) }
+                .onKeyPress(.init("P")) { applySemanticRole(.place) }
+                .onKeyPress(.init("c")) { applySemanticRole(.character) }
+                .onKeyPress(.init("C")) { applySemanticRole(.character) }
                 .onKeyPress(.init("]")) {
                     state.selectAdjacentRecord(in: records, delta: 1)
                     return .handled
@@ -1043,6 +1052,29 @@ struct AllProjectImagesPageView: View {
             )
             state.updateReviewMetadata(for: target.id, rating: updated.rating, isRejected: updated.isRejected, notes: updated.notes)
         }
+    }
+
+    private func updateSemanticRole(_ semanticRole: ImageLibrarySemanticRole, for record: ProjectImageRecord) {
+        let targets = actionRecords(anchor: record)
+        for target in targets {
+            let updated = persistReviewUpdate(
+                store: store,
+                record: target,
+                rating: target.rating,
+                isRejected: target.isRejected,
+                notes: target.notes,
+                semanticRole: semanticRole
+            )
+            state.updateReviewMetadata(
+                for: target.id,
+                rating: updated.rating,
+                isRejected: updated.isRejected,
+                notes: updated.notes,
+                semanticRole: updated.semanticRole
+            )
+        }
+        let suffix = targets.count == 1 ? "" : "s"
+        store.statusMessage = "Tagged \(targets.count) image\(suffix) as \(semanticRole.displayName.lowercased()) review scope"
     }
 
     private func toggleRejected(for record: ProjectImageRecord) {
@@ -1264,6 +1296,12 @@ struct AllProjectImagesPageView: View {
         return .handled
     }
 
+    private func applySemanticRole(_ semanticRole: ImageLibrarySemanticRole) -> KeyPress.Result {
+        guard let record = state.selectedRecord else { return .ignored }
+        updateSemanticRole(semanticRole, for: record)
+        return .handled
+    }
+
     private func handleGridRatingKeyPress(_ press: KeyPress) -> KeyPress.Result {
         switch press.key {
         case "1":
@@ -1280,6 +1318,10 @@ struct AllProjectImagesPageView: View {
             return applyGridRating(nil)
         case "x", "X":
             return toggleGridRejected()
+        case "p", "P":
+            return applySemanticRole(.place)
+        case "c", "C":
+            return applySemanticRole(.character)
         case "/", "?", "\\":
             return rejectSelectedAndAdvance()
         case ";", ":":
