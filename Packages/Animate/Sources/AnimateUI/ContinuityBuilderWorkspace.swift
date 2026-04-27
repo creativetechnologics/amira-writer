@@ -28,11 +28,7 @@ public struct ContinuityBuilderWorkspace: View {
 private struct ContinuityBuilderWorkspaceContent: View {
     @Bindable var store: AnimateStore
 
-    @AppStorage("novotro.continuityBuilder.sidebarVisible") private var sidebarVisible = true
-    @AppStorage("novotro.continuityBuilder.sidebar.width") private var sidebarWidth: Double = 320
-    @AppStorage("novotro.continuityBuilder.showInspector") private var inspectorVisible = true
-    @AppStorage("novotro.continuityBuilder.inspector.width") private var inspectorWidth: Double = 340
-    @AppStorage("novotro.continuityBuilder.autoSubmit") private var autoSubmit = false
+    @AppStorage("novotro.continuityBuilder.autoAdvance") private var autoAdvance = true
 
     @State private var session: ContinuityBuilderSession?
     @State private var selectedLabel: ContinuityBuilderCandidateLabel?
@@ -42,7 +38,6 @@ private struct ContinuityBuilderWorkspaceContent: View {
     @State private var isLoading = false
     @State private var generatingTurnIDs: Set<UUID> = []
     @State private var isPrebuffering = false
-    @State private var dictationSession = ImageReviewDictationSession()
 
     private var projectRoot: URL? { Self.projectRoot(from: store.fileOWPURL ?? store.owpURL) }
     private var activeTurn: ContinuityBuilderTurn? { session?.activeTurn }
@@ -79,22 +74,8 @@ private struct ContinuityBuilderWorkspaceContent: View {
     }
 
     private var startedWorkspaceBody: some View {
-        HStack(spacing: 0) {
-            if sidebarVisible {
-                sidebar
-                    .frame(width: max(sidebarWidth, 260))
-                OperaChromeSplitHandle(onDragChanged: resizeSidebar, onDragEnded: { })
-            }
-
-            mainPane
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if inspectorVisible {
-                OperaChromeSplitHandle(onDragChanged: resizeInspector, onDragEnded: { })
-                inspector
-                    .frame(width: max(inspectorWidth, 300))
-            }
-        }
+        mainPane
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var beginWorkspaceBody: some View {
@@ -143,261 +124,105 @@ private struct ContinuityBuilderWorkspaceContent: View {
         }
     }
 
-    private var sidebar: some View {
-        OperaChromeFlatPane(headerPadding: OperaChromeSidebarMetrics.headerPadding) {
-            OperaChromePaneHeader(
-                eyebrow: "CONTINUITY",
-                title: "Builder",
-                subtitle: session.map { "One stream • prompt #\($0.activeTurnIndex + 1) • \($0.feedback.count) notes" } ?? "Loading…"
-            ) {
-                OperaChromeActionButton(systemImage: "sidebar.left") {
-                    withAnimation(.easeInOut(duration: 0.2)) { sidebarVisible = false }
-                }
-            }
-        } content: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("One continuous stream")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(OperaChromeTheme.textSecondary)
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Circle()
-                                .fill(OperaChromeTheme.accent)
-                                .frame(width: 8, height: 8)
-                            Text("Current continuity judgment")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(OperaChromeTheme.textPrimary)
-                        }
-                        Text(activeTurn?.title ?? "Waiting for next prompt")
-                            .font(.system(size: 11))
-                            .foregroundStyle(OperaChromeTheme.textSecondary)
-                            .lineLimit(3)
-                        Text("The builder dynamically chooses what to ask next; it is not a menu of separate tracks.")
-                            .font(.system(size: 10))
-                            .foregroundStyle(OperaChromeTheme.textTertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(10)
-                    .background(OperaChromeTheme.selection, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                    if let session {
-                        sidebarMetric("Judgments", "\(session.feedback.count)")
-                        sidebarMetric("Prompt", "#\(session.activeTurnIndex + 1)")
-                        sidebarMetric("Learned notes", "\(session.feedback.filter { !$0.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count)")
-                    }
-                }
-                .padding(14)
-            }
-        }
-    }
-
     private var mainPane: some View {
-        OperaChromeFlatPane {
-            HStack(alignment: .center, spacing: 12) {
-                if !sidebarVisible {
-                    OperaChromeActionButton(systemImage: "sidebar.left") {
-                        withAnimation(.easeInOut(duration: 0.2)) { sidebarVisible = true }
-                    }
+        VStack(spacing: 0) {
+            Spacer(minLength: 24)
+            if let turn = activeTurn {
+                VStack(spacing: 18) {
+                    continuityImage(turn)
+                        .frame(maxWidth: 980)
+                    reviewControls(turn)
+                        .frame(maxWidth: 520)
+                    feedbackBox(turn)
+                        .frame(maxWidth: 760)
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("CONTINUITY BUILDER")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .tracking(1.2)
-                        .foregroundStyle(OperaChromeTheme.textTertiary)
-                    Text(projectTitle)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(OperaChromeTheme.textPrimary)
-                    Text(activeTurn?.priorityReason ?? "Guided continuity training from local project assets")
-                        .font(.system(size: 11))
-                        .foregroundStyle(OperaChromeTheme.textSecondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 10)
-                if !inspectorVisible {
-                    OperaChromeActionButton(systemImage: "sidebar.right") {
-                        withAnimation(.easeInOut(duration: 0.2)) { inspectorVisible = true }
-                    }
-                }
+                .padding(.horizontal, 32)
+            } else {
+                OperaChromeEmptyState(
+                    systemImage: "point.3.connected.trianglepath.dotted",
+                    title: "No continuity image yet",
+                    message: "Continuity Builder will generate one image at a time for like/reject review."
+                )
+                .padding(32)
             }
-        } content: {
-            VStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if let turn = activeTurn {
-                            turnHeader(turn)
-                            candidateGrid(turn)
-                            feedbackBox(turn)
-                        } else {
-                            OperaChromeEmptyState(
-                                systemImage: "point.3.connected.trianglepath.dotted",
-                                title: "No continuity prompts yet",
-                                message: "Open a project with scenes, places, and character packages to seed the trainer."
-                            )
+            Spacer(minLength: 24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(OperaChromeTheme.workspaceBackground)
+    }
+
+    private func continuityImage(_ turn: ContinuityBuilderTurn) -> some View {
+        Group {
+            if generatingTurnIDs.contains(turn.id) {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(OperaChromeTheme.panelBackground)
+                    .overlay { Color.clear }
+            } else if let candidate = generatedCandidate(in: turn), let path = candidate.imagePath {
+                AsyncStoreThumbnailImage.rounded(
+                    store: store,
+                    path: path,
+                    maxSize: 900,
+                    width: nil,
+                    height: 560,
+                    contentMode: .fit,
+                    cornerRadius: 18
+                )
+                .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(OperaChromeTheme.panelBackground)
+                    .overlay {
+                        Button {
+                            generateCandidates(turn)
+                        } label: {
+                            Label("Generate Current", systemImage: "sparkles")
+                                .font(.system(size: 14, weight: .semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
                         }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isLoading)
                     }
-                    .padding(18)
-                }
             }
         }
+        .aspectRatio(4.0 / 3.0, contentMode: .fit)
     }
 
-    private func turnHeader(_ turn: ContinuityBuilderTurn) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(turn.category.displayName.uppercased())
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(OperaChromeTheme.textTertiary)
-                    Text(turn.title)
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(OperaChromeTheme.textPrimary)
-                }
-                Spacer()
-                Text("\(turn.recommendedAspectRatio) • \(turn.recommendedImageSize)")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(OperaChromeTheme.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(OperaChromeTheme.selection, in: Capsule())
+    private func reviewControls(_ turn: ContinuityBuilderTurn) -> some View {
+        HStack(spacing: 18) {
+            Button {
+                reviewSelectedImage(rejected: true, liked: false, rating: nil, closenessOverride: 0, advance: autoAdvance)
+            } label: {
+                Image(systemName: "hand.thumbsdown.fill")
+                    .font(.system(size: 32, weight: .semibold))
+                    .frame(width: 78, height: 56)
             }
-            Text(turn.question)
-                .font(.system(size: 14))
-                .foregroundStyle(OperaChromeTheme.textPrimary)
-            Text("Use this image to teach the continuity system what should stay, what should change, and what future prompts must remember.")
-                .font(.system(size: 11))
-                .foregroundStyle(OperaChromeTheme.textTertiary)
-        }
-        .padding(14)
-        .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
+            .buttonStyle(.bordered)
+            .disabled(generatedCandidate(in: turn)?.imagePath == nil)
+            .keyboardShortcut("/", modifiers: [])
 
-    private func candidateGrid(_ turn: ContinuityBuilderTurn) -> some View {
-        if generatingTurnIDs.contains(turn.id) {
-            return AnyView(Color.clear.frame(height: 360).accessibilityHidden(true))
-        }
-        guard !turn.candidates.isEmpty else {
-            return AnyView(noCandidateCard(turn))
-        }
-        let visibleCandidates = Array(turn.candidates.prefix(1))
-        let columns = [GridItem(.flexible(), spacing: 12)]
-        return AnyView(VStack(alignment: .leading, spacing: 10) {
-            if !turnHasGeneratedCandidates(turn) {
-                Label("Reference inputs for the next generation — not regenerated results yet.", systemImage: "info.circle")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(OperaChromeTheme.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(OperaChromeTheme.selection, in: Capsule())
+            Button {
+                reviewSelectedImage(rejected: false, liked: true, rating: nil, closenessOverride: 100, advance: autoAdvance)
+            } label: {
+                Image(systemName: "hand.thumbsup.fill")
+                    .font(.system(size: 32, weight: .semibold))
+                    .frame(width: 78, height: 56)
             }
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(visibleCandidates) { candidate in
-                    candidateCard(candidate, showSelection: false)
-                }
-            }
-        })
-    }
-
-    private func noCandidateCard(_ turn: ContinuityBuilderTurn) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(OperaChromeTheme.selection)
-                .frame(height: 240)
-                .overlay {
-                    VStack(spacing: 10) {
-                        Image(systemName: "photo.badge.plus")
-                            .font(.system(size: 34, weight: .light))
-                        Text("No existing reference image found for this prompt.")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text("Use Generate 1K to create the minimum useful candidate, or add selected reference images to the project library.")
-                            .font(.system(size: 12))
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(OperaChromeTheme.textSecondary)
-                    }
-                    .foregroundStyle(OperaChromeTheme.textTertiary)
-                    .padding()
-                }
-            Text(turn.title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(OperaChromeTheme.textPrimary)
-            Text("No candidate image • \(turn.category.displayName)")
-                .font(.system(size: 10))
-                .foregroundStyle(OperaChromeTheme.textTertiary)
+            .buttonStyle(.borderedProminent)
+            .disabled(generatedCandidate(in: turn)?.imagePath == nil)
+            .keyboardShortcut(";", modifiers: [])
         }
-        .padding(10)
-        .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func candidateCard(_ candidate: ContinuityBuilderCandidate, showSelection: Bool) -> some View {
-        Button {
-            selectedLabel = candidate.label
-        } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                ZStack(alignment: .topLeading) {
-                    if let path = candidate.imagePath {
-                        AsyncStoreThumbnailImage.rounded(
-                            store: store,
-                            path: path,
-                            maxSize: 360,
-                            width: nil,
-                            height: 320,
-                            contentMode: .fit,
-                            cornerRadius: 12
-                        )
-                    } else {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(OperaChromeTheme.selection)
-                            .frame(height: 320)
-                            .overlay {
-                                VStack(spacing: 8) {
-                                    Image(systemName: "photo.badge.exclamationmark")
-                                    Text("No image yet")
-                                }
-                                .foregroundStyle(OperaChromeTheme.textTertiary)
-                            }
-                    }
-                    Text(candidateBadge(for: candidate).uppercased())
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.black.opacity(0.55), in: Capsule())
-                        .foregroundStyle(.white)
-                        .padding(8)
-                }
-                Text(candidate.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(OperaChromeTheme.textPrimary)
-                    .lineLimit(2)
-                Text("\(candidate.referenceRole) • \(candidate.source)")
-                    .font(.system(size: 10))
-                    .foregroundStyle(OperaChromeTheme.textTertiary)
-                    .lineLimit(1)
-            }
-            .padding(10)
-            .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(showSelection && selectedLabel == candidate.label ? OperaChromeTheme.accent : OperaChromeTheme.stroke, lineWidth: showSelection && selectedLabel == candidate.label ? 2 : 1)
-            }
-        }
-        .buttonStyle(.plain)
     }
 
     private func feedbackBox(_ turn: ContinuityBuilderTurn) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Feedback")
+                Text("Notes")
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Toggle("Auto submit", isOn: $autoSubmit)
+                Toggle("Auto-advance", isOn: $autoAdvance)
                     .toggleStyle(.switch)
                     .font(.system(size: 11))
-                Button {
-                    dictationSession.toggle(projectRoot: projectRoot)
-                } label: {
-                    Label(dictationSession.isEnabled ? "Mic on" : "Mic", systemImage: dictationSession.isRecording ? "mic.fill" : "mic")
-                }
-                .buttonStyle(.bordered)
             }
 
             ReviewNotesTextView(text: $notesText) { command in
@@ -406,115 +231,6 @@ private struct ContinuityBuilderWorkspaceContent: View {
             .font(.system(size: 13))
             .frame(minHeight: 90)
             .background(OperaChromeTheme.workspaceBackground, in: RoundedRectangle(cornerRadius: 10))
-
-            HStack(spacing: 12) {
-                Text("Closeness: \(Int(closenessPercent))%")
-                    .font(.system(size: 12, weight: .medium))
-                Slider(value: $closenessPercent, in: 0...100, step: 5)
-                Button {
-                    reviewSelectedImage(rejected: true, liked: false, rating: nil, closenessOverride: 0, advance: true)
-                } label: {
-                    Label("Reject", systemImage: "hand.thumbsdown.fill")
-                }
-                    .disabled(selectedCandidate(in: turn)?.imagePath == nil)
-                    .keyboardShortcut("/", modifiers: [])
-                Button {
-                    reviewSelectedImage(rejected: false, liked: true, rating: nil, closenessOverride: 100, advance: true)
-                } label: {
-                    Label("Like", systemImage: "hand.thumbsup.fill")
-                }
-                    .disabled(selectedCandidate(in: turn)?.imagePath == nil)
-                    .keyboardShortcut(";", modifiers: [])
-                Button("5★") { reviewSelectedImage(rejected: false, liked: true, rating: 5, closenessOverride: 100, advance: false) }
-                    .disabled(selectedCandidate(in: turn)?.imagePath == nil)
-                Button(submitButtonTitle(for: turn)) { submit(turn) }
-                    .keyboardShortcut(.return, modifiers: [])
-                Button(generateButtonTitle(for: turn)) {
-                    generateCandidates(turn)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(isLoading)
-            }
-            Text(dictationSession.statusMessage.isEmpty ? statusMessage : "\(statusMessage) • \(dictationSession.statusMessage)")
-                .font(.system(size: 11))
-                .foregroundStyle(OperaChromeTheme.textTertiary)
-        }
-        .padding(14)
-        .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private var inspector: some View {
-        OperaChromeFlatPane {
-            OperaChromePaneHeader(eyebrow: "CONTINUITY", title: "Generation Prompt", subtitle: "Live prompt context") {
-                OperaChromeActionButton(systemImage: "xmark") {
-                    withAnimation(.easeInOut(duration: 0.2)) { inspectorVisible = false }
-                }
-            }
-        } content: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if let turn = activeTurn {
-                        inspectorSection("Prompt seed", turn.promptSeed)
-                        inspectorSection("Negative guardrails", turn.negativeGuardrails.joined(separator: "\n• "))
-                        inspectorSection("Context tags", turn.contextTags.joined(separator: ", "))
-                        inspectorSection("Status", displayStatus(for: turn.generationStatus))
-                    }
-                }
-                .padding(14)
-            }
-        }
-    }
-
-    private func inspectorSection(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(OperaChromeTheme.textTertiary)
-            Text(value.isEmpty ? "—" : value)
-                .font(.system(size: 11))
-                .foregroundStyle(OperaChromeTheme.textSecondary)
-                .textSelection(.enabled)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-
-    private func sidebarMetric(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(OperaChromeTheme.textTertiary)
-            Spacer()
-            Text(value)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(OperaChromeTheme.textSecondary)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(OperaChromeTheme.panelBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func livePromptSeed(for turn: ContinuityBuilderTurn) -> String {
-        guard let projectRoot else { return turn.promptSeed }
-        let rules = ContinuityRuleExtractionService.relevantPromptClauses(
-            projectRoot: projectRoot,
-            query: [turn.title, turn.question, turn.promptSeed, turn.contextTags.joined(separator: " ")].joined(separator: "\n"),
-            limit: 8
-        )
-        return [
-            turn.promptSeed,
-            rules.isEmpty ? nil : "Latest relevant continuity memory injected at generation time:\n\(rules.joined(separator: "\n"))"
-        ].compactMap { $0 }.joined(separator: "\n\n")
-    }
-
-    private func displayStatus(for status: String) -> String {
-        switch status {
-        case "dry_run_ready", "ready_for_generation":
-            return "ready_for_generation"
-        case "generated_candidates_ready_for_feedback":
-            return "ready_for_feedback"
-        default:
-            return status
         }
     }
 
@@ -523,11 +239,13 @@ private struct ContinuityBuilderWorkspaceContent: View {
             && turn.candidates.contains { $0.source == "Continuity Builder generated candidate" }
     }
 
-    private func candidateBadge(for candidate: ContinuityBuilderCandidate) -> String {
-        if candidate.source == "Continuity Builder generated candidate" {
-            return candidate.label == .single ? "Current image" : "Candidate \(candidate.label.displayName)"
+    private func generatedCandidate(in turn: ContinuityBuilderTurn) -> ContinuityBuilderCandidate? {
+        guard turnHasGeneratedCandidates(turn) else { return nil }
+        if let selectedLabel,
+           let match = turn.candidates.first(where: { $0.label == selectedLabel && $0.source == "Continuity Builder generated candidate" }) {
+            return match
         }
-        return "Reference input"
+        return turn.candidates.first { $0.source == "Continuity Builder generated candidate" }
     }
 
     private func statusMessage(for loadedSession: ContinuityBuilderSession) -> String {
@@ -540,13 +258,6 @@ private struct ContinuityBuilderWorkspaceContent: View {
         return "No generated candidate is ready yet. Submit feedback or click Generate 1K to create one."
     }
 
-    private func selectedCandidate(in turn: ContinuityBuilderTurn) -> ContinuityBuilderCandidate? {
-        if let selectedLabel, let match = turn.candidates.first(where: { $0.label == selectedLabel }) {
-            return match
-        }
-        return turn.candidates.first
-    }
-
     private func handleReviewCommand(_ command: ImageReviewKeyboardCommand, turn: ContinuityBuilderTurn) -> Bool {
         switch command {
         case .previous:
@@ -554,9 +265,9 @@ private struct ContinuityBuilderWorkspaceContent: View {
         case .next:
             submit(turn)
         case .reject:
-            reviewSelectedImage(rejected: true, liked: false, rating: nil, closenessOverride: 0, advance: true)
+            reviewSelectedImage(rejected: true, liked: false, rating: nil, closenessOverride: 0, advance: autoAdvance)
         case .fiveStars:
-            reviewSelectedImage(rejected: false, liked: true, rating: 5, closenessOverride: 100, advance: true)
+            reviewSelectedImage(rejected: false, liked: true, rating: 5, closenessOverride: 100, advance: autoAdvance)
         case .setRating(let rating):
             reviewSelectedImage(rejected: false, liked: rating.map { $0 >= 4 } ?? false, rating: rating, closenessOverride: nil, advance: false)
         }
@@ -571,7 +282,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
         advance: Bool
     ) {
         guard let currentTurn = activeTurn,
-              let candidate = selectedCandidate(in: currentTurn),
+              let candidate = generatedCandidate(in: currentTurn),
               let path = candidate.imagePath else {
             statusMessage = "No displayed image is selected for review."
             return
@@ -646,15 +357,10 @@ private struct ContinuityBuilderWorkspaceContent: View {
         isLoading = true
         statusMessage = "Saving continuity feedback, then Gemini will generate the next 1K image…"
         Task {
-            let transcript = await dictationSession.cycleForReviewCommand(projectRoot: projectRoot)
-            let combined = [notesText, transcript].compactMap { text in
-                let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmed?.isEmpty == false ? trimmed : nil
-            }.joined(separator: "\n")
+            let combined = notesText.trimmingCharacters(in: .whitespacesAndNewlines)
             do {
                 if shouldAutoRejectForLearning(notes: combined, closenessPercent: Int(closenessPercent)),
-                   let selected = selectedCandidate(in: turn),
-                   selected.source == "Continuity Builder generated candidate",
+                   let selected = generatedCandidate(in: turn),
                    let path = selected.imagePath {
                     store.setImageLibraryRejected(true, for: path)
                 }
@@ -664,7 +370,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                     selectedLabel: submittedLabel,
                     closenessPercent: Int(closenessPercent),
                     notes: combined,
-                    transcriptAudioPath: dictationSession.lastAudioPath,
+                    transcriptAudioPath: nil,
                     projectRoot: projectRoot
                 )
                 notesText = ""
@@ -887,21 +593,5 @@ private struct ContinuityBuilderWorkspaceContent: View {
         }
     }
 
-    private func jump(to index: Int) {
-        guard let projectRoot, var currentSession = session else { return }
-        currentSession.activeTurnIndex = index
-        currentSession.updatedAt = Date()
-        session = currentSession
-        selectedLabel = currentSession.activeTurn?.candidates.first?.label
-        notesText = ""
-        _ = try? ContinuityBuilderService(store: store).move(session: currentSession, delta: 0, projectRoot: projectRoot)
-    }
 
-    private func resizeSidebar(_ delta: CGFloat) {
-        sidebarWidth = min(max(sidebarWidth + Double(delta), 260), 520)
-    }
-
-    private func resizeInspector(_ delta: CGFloat) {
-        inspectorWidth = min(max(inspectorWidth - Double(delta), 300), 640)
-    }
 }
