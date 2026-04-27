@@ -206,7 +206,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
             Text(turn.question)
                 .font(.system(size: 14))
                 .foregroundStyle(OperaChromeTheme.textPrimary)
-            Text("No paid generation runs from this page yet. The current turn writes project-local feedback artifacts and prompt seeds only.")
+            Text("Generation is execute-gated and cost-capped; feedback writes project-local continuity artifacts.")
                 .font(.system(size: 11))
                 .foregroundStyle(OperaChromeTheme.textTertiary)
         }
@@ -229,11 +229,11 @@ private struct ContinuityBuilderWorkspaceContent: View {
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack(alignment: .topLeading) {
-                    if let path = candidate.imagePath, FileManager.default.fileExists(atPath: path) {
+                    if let path = candidate.imagePath {
                         AsyncStoreThumbnailImage.rounded(
                             store: store,
                             path: path,
-                            maxSize: 900,
+                            maxSize: 360,
                             width: nil,
                             height: 320,
                             contentMode: .fit,

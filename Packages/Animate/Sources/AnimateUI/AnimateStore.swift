@@ -4504,6 +4504,17 @@ final class AnimateStore {
         }
 
         let standardizedAbsolutePath = standardizedAbsoluteURL.path
+        if let projectURL = fileOWPURL {
+            let unescapedProjectName = projectURL.standardizedFileURL.lastPathComponent
+            if let projectRange = standardizedAbsolutePath.range(of: "/\(unescapedProjectName)/") {
+                return String(standardizedAbsolutePath[projectRange.upperBound...])
+            }
+            if let projectName = unescapedProjectName.addingPercentEncoding(withAllowedCharacters: CharacterSet.urlPathAllowed),
+               projectName != unescapedProjectName,
+               let projectRange = standardizedAbsolutePath.range(of: "/\(projectName)/") {
+                return String(standardizedAbsolutePath[projectRange.upperBound...]).removingPercentEncoding
+            }
+        }
         if let animateRange = standardizedAbsolutePath.range(of: "/Animate/") {
             return "Animate/" + standardizedAbsolutePath[animateRange.upperBound...]
         }

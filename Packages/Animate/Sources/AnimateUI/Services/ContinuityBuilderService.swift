@@ -14,13 +14,13 @@ struct ContinuityBuilderService {
                 existing.updatedAt = Date()
                 try? writeSession(existing, projectRoot: projectRoot)
             }
-            return existing
+            return Self.runtimeSession(existing, projectRoot: projectRoot)
         }
         var session = ContinuityBuilderSession(projectRoot: projectRoot.path)
         session.turns = await seedTurns(projectRoot: projectRoot)
         try? writeSession(session, projectRoot: projectRoot)
         try? writeLatestPointer(sessionID: session.id, projectRoot: projectRoot)
-        return session
+        return Self.runtimeSession(session, projectRoot: projectRoot)
     }
 
     func recordFeedback(
@@ -219,7 +219,8 @@ struct ContinuityBuilderService {
             let name = (entry["name"] as? String ?? "").lowercased()
             guard wanted.contains(name) else { continue }
             for file in (entry["files"] as? [[String: Any]] ?? []) {
-                let path = file["absolute_path"] as? String ?? file["path"] as? String
+                let rawPath = file["path"] as? String ?? file["absolute_path"] as? String
+                let path = Self.runtimePath(rawPath, projectRoot: projectRoot)
                 guard let path, FileManager.default.fileExists(atPath: path) else { continue }
                 candidates.append(.init(label: .single, title: "Registry \(name)", imagePath: path, source: "reference-registry.json", referenceRole: name == "map" ? "spatial_map" : "landmark_design", promptRole: "continuity candidate"))
             }
@@ -337,13 +338,14 @@ struct ContinuityBuilderService {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try? decoder.decode(ContinuityBuilderSession.self, from: data)
+        guard let decoded = try? decoder.decode(ContinuityBuilderSession.self, from: data) else { return nil }
+        return Self.runtimeSession(decoded, projectRoot: projectRoot)
     }
 
     private func writeSession(_ session: ContinuityBuilderSession, projectRoot: URL) throws {
         let dir = sessionDirectory(projectRoot: projectRoot, sessionID: session.id.uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try writeCodable(session, to: dir.appendingPathComponent("session.json"))
+        try writeCodable(Self.portableSession(session, projectRoot: projectRoot), to: dir.appendingPathComponent("session.json"))
         try writeLatestPointer(sessionID: session.id, projectRoot: projectRoot)
     }
 
@@ -395,5 +397,61 @@ struct ContinuityBuilderService {
         ProjectPaths(root: projectRoot).metadata
             .appendingPathComponent("automation", isDirectory: true)
             .appendingPathComponent("continuity-builder", isDirectory: true)
+    }
+
+    static func runtimePath(_ rawPath: String?, projectRoot: URL) -> String? {
+        guard let rawPath = rawPath?.trimmingCharacters(in: .whitespacesAndNewlines), !rawPath.isEmpty else { return nil }
+        if !rawPath.hasPrefix("/") {
+            return projectRoot.appendingPathComponent(rawPath).path
+        }
+        let projectPath = projectRoot.standardizedFileURL.path
+        if rawPath == projectPath || rawPath.hasPrefix(projectPath + "/") {
+            return rawPath
+        }
+        if let range = rawPath.range(of: "/\(projectRoot.lastPathComponent)/") {
+            return projectRoot.appendingPathComponent(String(rawPath[range.upperBound...])).path
+        }
+        if let animateRange = rawPath.range(of: "/Animate/") {
+            return projectRoot.appendingPathComponent("Animate").appendingPathComponent(String(rawPath[animateRange.upperBound...])).path
+        }
+        return rawPath
+    }
+
+    static func portablePath(_ rawPath: String?, projectRoot: URL) -> String? {
+        guard let runtime = runtimePath(rawPath, projectRoot: projectRoot) else { return nil }
+        let projectPath = projectRoot.standardizedFileURL.path
+        if runtime == projectPath { return nil }
+        if runtime.hasPrefix(projectPath + "/") {
+            return String(runtime.dropFirst(projectPath.count + 1))
+        }
+        return rawPath
+    }
+
+    static func runtimeSession(_ session: ContinuityBuilderSession, projectRoot: URL) -> ContinuityBuilderSession {
+        var copy = session
+        copy.projectRoot = projectRoot.path
+        for turnIndex in copy.turns.indices {
+            for candidateIndex in copy.turns[turnIndex].candidates.indices {
+                copy.turns[turnIndex].candidates[candidateIndex].imagePath = runtimePath(
+                    copy.turns[turnIndex].candidates[candidateIndex].imagePath,
+                    projectRoot: projectRoot
+                )
+            }
+        }
+        return copy
+    }
+
+    static func portableSession(_ session: ContinuityBuilderSession, projectRoot: URL) -> ContinuityBuilderSession {
+        var copy = session
+        copy.projectRoot = projectRoot.lastPathComponent
+        for turnIndex in copy.turns.indices {
+            for candidateIndex in copy.turns[turnIndex].candidates.indices {
+                copy.turns[turnIndex].candidates[candidateIndex].imagePath = portablePath(
+                    copy.turns[turnIndex].candidates[candidateIndex].imagePath,
+                    projectRoot: projectRoot
+                )
+            }
+        }
+        return copy
     }
 }
