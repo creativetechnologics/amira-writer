@@ -145,7 +145,7 @@ struct ContinuityRuleExtractionService {
 
         if request.writeSidecars {
             artifact.artifactPath = try writeArtifact(artifact, projectRoot: request.projectRoot).path
-            if artifact.errorMessage == nil, !artifact.fingerprints.isEmpty {
+            if !artifact.fingerprints.isEmpty {
                 try writeLatest(artifact, projectRoot: request.projectRoot)
             }
         }
@@ -162,18 +162,19 @@ struct ContinuityRuleExtractionService {
     static func relevantPromptClauses(projectRoot: URL, query: String, limit: Int = 8) -> [String] {
         guard let artifact = latest(projectRoot: projectRoot) else { return [] }
         let queryVector = ContinuityTextVectorizer.vector(for: query)
-        return artifact.fingerprints
+        let scored = artifact.fingerprints
             .map { rule -> (ContinuityRuleFingerprint, Double) in
                 let tagScore = rule.requiredTags.reduce(0.0) { partial, tag in
                     partial + (query.localizedCaseInsensitiveContains(tag) ? 0.15 : 0)
                 }
                 return (rule, ContinuityTextVectorizer.cosine(queryVector, rule.vector) + tagScore)
             }
-            .filter { $0.1 > 0.10 }
             .sorted { lhs, rhs in
                 if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
                 return lhs.0.confidence > rhs.0.confidence
             }
+        let relevant = scored.filter { $0.1 > 0.04 }
+        return (relevant.isEmpty ? scored : relevant)
             .prefix(max(1, limit))
             .map { $0.0.promptClause }
     }
@@ -181,6 +182,10 @@ struct ContinuityRuleExtractionService {
     private func collectSources(projectRoot: URL, limit: Int) async -> [ContinuityFeedbackSource] {
         var sources: [ContinuityFeedbackSource] = []
         for artifact in ImageReviewFeedbackService.loadAllFeedback(projectRoot: projectRoot) {
+            let reviewStatus = artifact.isRejected
+                ? "Image review status: rejected. Use the written notes as continuity learning input, but never treat the rejected image itself as a positive reference."
+                : "Image review status: rated \(artifact.rating.map(String.init) ?? "unrated")."
+            let reviewNotes = [reviewStatus, artifact.notes].joined(separator: "\n")
             let text = [artifact.notes, artifact.originLabel, artifact.groupLabel, artifact.analysis?.summary, artifact.analysis?.retrievalJSON]
                 .compactMap { $0 }
                 .joined(separator: "\n")
@@ -191,7 +196,7 @@ struct ContinuityRuleExtractionService {
                 category: artifact.source,
                 imagePath: artifact.imagePath,
                 label: artifact.originLabel,
-                notes: artifact.notes,
+                notes: reviewNotes,
                 analysisSummary: artifact.analysis?.summary ?? artifact.analysis?.shortCaption,
                 tags: tags,
                 vector: ContinuityTextVectorizer.vector(for: text),

@@ -301,7 +301,8 @@ struct ContinuityBuilderService {
                 candidates.append(.init(label: .single, title: "Registry \(name)", imagePath: path, source: "reference-registry.json", referenceRole: name == "map" ? "spatial_map" : "landmark_design", promptRole: "continuity candidate"))
             }
         }
-        return withLabels(Array(candidates.prefix(3))).isEmpty ? fallback : withLabels(Array(candidates.prefix(3)))
+        let ranked = rankedRatedCandidates(candidates)
+        return withLabels(ranked).isEmpty ? fallback : withLabels(ranked)
     }
 
     nonisolated private static func firstPlaceCandidates(backgrounds: [BackgroundPlate], projectRoot: URL, limit: Int) -> [ContinuityBuilderCandidate] {
@@ -313,7 +314,7 @@ struct ContinuityBuilderService {
             }
             if candidates.count >= limit { break }
         }
-        return withLabels(candidates)
+        return withLabels(rankedRatedCandidates(candidates))
     }
 
     nonisolated private static func bridgePlaceCandidates(backgrounds: [BackgroundPlate], projectRoot: URL, limit: Int) -> [ContinuityBuilderCandidate] {
@@ -329,7 +330,7 @@ struct ContinuityBuilderService {
             }
             if candidates.count >= limit { break }
         }
-        return withLabels(candidates)
+        return withLabels(rankedRatedCandidates(candidates))
     }
 
     nonisolated private static func firstCharacterCandidates(characters: [AnimationCharacter], projectRoot: URL, limit: Int) -> [ContinuityBuilderCandidate] {
@@ -343,7 +344,7 @@ struct ContinuityBuilderService {
             }
             if candidates.count >= limit { break }
         }
-        return withLabels(candidates)
+        return withLabels(rankedRatedCandidates(candidates))
     }
 
     nonisolated private static func firstCostumeCandidates(characters: [AnimationCharacter], projectRoot: URL, limit: Int, fallback: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
@@ -359,7 +360,8 @@ struct ContinuityBuilderService {
             }
             if candidates.count >= limit { break }
         }
-        return withLabels(candidates.isEmpty ? fallback : candidates)
+        let ranked = rankedRatedCandidates(candidates)
+        return withLabels(ranked.isEmpty ? fallback : ranked)
     }
 
     nonisolated private static func resolvedPath(_ rawPath: String?, projectRoot: URL) -> String? {
@@ -367,18 +369,54 @@ struct ContinuityBuilderService {
     }
 
     nonisolated private static func acceptedExistingPath(_ rawPaths: [String?], projectRoot: URL) -> String? {
-        rawPaths.compactMap { acceptedExistingPath($0, projectRoot: projectRoot) }.first
+        rawPaths.compactMap { acceptedExistingRatedPath($0, projectRoot: projectRoot) }
+            .sorted { lhs, rhs in
+                if lhs.rating != rhs.rating { return lhs.rating > rhs.rating }
+                return lhs.path < rhs.path
+            }
+            .map(\.path)
+            .first
     }
 
     nonisolated private static func acceptedExistingPath(_ rawPath: String?, projectRoot: URL) -> String? {
+        acceptedExistingRatedPath(rawPath, projectRoot: projectRoot)?.path
+    }
+
+    nonisolated private static func acceptedExistingRatedPath(_ rawPath: String?, projectRoot: URL) -> (path: String, rating: Int)? {
         guard let path = resolvedPath(rawPath, projectRoot: projectRoot),
               FileManager.default.fileExists(atPath: path),
-              !isRejectedImagePath(path) else { return nil }
-        return path
+              let rating = referenceRating(forImagePath: path) else { return nil }
+        return (path, rating)
     }
 
     nonisolated static func isRejectedImagePath(_ path: String) -> Bool {
         ImageLibraryMetadataSidecarService.load(forImagePath: path)?.isRejected == true
+    }
+
+    nonisolated static func referenceRating(forImagePath path: String) -> Int? {
+        guard let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path),
+              metadata.isRejected == false,
+              let rating = metadata.rating,
+              rating > 0 else { return nil }
+        return min(max(rating, 1), 5)
+    }
+
+    nonisolated static func isReferenceEligibleImagePath(_ path: String) -> Bool {
+        referenceRating(forImagePath: path) != nil
+    }
+
+    nonisolated private static func rankedRatedCandidates(_ candidates: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {
+        candidates
+            .compactMap { candidate -> (ContinuityBuilderCandidate, Int)? in
+                guard let path = candidate.imagePath,
+                      let rating = referenceRating(forImagePath: path) else { return nil }
+                return (candidate, rating)
+            }
+            .sorted { lhs, rhs in
+                if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
+                return lhs.0.title.localizedCaseInsensitiveCompare(rhs.0.title) == .orderedAscending
+            }
+            .map(\.0)
     }
 
     nonisolated private static func withLabels(_ candidates: [ContinuityBuilderCandidate]) -> [ContinuityBuilderCandidate] {

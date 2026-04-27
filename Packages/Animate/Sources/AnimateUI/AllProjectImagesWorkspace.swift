@@ -2359,6 +2359,10 @@ private struct AllProjectImagesInspectorView: View {
                 persistAndRefresh(record: record, rating: 5, isRejected: false, notes: record.notes)
             }
             state.selectAdjacentRecord(in: state.filteredRecords, delta: 1)
+        case .setRating(let rating):
+            if let record {
+                persistAndRefresh(record: record, rating: rating, isRejected: false, notes: record.notes)
+            }
         }
     }
 

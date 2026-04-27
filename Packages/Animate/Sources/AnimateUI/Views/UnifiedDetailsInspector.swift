@@ -48,11 +48,12 @@ struct SharedInspectorTabBar<Value: Hashable & Identifiable>: View {
 // MARK: - Protocol
 
 @available(macOS 26.0, *)
-enum ImageReviewKeyboardCommand: String, Sendable, Hashable {
+enum ImageReviewKeyboardCommand: Sendable, Hashable {
     case previous
     case next
     case reject
     case fiveStars
+    case setRating(Int?)
 }
 
 @available(macOS 26.0, *)
@@ -791,6 +792,18 @@ private final class ReviewNotesNSTextView: NSTextView {
             command = .reject
         case ";", ":":
             command = .fiveStars
+        case "1":
+            command = .setRating(1)
+        case "2":
+            command = .setRating(2)
+        case "3":
+            command = .setRating(3)
+        case "4":
+            command = .setRating(4)
+        case "5":
+            command = .setRating(5)
+        case "0":
+            command = .setRating(nil)
         default:
             command = nil
         }

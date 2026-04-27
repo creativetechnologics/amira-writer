@@ -83,7 +83,12 @@ struct ContinuityBuilderGenerationService {
         }
 
         let referencePaths = Array(turn.candidates.compactMap(\.imagePath).filter {
-            FileManager.default.fileExists(atPath: $0) && !ContinuityBuilderService.isRejectedImagePath($0)
+            FileManager.default.fileExists(atPath: $0) && ContinuityBuilderService.isReferenceEligibleImagePath($0)
+        }.sorted { lhs, rhs in
+            let lhsRating = ContinuityBuilderService.referenceRating(forImagePath: lhs) ?? 0
+            let rhsRating = ContinuityBuilderService.referenceRating(forImagePath: rhs) ?? 0
+            if lhsRating != rhsRating { return lhsRating > rhsRating }
+            return lhs < rhs
         }.prefix(6))
         let references = await Task.detached(priority: .userInitiated) {
             referencePaths.compactMap { GeminiImageService.referenceImage(from: URL(fileURLWithPath: $0)) }
@@ -203,19 +208,28 @@ struct ContinuityBuilderGenerationService {
     }
 
     private func executionPrompt(turn: ContinuityBuilderTurn, label: ContinuityBuilderCandidateLabel, variantIndex: Int, imageSize: String, aspectRatio: String, projectRoot: URL) -> String {
+        let query = [turn.title, turn.question, turn.promptSeed, turn.contextTags.joined(separator: " ")].joined(separator: "\n")
         let continuityRules = ContinuityRuleExtractionService.relevantPromptClauses(
             projectRoot: projectRoot,
-            query: [turn.title, turn.question, turn.promptSeed, turn.contextTags.joined(separator: " ")].joined(separator: "\n"),
-            limit: 8
+            query: query,
+            limit: 12
         )
+        let recentFeedbackClauses = ContinuityBuilderService.promptClauses(
+            from: ContinuityBuilderService.relevantFeedback(projectRoot: projectRoot, query: query, limit: 10)
+        )
+        let memoryClauses = Array((continuityRules + recentFeedbackClauses).prefix(16))
         return [
             "Continuity Builder training candidate. Generate a single image for Gary to critique.",
             "Candidate label visible to the system: \(label.displayName). Do not render any label text in the image.",
             "Output format: \(aspectRatio) open-matte, \(imageSize). Keep a wider-than-needed field of view so later 21:9/vertical crops and camera moves remain possible.",
             turn.promptSeed,
             "Question this image is meant to answer: \(turn.question)",
-            continuityRules.isEmpty ? nil : "Canonical continuity rules already learned:\n\(continuityRules.joined(separator: "\n"))",
-            "Reference usage: attached images are continuity references, not collage panels. Preserve only the relevant geography/identity/costume/style facts.",
+            memoryClauses.isEmpty ? nil : [
+                "AUTHORITATIVE CONTINUITY MEMORY — these rules override attached images, older generated examples, and any ambiguous visual reference.",
+                "Do not reintroduce mistakes called out in negative feedback. If a prior image had a flat bridge and feedback says the bridge must be arched, the new image must use an arched bridge.",
+                memoryClauses.joined(separator: "\n")
+            ].joined(separator: "\n"),
+            "Reference usage: attached images are continuity references, not collage panels. Preserve only the relevant geography/identity/costume/style facts that do not conflict with the authoritative continuity memory.",
             "Negative guardrails: \(turn.negativeGuardrails.joined(separator: " | "))",
             "Variant guidance: produce a distinct but plausible candidate \(variantIndex + 1), changing composition only enough to test the continuity question."
         ].compactMap { $0 }.joined(separator: "\n\n")

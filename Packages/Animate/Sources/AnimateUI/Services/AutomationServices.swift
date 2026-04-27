@@ -318,7 +318,7 @@ struct ReferenceContractResolver {
         // Settings/animated-look-prompt.json. Do not add that JSON file as an
         // image reference, or later paid phases could try to upload a non-image.
         candidates = deduplicated(candidates).filter { item in
-            item.status == .pinned || !rejectedKeys.contains(referenceKey(item))
+            !rejectedKeys.contains(referenceKey(item)) && isRatedReference(item.path)
         }
         let selected = quotaLimited(candidates, maxReferences: 8, quotas: ReferenceContract.defaultRoleQuotas)
         let rejectedAudit = (existing?.references ?? []).filter { $0.status == .rejected }
@@ -456,6 +456,9 @@ struct ReferenceContractResolver {
         for item in candidates.sorted(by: { lhs, rhs in
             if lhs.status == .pinned && rhs.status != .pinned { return true }
             if lhs.status != .pinned && rhs.status == .pinned { return false }
+            let lhsRating = referenceRating(lhs.path) ?? 0
+            let rhsRating = referenceRating(rhs.path) ?? 0
+            if lhsRating != rhsRating { return lhsRating > rhsRating }
             return lhs.priority < rhs.priority
         }) {
             if selected.count >= maxReferences { break }
@@ -473,6 +476,18 @@ struct ReferenceContractResolver {
     }
 
     private func referenceKey(_ item: ReferenceContractItem) -> String { "\(item.role.rawValue)|\(item.path)" }
+
+    private func isRatedReference(_ path: String) -> Bool {
+        referenceRating(path) != nil
+    }
+
+    private func referenceRating(_ path: String) -> Int? {
+        guard let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path),
+              metadata.isRejected == false,
+              let rating = metadata.rating,
+              rating > 0 else { return nil }
+        return min(max(rating, 1), 5)
+    }
 }
 
 @available(macOS 26.0, *)
