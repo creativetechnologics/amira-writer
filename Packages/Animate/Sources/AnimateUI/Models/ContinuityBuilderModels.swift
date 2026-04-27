@@ -187,6 +187,7 @@ struct ContinuityBuilderSession: Identifiable, Codable, Sendable, Hashable {
     var feedback: [ContinuityBuilderFeedback]
     var nextPriorityQueue: [ContinuityBuilderCategory]
     var notes: String
+    var startedAt: Date?
 
     init(
         schemaVersion: Int = Self.currentSchemaVersion,
@@ -198,7 +199,8 @@ struct ContinuityBuilderSession: Identifiable, Codable, Sendable, Hashable {
         turns: [ContinuityBuilderTurn] = [],
         feedback: [ContinuityBuilderFeedback] = [],
         nextPriorityQueue: [ContinuityBuilderCategory] = ContinuityBuilderCategory.allCases,
-        notes: String = ""
+        notes: String = "",
+        startedAt: Date? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -210,10 +212,15 @@ struct ContinuityBuilderSession: Identifiable, Codable, Sendable, Hashable {
         self.feedback = feedback
         self.nextPriorityQueue = nextPriorityQueue
         self.notes = notes
+        self.startedAt = startedAt
     }
 
     var activeTurn: ContinuityBuilderTurn? {
         guard turns.indices.contains(activeTurnIndex) else { return nil }
         return turns[activeTurnIndex]
+    }
+
+    var hasStarted: Bool {
+        startedAt != nil
     }
 }

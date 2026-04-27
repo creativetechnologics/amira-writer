@@ -945,6 +945,36 @@ final class AnimateStore {
     @ObservationIgnored private var imageAnalysisBackfill: ImageAnalysisBackfillService?
     @ObservationIgnored private var imageAnalysisWorkerActivityID: UUID?
     @ObservationIgnored private var imageAnalysisActivityMonitorTask: Task<Void, Never>?
+
+    struct ImageIntelligenceContinuityTextCandidate: Sendable, Hashable {
+        var assetID: String
+        var resolvedPath: String
+        var projectRelativePath: String?
+        var summary: String?
+        var shortCaption: String?
+        var longCaption: String?
+        var retrievalJSON: String?
+        var entitiesJSON: String?
+        var sceneJSON: String?
+        var styleJSON: String?
+
+        var searchableText: String {
+            [
+                resolvedPath,
+                projectRelativePath,
+                summary,
+                shortCaption,
+                longCaption,
+                retrievalJSON,
+                entitiesJSON,
+                sceneJSON,
+                styleJSON
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        }
+    }
     
     private func setupImageIntelligence() {
         guard let projectURL = fileOWPURL else { return }
@@ -1732,6 +1762,27 @@ final class AnimateStore {
         guard let store = imageIntelligenceStore,
               let record = try? await store.assetByPath(URL(fileURLWithPath: path).standardizedFileURL.path) else { return nil }
         return try? await store.latestVisualMetadataForAsset(record.id)
+    }
+
+    func imageIntelligenceContinuityCandidates(matchingTerms terms: [String], limit: Int = 80) async -> [ImageIntelligenceContinuityTextCandidate] {
+        guard let store = imageIntelligenceStore else { return [] }
+        guard let rows = try? await store.continuityCandidateRows(matchingTerms: terms, limit: limit) else { return [] }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String,
+                  let path = row["resolved_path"] as? String else { return nil }
+            return ImageIntelligenceContinuityTextCandidate(
+                assetID: id,
+                resolvedPath: path,
+                projectRelativePath: row["project_relative_path"] as? String,
+                summary: row["summary"] as? String,
+                shortCaption: row["short_caption"] as? String,
+                longCaption: row["long_caption"] as? String,
+                retrievalJSON: row["retrieval_json"] as? String,
+                entitiesJSON: row["entities_json"] as? String,
+                sceneJSON: row["scene_json"] as? String,
+                styleJSON: row["style_json"] as? String
+            )
+        }
     }
 
     public func imageCharacterRegionTags(for path: String) async -> [ImageCharacterRegionTagRecord] {
@@ -8005,6 +8056,7 @@ final class AnimateStore {
         if didMutateCharacterState {
             save()
         }
+        bumpAllImagesContentRevision()
     }
 
     func setInspirationRating(_ rating: Int?, path: String, for characterID: UUID) {

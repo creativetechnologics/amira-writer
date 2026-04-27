@@ -45,6 +45,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
     private var projectRoot: URL? { store.owpURL?.deletingLastPathComponent() }
     private var activeTurn: ContinuityBuilderTurn? { session?.activeTurn }
     private var projectTitle: String { projectRoot?.lastPathComponent ?? "Untitled Opera" }
+    private var hasStarted: Bool { session?.hasStarted == true }
 
     var body: some View {
         Group {
@@ -64,6 +65,17 @@ private struct ContinuityBuilderWorkspaceContent: View {
     }
 
     private var workspaceBody: some View {
+        Group {
+            if hasStarted {
+                startedWorkspaceBody
+            } else {
+                beginWorkspaceBody
+            }
+        }
+        .background(OperaChromeTheme.workspaceBackground)
+    }
+
+    private var startedWorkspaceBody: some View {
         HStack(spacing: 0) {
             if sidebarVisible {
                 sidebar
@@ -80,7 +92,52 @@ private struct ContinuityBuilderWorkspaceContent: View {
                     .frame(width: max(inspectorWidth, 300))
             }
         }
-        .background(OperaChromeTheme.workspaceBackground)
+    }
+
+    private var beginWorkspaceBody: some View {
+        OperaChromeFlatPane {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("CONTINUITY BUILDER")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+                    Text(projectTitle)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(OperaChromeTheme.textPrimary)
+                }
+                Spacer()
+            }
+        } content: {
+            VStack(spacing: 18) {
+                Image(systemName: "point.3.connected.trianglepath.dotted")
+                    .font(.system(size: 48, weight: .light))
+                    .foregroundStyle(OperaChromeTheme.textTertiary)
+                Text("Start from zero")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(OperaChromeTheme.textPrimary)
+                Text("Continuity Builder will run as one long guided session. It will choose the next best question, keep going from where you left off, and use your feedback to build continuity memory over time.")
+                    .font(.system(size: 14))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(OperaChromeTheme.textSecondary)
+                    .frame(maxWidth: 720)
+                Button {
+                    beginContinuityStream()
+                } label: {
+                    Label("Begin", systemImage: "play.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isLoading || session == nil)
+                if isLoading {
+                    ProgressView("Preparing first continuity prompt…")
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(40)
+        }
     }
 
     private var sidebar: some View {
@@ -97,7 +154,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
         } content: {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Knowledge pathways")
+                    Text("Continuous stream")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(OperaChromeTheme.textSecondary)
                     ForEach(Array((session?.turns ?? []).enumerated()), id: \.element.id) { index, turn in
@@ -309,8 +366,6 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 Text("Closeness: \(Int(closenessPercent))%")
                     .font(.system(size: 12, weight: .medium))
                 Slider(value: $closenessPercent, in: 0...100, step: 5)
-                Button("Previous") { move(delta: -1) }
-                    .disabled((session?.activeTurnIndex ?? 0) == 0)
                 Button("Submit & Next") { submit(turn) }
                     .keyboardShortcut(.return, modifiers: [])
                 Button("Generate 3 × 1K") {
@@ -372,8 +427,28 @@ private struct ContinuityBuilderWorkspaceContent: View {
         isLoading = false
     }
 
+    private func beginContinuityStream() {
+        guard let projectRoot, let currentSession = session else { return }
+        isLoading = true
+        statusMessage = "Beginning continuous Continuity Builder stream…"
+        Task {
+            do {
+                let updated = try await ContinuityBuilderService(store: store).begin(session: currentSession, projectRoot: projectRoot)
+                session = updated
+                selectedLabel = updated.activeTurn?.candidates.first?.label
+                notesText = ""
+                closenessPercent = 55
+                statusMessage = "Started one continuous Continuity Builder session."
+            } catch {
+                statusMessage = "Could not begin Continuity Builder: \(error.localizedDescription)"
+            }
+            isLoading = false
+        }
+    }
+
     private func submit(_ turn: ContinuityBuilderTurn) {
         guard let projectRoot, let currentSession = session else { return }
+        let submittedLabel = selectedLabel
         Task {
             let transcript = await dictationSession.cycleForReviewCommand(projectRoot: projectRoot)
             let combined = [notesText, transcript].compactMap { text in
@@ -384,7 +459,7 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 let updated = try await ContinuityBuilderService(store: store).recordFeedback(
                     session: currentSession,
                     turn: turn,
-                    selectedLabel: selectedLabel,
+                    selectedLabel: submittedLabel,
                     closenessPercent: Int(closenessPercent),
                     notes: combined,
                     transcriptAudioPath: dictationSession.lastAudioPath,
@@ -394,7 +469,23 @@ private struct ContinuityBuilderWorkspaceContent: View {
                 selectedLabel = updated.activeTurn?.candidates.first?.label
                 notesText = ""
                 closenessPercent = 55
-                statusMessage = "Saved continuity feedback to Metadata/automation/continuity-builder."
+                if let feedback = updated.feedback.first(where: { $0.turnID == turn.id }) {
+                    let selectedCandidate = turn.candidates.first { $0.label == submittedLabel }
+                    let propagation = await ContinuityFeedbackPropagationService(store: store).propagate(
+                        feedback: feedback,
+                        turn: turn,
+                        selectedCandidate: selectedCandidate,
+                        projectRoot: projectRoot
+                    )
+                    let suffix = propagation.autoRejectedCount > 0
+                        ? " Auto-rejected \(propagation.autoRejectedCount) high-confidence similar image(s)."
+                        : propagation.reviewCandidateCount > 0
+                            ? " Found \(propagation.reviewCandidateCount) possible similar issue(s) for review; none auto-rejected."
+                            : ""
+                    statusMessage = "Saved continuity feedback to Metadata/automation/continuity-builder.\(suffix)"
+                } else {
+                    statusMessage = "Saved continuity feedback to Metadata/automation/continuity-builder."
+                }
             } catch {
                 statusMessage = "Could not save continuity feedback: \(error.localizedDescription)"
             }

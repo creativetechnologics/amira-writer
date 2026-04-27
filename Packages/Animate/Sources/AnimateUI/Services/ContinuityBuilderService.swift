@@ -9,18 +9,37 @@ struct ContinuityBuilderService {
 
     func loadOrCreateSession(projectRoot: URL) async -> ContinuityBuilderSession {
         if var existing = readLatestSession(projectRoot: projectRoot) {
-            if existing.turns.isEmpty {
+            if existing.hasStarted, existing.turns.isEmpty {
                 existing.turns = await seedTurns(projectRoot: projectRoot)
+                existing.updatedAt = Date()
+                try? writeSession(existing, projectRoot: projectRoot)
+            } else if !existing.hasStarted, (!existing.turns.isEmpty || !existing.feedback.isEmpty || !existing.notes.isEmpty) {
+                existing.activeTurnIndex = 0
+                existing.turns = []
+                existing.feedback = []
+                existing.notes = ""
                 existing.updatedAt = Date()
                 try? writeSession(existing, projectRoot: projectRoot)
             }
             return Self.runtimeSession(existing, projectRoot: projectRoot)
         }
-        var session = ContinuityBuilderSession(projectRoot: projectRoot.path)
-        session.turns = await seedTurns(projectRoot: projectRoot)
+        let session = ContinuityBuilderSession(projectRoot: projectRoot.path)
         try? writeSession(session, projectRoot: projectRoot)
         try? writeLatestPointer(sessionID: session.id, projectRoot: projectRoot)
         return Self.runtimeSession(session, projectRoot: projectRoot)
+    }
+
+    func begin(session: ContinuityBuilderSession, projectRoot: URL) async throws -> ContinuityBuilderSession {
+        var updated = session
+        updated.startedAt = updated.startedAt ?? Date()
+        updated.activeTurnIndex = 0
+        updated.feedback = []
+        updated.notes = ""
+        updated.turns = await seedTurns(projectRoot: projectRoot)
+        updated.updatedAt = Date()
+        try writeSession(updated, projectRoot: projectRoot)
+        try writeIndex(projectRoot: projectRoot)
+        return Self.runtimeSession(updated, projectRoot: projectRoot)
     }
 
     func recordFeedback(
