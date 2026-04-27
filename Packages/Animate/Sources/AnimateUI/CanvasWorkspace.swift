@@ -208,6 +208,7 @@ private struct CanvasWorkspaceContent: View {
                 ImagineCanvasPageView(
                     store: store,
                     canvasState: canvasFormState,
+                    libraryState: libraryState,
                     selectedGenerationID: $selectedGenerationID
                 )
             }

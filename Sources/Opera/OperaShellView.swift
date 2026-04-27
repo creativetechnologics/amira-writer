@@ -71,9 +71,17 @@ enum OperaMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Legacy compatibility mode; hidden from navigation and surfaced as All Images.
+    /// Legacy/archived compatibility modes; hidden from navigation and routed
+    /// to their replacement workspaces so stale saved state cannot reopen them.
     var navigationMode: OperaMode {
-        self == .props ? .allImages : self
+        switch self {
+        case .props:
+            return .allImages
+        case .continuityBuilder:
+            return .canvas
+        default:
+            return self
+        }
     }
 
     static let sidebarModes: [OperaMode] = [
@@ -646,14 +654,6 @@ struct OperaShellView: View {
                     if !ultraCompact {
                         animateController.geminiStatusBadgeView()
                     }
-
-                    OperaChromeActionButton(
-                        systemImage: "point.3.connected.trianglepath.dotted",
-                        isSelected: selectedMode.navigationMode == .continuityBuilder
-                    ) {
-                        selectedMode = .continuityBuilder
-                    }
-                    .help("Continuity Builder")
 
                     OperaChromeActionButton(
                         systemImage: "paintpalette",
