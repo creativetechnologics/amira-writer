@@ -140,7 +140,7 @@ struct CanvasPromptGeneratorService: Sendable {
         if needsMasterMap,
            let masterMap = canonicalMasterMapPath(projectRoot: projectRoot),
            FileManager.default.fileExists(atPath: masterMap),
-           !ContinuityBuilderService.isRejectedImagePath(masterMap) {
+           !isRejectedImagePath(masterMap) {
             candidates.append(ReferenceCandidate(
                 id: "master_map",
                 path: masterMap,
@@ -163,7 +163,7 @@ struct CanvasPromptGeneratorService: Sendable {
             guard !path.isEmpty,
                   FileManager.default.fileExists(atPath: path),
                   !record.isRejected,
-                  !ContinuityBuilderService.isRejectedImagePath(path),
+                  !isRejectedImagePath(path),
                   let preferenceScore = ImagePreferenceProfileService.referencePreferenceScore(forImagePath: path) ?? recordPreferenceScore(record) else {
                 continue
             }
@@ -325,7 +325,7 @@ struct CanvasPromptGeneratorService: Sendable {
 
         Rules:
         - The prompt is for Gemini image generation; write clean visual instructions only.
-        - Never include app/process words such as Continuity Builder, image review status, prompt seed, category, rating, rejected, liked, reference ID, metadata, vector, or training.
+        - Never include app/process words such as image review status, prompt seed, category, rating, rejected, liked, reference ID, metadata, vector, or training.
         - Never rely on the project title as visual shorthand.
         - Translate Gary's plain English into visible details: era, regional/world cues, architecture/materials, lighting, camera/framing, action, and visual tone.
         - Use early-2000s, Persian-Afghan highland valley continuity when relevant.
@@ -453,6 +453,32 @@ struct CanvasPromptGeneratorService: Sendable {
         return max(0, min(1.5, 1.5 - (daysOld / 120.0)))
     }
 
+
+    private static func isRejectedImagePath(_ path: String) -> Bool {
+        ImageLibraryMetadataSidecarService.load(forImagePath: path)?.isRejected == true
+    }
+
+    private static func runtimePath(_ rawPath: String?, projectRoot: URL) -> String? {
+        guard let rawPath = rawPath?.trimmingCharacters(in: .whitespacesAndNewlines), !rawPath.isEmpty else {
+            return nil
+        }
+        if !rawPath.hasPrefix("/") {
+            return projectRoot.appendingPathComponent(rawPath).path
+        }
+        let projectPath = projectRoot.standardizedFileURL.path
+        if rawPath == projectPath || rawPath.hasPrefix(projectPath + "/") {
+            return rawPath
+        }
+        let projectFolderMarker = "/\(projectRoot.lastPathComponent)/"
+        if let range = rawPath.range(of: projectFolderMarker) {
+            return projectRoot.appendingPathComponent(String(rawPath[range.upperBound...])).path
+        }
+        if let range = rawPath.range(of: "/Animate/") {
+            return ProjectPaths(root: projectRoot).animate.appendingPathComponent(String(rawPath[range.upperBound...])).path
+        }
+        return rawPath
+    }
+
     private static func canonicalMasterMapPath(projectRoot: URL) -> String? {
         let registryURL = ProjectPaths(root: projectRoot).animate.appendingPathComponent("reference-registry.json")
         guard let data = try? Data(contentsOf: registryURL),
@@ -461,11 +487,11 @@ struct CanvasPromptGeneratorService: Sendable {
         for entry in backgrounds {
             let name = (entry["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard name == "map" || name.contains("master map") else { continue }
-            let entryBase = (entry["absolute_path"] as? String).flatMap { ContinuityBuilderService.runtimePath($0, projectRoot: projectRoot) }
+            let entryBase = (entry["absolute_path"] as? String).flatMap { runtimePath($0, projectRoot: projectRoot) }
             for file in (entry["files"] as? [[String: Any]] ?? []) {
                 var candidates: [String] = []
                 if let rawPath = file["absolute_path"] as? String ?? file["path"] as? String,
-                   let resolved = ContinuityBuilderService.runtimePath(rawPath, projectRoot: projectRoot) {
+                   let resolved = runtimePath(rawPath, projectRoot: projectRoot) {
                     candidates.append(resolved)
                 }
                 if let relative = file["relative_to_root"] as? String {

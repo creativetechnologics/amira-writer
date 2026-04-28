@@ -147,12 +147,6 @@ struct EffectiveShotSpecBuilder {
                 query: feedbackQuery,
                 limit: 6
             )
-        ) + ContinuityBuilderService.promptClauses(
-            from: ContinuityBuilderService.relevantFeedback(
-                projectRoot: projectRoot,
-                query: feedbackQuery,
-                limit: 6
-            )
         ) + ContinuityRuleExtractionService.relevantPromptClauses(
             projectRoot: projectRoot,
             query: feedbackQuery,

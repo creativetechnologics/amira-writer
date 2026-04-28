@@ -8452,7 +8452,8 @@ final class AnimateStore {
         aspectRatio: String,
         imageSize: String,
         kind: UnattachedGeneratedImageKind = .library,
-        referencePaths: [String] = []
+        referencePaths: [String] = [],
+        semanticRole: ImageLibrarySemanticRole? = nil
     ) throws -> String {
         let animateURL = try requireAnimateURL()
         let directory = ProjectPaths(root: animateURL.deletingLastPathComponent())
@@ -8479,6 +8480,17 @@ final class AnimateStore {
             ?? normalizedCharacterAssetPath(storedURL.path)
             ?? storedURL.path
 
+        if let semanticRole {
+            let metadata = ImageLibraryReviewMetadata(
+                rating: nil,
+                isRejected: false,
+                notes: "",
+                updatedAt: Date(),
+                semanticRole: semanticRole
+            )
+            ImageLibraryMetadataSidecarService.save(metadata, forImagePath: storedURL.path)
+        }
+
         var record = GeneratedBackgroundLibraryRecord(
             activePath: storedPath,
             workflow: .photorealistic,
@@ -8500,7 +8512,8 @@ final class AnimateStore {
                 "prompt": prompt,
                 "model": model.rawValue,
                 "aspectRatio": aspectRatio,
-                "imageSize": imageSize
+                "imageSize": imageSize,
+                "semanticRole": semanticRole?.rawValue ?? ""
             ],
             analysisMode: .immediate
         )

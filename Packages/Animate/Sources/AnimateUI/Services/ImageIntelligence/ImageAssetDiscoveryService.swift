@@ -135,10 +135,13 @@ public final class ImageAssetDiscoveryService {
             let path = record.activePath
             guard !path.isEmpty else { continue }
 
-            let isMap3D = record.keywords.contains("map3d-capture")
-            let kind: ImageAssetLinkKind = isMap3D ? .map3DCapture : .placeGenerated
+            let baseIsMap3D = record.keywords.contains("map3d-capture")
+            let baseKind: ImageAssetLinkKind = baseIsMap3D ? .map3DCapture : .placeGenerated
 
             if let resolved = resolvePath(path) {
+                let sidecarRole = ImageLibraryMetadataSidecarService.load(forImagePath: resolved)?.semanticRole
+                let isMap3D = baseIsMap3D && sidecarRole != .character
+                let kind: ImageAssetLinkKind = isMap3D ? .map3DCapture : (sidecarRole == .character ? .canvasGeneration : .placeGenerated)
                 var context: [String: String] = [
                     "recordID": record.id.uuidString,
                     "keywords": record.keywords.joined(separator: ", "),
@@ -162,10 +165,12 @@ public final class ImageAssetDiscoveryService {
             // Prior versions
             for prior in record.priorVersions {
                 if let resolved = resolvePath(prior.path) {
+                    let priorSidecarRole = ImageLibraryMetadataSidecarService.load(forImagePath: resolved)?.semanticRole
+                    let priorKind: ImageAssetLinkKind = priorSidecarRole == .character ? .canvasGeneration : baseKind
                     assets.append(DiscoveredAsset(
                         resolvedPath: resolved,
                         projectRelativePath: relativePath(resolved),
-                        linkKind: kind,
+                        linkKind: priorKind,
                         ownerID: record.id.uuidString,
                         ownerParentID: record.linkedPlaceID?.uuidString,
                         context: ["isPriorVersion": "true", "versionPath": prior.path]

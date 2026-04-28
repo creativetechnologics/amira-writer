@@ -236,18 +236,6 @@ final class AnimateAPIRouter {
             await ensureProjectHydrated()
             return await automationFramesGenerateResponse(request)
         }
-        if request.method == "GET", request.path == "/automation/continuity-builder/session" {
-            await ensureProjectHydrated()
-            return await automationContinuityBuilderSessionResponse()
-        }
-        if request.method == "POST", request.path == "/automation/continuity-builder/begin" {
-            await ensureProjectHydrated()
-            return await automationContinuityBuilderBeginResponse()
-        }
-        if request.method == "POST", request.path == "/automation/continuity-builder/generate" {
-            await ensureProjectHydrated()
-            return await automationContinuityBuilderGenerateResponse(request)
-        }
         if request.method == "POST", request.path == "/automation/feedback/rules/extract" {
             await ensureProjectHydrated()
             return await automationFeedbackRulesExtractResponse(request)
@@ -695,66 +683,6 @@ final class AnimateAPIRouter {
         }
     }
 
-    private func automationContinuityBuilderSessionResponse() async -> AnimateHTTPResponse {
-        guard let projectRoot = store.fileOWPURL else {
-            return .error(400, "No project is loaded.")
-        }
-        let session = await ContinuityBuilderService(store: store).loadOrCreateSession(projectRoot: projectRoot)
-        return .okCodable(session)
-    }
-
-    private func automationContinuityBuilderBeginResponse() async -> AnimateHTTPResponse {
-        guard let projectRoot = store.fileOWPURL else {
-            return .error(400, "No project is loaded.")
-        }
-        do {
-            let session = await ContinuityBuilderService(store: store).loadOrCreateSession(projectRoot: projectRoot)
-            let updated = try await ContinuityBuilderService(store: store).begin(session: session, projectRoot: projectRoot)
-            return .okCodable(updated)
-        } catch {
-            return .error(500, error.localizedDescription)
-        }
-    }
-
-    private func automationContinuityBuilderGenerateResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
-        guard let projectRoot = store.fileOWPURL else {
-            return .error(400, "No project is loaded.")
-        }
-        let body = request.jsonBody() ?? [:]
-        let mode = (stringValue(body["mode"]) ?? "dry_run").lowercased()
-        guard mode == "dry_run" || mode == "dry-run" || mode == "preview" || mode == "execute" else {
-            return .error(400, "Invalid mode: \(mode). Use dry_run or execute.")
-        }
-        let normalizedMode = mode == "execute" ? "execute" : "dry_run"
-        guard normalizedMode != "execute" || doubleValue(body["maxCostUSD"]) != nil else {
-            return .error(400, "Continuity Builder execute mode requires maxCostUSD.")
-        }
-
-        let session = await ContinuityBuilderService(store: store).loadOrCreateSession(projectRoot: projectRoot)
-        let model = resolvedGeminiModel(from: stringValue(body["model"]))
-        let imageSize = stringValue(body["imageSize"]) ?? "1K"
-        let aspectRatio = stringValue(body["aspectRatio"]) ?? "4:3"
-        let candidateCount = intValue(body["candidateCount"]) ?? intValue(body["count"]) ?? 1
-        let maxCostUSD = doubleValue(body["maxCostUSD"]) ?? 0
-        let turnID = uuidValue(body["turnID"])
-
-        let result = await ContinuityBuilderGenerationService(store: store).generate(
-            .init(
-                session: session,
-                turnID: turnID,
-                projectRoot: projectRoot,
-                mode: normalizedMode,
-                maxCostUSD: maxCostUSD,
-                candidateCount: candidateCount,
-                model: model,
-                imageSize: imageSize,
-                aspectRatio: aspectRatio,
-                apiKey: store.geminiAPIKey
-            )
-        )
-        return .okCodable(result)
-    }
-
     private func automationFeedbackRulesExtractResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
         guard let projectRoot = store.fileOWPURL else {
             return .error(400, "No project is loaded.")
@@ -1108,11 +1036,6 @@ final class AnimateAPIRouter {
         var selectedFramePath: String?
     }
 
-
-    private struct AutomationContinuityBuilderSessionPayload: Codable, Sendable {
-        var ok: Bool
-        var session: ContinuityBuilderSession
-    }
 
     private struct AutomationFeedbackRulesExtractPayload: Codable, Sendable {
         var ok: Bool

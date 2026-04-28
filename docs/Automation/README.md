@@ -193,25 +193,18 @@ Settings/parakeet-review-dictation.json
 
 The command must print the transcript to stdout. This keeps transcription project-local and avoids any paid provider call.
 
-## Continuity Builder
+## Canvas Prompt Generator and review feedback memory
 
-Continuity Builder is a dry-run-first guided training workspace for turning Gary's fast visual feedback into reusable continuity memory. It lives in the Opera title bar between the Gemini activity pill and Canvas button.
+The old guided trainer workspace has been removed from the active app. Visual preference learning now comes from the simpler All Images review flow plus the Canvas Prompt Generator:
 
-Current implementation:
-
-- Seeds a project-local training session from canonical world context, places, character packages, costume refs, and `Animate/reference-registry.json`.
-- Shows one/two/three candidate references with stable labels (`single`, `left`, `middle`, `right`) so dictated feedback like “the middle one…” can be interpreted later.
-- Captures a closeness percentage plus notes, with optional Parakeet review dictation using the same project-local configuration as All Images review dictation.
-- Writes artifacts to `Metadata/automation/continuity-builder/` and indexes feedback for later prompt retrieval.
-- Promotes repeated feedback into canonical continuity rule fingerprints under `Metadata/automation/continuity-rules/`.
-- Injects matching All Images feedback, Continuity Builder feedback, and canonical continuity rules into future `EffectiveShotSpec` prompts.
-- The Continuity Builder Generate button now calls Gemini only through an execute-gated 1K/4:3 path with a local cost cap; generated candidates write prompt/response/metadata sidecars and register with the image library so Image Intelligence can run immediately.
+- Rate, like, reject, recategorize, and note images in All Images; those project-local sidecars feed prompt-memory and continuity-rule extraction.
+- Use the Canvas Prompt Generator under Canvas reference images to turn plain-English intent into a clean Gemini prompt using MiniMax plus rated/non-rejected reference selection.
+- Continuity rules are promoted from All Images review notes and Image Intelligence metadata under `Metadata/automation/continuity-rules/`.
+- Generated/edit outputs should preserve their semantic review scope so character images do not train or appear as place/map images.
 
 Useful local API checks:
 
 ```bash
-curl -sS http://127.0.0.1:19849/automation/continuity-builder/session | jq
-
 curl -sS -X POST http://127.0.0.1:19849/automation/feedback/rules/extract \
   -H 'Content-Type: application/json' \
   -d '{"mode":"dry_run","maxSources":80,"write":true}' | jq
@@ -219,11 +212,6 @@ curl -sS -X POST http://127.0.0.1:19849/automation/feedback/rules/extract \
 curl -sS -X POST http://127.0.0.1:19849/automation/feedback/rules/query \
   -H 'Content-Type: application/json' \
   -d '{"query":"bridge ravine town river north bank","limit":5}' | jq
-
-# Paid Gemini/Vertex call; requires explicit user budget/approval.
-curl -sS -X POST http://127.0.0.1:19849/automation/continuity-builder/generate \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"execute","candidateCount":1,"imageSize":"1K","aspectRatio":"4:3","maxCostUSD":0.25}' | jq
 ```
 
 Design intent:

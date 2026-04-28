@@ -16,6 +16,43 @@ enum ImageLibrarySemanticRole: String, CaseIterable, Codable, Sendable, Hashable
     }
 }
 
+
+@available(macOS 26.0, *)
+enum ImageSemanticRoleInference {
+    nonisolated static func role(from metadata: ImageVisualMetadataRecord?) -> ImageLibrarySemanticRole? {
+        guard let metadata else { return nil }
+        let text = [
+            metadata.summary,
+            metadata.shortCaption,
+            metadata.longCaption,
+            metadata.assetRolesJSON,
+            metadata.entitiesJSON,
+            metadata.sceneJSON,
+            metadata.retrievalJSON,
+            metadata.rawModelJSON
+        ]
+            .compactMap { $0 }
+            .joined(separator: "\n")
+            .lowercased()
+
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let characterTerms = [
+            "character", "person", "people", "human", "man", "woman", "boy", "girl",
+            "portrait", "face", "head", "body", "turnaround", "model sheet", "character sheet",
+            "costume", "clothing", "uniform", "soldier", "figure"
+        ]
+        let placeTerms = [
+            "place", "map", "terrain", "topography", "town", "village", "city", "landscape",
+            "river", "bridge", "road", "street", "building", "architecture", "mountain", "valley", "ravine"
+        ]
+        let characterScore = characterTerms.reduce(0) { $0 + (text.contains($1) ? 1 : 0) }
+        let placeScore = placeTerms.reduce(0) { $0 + (text.contains($1) ? 1 : 0) }
+        if characterScore >= placeScore + 2 { return .character }
+        if placeScore >= characterScore + 2 { return .place }
+        return nil
+    }
+}
+
 @available(macOS 26.0, *)
 struct ImageLibraryReviewMetadata: Equatable, Sendable {
     var rating: Int?
@@ -521,7 +558,8 @@ final class AllProjectImagesState {
                     rebuiltRecords,
                     seedsByID: rebuiltSeedsByID,
                     signature: sig,
-                    projectPath: projectPath
+                    projectPath: projectPath,
+                    store: store
                 )
                 self.pendingBuildSignature = -1
                 self.rebuildTask = nil
@@ -545,7 +583,8 @@ final class AllProjectImagesState {
         _ rebuiltRecords: [ProjectImageRecord],
         seedsByID rebuiltSeedsByID: [String: RecordSeed],
         signature: Int,
-        projectPath: String?
+        projectPath: String?,
+        store: AnimateStore
     ) {
         cachedAllRecords = rebuiltRecords
         seedsByID = rebuiltSeedsByID
@@ -581,6 +620,44 @@ final class AllProjectImagesState {
         }
         if let selectedRecordID, recordsByID[selectedRecordID] == nil {
             self.selectedRecordID = selectedRecordIDs.first
+        }
+        repairSemanticallyMisfiledMapCapturesIfNeeded(store: store)
+    }
+
+    private func repairSemanticallyMisfiledMapCapturesIfNeeded(store: AnimateStore) {
+        let candidates = cachedAllRecords.filter { record in
+            guard record.source == .map3dCaptures else { return false }
+            guard ImageLibraryMetadataSidecarService.load(forImagePath: record.resolvedPath)?.semanticRole == nil else { return false }
+            return true
+        }
+        guard !candidates.isEmpty else { return }
+
+        Task { [weak self, weak store] in
+            guard let self, let store else { return }
+            var repaired = 0
+            for record in candidates {
+                guard !Task.isCancelled else { return }
+                let analysis = await store.imageIntelligenceRecordAndMetadata(for: record.resolvedPath).metadata
+                guard ImageSemanticRoleInference.role(from: analysis) == .character else { continue }
+                var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: record.resolvedPath)
+                    ?? ImageLibraryReviewMetadata(rating: record.rating, isRejected: record.isRejected, isLiked: record.isLiked, notes: record.notes, updatedAt: record.createdAt)
+                metadata.semanticRole = .character
+                metadata.updatedAt = Date()
+                ImageLibraryMetadataSidecarService.save(metadata, forImagePath: record.resolvedPath)
+                repaired += 1
+            }
+            if repaired > 0 {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.contentRevision &+= 1
+                    self.lastBuildSignature = -1
+                    self.filteredCacheKey = nil
+                    self.filteredCacheRecords = []
+                    self.filteredRecordsByID = [:]
+                    self.prefetchSignatureCache.removeAll(keepingCapacity: true)
+                    self.requestRebuildIfNeeded(store: store)
+                }
+            }
         }
     }
 
@@ -1059,12 +1136,7 @@ final class AllProjectImagesState {
             metadataCache[resolvedPath] = metadata
         }
 
-        let hasSeedMetadata = seed.rating != nil
-            || seed.isRejected
-            || !seed.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let sidecarMetadata = (seed.source == .places || !hasSeedMetadata)
-            ? ImageLibraryMetadataSidecarService.load(forImagePath: resolvedPath)
-            : nil
+        let sidecarMetadata = ImageLibraryMetadataSidecarService.load(forImagePath: resolvedPath)
         let resolvedSemanticRole = sidecarMetadata?.semanticRole ?? seed.semanticRole ?? inferredSemanticRole(for: seed.source)
         let resolvedSource = sourceAfterRecategorization(
             recordID: seed.id,
@@ -1283,17 +1355,18 @@ final class AllProjectImagesState {
         originalSource: AllProjectImagesSource,
         semanticRole: ImageLibrarySemanticRole?
     ) -> AllProjectImagesSource {
-        let recategorizesSource = recordID.hasPrefix("canvas-") || recordID.hasPrefix("shot-")
-        guard recategorizesSource else { return originalSource }
-        guard let semanticRole else {
-            return recordID.hasPrefix("shot-") ? .sceneShots : .canvas
+        if let semanticRole {
+            switch semanticRole {
+            case .place:
+                return .places
+            case .character:
+                return .characters
+            }
         }
-        switch semanticRole {
-        case .place:
-            return .places
-        case .character:
-            return .characters
-        }
+
+        if recordID.hasPrefix("canvas-") { return .canvas }
+        if recordID.hasPrefix("shot-") { return .sceneShots }
+        return originalSource
     }
 
     // MARK: - Filter + Sort
@@ -1762,6 +1835,27 @@ private struct AllProjectImagesWorkspaceContent: View {
         )
     }
 
+    private func semanticRoleForEditedOutput(sourceRecord: ProjectImageRecord?) async -> ImageLibrarySemanticRole? {
+        guard let sourceRecord else { return nil }
+        if let explicitRole = ImageLibraryMetadataSidecarService.load(forImagePath: sourceRecord.resolvedPath)?.semanticRole {
+            return explicitRole
+        }
+
+        let analysis = await store.imageIntelligenceRecordAndMetadata(for: sourceRecord.resolvedPath).metadata
+        if let inferred = ImageSemanticRoleInference.role(from: analysis) {
+            return inferred
+        }
+
+        switch sourceRecord.source {
+        case .characters, .costumes:
+            return .character
+        case .places, .landmarks, .map3dCaptures:
+            return .place
+        case .props, .vehicles, .sceneShots, .canvas:
+            return sourceRecord.semanticRole
+        }
+    }
+
     private func resizeInspector(_ delta: CGFloat) {
         // Anchor off the larger of the persisted value or the clamp floor
         // before subtracting the delta. Without this, a previously saved
@@ -1786,6 +1880,7 @@ private struct AllProjectImagesWorkspaceContent: View {
         }
         Task { @MainActor in
             let service = GeminiImageService()
+            let outputSemanticRole = await semanticRoleForEditedOutput(sourceRecord: sourceRecord)
             var finishedCount = 0
             for draft in drafts {
                 let activityID = store.registerGeminiActivity(
@@ -1820,7 +1915,8 @@ private struct AllProjectImagesWorkspaceContent: View {
                         model: draft.model,
                         aspectRatio: draft.aspectRatio,
                         imageSize: draft.imageSize,
-                        referencePaths: draft.referenceItems.filter(\.isIncluded).map(\.path)
+                        referencePaths: draft.referenceItems.filter(\.isIncluded).map(\.path),
+                        semanticRole: outputSemanticRole
                     )
                     store.updateGeminiActivity(
                         activityID,

@@ -219,25 +219,6 @@ struct ContinuityRuleExtractionService {
                 updatedAt: artifact.updatedAt
             ))
         }
-        for feedback in ContinuityBuilderService.loadAllFeedback(projectRoot: projectRoot) {
-            let text = ([feedback.notes] + feedback.interpretedFocus).joined(separator: "\n")
-            sources.append(.init(
-                id: "continuity-builder:\(feedback.id.uuidString)",
-                sourceKind: "continuity_builder",
-                category: feedback.selectedCandidateLabel?.rawValue,
-                imagePath: nil,
-                label: feedback.selectedCandidateLabel?.displayName ?? "Continuity Builder",
-                notes: ContinuityPromptMemoryCompiler.cleaned(feedback.notes),
-                reviewStatus: feedback.closenessPercent >= 75 ? "positive_feedback" : "correction_feedback",
-                rating: nil,
-                isRejected: feedback.closenessPercent < 45,
-                reviewScope: nil,
-                analysisSummary: nil,
-                tags: feedback.interpretedFocus,
-                vector: ContinuityTextVectorizer.vector(for: text),
-                updatedAt: feedback.submittedAt
-            ))
-        }
         return Array(sources.sorted { $0.updatedAt > $1.updatedAt }.prefix(limit))
     }
 

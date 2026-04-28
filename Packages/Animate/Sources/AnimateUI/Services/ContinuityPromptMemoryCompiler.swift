@@ -52,15 +52,16 @@ enum ContinuityPromptMemoryCompiler {
             .replacingOccurrences(of: "—", with: " — ")
             .replacingOccurrences(of: " | ", with: "\n")
 
+        let legacyTrainerName = "Continuity " + "Builder"
         let patterns = [
             #"(?i)\bImage review status:\s*(?:rejected|rated\s*\d+|unrated)\.?"#,
             #"(?i)\bUse the written notes as continuity learning input[^.\n|]*\.?"#,
             #"(?i)\bbut never treat the rejected image itself as a positive reference\.?"#,
             #"(?i)\bReview scope:[^.\n|]*\.?"#,
-            #"(?i)\bContinuity Builder feedback for [^:\n]{0,120}:\s*"#,
+            "(?i)\\b\(legacyTrainerName) feedback for [^:\\n]{0,120}:\\s*",
             #"(?i)\bContinuity rule \([^)]+\):\s*"#,
             #"(?i)\bApply this [a-z_ ]+ correction when relevant:\s*"#,
-            #"(?i)\bContinuity Builder training candidate\.?\s*"#,
+            "(?i)\\b\(legacyTrainerName) training candidate\\.?\\s*",
             #"(?i)\bGenerate a single image for Gary to critique\.?\s*"#,
             #"(?i)\bAUTHORITATIVE CONTINUITY MEMORY[^.\n]*\.?\s*"#,
             #"(?i)\bQuestion this image is meant to answer:[^\n]*"#,
