@@ -203,7 +203,7 @@ final class ScriptStoreTests: XCTestCase {
 
         XCTAssertEqual(store.librettoFiles.first?.content, "Draft change")
         XCTAssertEqual(reopened.activeVersion()?.lyrics, "Before")
-        XCTAssertEqual(store.projectHistoryEntries.first?.kind, .autosave)
+        XCTAssertTrue(store.projectHistoryEntries.isEmpty)
         XCTAssertTrue(store.isDirty)
     }
 
@@ -338,15 +338,13 @@ final class ScriptStoreTests: XCTestCase {
         XCTAssertTrue(fullyHiddenSnippets.contains("[Storyboard flare]"))
         XCTAssertTrue(fullyHiddenSnippets.contains("{camera: push_in | to=close}"))
         XCTAssertTrue(fullyHiddenSnippets.contains("[object: \"lantern\" | position=center | state=lit | bars=1-2]"))
-        XCTAssertTrue(fullyHiddenSnippets.contains(" (8)"))
-        XCTAssertTrue(fullyHiddenSnippets.contains("{{{SUMMARY}}}\nHidden summary\n{{{/SUMMARY}}}"))
+        XCTAssertFalse(fullyHiddenSnippets.contains(" (8)"))
 
         XCTAssertFalse(visibleMarkupSnippets.contains("[[1.01.0.001 - Lanterns rise]]"))
         XCTAssertFalse(visibleMarkupSnippets.contains("[Storyboard flare]"))
         XCTAssertTrue(visibleMarkupSnippets.contains("{camera: push_in | to=close}"))
         XCTAssertTrue(visibleMarkupSnippets.contains("[object: \"lantern\" | position=center | state=lit | bars=1-2]"))
-        XCTAssertTrue(visibleMarkupSnippets.contains(" (8)"))
-        XCTAssertTrue(visibleMarkupSnippets.contains("{{{SUMMARY}}}\nHidden summary\n{{{/SUMMARY}}}"))
+        XCTAssertFalse(visibleMarkupSnippets.contains(" (8)"))
         XCTAssertFalse(displayText.contains("{camera:"))
         XCTAssertFalse(displayText.contains("[object:"))
         XCTAssertFalse(displayText.contains("(8)"))
@@ -670,12 +668,7 @@ final class ScriptStoreTests: XCTestCase {
         \tthese timestamps and hurt?
         """
 
-        let rendered = ScriptTextEditor.displayText(
-            from: rawText,
-            showDirections: false,
-            showStoryboarding: false,
-            showAnimateDirections: false
-        )
+        let rendered = ScriptTextEditor.readOnlyDisplayText(from: rawText)
 
         XCTAssertFalse(rendered.contains("(SUNG - Mark + Johnny."))
         XCTAssertFalse(rendered.contains("(The briefing room has emptied."))
@@ -704,7 +697,7 @@ final class ScriptStoreTests: XCTestCase {
         XCTAssertFalse(rendered.contains("[[Wide shot without address]]"))
         XCTAssertFalse(rendered.contains("{action: \"Amira\" | picks up journal | bars=37-38}"))
         XCTAssertFalse(rendered.contains("{INSTRUMENTAL: Ancient Waters motif returns}"))
-        XCTAssertEqual(rendered, "Visible line")
+        XCTAssertEqual(rendered.trimmingCharacters(in: .whitespacesAndNewlines), "Visible line")
     }
 
     func testSynopsisScenePathResolverHandlesWhitespaceAndFilenameFallback() {

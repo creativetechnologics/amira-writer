@@ -1413,27 +1413,20 @@ struct ScriptTextEditor: NSViewRepresentable {
 
         let replacement = replacementString ?? ""
         let sourceText = prepareEditableText(from: rawText)
-        let displayText = projection.displayText
-        let totalDisplayLength = (displayText as NSString).length
+        let totalDisplayLength = (projection.displayText as NSString).length
         let displayStart = max(0, min(affectedDisplayRange.location, totalDisplayLength))
         let displayEnd = max(displayStart, min(NSMaxRange(affectedDisplayRange), totalDisplayLength))
-        let displayDeleteLength = displayEnd - displayStart
-        let mutable = NSMutableString(string: displayText)
+        let rawStart = displayToRaw(displayStart, projection: projection)
+        let rawEnd = displayToRaw(displayEnd, projection: projection)
+        let nsSource = sourceText as NSString
+        guard rawStart <= rawEnd, rawStart <= nsSource.length else { return sourceText }
+        let clampedRawEnd = max(rawStart, min(rawEnd, nsSource.length))
+        let mutable = NSMutableString(string: sourceText)
         mutable.replaceCharacters(
-            in: NSRange(location: displayStart, length: displayDeleteLength),
+            in: NSRange(location: rawStart, length: clampedRawEnd - rawStart),
             with: replacement
         )
-        let displayForRebuild = removeAdjustedShotPlaceholders(
-            from: mutable as String,
-            attachments: projection.shotAttachments,
-            editRange: NSRange(location: displayStart, length: displayDeleteLength),
-            replacementLength: (replacement as NSString).length
-        )
-        let rebuilt = rebuildRawText(
-            newDisplayText: displayForRebuild,
-            rawText: sourceText,
-            hiddenRanges: projection.hiddenRanges
-        )
+        let rebuilt = mutable as String
         guard validateHiddenContentPreserved(
             original: sourceText,
             edited: rebuilt,

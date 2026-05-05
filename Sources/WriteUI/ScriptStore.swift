@@ -2193,6 +2193,10 @@ final class ScriptStore {
     private func reloadExternallyChanged(stub: SongStub, modDate: Date) {
         let path = stub.relativePath
         beginAgentSync()
+        let hadLocalDraft = dirtySongPaths.contains(path)
+        let localDraftLyrics = hadLocalDraft
+            ? librettoFiles.first(where: { $0.relativePath == path })?.content
+            : nil
 
         // External change wins for this file.
         dirtySongPaths.remove(path)
@@ -2217,6 +2221,13 @@ final class ScriptStore {
                 let previousLyrics = librettoFiles.first(where: { $0.relativePath == path })?.content ?? ""
                 var asset = try await OWPProjectIO.loadSongAsync(stub: stub)
                 let promotedLatestVersion = preferMostRecentlyUpdatedVersionIfNeeded(in: &asset.document)
+                let externalLyrics = asset.document.activeVersion()?.lyrics ?? ""
+                preserveLocalDraftIfNeeded(
+                    path: path,
+                    localDraftLyrics: localDraftLyrics,
+                    externalLyrics: externalLyrics,
+                    in: &asset.document
+                )
 
                 if let idx = songAssets.firstIndex(where: { $0.relativePath == path }) {
                     songAssets[idx] = asset
@@ -2252,6 +2263,39 @@ final class ScriptStore {
                 statusMessage = "Failed to reload: \(stub.displayName)"
             }
         }
+    }
+
+    private func preserveLocalDraftIfNeeded(
+        path: String,
+        localDraftLyrics: String?,
+        externalLyrics: String,
+        in document: inout OWSSongDocument
+    ) {
+        guard let localDraftLyrics, localDraftLyrics != externalLyrics else { return }
+        let now = Date()
+        let autosave = OWSVersionPayload(
+            id: UUID(),
+            label: "Auto-save before external reload",
+            createdAt: now,
+            updatedAt: now,
+            lyrics: localDraftLyrics,
+            saveType: .autosave,
+            userLabel: "Preserved local draft",
+            isBookmarked: false
+        )
+        document.versions.append(autosave)
+        document.normalize()
+
+        projectHistoryEntries.insert(
+            ProjectHistoryEntry(
+                kind: .autosave,
+                title: "Preserved local draft",
+                message: path,
+                relativePaths: [path]
+            ),
+            at: 0
+        )
+        projectHistoryEntries = Array(projectHistoryEntries.prefix(Self.maxProjectHistoryEntries))
     }
 
     func applySyncedLyricsChange(atPath path: String, lyrics: String, sourceTitle: String = "Applied synced AI change") {
