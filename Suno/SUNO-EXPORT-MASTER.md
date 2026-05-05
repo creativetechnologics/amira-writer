@@ -42,7 +42,7 @@ What it broke was the surrounding assumptions:
 
 1. Older notes still pointed at `/Volumes/Storage VIII/Programming/Novotro Score/...`
 2. Older wrapper logic assumed `~/Applications/Novotro Score.app/Contents/MacOS/NovotroScore`
-3. Agents could confuse `NovotroOpera` with `NovotroScore`
+3. Agents could confuse `Opera` with `Score`
 4. The repo-local wrapper script was missing from `Amira Writer`
 
 So the export capability is still present, but the canonical path changed.

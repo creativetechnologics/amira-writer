@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PACKAGE_ROOT="$REPO_ROOT/Packages/Score"
-COOLDOWN_SECONDS="${NOVOTRO_HEADLESS_EXPORT_COOLDOWN_SECONDS:-5}"
+COOLDOWN_SECONDS="${AMIRA_HEADLESS_EXPORT_COOLDOWN_SECONDS:-${NOVOTRO_HEADLESS_EXPORT_COOLDOWN_SECONDS:-5}}"
 COOLDOWN_STAMP="${TMPDIR:-/tmp}/score-headless-export.last-exit"
-ALLOW_BLUETOOTH_OUTPUT="${NOVOTRO_ALLOW_BLUETOOTH_OUTPUT:-0}"
+ALLOW_BLUETOOTH_OUTPUT="${AMIRA_ALLOW_BLUETOOTH_OUTPUT:-${AMIRA_ALLOW_BLUETOOTH_OUTPUT:-0}}"
 SCORE_BIN_OVERRIDE="${AMIRA_SCORE_BIN:-${NOVOTRO_SCORE_BIN:-}}"
 OUTPUT_PATH=""
 
@@ -60,7 +60,7 @@ if [[ "$ALLOW_BLUETOOTH_OUTPUT" != "1" ]]; then
   if echo "$default_output_device" | grep -qi 'AirPods'; then
     echo "Refusing headless export while AirPods are the default output device: $default_output_device" >&2
     echo "Switch output to built-in speakers first, then retry." >&2
-    echo "Override guard with NOVOTRO_ALLOW_BLUETOOTH_OUTPUT=1 if needed." >&2
+    echo "Override guard with AMIRA_ALLOW_BLUETOOTH_OUTPUT=1 if needed." >&2
     exit 3
   fi
 
@@ -83,7 +83,7 @@ if [[ "$ALLOW_BLUETOOTH_OUTPUT" != "1" ]]; then
   if [[ -n "$connected_airpods" ]]; then
     echo "Refusing headless export while AirPods are connected: $connected_airpods" >&2
     echo "Disconnect AirPods (or disable Bluetooth) first, then retry." >&2
-    echo "Override guard with NOVOTRO_ALLOW_BLUETOOTH_OUTPUT=1 if needed." >&2
+    echo "Override guard with AMIRA_ALLOW_BLUETOOTH_OUTPUT=1 if needed." >&2
     exit 4
   fi
 fi

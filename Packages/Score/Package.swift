@@ -25,6 +25,7 @@ let package = Package(
         .target(
             name: "ScoreUI",
             dependencies: [
+                "ObjCExceptionCatcher",
                 .product(name: "ProjectKit", package: "ProjectKit"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm", condition: .when(platforms: [.macOS])),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm", condition: .when(platforms: [.macOS])),
@@ -37,6 +38,11 @@ let package = Package(
                 .copy("Resources/mbrola-us2"),
                 .copy("Resources/suno-instrument-prompts.json")
             ]
+        ),
+        .target(
+            name: "ObjCExceptionCatcher",
+            path: "Sources/ObjCExceptionCatcher",
+            publicHeadersPath: "include"
         ),
         .executableTarget(
             name: "Score",

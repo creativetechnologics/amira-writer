@@ -18,14 +18,16 @@ else
 fi
 PROJECT_CACHE_ROOT="$SUPPORT_ROOT/Project Databases"
 MIRROR_ROOT="$SUPPORT_ROOT/Project Mirrors"
-KEEP_DAYS="${OPERA_CACHE_KEEP_DAYS:-${NOVOTRO_CACHE_KEEP_DAYS:-30}}"
-SERVICE_LABELS=("com.opera.project-service" "com.novotro.project-service")
+KEEP_DAYS="${OPERA_CACHE_KEEP_DAYS:-${AMIRA_CACHE_KEEP_DAYS:-${NOVOTRO_CACHE_KEEP_DAYS:-30}}}"
+SERVICE_LABELS=("com.opera.project-service" "com.amira.project-service" "com.novotro.project-service")
 SERVICE_BINARIES=(
   "/Volumes/Storage VIII/Programming/!Applications/project-service"
+  "/Volumes/Storage VIII/Programming/!Applications/amira-project-service"
   "/Volumes/Storage VIII/Programming/!Applications/novotro-project-service"
 )
 SERVICE_LAUNCH_AGENTS=(
   "$HOME/Library/LaunchAgents/com.opera.project-service.plist"
+  "$HOME/Library/LaunchAgents/com.amira.project-service.plist"
   "$HOME/Library/LaunchAgents/com.novotro.project-service.plist"
 )
 
@@ -49,6 +51,7 @@ Options:
 
 Environment:
   OPERA_CACHE_KEEP_DAYS    Optional integer for stale-cache cleanup (default 30).
+  AMIRA_CACHE_KEEP_DAYS    Optional integer for stale-cache cleanup (default 30).
   NOVOTRO_CACHE_KEEP_DAYS  Legacy alias for OPERA_CACHE_KEEP_DAYS.
 USAGE
 }
@@ -104,7 +107,7 @@ clean_project_cache() {
   fi
 
   echo "Cleaning project cache for: $project_path"
-  rm -rf "$project_path/.novtro"
+  rm -rf "$project_path/.novtro" "$project_path/.novotro" "$project_path/.amira"
 
   local cache_key
   cache_key="$(resolve_cache_root "$project_path")"

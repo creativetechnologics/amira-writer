@@ -1,3 +1,4 @@
+import ProjectKit
 import SwiftUI
 
 @available(macOS 26.0, *)

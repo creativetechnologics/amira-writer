@@ -1,4 +1,5 @@
 #if os(macOS)
+import ProjectKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -581,7 +582,7 @@ public enum ScoreBootstrap {
         root["versions"] = [selectedVersion]
 
         let trimmedData = try JSONSerialization.data(withJSONObject: root, options: [])
-        let document = try OWPProjectIO.configuredDecoder().decode(OWSSongDocument.self, from: trimmedData)
+        let document = try JSONCoders.makeDecoder().decode(OWSSongDocument.self, from: trimmedData)
         return OWSSongAsset(relativePath: stub.relativePath, document: document)
     }
 }

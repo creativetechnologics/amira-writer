@@ -3,7 +3,7 @@ import ProjectKit
 
 enum ProjectDatabaseBridge {
     static let scoreActorID = ProjectClientIdentity.actorID(for: "score")
-    static let legacyScoreActorID = ProjectClientIdentity.actorID(for: "novotro-score")
+    static let legacyScoreActorID = ProjectClientIdentity.actorID(for: "amira-score")
     static let scoreActorIDs: Set<String> = [scoreActorID, legacyScoreActorID]
     static let metadataPath = OWPProjectIO.projectMetadataFile
     static let legacyMetadataPath = "project.json"
@@ -75,19 +75,5 @@ enum ProjectDatabaseBridge {
             return nil
         }
         return version.playback
-    }
-
-    // MARK: - Helpers
-
-    static func configuredDecoder() -> JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }
-
-    static func configuredEncoder() -> JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
     }
 }

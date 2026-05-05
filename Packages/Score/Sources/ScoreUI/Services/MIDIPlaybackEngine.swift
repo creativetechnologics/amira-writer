@@ -3,8 +3,9 @@ import Accelerate
 import AppKit
 #endif
 @preconcurrency import AVFoundation
-import AudioToolbox
+@preconcurrency import AudioToolbox
 import Foundation
+import ObjCExceptionCatcher
 
 final class MIDIPlaybackEngine: @unchecked Sendable {
     private final class AULoadResultBox: @unchecked Sendable {
@@ -60,8 +61,11 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         case sequencer
     }
 
-    private let audioQueue = DispatchQueue(label: "com.novotro.score.playback", qos: .userInitiated)
-    private let engine = AVAudioEngine()
+    private let audioQueue = DispatchQueue(label: "com.amira.score.playback", qos: .userInitiated)
+    /// Dedicated serial queue for AUv3 instantiation. Third-party instruments can take
+    /// seconds to spin up their out-of-process host; keep that wait off the engine queue.
+    private let audioUnitInstantiationQueue = DispatchQueue(label: "com.amira.score.audio-unit-instantiation", qos: .userInitiated)
+    private var engine = AVAudioEngine()
     /// Recreated for each playback session to guarantee clean tempo state.
     /// AVAudioSequencer can retain stale internal tempo maps across load() calls.
     private var sequencer: AVAudioSequencer?
@@ -77,6 +81,13 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     private var samplerByMappingKey: [String: AVAudioUnitSampler] = [:]
     /// Audio Unit instrument instances keyed by mapping key (for AU-type mappings)
     private var auInstrumentByMappingKey: [String: AVAudioUnit] = [:]
+    /// AU mappings whose out-of-process host failed during this engine lifetime.
+    /// They stay muted/fallback-only until the user explicitly reloads or opens the AU.
+    private var quarantinedAudioUnitMappingKeys: Set<String> = []
+    private typealias AudioUnitLoadCompletion = (AUAudioUnit?) -> Void
+    private var pendingAudioUnitLoadKeys: Set<String> = []
+    private var pendingAudioUnitLoadSignatureByMappingKey: [String: SamplerPatchSignature] = [:]
+    private var audioUnitLoadWaitersByMappingKey: [String: [AudioUnitLoadCompletion]] = [:]
     private var patchSignatureByMappingKey: [String: SamplerPatchSignature] = [:]
     private let previewSamplerKey = "__preview__"
     private var previewMapping: InstrumentMapping?
@@ -151,6 +162,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     /// unaffected while speakers stay silent.
     /// Set this BEFORE calling play() or configureAudioGraphIfNeeded().
     nonisolated(unsafe) var muteHardwareOutput: Bool = false
+    nonisolated(unsafe) var requireHardwareOutputMute: Bool = false
 
     // MARK: - Recording
     /// Lock protecting recordingFile and isRecordingAudio from concurrent access
@@ -237,18 +249,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
     init() {
         // Observe audio engine configuration changes (device changes, AU disconnects, etc.)
-        engineConfigObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: engine,
-            queue: nil
-        ) { [engineOwner = self] _ in
-            // Apple docs: "the engine stops itself" before posting this notification.
-            // Do NOT call engine.pause()/stop() on this internal queue — risks deadlock.
-            // Dispatch recovery to audioQueue where we can safely manipulate state.
-            engineOwner.audioQueue.async { [engineOwner] in
-                engineOwner.handleEngineConfigurationChange()
-            }
-        }
+        installEngineConfigurationObserver()
         #if os(macOS)
         // Observe system wake to reset stale audio state. After sleep, the audio
         // hardware reinitializes and AVAudioUnitSampler render resources may be
@@ -274,6 +275,30 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         startHealthCheckTimer()
     }
 
+    private func installEngineConfigurationObserver() {
+        if let obs = engineConfigObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        let observedEngine = engine
+        engineConfigObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: observedEngine,
+            queue: nil
+        ) { [weak self, observedEngine] _ in
+            // Apple docs: "the engine stops itself" before posting this notification.
+            // Do NOT call engine.pause()/stop() on this internal queue — risks deadlock.
+            // Dispatch recovery to audioQueue where we can safely manipulate state.
+            self?.audioQueue.async { [weak self, observedEngine] in
+                guard let self else { return }
+                guard self.engine === observedEngine else {
+                    self.fileLog("CONFIG_CHANGE: ignored stale engine notification")
+                    return
+                }
+                self.handleEngineConfigurationChange()
+            }
+        }
+    }
+
     deinit {
         healthCheckTimer?.cancel()
         meterPublishTimer?.cancel()
@@ -292,6 +317,87 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
         }
         #endif
+    }
+
+    private func performAudioGraphMutation(_ label: String, _ work: () -> Void) -> Bool {
+        var exceptionName: NSString?
+        var exceptionReason: NSString?
+        let succeeded = AWPerformObjCExceptionSafe(work, &exceptionName, &exceptionReason)
+        guard succeeded else {
+            let name = (exceptionName as String?) ?? "NSException"
+            let reason = (exceptionReason as String?) ?? "no reason reported"
+            fileLog("AUDIO_GRAPH_EXCEPTION \(label): \(name) — \(reason)")
+            NSLog("[Engine] Audio graph exception during %@: %@ — %@", label, name, reason)
+            return false
+        }
+        return true
+    }
+
+    private func quarantineAudioUnits(_ keys: Set<String>, reason: String) {
+        guard !keys.isEmpty else { return }
+        quarantinedAudioUnitMappingKeys.formUnion(keys)
+        for key in keys {
+            auObservations.removeValue(forKey: key)
+            auInstrumentByMappingKey.removeValue(forKey: key)
+            panMixerByMappingKey.removeValue(forKey: key)
+            multiOutputMixersByMappingKey.removeValue(forKey: key)
+            patchSignatureByMappingKey.removeValue(forKey: key)
+        }
+        fileLog("AUDIO_UNIT_QUARANTINE keys=\(keys.sorted().joined(separator: ",")) reason=\(reason)")
+    }
+
+    private func resetAudioEngineAfterGraphFailure(reason: String, quarantinedKeys: Set<String>) {
+        fileLog("AUDIO_GRAPH_RESET reason=\(reason)")
+        engine.stop()
+
+        playbackStopWorkItem?.cancel()
+        playbackStopWorkItem = nil
+        hostedMIDIDeliveryWorkItem?.cancel()
+        hostedMIDIDeliveryWorkItem = nil
+        for item in pendingAudioStartWorkItems.values {
+            item.cancel()
+        }
+        pendingAudioStartWorkItems.removeAll()
+        for timer in fadeTimers.values {
+            timer.cancel()
+        }
+        fadeTimers.removeAll()
+        automationTimer?.cancel()
+        automationTimer = nil
+        meterPublishTimer?.cancel()
+        meterPublishTimer = nil
+        loopRecordingTimer?.cancel()
+        loopRecordingTimer = nil
+
+        sequencer = nil
+        samplerByMappingKey.removeAll()
+        auObservations.removeAll()
+        auInstrumentByMappingKey.removeAll()
+        panMixerByMappingKey.removeAll()
+        multiOutputMixersByMappingKey.removeAll()
+        patchSignatureByMappingKey.removeAll()
+        audioPlayerNodes.removeAll()
+        clipTimePitchNodes.removeAll()
+        inputMonitorNodes.removeAll()
+        trackSubmixNodes.removeAll()
+        trackFXChains.removeAll()
+        sendMixerNodes.removeAll()
+        meterTapLevels.removeAll()
+        meterPeakHold.removeAll()
+        masterMeterRaw = .zero
+        masterPeakHold = (-160, -160)
+        meterTapsInstalled = false
+        isRecordingAudio = false
+        isRecordingMainMix = false
+        isReconfiguring = false
+        engineStopIsOursDepth = 0
+        setPlaying(false)
+
+        engine = AVAudioEngine()
+        installEngineConfigurationObserver()
+        engine.mainMixerNode.outputVolume = masterOutputVolume
+        quarantineAudioUnits(quarantinedKeys, reason: reason)
+        reportError("Audio Unit host failed; continuing with fallback instruments.")
     }
 
     /// Periodic health check (every 1s) to detect dead out-of-process AUs
@@ -331,6 +437,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 NSLog("[Engine] Health check: removing dead AU '%@'", key)
                 removeDeadAU(mappingKey: key)
             }
+            quarantineAudioUnits(Set(deadKeys), reason: "health check found dead AU")
 
             let savedPosition = currentPlaybackPositionInBeats()
             NSLog("[Engine] Health check: requesting full restart at beat %.2f", savedPosition)
@@ -371,6 +478,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 for key in deadKeys {
                     removeDeadAU(mappingKey: key)
                 }
+                quarantineAudioUnits(Set(deadKeys), reason: "idle health check found dead AU")
                 do { try engine.start() } catch {
                     NSLog("[Engine] Health check: failed to restart engine after dead AU removal: %@", error.localizedDescription)
                     reportError("Engine restart failed after AU recovery: \(error.localizedDescription)")
@@ -410,20 +518,25 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         auObservations.removeValue(forKey: mappingKey)
         patchSignatureByMappingKey.removeValue(forKey: mappingKey)
         if let auUnit = auInstrumentByMappingKey.removeValue(forKey: mappingKey) {
-            withEnginePaused {
-                if let panMixer = panMixerByMappingKey.removeValue(forKey: mappingKey) {
-                    engine.disconnectNodeOutput(panMixer)
-                    engine.detach(panMixer)
-                }
-                // Clean up multi-output bus mixers if present
-                if let busMixers = multiOutputMixersByMappingKey.removeValue(forKey: mappingKey) {
-                    for m in busMixers {
-                        engine.disconnectNodeOutput(m)
-                        engine.detach(m)
+            let removed = withEnginePausedReturningSuccess {
+                performAudioGraphMutation("remove dead AU \(mappingKey)") {
+                    if let panMixer = panMixerByMappingKey.removeValue(forKey: mappingKey) {
+                        engine.disconnectNodeOutput(panMixer)
+                        engine.detach(panMixer)
                     }
+                    // Clean up multi-output bus mixers if present
+                    if let busMixers = multiOutputMixersByMappingKey.removeValue(forKey: mappingKey) {
+                        for m in busMixers {
+                            engine.disconnectNodeOutput(m)
+                            engine.detach(m)
+                        }
+                    }
+                    engine.disconnectNodeOutput(auUnit)
+                    engine.detach(auUnit)
                 }
-                engine.disconnectNodeOutput(auUnit)
-                engine.detach(auUnit)
+            }
+            if !removed {
+                resetAudioEngineAfterGraphFailure(reason: "dead AU removal exception", quarantinedKeys: [mappingKey])
             }
         }
     }
@@ -477,6 +590,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             NSLog("[Engine] Removing dead AU node for '%@'", key)
             removeDeadAU(mappingKey: key)
         }
+        quarantineAudioUnits(Set(deadKeys), reason: "engine configuration change found dead AU")
 
         // Clear SF2 signatures — after a real hardware stop AVAudioUnitSampler render
         // resources may be in an undefined state. Calling loadSoundBankInstrument again
@@ -690,16 +804,29 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
     /// Ensure an Audio Unit is instantiated for the given mapping key, loading it on demand
     /// Force-reload an AU instrument (e.g. after an out-of-process crash).
-    /// Clears the cached patch signature so loadAudioUnitIfNeeded will re-instantiate.
+    /// Clears the cached patch signature so the async AU loader will re-instantiate.
     func reloadAudioUnit(for mappingKey: String, mapping: InstrumentMapping) {
         audioQueue.async { [weak self] in
             guard let self, let desc = mapping.audioComponentDescription else { return }
             NSLog("[Engine] Reloading AU for '%@'", mappingKey)
+            self.quarantinedAudioUnitMappingKeys.remove(mappingKey)
             // Clear signature to force reload
             self.patchSignatureByMappingKey.removeValue(forKey: mappingKey)
-            self.loadAudioUnitIfNeeded(mappingKey: mappingKey, mapping: mapping, description: desc)
-            _ = self.configureAudioGraphIfNeeded()
-            NSLog("[Engine] AU reload complete for '%@'", mappingKey)
+            self.requestAudioUnitLoad(
+                mappingKey: mappingKey,
+                mapping: mapping,
+                description: desc,
+                muteExistingSamplerPlaceholder: true,
+                reason: "manual reload"
+            ) { [weak self] auAudioUnit in
+                guard let self else { return }
+                _ = self.configureAudioGraphIfNeeded()
+                if auAudioUnit != nil {
+                    NSLog("[Engine] AU reload complete for '%@'", mappingKey)
+                } else {
+                    NSLog("[Engine] AU reload failed for '%@'", mappingKey)
+                }
+            }
         }
     }
 
@@ -803,17 +930,23 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 self.fileLog("reloadAll: engine start FAILED: \(error)")
             }
 
-            // 7. Load AU instruments (need running engine)
-            let preparedAULoads = self.prepareAudioUnitLoads(
+            // 7. Queue AU instruments (need running engine). Instantiation is async
+            // and serial off the engine queue; the graph is updated only after each
+            // AU exists.
+            self.requestAudioUnitLoads(
                 for: mappings.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending },
                 mappings: mappings,
-                muteExistingSamplerPlaceholders: true
-            )
-            self.installPreparedAudioUnits(preparedAULoads)
+                muteExistingSamplerPlaceholders: true,
+                reason: "reloadAllInstruments"
+            ) { [weak self] _ in
+                guard let self else { return }
+                _ = self.configureAudioGraphIfNeeded()
+                self.fileLog("reloadAllInstruments AU stage complete — samplers=\(self.samplerByMappingKey.count) AUs=\(self.auInstrumentByMappingKey.count)")
+            }
 
             _ = self.configureAudioGraphIfNeeded()
-            self.fileLog("reloadAllInstruments complete — samplers=\(self.samplerByMappingKey.count) AUs=\(self.auInstrumentByMappingKey.count)")
-            NSLog("[Engine] reloadAllInstruments complete")
+            self.fileLog("reloadAllInstruments base stage complete — samplers=\(self.samplerByMappingKey.count) AUs=\(self.auInstrumentByMappingKey.count)")
+            NSLog("[Engine] reloadAllInstruments base stage complete")
         }
     }
 
@@ -842,11 +975,23 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
-            self.loadAudioUnitIfNeeded(mappingKey: mappingKey, mapping: mapping, description: desc)
-            // Start the engine so the AU can produce audio immediately
-            _ = self.configureAudioGraphIfNeeded()
-            let au = self.auInstrumentByMappingKey[mappingKey]?.auAudioUnit
-            DispatchQueue.main.async { completion(au) }
+            self.quarantinedAudioUnitMappingKeys.remove(mappingKey)
+            self.requestAudioUnitLoad(
+                mappingKey: mappingKey,
+                mapping: mapping,
+                description: desc,
+                muteExistingSamplerPlaceholder: true,
+                reason: "ensureAudioUnit"
+            ) { [weak self] _ in
+                guard let self else {
+                    DispatchQueue.main.async { completion(nil) }
+                    return
+                }
+                // Start the engine so the AU can produce audio immediately
+                _ = self.configureAudioGraphIfNeeded()
+                let loadedAU = self.auInstrumentByMappingKey[mappingKey]?.auAudioUnit
+                DispatchQueue.main.async { completion(loadedAU) }
+            }
         }
     }
 
@@ -882,10 +1027,59 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
             _ = self.configureAudioGraphIfNeeded()
 
-            let preparedLoads = self.prepareAudioUnitLoads(for: orderedAUKeys, mappings: snapshot)
-            self.installPreparedAudioUnits(preparedLoads)
+            self.requestAudioUnitLoads(
+                for: orderedAUKeys,
+                mappings: snapshot,
+                reason: "prewarmAudioUnits"
+            ) { _ in
+                DispatchQueue.main.async { completion?() }
+            }
+        }
+    }
 
-            DispatchQueue.main.async { completion?() }
+    func prewarmAudioUnitsForExport(
+        for mappings: [String: InstrumentMapping],
+        requiredKeys: Set<String>,
+        completion: @escaping @MainActor @Sendable ([String]) -> Void
+    ) {
+        let snapshot = mappings
+        audioQueue.async { [weak self] in
+            guard let self else {
+                DispatchQueue.main.async { completion(Array(requiredKeys).sorted()) }
+                return
+            }
+
+            self.cancelPendingIdleAUPrewarmOnAudioQueue()
+
+            let orderedAUKeys = requiredKeys
+                .filter {
+                    guard let mapping = snapshot[$0] else { return false }
+                    return mapping.effectiveSourceType == .audioUnit && mapping.audioComponentDescription != nil
+                }
+                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+
+            guard !orderedAUKeys.isEmpty else {
+                DispatchQueue.main.async { completion([]) }
+                return
+            }
+
+            _ = self.configureAudioGraphIfNeeded()
+
+            self.requestAudioUnitLoads(
+                for: orderedAUKeys,
+                mappings: snapshot,
+                muteExistingSamplerPlaceholders: true,
+                reason: "export prewarm"
+            ) { [weak self] loaded in
+                guard let self else {
+                    DispatchQueue.main.async { completion(orderedAUKeys) }
+                    return
+                }
+                let missing = orderedAUKeys.filter { key in
+                    self.auInstrumentByMappingKey[key] == nil && loaded[key] == nil
+                }
+                DispatchQueue.main.async { completion(missing) }
+            }
         }
     }
 
@@ -919,8 +1113,11 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 guard !self.isPlaying else { return }
 
                 _ = self.configureAudioGraphIfNeeded()
-                let preparedLoads = self.prepareAudioUnitLoads(for: orderedAUKeys, mappings: snapshot)
-                self.installPreparedAudioUnits(preparedLoads)
+                self.requestAudioUnitLoads(
+                    for: orderedAUKeys,
+                    mappings: snapshot,
+                    reason: "idle prewarm"
+                )
             }
 
             self.pendingIdleAUPrewarmWorkItem = workItem
@@ -1864,17 +2061,19 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     private func sampler(for mappingKey: String, mapping: InstrumentMapping?) -> AVAudioUnitSampler {
         // If this mapping uses an Audio Unit, load it asynchronously and return a silent sampler
         if let mapping, mapping.effectiveSourceType == .audioUnit, let desc = mapping.audioComponentDescription {
-            loadAudioUnitIfNeeded(mappingKey: mappingKey, mapping: mapping, description: desc)
-            // Return a placeholder sampler (muted) — AU will handle audio
-            if let existing = samplerByMappingKey[mappingKey] { return existing }
-            let placeholder = AVAudioUnitSampler()
-            withEnginePaused {
-                engine.attach(placeholder)
-                engine.connect(placeholder, to: engine.mainMixerNode, format: nil)
+            if quarantinedAudioUnitMappingKeys.contains(mappingKey) {
+                fileLog("sampler fallback key=\(mappingKey) — AU quarantined")
+            } else {
+                requestAudioUnitLoad(
+                    mappingKey: mappingKey,
+                    mapping: mapping,
+                    description: desc,
+                    muteExistingSamplerPlaceholder: true,
+                    reason: "sampler fallback"
+                )
             }
-            placeholder.volume = 0
-            samplerByMappingKey[mappingKey] = placeholder
-            return placeholder
+            // Return a placeholder sampler (muted) — AU will handle audio
+            return mutedAudioUnitPlaceholderSampler(for: mappingKey)
         }
 
         if let existing = samplerByMappingKey[mappingKey] {
@@ -1896,6 +2095,26 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         return sampler
     }
 
+    private func mutedAudioUnitPlaceholderSampler(for mappingKey: String) -> AVAudioUnitSampler {
+        if let existing = samplerByMappingKey[mappingKey] {
+            existing.volume = 0
+            return existing
+        }
+
+        let placeholder = AVAudioUnitSampler()
+        let maxFrames = recommendedMaximumFramesToRender()
+        if !placeholder.auAudioUnit.renderResourcesAllocated {
+            placeholder.auAudioUnit.maximumFramesToRender = maxFrames
+        }
+        withEnginePaused {
+            engine.attach(placeholder)
+            engine.connect(placeholder, to: engine.mainMixerNode, format: nil)
+        }
+        placeholder.volume = 0
+        samplerByMappingKey[mappingKey] = placeholder
+        return placeholder
+    }
+
     private func applyAUGain(_ gainDB: Double, mappingKey: String) {
         // Apply AU "gain" at the host mixer level to avoid touching AU parameter trees
         // during song transitions (some out-of-process AUs are unstable there).
@@ -1914,51 +2133,40 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         applyAUGain(gainDB, mappingKey: mappingKey)
     }
 
-    private struct PreparedAudioUnitLoad {
+    private enum AudioUnitLoadError: LocalizedError {
+        case timedOut
+
+        var errorDescription: String? {
+            switch self {
+            case .timedOut:
+                return "Audio Unit instantiation timed out"
+            }
+        }
+    }
+
+    private struct FailedAudioUnitLoad: @unchecked Sendable {
+        let request: AudioUnitLoadRequest
+        let message: String
+    }
+
+    private struct AudioUnitLoadRequest: @unchecked Sendable {
+        let mappingKey: String
+        let mapping: InstrumentMapping
+        let description: AudioComponentDescription
+        let signature: SamplerPatchSignature
+        let reason: String
+    }
+
+    private struct PreparedAudioUnitLoad: @unchecked Sendable {
         let mappingKey: String
         let mapping: InstrumentMapping
         let signature: SamplerPatchSignature
         let audioUnit: AVAudioUnit
         let panMixer: AVAudioMixerNode
-        let replacedAudioUnit: AVAudioUnit?
-        let replacedPanMixer: AVAudioMixerNode?
     }
 
-    /// Load an Audio Unit instrument plugin synchronously on the audio queue.
-    /// Uses a semaphore to block until the AU is instantiated — safe because audio queue
-    /// is not the main thread and AU instantiation happens out-of-process.
-    private func loadAudioUnitIfNeeded(mappingKey: String, mapping: InstrumentMapping, description: AudioComponentDescription) {
-        guard let prepared = prepareAudioUnitLoad(mappingKey: mappingKey, mapping: mapping, description: description) else {
-            return
-        }
-        installPreparedAudioUnits([prepared])
-    }
-
-    private func prepareAudioUnitLoads(
-        for mappingKeys: [String],
-        mappings: [String: InstrumentMapping],
-        muteExistingSamplerPlaceholders: Bool = false
-    ) -> [PreparedAudioUnitLoad] {
-        guard !mappingKeys.isEmpty else { return [] }
-
-        var preparedLoads: [PreparedAudioUnitLoad] = []
-        preparedLoads.reserveCapacity(mappingKeys.count)
-        for mappingKey in mappingKeys {
-            guard let mapping = mappings[mappingKey],
-                  mapping.effectiveSourceType == .audioUnit,
-                  let description = mapping.audioComponentDescription else { continue }
-            if muteExistingSamplerPlaceholders, let placeholder = samplerByMappingKey[mappingKey] {
-                placeholder.volume = 0
-            }
-            if let prepared = prepareAudioUnitLoad(mappingKey: mappingKey, mapping: mapping, description: description) {
-                preparedLoads.append(prepared)
-            }
-        }
-        return preparedLoads
-    }
-
-    private func prepareAudioUnitLoad(mappingKey: String, mapping: InstrumentMapping, description: AudioComponentDescription) -> PreparedAudioUnitLoad? {
-        let sig = SamplerPatchSignature(
+    private func audioUnitSignature(for description: AudioComponentDescription) -> SamplerPatchSignature {
+        SamplerPatchSignature(
             soundBankPath: nil, bankMSB: 0, bankLSB: 0, program: 0,
             // Gain changes should not force AU tear-down/re-instantiation.
             // Gain is updated in-place on an existing AU node.
@@ -1966,58 +2174,243 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             auSubType: description.componentSubType,
             auManufacturer: description.componentManufacturer
         )
+    }
+
+    private func requestAudioUnitLoad(
+        mappingKey: String,
+        mapping: InstrumentMapping,
+        description: AudioComponentDescription,
+        muteExistingSamplerPlaceholder: Bool = false,
+        reason: String,
+        completion: AudioUnitLoadCompletion? = nil
+    ) {
+        if muteExistingSamplerPlaceholder, let placeholder = samplerByMappingKey[mappingKey] {
+            placeholder.volume = 0
+        }
+
+        guard !quarantinedAudioUnitMappingKeys.contains(mappingKey) else {
+            fileLog("loadAU SKIPPED key=\(mappingKey) — quarantined after host failure")
+            completion?(nil)
+            return
+        }
+
+        let sig = audioUnitSignature(for: description)
         if patchSignatureByMappingKey[mappingKey] == sig {
-            if auInstrumentByMappingKey[mappingKey] != nil {
-                fileLog("loadAU CACHED key=\(mappingKey) renderAlloc=\(auInstrumentByMappingKey[mappingKey]!.auAudioUnit.renderResourcesAllocated)")
+            if let existing = auInstrumentByMappingKey[mappingKey] {
+                fileLog("loadAU CACHED key=\(mappingKey) renderAlloc=\(existing.auAudioUnit.renderResourcesAllocated)")
                 applyAUGain(mapping.gainDB, mappingKey: mappingKey)
-                return nil
+                completion?(existing.auAudioUnit)
+                return
             }
             fileLog("loadAU STALE CACHE key=\(mappingKey) — AU missing, will retry")
             patchSignatureByMappingKey.removeValue(forKey: mappingKey)
         }
 
-        let replacedAudioUnit = auInstrumentByMappingKey.removeValue(forKey: mappingKey)
-        let replacedPanMixer = panMixerByMappingKey.removeValue(forKey: mappingKey)
-        auObservations.removeValue(forKey: mappingKey)
-
-        fileLog("loadAU INSTANTIATING key=\(mappingKey) subType=\(description.componentSubType) mfr=\(description.componentManufacturer)")
-        let semaphore = DispatchSemaphore(value: 0)
-        let loadResult = AULoadResultBox()
-
-        AVAudioUnit.instantiate(with: description, options: .loadOutOfProcess) { audioUnit, error in
-            loadResult.store(unit: audioUnit, error: error)
-            semaphore.signal()
-        }
-
-        let timeout = semaphore.wait(timeout: .now() + 10.0)
-        let (loadedUnit, loadError) = loadResult.snapshot()
-        guard timeout == .success, let audioUnit = loadedUnit else {
-            fileLog("loadAU FAILED key=\(mappingKey) error=\(loadError?.localizedDescription ?? "timeout")")
-            patchSignatureByMappingKey.removeValue(forKey: mappingKey)
-            if let replacedAudioUnit {
-                auInstrumentByMappingKey[mappingKey] = replacedAudioUnit
+        if pendingAudioUnitLoadKeys.contains(mappingKey) {
+            if pendingAudioUnitLoadSignatureByMappingKey[mappingKey] == sig {
+                fileLog("loadAU JOIN key=\(mappingKey) reason=\(reason)")
+                if let completion {
+                    audioUnitLoadWaitersByMappingKey[mappingKey, default: []].append(completion)
+                }
+            } else {
+                fileLog("loadAU SKIPPED key=\(mappingKey) — different AU load already pending")
+                completion?(nil)
             }
-            if let replacedPanMixer {
-                panMixerByMappingKey[mappingKey] = replacedPanMixer
-            }
-            return nil
+            return
         }
 
-        let panMixer = AVAudioMixerNode()
-        let maxFrames = recommendedMaximumFramesToRender()
-        if !audioUnit.auAudioUnit.renderResourcesAllocated {
-            audioUnit.auAudioUnit.maximumFramesToRender = maxFrames
-        }
-
-        return PreparedAudioUnitLoad(
+        let request = AudioUnitLoadRequest(
             mappingKey: mappingKey,
             mapping: mapping,
+            description: description,
             signature: sig,
-            audioUnit: audioUnit,
-            panMixer: panMixer,
-            replacedAudioUnit: replacedAudioUnit,
-            replacedPanMixer: replacedPanMixer
+            reason: reason
         )
+        pendingAudioUnitLoadKeys.insert(mappingKey)
+        pendingAudioUnitLoadSignatureByMappingKey[mappingKey] = sig
+        if let completion {
+            audioUnitLoadWaitersByMappingKey[mappingKey, default: []].append(completion)
+        }
+        fileLog("loadAU QUEUED key=\(mappingKey) reason=\(reason) subType=\(description.componentSubType) mfr=\(description.componentManufacturer)")
+
+        instantiateAudioUnit(request: request)
+    }
+
+    private func requestAudioUnitLoads(
+        for mappingKeys: [String],
+        mappings: [String: InstrumentMapping],
+        muteExistingSamplerPlaceholders: Bool = false,
+        reason: String,
+        completion: (([String: AUAudioUnit]) -> Void)? = nil
+    ) {
+        guard !mappingKeys.isEmpty else {
+            completion?([:])
+            return
+        }
+
+        var loadedByKey: [String: AUAudioUnit] = [:]
+        var remainingForCompletion = 0
+        var newRequests: [AudioUnitLoadRequest] = []
+
+        func completeOne(mappingKey: String, audioUnit: AUAudioUnit?) {
+            if let audioUnit {
+                loadedByKey[mappingKey] = audioUnit
+            }
+            remainingForCompletion -= 1
+            if remainingForCompletion == 0 {
+                completion?(loadedByKey)
+            }
+        }
+
+        for mappingKey in mappingKeys {
+            guard let mapping = mappings[mappingKey],
+                  mapping.effectiveSourceType == .audioUnit,
+                  let description = mapping.audioComponentDescription else { continue }
+
+            if muteExistingSamplerPlaceholders, let placeholder = samplerByMappingKey[mappingKey] {
+                placeholder.volume = 0
+            }
+
+            guard !quarantinedAudioUnitMappingKeys.contains(mappingKey) else {
+                fileLog("loadAU SKIPPED key=\(mappingKey) — quarantined after host failure")
+                continue
+            }
+
+            let sig = audioUnitSignature(for: description)
+            if patchSignatureByMappingKey[mappingKey] == sig {
+                if let existing = auInstrumentByMappingKey[mappingKey] {
+                    fileLog("loadAU CACHED key=\(mappingKey) renderAlloc=\(existing.auAudioUnit.renderResourcesAllocated)")
+                    applyAUGain(mapping.gainDB, mappingKey: mappingKey)
+                    loadedByKey[mappingKey] = existing.auAudioUnit
+                    continue
+                }
+                fileLog("loadAU STALE CACHE key=\(mappingKey) — AU missing, will retry")
+                patchSignatureByMappingKey.removeValue(forKey: mappingKey)
+            }
+
+            if pendingAudioUnitLoadKeys.contains(mappingKey) {
+                if pendingAudioUnitLoadSignatureByMappingKey[mappingKey] == sig {
+                    fileLog("loadAU JOIN key=\(mappingKey) reason=\(reason)")
+                    if completion != nil {
+                        remainingForCompletion += 1
+                        audioUnitLoadWaitersByMappingKey[mappingKey, default: []].append { auAudioUnit in
+                            completeOne(mappingKey: mappingKey, audioUnit: auAudioUnit)
+                        }
+                    }
+                } else {
+                    fileLog("loadAU SKIPPED key=\(mappingKey) — different AU load already pending")
+                }
+                continue
+            }
+
+            let request = AudioUnitLoadRequest(
+                mappingKey: mappingKey,
+                mapping: mapping,
+                description: description,
+                signature: sig,
+                reason: reason
+            )
+            pendingAudioUnitLoadKeys.insert(mappingKey)
+            pendingAudioUnitLoadSignatureByMappingKey[mappingKey] = sig
+            if completion != nil {
+                remainingForCompletion += 1
+                audioUnitLoadWaitersByMappingKey[mappingKey, default: []].append { auAudioUnit in
+                    completeOne(mappingKey: mappingKey, audioUnit: auAudioUnit)
+                }
+            }
+            fileLog("loadAU QUEUED key=\(mappingKey) reason=\(reason) subType=\(description.componentSubType) mfr=\(description.componentManufacturer)")
+            newRequests.append(request)
+        }
+
+        if !newRequests.isEmpty {
+            instantiateAudioUnits(requests: newRequests)
+        } else if remainingForCompletion == 0 {
+            completion?(loadedByKey)
+        }
+    }
+
+    private func instantiateAudioUnit(request: AudioUnitLoadRequest) {
+        instantiateAudioUnits(requests: [request])
+    }
+
+    private func instantiateAudioUnits(requests: [AudioUnitLoadRequest]) {
+        guard !requests.isEmpty else { return }
+
+        audioUnitInstantiationQueue.async { [weak self] in
+            guard let self else { return }
+            var preparedLoads: [PreparedAudioUnitLoad] = []
+            var failures: [FailedAudioUnitLoad] = []
+            preparedLoads.reserveCapacity(requests.count)
+
+            for request in requests {
+                self.fileLog("loadAU INSTANTIATING key=\(request.mappingKey) reason=\(request.reason) subType=\(request.description.componentSubType) mfr=\(request.description.componentManufacturer)")
+
+                let semaphore = DispatchSemaphore(value: 0)
+                let loadResult = AULoadResultBox()
+
+                AVAudioUnit.instantiate(with: request.description, options: .loadOutOfProcess) { audioUnit, error in
+                    loadResult.store(unit: audioUnit, error: error)
+                    semaphore.signal()
+                }
+
+                let timeout = semaphore.wait(timeout: .now() + 20.0)
+                let (loadedUnit, loadError) = loadResult.snapshot()
+
+                if timeout == .success, let audioUnit = loadedUnit {
+                    let panMixer = AVAudioMixerNode()
+                    let maxFrames = self.recommendedMaximumFramesToRender()
+                    if !audioUnit.auAudioUnit.renderResourcesAllocated {
+                        audioUnit.auAudioUnit.maximumFramesToRender = maxFrames
+                    }
+                    preparedLoads.append(PreparedAudioUnitLoad(
+                        mappingKey: request.mappingKey,
+                        mapping: request.mapping,
+                        signature: request.signature,
+                        audioUnit: audioUnit,
+                        panMixer: panMixer
+                    ))
+                } else {
+                    let error = loadError ?? AudioUnitLoadError.timedOut
+                    failures.append(FailedAudioUnitLoad(request: request, message: error.localizedDescription))
+                }
+            }
+
+            let completedPreparedLoads = preparedLoads
+            let completedFailures = failures
+            self.audioQueue.async { [weak self] in
+                guard let self else { return }
+                self.finishAudioUnitLoads(requests: requests, preparedLoads: completedPreparedLoads, failures: completedFailures)
+            }
+        }
+    }
+
+    private func finishAudioUnitLoads(requests: [AudioUnitLoadRequest], preparedLoads: [PreparedAudioUnitLoad], failures: [FailedAudioUnitLoad]) {
+        let failedByKey = Dictionary(uniqueKeysWithValues: failures.map { ($0.request.mappingKey, $0.message) })
+
+        for request in requests {
+            pendingAudioUnitLoadKeys.remove(request.mappingKey)
+            pendingAudioUnitLoadSignatureByMappingKey.removeValue(forKey: request.mappingKey)
+        }
+
+        for failure in failures {
+            fileLog("loadAU FAILED key=\(failure.request.mappingKey) error=\(failure.message)")
+            patchSignatureByMappingKey.removeValue(forKey: failure.request.mappingKey)
+        }
+
+        if !preparedLoads.isEmpty {
+            installPreparedAudioUnits(preparedLoads)
+        }
+
+        for request in requests {
+            if failedByKey[request.mappingKey] != nil {
+                patchSignatureByMappingKey.removeValue(forKey: request.mappingKey)
+            }
+            let au = auInstrumentByMappingKey[request.mappingKey]?.auAudioUnit
+            let waiters = audioUnitLoadWaitersByMappingKey.removeValue(forKey: request.mappingKey) ?? []
+            for waiter in waiters {
+                waiter(au)
+            }
+        }
     }
 
     private func installPreparedAudioUnits(_ preparedLoads: [PreparedAudioUnitLoad]) {
@@ -2026,24 +2419,34 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         // Batch all attach/detach/connect work in one engine pause/start cycle.
         // Reconfiguring the AVAudioEngine separately for every AU was causing export-time
         // thread explosions inside AVFAudio/AUHostingService and eventually dispatch soft-limit aborts.
-        withEnginePaused {
-            for prepared in preparedLoads {
-                if let oldAU = prepared.replacedAudioUnit {
-                    engine.disconnectNodeOutput(oldAU)
-                    engine.detach(oldAU)
+        let mappingKeys = Set(preparedLoads.map(\.mappingKey))
+        let graphInstalled = withEnginePausedReturningSuccess {
+            performAudioGraphMutation("install AU nodes (\(mappingKeys.sorted().joined(separator: ",")))") {
+                for prepared in preparedLoads {
+                    let mappingKey = prepared.mappingKey
+                    if let oldAU = auInstrumentByMappingKey.removeValue(forKey: mappingKey), oldAU !== prepared.audioUnit {
+                        engine.disconnectNodeOutput(oldAU)
+                        engine.detach(oldAU)
+                    }
+                    if let oldPan = panMixerByMappingKey.removeValue(forKey: mappingKey), oldPan !== prepared.panMixer {
+                        engine.disconnectNodeOutput(oldPan)
+                        engine.detach(oldPan)
+                    }
+                    auObservations.removeValue(forKey: mappingKey)
                 }
-                if let oldPan = prepared.replacedPanMixer {
-                    engine.disconnectNodeOutput(oldPan)
-                    engine.detach(oldPan)
-                }
-            }
 
-            for prepared in preparedLoads {
-                engine.attach(prepared.audioUnit)
-                engine.attach(prepared.panMixer)
-                engine.connect(prepared.audioUnit, to: prepared.panMixer, format: nil)
-                engine.connect(prepared.panMixer, to: engine.mainMixerNode, format: nil)
+                for prepared in preparedLoads {
+                    engine.attach(prepared.audioUnit)
+                    engine.attach(prepared.panMixer)
+                    engine.connect(prepared.audioUnit, to: prepared.panMixer, format: nil)
+                    engine.connect(prepared.panMixer, to: engine.mainMixerNode, format: nil)
+                }
             }
+        }
+
+        guard graphInstalled else {
+            resetAudioEngineAfterGraphFailure(reason: "AU install exception", quarantinedKeys: mappingKeys)
+            return
         }
 
         for prepared in preparedLoads {
@@ -2116,6 +2519,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         if engine.isRunning { engineStopIsOursDepth += 1 }
         engine.pause()
         removeDeadAU(mappingKey: mappingKey)
+        quarantineAudioUnits([mappingKey], reason: "AU render resources disconnected")
 
         // Restart engine and resume playback if we were playing
         do {
@@ -2139,7 +2543,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
         DispatchQueue.main.async { [weak self] in
             self?.onAUDisconnected?(mappingKey)
-            self?.onPlaybackError?("Audio Unit crashed — reconnecting automatically...")
+            self?.onPlaybackError?("Audio Unit crashed — using fallback until you reload it.")
         }
     }
 
@@ -2676,17 +3080,16 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         let missingAUMappingKeys = noteGroups.keys
             .filter { mappingKey in
                 guard auInstrumentByMappingKey[mappingKey] == nil,
-                      samplerByMappingKey[mappingKey] == nil,
                       let mapping = instrumentMappings[mappingKey] else { return false }
                 return mapping.effectiveSourceType == .audioUnit && mapping.audioComponentDescription != nil
             }
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        let preparedAULoads = prepareAudioUnitLoads(
+        requestAudioUnitLoads(
             for: missingAUMappingKeys,
             mappings: instrumentMappings,
-            muteExistingSamplerPlaceholders: true
+            muteExistingSamplerPlaceholders: true,
+            reason: "hosted MIDI playback"
         )
-        installPreparedAudioUnits(preparedAULoads)
 
         var hasDestination = false
         for mappingKey in noteGroups.keys {
@@ -2699,8 +3102,11 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 continue
             }
             let samplerMapping = instrumentMappings[mappingKey]
-            let fallbackMapping = samplerMapping?.effectiveSourceType == .audioUnit ? nil : samplerMapping
-            _ = sampler(for: mappingKey, mapping: fallbackMapping)
+            if samplerMapping?.effectiveSourceType == .audioUnit {
+                _ = mutedAudioUnitPlaceholderSampler(for: mappingKey)
+            } else {
+                _ = sampler(for: mappingKey, mapping: samplerMapping)
+            }
             if samplerByMappingKey[mappingKey] != nil {
                 hasDestination = true
             }
@@ -2760,6 +3166,14 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     /// buffers (EXC_BAD_ACCESS on com.apple.audio.IOThread.client).
     /// If the engine is already paused/stopped, the work runs directly with no restart.
     private func withEnginePaused(_ work: () -> Void) {
+        _ = withEnginePausedReturningSuccess {
+            work()
+            return true
+        }
+    }
+
+    @discardableResult
+    private func withEnginePausedReturningSuccess(_ work: () -> Bool) -> Bool {
         // Always pause the engine when it's running before topology changes.
         // Apple requires the engine be stopped/paused for attach/detach/connect.
         // Previously this only paused during active playback, but that caused
@@ -2771,10 +3185,16 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             fileLog("withEnginePaused: pause → depth=\(engineStopIsOursDepth)")
             engine.pause()
         }
-        work()
-        if shouldPause {
+        let succeeded = work()
+        if shouldPause && succeeded {
             do {
                 try engine.start()
+                if muteHardwareOutput,
+                   !applyHardwareMute(),
+                   requireHardwareOutputMute {
+                    reportError("Export aborted: hardware output could not be muted.")
+                    return false
+                }
             } catch {
                 // No AVAudioEngineConfigurationChange notification will arrive for this
                 // failed restart, so decrement the depth counter to prevent swallowing
@@ -2784,7 +3204,11 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 NSLog("[Engine] withEnginePaused: engine.start() failed: %@", error.localizedDescription)
                 reportError("Audio engine restart failed: \(error.localizedDescription)")
             }
+        } else if shouldPause {
+            engineStopIsOursDepth = max(0, engineStopIsOursDepth - 1)
+            fileLog("withEnginePaused: work failed; leaving engine paused depth=\(engineStopIsOursDepth)")
         }
+        return succeeded
     }
 
     private func configureAudioGraphIfNeeded() -> Bool {
@@ -2792,6 +3216,12 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         // Calling engine.start() even on a running engine acquires internal locks
         // and causes audible glitches when called at 60Hz during live preview.
         if engine.isRunning {
+            if muteHardwareOutput,
+               !applyHardwareMute(),
+               requireHardwareOutputMute {
+                reportError("Export aborted: hardware output could not be muted.")
+                return false
+            }
             return true
         }
 
@@ -2810,7 +3240,11 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             // recording tap on mainMixerNode (which captures upstream of the
             // output node). kHALOutputParam_Volume = 14.
             if muteHardwareOutput {
-                applyHardwareMute()
+                let muted = applyHardwareMute()
+                if !muted && requireHardwareOutputMute {
+                    reportError("Export aborted: hardware output could not be muted.")
+                    return false
+                }
             }
             return true
         } catch {
@@ -2824,21 +3258,33 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     /// Mute the hardware output node's underlying AudioUnit.
     /// This sets the HAL output volume to 0, silencing speakers without
     /// affecting the recording tap on mainMixerNode.
-    private func applyHardwareMute() {
+    @discardableResult
+    private func applyHardwareMute() -> Bool {
         guard let outputAU = engine.outputNode.audioUnit else {
             fileLog("Silent export: could not access outputNode audioUnit")
-            return
+            return false
         }
         // kHALOutputParam_Volume = 14 (from AudioUnit/AudioUnitProperties.h)
         let status = AudioUnitSetParameter(outputAU, 14, kAudioUnitScope_Global, 0, 0, 0)
         if status == noErr {
             fileLog("Silent export: hardware output volume set to 0")
+            return true
         } else {
             fileLog("Silent export: AudioUnitSetParameter failed with status \(status)")
-            // Fallback: set the output node's volume via AVAudioEngine API
-            // This is less ideal but better than audible output
-            engine.mainMixerNode.outputVolume = 0
-            fileLog("Silent export: fell back to mainMixerNode.outputVolume = 0 (tap may capture silence)")
+            return false
+        }
+    }
+
+    private func restoreHardwareOutputAfterExport() {
+        guard let outputAU = engine.outputNode.audioUnit else {
+            fileLog("Silent export: could not access outputNode audioUnit for restore")
+            return
+        }
+        let status = AudioUnitSetParameter(outputAU, 14, kAudioUnitScope_Global, 0, 1, 0)
+        if status == noErr {
+            fileLog("Silent export: hardware output volume restored")
+        } else {
+            fileLog("Silent export: hardware output restore failed with status \(status)")
         }
     }
 
@@ -2853,7 +3299,12 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             guard let self else { return }
             do {
                 try self.engine.start()
-                if self.muteHardwareOutput { self.applyHardwareMute() }
+                if self.muteHardwareOutput,
+                   !self.applyHardwareMute(),
+                   self.requireHardwareOutputMute {
+                    self.reportError("Export aborted: hardware output could not be muted.")
+                    return
+                }
                 self.fileLog("engine.start() succeeded on attempt \(attempt + 1)")
             } catch {
                 self.fileLog("engine.start() failed (attempt \(attempt + 1)): \(error.localizedDescription)")
@@ -2991,29 +3442,24 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             // Solution: collect all new samplers, attach them ALL in ONE withEnginePaused block.
             // Existing cached samplers don't need attachment — just loadInstrument if sig changed.
             var newSamplerPairs: [(key: String, node: AVAudioUnitSampler, mapping: InstrumentMapping?)] = []
-            let preparedAULoads = prepareAudioUnitLoads(for: orderedMappingKeys, mappings: instrumentMappings)
+            requestAudioUnitLoads(
+                for: orderedMappingKeys,
+                mappings: instrumentMappings,
+                muteExistingSamplerPlaceholders: true,
+                reason: "playback setup"
+            )
             for mappingKey in orderedMappingKeys {
                 let mapping = instrumentMappings[mappingKey]
                 let srcType = mapping?.effectiveSourceType
                 let hasAUDesc = mapping?.audioComponentDescription != nil
                 fileLog("  setup \(mappingKey): sourceType=\(String(describing: srcType)) hasAUDesc=\(hasAUDesc) hasSampler=\(samplerByMappingKey[mappingKey] != nil) hasAU=\(auInstrumentByMappingKey[mappingKey] != nil)")
                 if let mapping, mapping.effectiveSourceType == .audioUnit, mapping.audioComponentDescription != nil {
-                    // AU instruments are hosted directly; do not create placeholder sampler nodes
-                    // during playback setup unless we actually need a silent fallback.
+                    _ = mutedAudioUnitPlaceholderSampler(for: mappingKey)
                 } else if samplerByMappingKey[mappingKey] == nil {
                     // New SF2 sampler needed — create node now, attach below in one batch
                     newSamplerPairs.append((key: mappingKey, node: AVAudioUnitSampler(), mapping: mapping))
                 }
                 // Existing samplers: instrument will be (re)loaded after attachment batch below
-            }
-
-            if !preparedAULoads.isEmpty {
-                installPreparedAudioUnits(preparedAULoads)
-                guard isPlayRequestCurrent(requestID) else {
-                    setPlaying(false)
-                    isReconfiguring = false
-                    return
-                }
             }
 
             // Attach all new sampler nodes in a single engine pause (1 pause vs N pauses)
@@ -3195,7 +3641,8 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                     track.destinationAudioUnit = auUnit
                     NSLog("[Engine] MIDI track %d -> AU instrument for '%@' (component: %@)", index, mappingKey, auUnit.name)
                 } else if mapping?.effectiveSourceType == .audioUnit {
-                    let fallbackSampler = samplerByMappingKey[mappingKey] ?? sampler(for: mappingKey, mapping: nil)
+                    let fallbackMapping = quarantinedAudioUnitMappingKeys.contains(mappingKey) ? mapping : nil
+                    let fallbackSampler = samplerByMappingKey[mappingKey] ?? sampler(for: mappingKey, mapping: fallbackMapping)
                     track.destinationAudioUnit = fallbackSampler
                     NSLog("[Engine] MIDI track %d -> silent fallback sampler for '%@' (AU unavailable)", index, mappingKey)
                 } else {
@@ -4200,6 +4647,9 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     /// Call AFTER play() completes (success or failure) during a WAV export.
     /// Restores the prior live-playback buffer size. Must be called on audioQueue.
     private func leaveExportModeOnAudioQueue() {
+        if muteHardwareOutput {
+            restoreHardwareOutputAfterExport()
+        }
         let restored = priorPlaybackBufferFrames > 0 ? priorPlaybackBufferFrames : 512
         preferredBufferFrames = restored
         exportTapBufferFrames = 0

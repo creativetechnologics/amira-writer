@@ -1,4 +1,5 @@
 #if os(iOS)
+import ProjectKit
 import SwiftUI
 
 // MARK: - iOS Piano Roll (SwiftUI Canvas)
