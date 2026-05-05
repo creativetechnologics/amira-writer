@@ -86,6 +86,7 @@ final class AssetManager {
 
         let destURL = uniqueDestination(for: sourceURL.lastPathComponent, in: charDir)
         try FileManager.default.copyItem(at: sourceURL, to: destURL)
+        warmImportedThumbnail(destURL)
 
         return destURL
     }
@@ -105,6 +106,7 @@ final class AssetManager {
 
         let destURL = uniqueDestination(for: suggestedFilename, in: charDir)
         try data.write(to: destURL)
+        warmImportedThumbnail(destURL)
         return destURL
     }
 
@@ -118,6 +120,7 @@ final class AssetManager {
 
         let destURL = uniqueDestination(for: sourceURL.lastPathComponent, in: bgDir)
         try FileManager.default.copyItem(at: sourceURL, to: destURL)
+        warmImportedThumbnail(destURL)
 
         return destURL
     }
@@ -126,21 +129,11 @@ final class AssetManager {
 
     /// Get a cached thumbnail for an image file. Generates on cache miss.
     func thumbnail(for url: URL, maxSize: CGFloat = 120) -> NSImage? {
-        let cacheKey = "\(url.path)#\(Int(maxSize.rounded()))" as NSString
-
-        if let cached = thumbnailCache.object(forKey: cacheKey) {
-            return cached
-        }
-
-        let thumb = generateThumbnail(from: url, maxSize: maxSize)
-        if let thumb {
-            let cost = Int(thumb.size.width) * Int(thumb.size.height) * 4
-            thumbnailCache.setObject(thumb, forKey: cacheKey, cost: cost)
-            let key = cacheKey as String
-            keysByPath[url.path, default: []].insert(key)
-        }
-
-        return thumb
+        cachedThumbnail(for: url, maxSize: maxSize)
+            ?? ImagineThumbnailCache.shared.bestCached(
+                for: url.path,
+                minimumPixelSize: max(1, Int(maxSize.rounded()))
+            )
     }
 
     /// Return a thumbnail ONLY if it's already in the cache. Never generates.
@@ -151,6 +144,10 @@ final class AssetManager {
     func cachedThumbnail(for url: URL, maxSize: CGFloat = 120) -> NSImage? {
         let cacheKey = "\(url.path)#\(Int(maxSize.rounded()))" as NSString
         return thumbnailCache.object(forKey: cacheKey)
+            ?? ImagineThumbnailCache.shared.cached(
+                for: url.path,
+                maxPixelSize: max(64, Int(maxSize.rounded() * 2))
+            )
     }
 
     /// Cache hit by an arbitrary identifier string. Thumbnail grids use the
@@ -161,6 +158,10 @@ final class AssetManager {
     func cachedThumbnail(forIdentifier identifier: String, maxSize: CGFloat = 120) -> NSImage? {
         let cacheKey = "id:\(identifier)#\(Int(maxSize.rounded()))" as NSString
         return thumbnailCache.object(forKey: cacheKey)
+            ?? ImagineThumbnailCache.shared.cached(
+                for: identifier,
+                maxPixelSize: max(64, Int(maxSize.rounded() * 2))
+            )
     }
 
     /// Store a thumbnail under a caller-supplied identifier as well as its
@@ -170,6 +171,11 @@ final class AssetManager {
         let cacheKey = "id:\(identifier)#\(Int(maxSize.rounded()))" as NSString
         let cost = Int(image.size.width) * Int(image.size.height) * 4
         thumbnailCache.setObject(image, forKey: cacheKey, cost: cost)
+        ImagineThumbnailCache.shared.store(
+            image,
+            for: identifier,
+            maxPixelSize: max(64, Int(maxSize.rounded() * 2))
+        )
         // identifier keys are not path-keyed, so no keysByPath registration needed here
     }
 
@@ -186,58 +192,10 @@ final class AssetManager {
         guard !Task.isCancelled else { return nil }
 
         let targetSize = max(64, Int(maxSize.rounded() * 2))
-        let path = url.path
-        let diskBase = diskCacheDir
-        let thumb = await withCheckedContinuation { (continuation: CheckedContinuation<NSImage?, Never>) in
-            thumbnailQueue.async {
-                let mtime = (try? FileManager.default
-                    .attributesOfItem(atPath: path)[.modificationDate] as? Date)?
-                    .timeIntervalSince1970 ?? 0
-                let diskURL = Self.diskCacheFileURL(
-                    base: diskBase,
-                    path: path,
-                    mtime: mtime,
-                    maxSize: targetSize
-                )
-
-                if let diskImage = NSImage(contentsOf: diskURL) {
-                    continuation.resume(returning: diskImage)
-                    return
-                }
-
-                guard let imageSource = CGImageSourceCreateWithURL(
-                    URL(fileURLWithPath: path) as CFURL, nil
-                ) else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-
-                let options: [CFString: Any] = [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: targetSize,
-                    kCGImageSourceShouldCacheImmediately: true,
-                ]
-
-                guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
-                    imageSource, 0, options as CFDictionary
-                ) else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-
-                let size = NSSize(width: CGFloat(cgImage.width), height: CGFloat(cgImage.height))
-                let image = NSImage(cgImage: cgImage, size: size)
-
-                if let tiff = image.tiffRepresentation,
-                   let rep = NSBitmapImageRep(data: tiff),
-                   let png = rep.representation(using: .png, properties: [:]) {
-                    try? png.write(to: diskURL, options: .atomic)
-                }
-
-                continuation.resume(returning: image)
-            }
-        }
+        let thumb = await ImagineThumbnailCache.shared.thumbnail(
+            for: url.path,
+            maxPixelSize: targetSize
+        )
 
         if Task.isCancelled {
             return nil
@@ -256,6 +214,7 @@ final class AssetManager {
     func clearThumbnailCache() {
         thumbnailCache.removeAllObjects()
         keysByPath.removeAll()
+        ImagineThumbnailCache.shared.clearMemory()
     }
 
     /// Invalidate all cached size variants for a specific file (e.g., after overwriting).
@@ -266,6 +225,7 @@ final class AssetManager {
                 thumbnailCache.removeObject(forKey: key as NSString)
             }
         }
+        ImagineThumbnailCache.shared.invalidate(path: path)
     }
 
     // MARK: - File Listing
@@ -308,6 +268,10 @@ final class AssetManager {
         }
 
         return dest
+    }
+
+    private func warmImportedThumbnail(_ url: URL) {
+        ImagineThumbnailCache.shared.prefetch(paths: [url.path], maxPixelSize: 512)
     }
 
     private func generateThumbnail(from url: URL, maxSize: CGFloat) -> NSImage? {

@@ -120,6 +120,7 @@ struct ImagineProjectStorage {
         let filename = "\(filePrefix)_\(timestamp).png"
         let outputURL = dir.appendingPathComponent(filename)
         try imageData.write(to: outputURL, options: .atomic)
+        ImagineThumbnailCache.shared.prefetch(paths: [outputURL.path], maxPixelSize: 512)
         return outputURL
     }
 
@@ -169,9 +170,11 @@ struct ImagineProjectStorage {
             let newName = "\(stem)_\(timestamp).\(ext)"
             let uniqueURL = destinationDir.appendingPathComponent(newName)
             try fm.copyItem(at: sourceURL, to: uniqueURL)
+            ImagineThumbnailCache.shared.prefetch(paths: [uniqueURL.path], maxPixelSize: 512)
             return uniqueURL
         }
         try fm.copyItem(at: sourceURL, to: destURL)
+        ImagineThumbnailCache.shared.prefetch(paths: [destURL.path], maxPixelSize: 512)
         return destURL
     }
 

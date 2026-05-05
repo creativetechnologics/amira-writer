@@ -156,15 +156,17 @@ private struct StoryboardFrameDots: View {
     let projectRoot: URL?
     let sceneID: UUID
     let shotID: UUID
+    @ObservedObject private var storyboardStatus = StoryboardServerStatusModel.shared
 
     var body: some View {
+        let refreshToken = storyboardStatus.lastSaveToken ^ storyboardStatus.lastRecoveryToken
         HStack(spacing: 2) {
             ForEach(StoryboardFrame.allCases, id: \.self) { frame in
                 Circle()
-                    .fill(filled(frame) ? OperaChromeTheme.accent : Color.clear)
+                    .fill(filled(frame, refreshToken: refreshToken) ? OperaChromeTheme.accent : Color.clear)
                     .overlay(
                         Circle()
-                            .stroke(filled(frame)
+                            .stroke(filled(frame, refreshToken: refreshToken)
                                 ? Color.clear
                                 : OperaChromeTheme.textTertiary.opacity(0.6),
                                 lineWidth: 1)
@@ -174,7 +176,8 @@ private struct StoryboardFrameDots: View {
         }
     }
 
-    private func filled(_ frame: StoryboardFrame) -> Bool {
+    private func filled(_ frame: StoryboardFrame, refreshToken: UInt64) -> Bool {
+        _ = refreshToken
         guard let projectRoot else { return false }
         let url = ProjectPaths(root: projectRoot)
             .shotStoryboardImage(sceneID: sceneID, shotID: shotID, frame: frame)

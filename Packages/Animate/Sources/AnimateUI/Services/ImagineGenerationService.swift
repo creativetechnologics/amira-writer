@@ -9,6 +9,7 @@ struct ImagineGenerationService {
     /// image first, then storyboard/automatic context, then any remaining manual
     /// references. The service preserves that order and caps the final request.
     private static let maxGeminiReferenceImagesPerRequest = 8
+    private static let maxOpenAIReferenceImagesPerRequest = 8
 
     // MARK: - Gemini Generation
 
@@ -35,13 +36,14 @@ struct ImagineGenerationService {
 
         let result = try await service.generate(request: request, apiKey: apiKey)
 
+        let filePrefix = currentImageGenerationProviderLabel()
         let savedURL = try await ImagineProjectStorage.saveGeneratedImageAsync(
             result.imageData,
             owpURL: owpURL,
             sceneSlug: sceneSlug,
             shotIndex: shotIndex,
             moment: moment,
-            filePrefix: "gemini"
+            filePrefix: filePrefix
         )
         await writeGeminiSidecarsBestEffort(
             imageURL: savedURL,
@@ -80,18 +82,60 @@ struct ImagineGenerationService {
 
         let result = try await service.generate(request: request, apiKey: apiKey)
 
+        let filePrefix = currentImageGenerationProviderLabel()
         let savedURL = try await ImagineProjectStorage.saveGeneratedImageAsync(
             result.imageData,
             owpURL: owpURL,
             sceneSlug: sceneSlug,
             shotIndex: shotIndex,
             moment: moment,
-            filePrefix: plan.usesEditPrompt ? "gemini_edit" : "gemini"
+            filePrefix: plan.usesEditPrompt ? "\(filePrefix)_edit" : filePrefix
         )
         await writeGeminiSidecarsBestEffort(
             imageURL: savedURL,
             prompt: plan.executionPrompt,
             textResponse: result.textResponse,
+            plan: plan
+        )
+        return savedURL
+    }
+
+    // MARK: - OpenAI Generation
+
+    func generateWithOpenAI(
+        plan: ShotFrameGenerationPlan,
+        manualReferenceURLs: [URL],
+        apiKey: String,
+        quality: OpenAIImageQuality,
+        owpURL: URL,
+        sceneSlug: String,
+        shotIndex: Int,
+        moment: ImagineShotMoment
+    ) async throws -> URL {
+        let referenceURLs = try openAIReferenceURLs(
+            for: plan,
+            manualReferenceURLs: manualReferenceURLs,
+            maxCount: Self.maxOpenAIReferenceImagesPerRequest
+        )
+        let result = try await OpenAIImageGenerationService().generate(
+            prompt: plan.executionPrompt,
+            referenceImageURLs: referenceURLs,
+            apiKey: apiKey,
+            quality: quality,
+            size: openAIImageSize(for: plan)
+        )
+        let savedURL = try await ImagineProjectStorage.saveGeneratedImageAsync(
+            result.imageData,
+            owpURL: owpURL,
+            sceneSlug: sceneSlug,
+            shotIndex: shotIndex,
+            moment: moment,
+            filePrefix: plan.usesEditPrompt ? "openai_gpt_image_edit" : "openai_gpt_image"
+        )
+        await writeGeminiSidecarsBestEffort(
+            imageURL: savedURL,
+            prompt: plan.executionPrompt,
+            textResponse: result.responseText,
             plan: plan
         )
         return savedURL
@@ -131,6 +175,62 @@ private extension ImagineGenerationService {
         }
 
         return references
+    }
+
+    func openAIReferenceURLs(
+        for plan: ShotFrameGenerationPlan,
+        manualReferenceURLs: [URL],
+        maxCount: Int
+    ) throws -> [URL] {
+        var urls: [URL] = []
+        var seen = Set<String>()
+
+        func appendPath(_ path: String, required: Bool) throws {
+            guard urls.count < maxCount else { return }
+            let url = URL(fileURLWithPath: path).standardizedFileURL
+            guard seen.insert(url.path).inserted else { return }
+            if FileManager.default.fileExists(atPath: url.path) {
+                urls.append(url)
+            } else if required {
+                throw GeminiImageService.ServiceError.referenceImageUnavailable(
+                    "Shot \(plan.shotIndex + 1) \(plan.moment.rawValue.lowercased()) is an edit plan, but no source image was resolved. Run or select the prior continuity frame first."
+                )
+            }
+        }
+
+        if let sourcePath = plan.sourceImage?.path {
+            try appendPath(sourcePath, required: plan.usesEditPrompt)
+        } else if plan.usesEditPrompt {
+            throw GeminiImageService.ServiceError.referenceImageUnavailable(
+                "Shot \(plan.shotIndex + 1) \(plan.moment.rawValue.lowercased()) is an edit plan, but no source image was resolved. Run or select the prior continuity frame first."
+            )
+        }
+
+        for path in plan.referenceImagePaths {
+            try appendPath(path, required: false)
+        }
+
+        for manualURL in manualReferenceURLs {
+            guard urls.count < maxCount else { break }
+            let url = manualURL.standardizedFileURL
+            guard seen.insert(url.path).inserted,
+                  FileManager.default.fileExists(atPath: url.path) else { continue }
+            urls.append(url)
+        }
+
+        return urls
+    }
+
+    func openAIImageSize(for plan: ShotFrameGenerationPlan) -> String {
+        let ratio = plan.openMattePlan?.generatedAspectRatio ?? "16:9"
+        switch ratio {
+        case "1:1":
+            return "1024x1024"
+        case "9:16":
+            return "1024x1536"
+        default:
+            return "1536x1024"
+        }
     }
 
     nonisolated func writeGeminiSidecarsBestEffort(

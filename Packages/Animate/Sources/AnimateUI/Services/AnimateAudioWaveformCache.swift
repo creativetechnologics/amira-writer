@@ -33,12 +33,8 @@ final class AnimateAudioWaveformCache: ObservableObject {
     }
 
     private func installMemoryPressureHandler() {
-        let source = DispatchSource.makeMemoryPressureSource(
-            eventMask: [.warning, .critical],
-            queue: .global(qos: .utility)
-        )
-        source.setEventHandler { [weak self] in
-            let isCritical = source.data.contains(.critical)
+        memoryPressureSource = Self.makeMemoryPressureSource { [weak self] event in
+            let isCritical = event.contains(.critical)
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 if isCritical {
@@ -48,8 +44,21 @@ final class AnimateAudioWaveformCache: ObservableObject {
                 }
             }
         }
+    }
+
+    nonisolated private static func makeMemoryPressureSource(
+        onEvent: @escaping @Sendable (DispatchSource.MemoryPressureEvent) -> Void
+    ) -> DispatchSourceMemoryPressure {
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: .global(qos: .utility)
+        )
+        source.setEventHandler { [weak source] in
+            guard let source else { return }
+            onEvent(source.data)
+        }
         source.resume()
-        memoryPressureSource = source
+        return source
     }
 
     private func clearAllCaches() {

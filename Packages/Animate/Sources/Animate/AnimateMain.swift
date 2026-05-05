@@ -13,6 +13,12 @@ struct AnimateMain {
         if await handleDumpCharactersCommand() {
             return
         }
+        if await handleAutomationFramePlansDryRunCommand() {
+            return
+        }
+        if await handleAutomationFramesGenerateCommand() {
+            return
+        }
         if await handleShotFrameDryRunCommand() {
             return
         }
@@ -34,6 +40,26 @@ struct AnimateMain {
             return nil
         }
         return arguments[index + 1]
+    }
+
+    private static func boolArgumentValue(
+        after flag: String,
+        in arguments: [String]
+    ) -> Bool? {
+        guard let raw = argumentValue(after: flag, in: arguments)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+            !raw.isEmpty else {
+            return nil
+        }
+        switch raw {
+        case "1", "true", "yes", "y", "on":
+            return true
+        case "0", "false", "no", "n", "off":
+            return false
+        default:
+            return nil
+        }
     }
 
     private static func handleSnapshotCommand() async -> Bool {
@@ -94,6 +120,102 @@ struct AnimateMain {
         for row in rows {
             print("\(row.name)\towp=\(row.owpSlug)\tstorage=\(row.storageSlug)")
         }
+        return true
+    }
+
+    @MainActor
+    private static func handleAutomationFramePlansDryRunCommand() async -> Bool {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        guard arguments.contains("--automation-frame-plans-dry-run") else { return false }
+
+        guard let projectPath = argumentValue(after: "--project", in: arguments) else {
+            fputs("Missing required flags for --automation-frame-plans-dry-run.\n", stderr)
+            fputs("Required: --project <path>\n", stderr)
+            fputs("Optional: --scene <all|first|index|name|uuid> --shot-id <uuid> --model <flash|pro> --image-size <1K|2K|4K> --max-cost-usd <value> --write <true|false>\n", stderr)
+            Darwin.exit(EXIT_FAILURE)
+        }
+
+        let maxCostUSD = argumentValue(after: "--max-cost-usd", in: arguments)
+            .flatMap(Double.init)
+        let writeSidecars = boolArgumentValue(after: "--write", in: arguments) ?? true
+
+        let controller = AnimateWorkspaceController(startServers: false)
+        let projectURL = URL(fileURLWithPath: projectPath)
+        if let error = await controller.ensureProjectLoaded(projectURL) {
+            fputs("Automation frame-plans dry run failed to load project: \(error)\n", stderr)
+            Darwin.exit(EXIT_FAILURE)
+        }
+
+        do {
+            let result = try await controller.runAutomationFramePlansDryRun(
+                sceneFilter: argumentValue(after: "--scene", in: arguments),
+                shotID: argumentValue(after: "--shot-id", in: arguments),
+                modelName: argumentValue(after: "--model", in: arguments),
+                imageSize: argumentValue(after: "--image-size", in: arguments),
+                maxCostUSD: maxCostUSD,
+                writeSidecars: writeSidecars
+            )
+            print("AUTOMATION_FRAME_PLANS_DRY_RUN_DONE")
+            for key in result.keys.sorted() {
+                print("\(key)=\(result[key] ?? "")")
+            }
+        } catch {
+            fputs("Automation frame-plans dry run failed: \(error.localizedDescription)\n", stderr)
+            Darwin.exit(EXIT_FAILURE)
+        }
+
+        return true
+    }
+
+    @MainActor
+    private static func handleAutomationFramesGenerateCommand() async -> Bool {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        guard arguments.contains("--automation-frames-generate") else { return false }
+
+        guard let projectPath = argumentValue(after: "--project", in: arguments) else {
+            fputs("Missing required flags for --automation-frames-generate.\n", stderr)
+            fputs("Required: --project <path>\n", stderr)
+            fputs("Optional: --scene <all|first|index|name|uuid> --shot-id <uuid> --moments <beginning,middle,end|all> --mode <preflight|execute> --model <flash|pro> --image-size <1K|2K|4K> --max-cost-usd <value> --max-frames <count> --force-vertex <true|false> --vertex-project <id> --vertex-region <region>\n", stderr)
+            Darwin.exit(EXIT_FAILURE)
+        }
+
+        let mode = argumentValue(after: "--mode", in: arguments) ?? "preflight"
+        let maxCostUSD = argumentValue(after: "--max-cost-usd", in: arguments)
+            .flatMap(Double.init)
+        let maxFrames = argumentValue(after: "--max-frames", in: arguments)
+            .flatMap(Int.init)
+        let forceVertex = boolArgumentValue(after: "--force-vertex", in: arguments) ?? false
+
+        let controller = AnimateWorkspaceController(startServers: false)
+        let projectURL = URL(fileURLWithPath: projectPath)
+        if let error = await controller.ensureProjectLoaded(projectURL) {
+            fputs("Automation frames generate failed to load project: \(error)\n", stderr)
+            Darwin.exit(EXIT_FAILURE)
+        }
+
+        do {
+            let result = try await controller.runAutomationFramesGenerate(
+                sceneFilter: argumentValue(after: "--scene", in: arguments),
+                shotID: argumentValue(after: "--shot-id", in: arguments),
+                momentsRaw: argumentValue(after: "--moments", in: arguments),
+                modelName: argumentValue(after: "--model", in: arguments),
+                imageSize: argumentValue(after: "--image-size", in: arguments),
+                mode: mode,
+                maxCostUSD: maxCostUSD,
+                maxFrames: maxFrames,
+                forceVertex: forceVertex,
+                vertexProjectID: argumentValue(after: "--vertex-project", in: arguments),
+                vertexRegion: argumentValue(after: "--vertex-region", in: arguments)
+            )
+            print("AUTOMATION_FRAMES_GENERATE_DONE")
+            for key in result.keys.sorted() {
+                print("\(key)=\(result[key] ?? "")")
+            }
+        } catch {
+            fputs("Automation frames generate failed: \(error.localizedDescription)\n", stderr)
+            Darwin.exit(EXIT_FAILURE)
+        }
+
         return true
     }
 

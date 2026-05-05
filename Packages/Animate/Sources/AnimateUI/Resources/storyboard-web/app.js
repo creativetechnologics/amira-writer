@@ -784,7 +784,7 @@ async function navigateTo(shotId, frame, save) {
 
   // Load canvas image
   resetUndoStacks();
-  await loadImageURL(`/api/storyboard/${shotId}/${frame}`);
+  await loadImageURL(storyboardEndpoint(shotId, frame));
   clearDirty();
 }
 
@@ -826,6 +826,14 @@ function placeSketchEndpoint(type, id) {
     : `/api/places/${id}/sketch`;
 }
 
+function storyboardEndpoint(shotId, frame) {
+  const shot = shots.find((s) => s.shotId === shotId);
+  if (shot?.sceneId) {
+    return `/api/scenes/${encodeURIComponent(shot.sceneId)}/shots/${encodeURIComponent(shotId)}/storyboard/${encodeURIComponent(frame)}`;
+  }
+  return `/api/storyboard/${encodeURIComponent(shotId)}/${encodeURIComponent(frame)}`;
+}
+
 async function navigateFrame(frame) {
   if (sidebarMode === 'places') return;
   if (frame === currentFrame) return;
@@ -834,7 +842,7 @@ async function navigateFrame(frame) {
   localStorage.setItem(LS_FRAME_KEY, frame);
   updateFramePickerUI();
   resetUndoStacks();
-  await loadImageURL(`/api/storyboard/${currentShotId}/${frame}`);
+  await loadImageURL(storyboardEndpoint(currentShotId, frame));
   clearDirty();
 }
 
@@ -864,7 +872,7 @@ async function navigateStep(direction) {
 
   updateFramePickerUI();
   resetUndoStacks();
-  await loadImageURL(`/api/storyboard/${shotId}/${frame}`);
+  await loadImageURL(storyboardEndpoint(shotId, frame));
   clearDirty();
 }
 
@@ -941,7 +949,7 @@ async function performSave({ keepalive = false } = {}) {
     const blob = await exportPNG();
     const endpoint = sidebarSnapshot === 'places'
       ? placeSketchEndpoint(placeSnapshot.type, placeSnapshot.id)
-      : `/api/storyboard/${shotSnapshot}/${frameSnapshot}`;
+      : storyboardEndpoint(shotSnapshot, frameSnapshot);
     // keepalive bodies are capped at ~64 KB. PNG blobs of real drawings are
     // always larger, so only set keepalive when the document is genuinely
     // being torn down AND the blob is small enough to actually go out.
@@ -1246,7 +1254,7 @@ function setupSidebar() {
     updateSummaryEditor();
     if (currentShotId) {
       resetUndoStacks();
-      await loadImageURL(`/api/storyboard/${currentShotId}/${currentFrame}`);
+      await loadImageURL(storyboardEndpoint(currentShotId, currentFrame));
       clearDirty();
     }
   });

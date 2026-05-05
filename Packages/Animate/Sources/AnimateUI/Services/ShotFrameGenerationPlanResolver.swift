@@ -21,6 +21,11 @@ enum ShotFrameGenerationPlanResolver {
         var generatedImageSize: String
         var extractionTargetAspectRatio: String
         var finalDeliveryAspectRatio: String
+        var requirePickedReferences: Bool
+        var requireRatedReferences: Bool
+        var minimumReferenceRating: Int
+        var includeOpenMatteCropContractText: Bool
+        var forbidVisibleFrameGuides: Bool
 
         init(
             projectRoot: URL,
@@ -38,7 +43,12 @@ enum ShotFrameGenerationPlanResolver {
             generatedAspectRatio: String = ShotFrameOpenMattePlan.defaultGeneratedAspectRatio,
             generatedImageSize: String = ShotFrameOpenMattePlan.defaultGeneratedImageSize,
             extractionTargetAspectRatio: String = ShotFrameOpenMattePlan.defaultExtractionTargetAspectRatio,
-            finalDeliveryAspectRatio: String = ShotFrameOpenMattePlan.defaultFinalDeliveryAspectRatio
+            finalDeliveryAspectRatio: String = ShotFrameOpenMattePlan.defaultFinalDeliveryAspectRatio,
+            requirePickedReferences: Bool = true,
+            requireRatedReferences: Bool = true,
+            minimumReferenceRating: Int = 1,
+            includeOpenMatteCropContractText: Bool = false,
+            forbidVisibleFrameGuides: Bool = true
         ) {
             self.projectRoot = projectRoot
             self.sceneID = sceneID
@@ -56,10 +66,16 @@ enum ShotFrameGenerationPlanResolver {
             self.generatedImageSize = generatedImageSize
             self.extractionTargetAspectRatio = extractionTargetAspectRatio
             self.finalDeliveryAspectRatio = finalDeliveryAspectRatio
+            self.requirePickedReferences = requirePickedReferences
+            self.requireRatedReferences = requireRatedReferences
+            self.minimumReferenceRating = minimumReferenceRating
+            self.includeOpenMatteCropContractText = includeOpenMatteCropContractText
+            self.forbidVisibleFrameGuides = forbidVisibleFrameGuides
         }
     }
 
     static func resolve(input: Input) -> ShotFrameGenerationPlan {
+        let promptProtocol = ShotPromptProtocolStore.load(projectRoot: input.projectRoot)
         let storyboard = storyboardAttachment(
             projectRoot: input.projectRoot,
             sceneID: input.sceneID,
@@ -74,14 +90,15 @@ enum ShotFrameGenerationPlanResolver {
             referenceImagePaths.append(storyboardImagePath)
         }
 
-        let hardBreak = containsHardContinuityBreak(in: input.prompt)
-        let openMattePlan = makeOpenMattePlan(input: input)
+        let hardBreak = containsHardContinuityBreak(in: input.prompt, promptProtocol: promptProtocol)
+        let openMattePlan = makeOpenMattePlan(input: input, promptProtocol: promptProtocol)
 
         switch input.moment {
         case .beginning:
             if let previousEnd = selectedOrNewestPath(
                 in: input.previousShotGallery,
-                moment: .end
+                moment: .end,
+                requirePickedReferences: input.requirePickedReferences
             ) {
                 referenceImagePaths.append(previousEnd)
             }
@@ -94,13 +111,20 @@ enum ShotFrameGenerationPlanResolver {
                 extraReasons: contextualReferenceReasons(
                     hasManualReferences: hasManualReferences,
                     hasAutomaticReferences: hasAutomaticReferences
-                )
+                ),
+                promptProtocol: promptProtocol
             )
 
         case .middle:
             referenceImagePaths.append(contentsOf: input.automaticReferenceImagePaths)
             guard !hardBreak,
-                  let sourcePath = selectedOrNewestPath(in: input.gallery, moment: .beginning) else {
+                  let sourcePath = approvedSourcePath(
+                    in: input.gallery,
+                    moment: .beginning,
+                    requirePickedReferences: input.requirePickedReferences,
+                    requireRatedReferences: input.requireRatedReferences,
+                    minimumReferenceRating: input.minimumReferenceRating
+                  ) else {
                 return generatePlan(
                     input: input,
                     storyboard: storyboard,
@@ -110,7 +134,8 @@ enum ShotFrameGenerationPlanResolver {
                         hardBreak: hardBreak,
                         hasManualReferences: hasManualReferences,
                         hasAutomaticReferences: hasAutomaticReferences
-                    )
+                    ),
+                    promptProtocol: promptProtocol
                 )
             }
             let source = ShotFrameSourceImage(
@@ -127,13 +152,20 @@ enum ShotFrameGenerationPlanResolver {
                 openMattePlan: openMattePlan,
                 referenceImagePaths: referenceImagePaths,
                 hasManualReferences: hasManualReferences,
-                hasAutomaticReferences: hasAutomaticReferences
+                hasAutomaticReferences: hasAutomaticReferences,
+                promptProtocol: promptProtocol
             )
 
         case .end:
             referenceImagePaths.append(contentsOf: input.automaticReferenceImagePaths)
             if !hardBreak,
-               let middlePath = selectedOrNewestPath(in: input.gallery, moment: .middle) {
+               let middlePath = approvedSourcePath(
+                in: input.gallery,
+                moment: .middle,
+                requirePickedReferences: input.requirePickedReferences,
+                requireRatedReferences: input.requireRatedReferences,
+                minimumReferenceRating: input.minimumReferenceRating
+               ) {
                 let source = ShotFrameSourceImage(
                     path: middlePath,
                     source: .middleFrame,
@@ -148,11 +180,18 @@ enum ShotFrameGenerationPlanResolver {
                     openMattePlan: openMattePlan,
                     referenceImagePaths: referenceImagePaths,
                     hasManualReferences: hasManualReferences,
-                    hasAutomaticReferences: hasAutomaticReferences
+                    hasAutomaticReferences: hasAutomaticReferences,
+                    promptProtocol: promptProtocol
                 )
             }
             if !hardBreak,
-               let beginningPath = selectedOrNewestPath(in: input.gallery, moment: .beginning) {
+               let beginningPath = approvedSourcePath(
+                in: input.gallery,
+                moment: .beginning,
+                requirePickedReferences: input.requirePickedReferences,
+                requireRatedReferences: input.requireRatedReferences,
+                minimumReferenceRating: input.minimumReferenceRating
+               ) {
                 let source = ShotFrameSourceImage(
                     path: beginningPath,
                     source: .beginningFrame,
@@ -167,7 +206,8 @@ enum ShotFrameGenerationPlanResolver {
                     openMattePlan: openMattePlan,
                     referenceImagePaths: referenceImagePaths,
                     hasManualReferences: hasManualReferences,
-                    hasAutomaticReferences: hasAutomaticReferences
+                    hasAutomaticReferences: hasAutomaticReferences,
+                    promptProtocol: promptProtocol
                 )
             }
             return generatePlan(
@@ -179,7 +219,8 @@ enum ShotFrameGenerationPlanResolver {
                     hardBreak: hardBreak,
                     hasManualReferences: hasManualReferences,
                     hasAutomaticReferences: hasAutomaticReferences
-                )
+                ),
+                promptProtocol: promptProtocol
             )
         }
     }
@@ -189,7 +230,8 @@ enum ShotFrameGenerationPlanResolver {
         storyboard: StoryboardAttachment,
         openMattePlan: ShotFrameOpenMattePlan,
         referenceImagePaths: [String],
-        extraReasons: [ShotFrameStrategyReason] = []
+        extraReasons: [ShotFrameStrategyReason] = [],
+        promptProtocol: ShotPromptProtocolSettings
     ) -> ShotFrameGenerationPlan {
         var plan = ShotFrameGenerationPlan.defaultGenerate(
             sceneID: input.sceneID,
@@ -200,7 +242,8 @@ enum ShotFrameGenerationPlanResolver {
                 basePrompt: input.prompt,
                 moment: input.moment,
                 storyboardImagePath: storyboard.imagePath,
-                openMattePlan: openMattePlan
+                openMattePlan: openMattePlan,
+                promptProtocol: promptProtocol
             ),
             storyboardImagePath: storyboard.imagePath,
             storyboardAnalysisPath: storyboard.analysisPath,
@@ -220,7 +263,8 @@ enum ShotFrameGenerationPlanResolver {
         openMattePlan: ShotFrameOpenMattePlan,
         referenceImagePaths: [String],
         hasManualReferences: Bool,
-        hasAutomaticReferences: Bool
+        hasAutomaticReferences: Bool,
+        promptProtocol: ShotPromptProtocolSettings
     ) -> ShotFrameGenerationPlan {
         var plan = ShotFrameGenerationPlan.defaultEdit(
             sceneID: input.sceneID,
@@ -234,7 +278,8 @@ enum ShotFrameGenerationPlanResolver {
                 moment: input.moment,
                 source: source,
                 storyboardImagePath: storyboard.imagePath,
-                openMattePlan: openMattePlan
+                openMattePlan: openMattePlan,
+                promptProtocol: promptProtocol
             ),
             storyboardImagePath: storyboard.imagePath,
             storyboardAnalysisPath: storyboard.analysisPath,
@@ -289,19 +334,37 @@ enum ShotFrameGenerationPlanResolver {
         basePrompt: String,
         moment: ImagineShotMoment,
         storyboardImagePath: String?,
-        openMattePlan: ShotFrameOpenMattePlan
+        openMattePlan: ShotFrameOpenMattePlan,
+        promptProtocol: ShotPromptProtocolSettings
     ) -> String {
-        var lines = [
-            "Generate a \(moment.rawValue.lowercased()) frame for this shot as a full image generation.",
-            openMattePlan.promptInstruction,
-            "Use the script-derived prompt as the semantic source of truth:",
-            basePrompt
-        ]
-        if storyboardImagePath != nil {
-            lines.append("A storyboard reference image is attached. Treat that storyboard as composition/blocking authority where it is clear, while using the text for identity, setting, time of day, and visible detail.")
+        var lines: [String] = []
+        for section in promptProtocol.framePlan.generationOrder {
+            switch section {
+            case .basePrompt:
+                lines.append(basePrompt)
+            case .openMatteInstruction:
+                lines.append(openMattePlan.promptInstruction)
+            case .momentProgression:
+                lines.append(
+                    momentProgressionInstruction(
+                        moment,
+                        basePrompt: basePrompt,
+                        openMattePlan: openMattePlan,
+                        promptProtocol: promptProtocol
+                    )
+                )
+            case .storyboardGuidance:
+                if storyboardImagePath != nil {
+                    lines.append(promptProtocol.framePlan.templates.storyboardGuidanceLine)
+                }
+            case .continuitySource, .noRedesign, .returnOneImage:
+                continue
+            }
         }
-        lines.append("Keep this frame compatible with the beginning/middle/end triplet for the same shot.")
-        return lines.joined(separator: "\n")
+        return lines
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 
     private static func editInstruction(
@@ -309,21 +372,46 @@ enum ShotFrameGenerationPlanResolver {
         moment: ImagineShotMoment,
         source: ShotFrameSourceImage,
         storyboardImagePath: String?,
-        openMattePlan: ShotFrameOpenMattePlan
+        openMattePlan: ShotFrameOpenMattePlan,
+        promptProtocol: ShotPromptProtocolSettings
     ) -> String {
-        var lines = [
-            "Edit the provided source image to create the \(moment.rawValue.uppercased()) frame of the SAME shot.",
-            "The first attached image is the continuity source: \(source.source.displayName). Preserve character identity, wardrobe, place, lighting continuity, camera/lens feel, aspect ratio, screen direction, and geography unless the target beat explicitly requires a small change.",
-            openMattePlan.promptInstruction,
-            "Do not redesign the scene, replace the cast, change the location, change time of day, or invent a reverse angle.",
-            "Only advance the visible action beat to this target prompt:",
-            basePrompt
-        ]
-        if storyboardImagePath != nil {
-            lines.append("A storyboard reference image is also attached for the target \(moment.rawValue.lowercased()) frame. Use that drawing as composition/blocking authority where clear, but keep the source image's continuity and production design.")
+        let continuitySource = ShotPromptProtocolStore.applyTemplate(
+            promptProtocol.framePlan.templates.continuitySourceLineTemplate,
+            values: ["source": source.source.displayName]
+        )
+
+        var lines: [String] = []
+        for section in promptProtocol.framePlan.editOrder {
+            switch section {
+            case .basePrompt:
+                lines.append(basePrompt)
+            case .openMatteInstruction:
+                lines.append(openMattePlan.promptInstruction)
+            case .continuitySource:
+                lines.append(continuitySource)
+            case .noRedesign:
+                lines.append(promptProtocol.framePlan.templates.noRedesignLine)
+            case .momentProgression:
+                lines.append(
+                    momentProgressionInstruction(
+                        moment,
+                        basePrompt: basePrompt,
+                        openMattePlan: openMattePlan,
+                        promptProtocol: promptProtocol
+                    )
+                )
+            case .storyboardGuidance:
+                if storyboardImagePath != nil {
+                    lines.append(promptProtocol.framePlan.templates.storyboardGuidanceLine)
+                }
+            case .returnOneImage:
+                lines.append(promptProtocol.framePlan.templates.returnOneImageLine)
+            }
         }
-        lines.append("Return one edited image; no captions, no text overlays, no extra panels.")
-        return lines.joined(separator: "\n")
+        return lines
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 
     private struct StoryboardAttachment {
@@ -357,48 +445,98 @@ enum ShotFrameGenerationPlanResolver {
 
     private static func selectedOrNewestPath(
         in gallery: ImagineSceneShotGallery?,
-        moment: ImagineShotMoment
+        moment: ImagineShotMoment,
+        requirePickedReferences: Bool
     ) -> String? {
         guard let gallery else { return nil }
         if let selected = gallery.selectedPath(for: moment),
            !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           FileManager.default.fileExists(atPath: selected) {
+           FileManager.default.fileExists(atPath: selected),
+           isApprovedImageReference(selected, requirePickedReferences: requirePickedReferences, requireRatedReferences: false, minimumReferenceRating: 0) {
             return selected
         }
         return gallery.paths(for: moment).last { path in
             FileManager.default.fileExists(atPath: path)
+                && isApprovedImageReference(path, requirePickedReferences: requirePickedReferences, requireRatedReferences: false, minimumReferenceRating: 0)
         }
     }
 
-    private static func containsHardContinuityBreak(in prompt: String) -> Bool {
+    private static func approvedSourcePath(
+        in gallery: ImagineSceneShotGallery?,
+        moment: ImagineShotMoment,
+        requirePickedReferences: Bool,
+        requireRatedReferences: Bool,
+        minimumReferenceRating: Int
+    ) -> String? {
+        guard let gallery else { return nil }
+        let candidates: [String] = {
+            var values: [String] = []
+            if let selected = gallery.selectedPath(for: moment),
+               !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                values.append(selected)
+            }
+            values.append(contentsOf: gallery.paths(for: moment).reversed())
+            return deduplicated(values)
+        }()
+
+        for path in candidates where FileManager.default.fileExists(atPath: path) {
+            if isApprovedImageReference(
+                path,
+                requirePickedReferences: requirePickedReferences,
+                requireRatedReferences: requireRatedReferences,
+                minimumReferenceRating: minimumReferenceRating
+            ) {
+                return path
+            }
+        }
+        return nil
+    }
+
+    private static func isApprovedImageReference(
+        _ path: String,
+        requirePickedReferences: Bool,
+        requireRatedReferences: Bool,
+        minimumReferenceRating: Int
+    ) -> Bool {
+        let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path)
+        if metadata?.isRejected == true { return false }
+        if requirePickedReferences {
+            return metadata?.isLiked == true
+        }
+        if !requireRatedReferences { return true }
+        let minRating = min(max(minimumReferenceRating, 1), 5)
+        guard let rating = metadata?.rating else { return false }
+        return rating >= minRating
+    }
+
+    private static func containsHardContinuityBreak(
+        in prompt: String,
+        promptProtocol: ShotPromptProtocolSettings
+    ) -> Bool {
         let lower = prompt.lowercased()
-        let hardBreakMarkers = [
-            "hard cut",
-            "cut to",
-            "new angle",
-            "reverse angle",
-            "different location",
-            "new location",
-            "different time",
-            "time jump",
-            "jump cut",
-            "flashback",
-            "wide establishing"
-        ]
+        let hardBreakMarkers = promptProtocol.framePlan.hardContinuityBreakMarkers
         return hardBreakMarkers.contains { lower.contains($0) }
     }
 
-    private static func makeOpenMattePlan(input: Input) -> ShotFrameOpenMattePlan {
+    private static func makeOpenMattePlan(
+        input: Input,
+        promptProtocol: ShotPromptProtocolSettings
+    ) -> ShotFrameOpenMattePlan {
         let intendedShot = input.cameraShot ?? .medium
         let generatedShot = widerShot(for: intendedShot)
-        let motion = cropMotion(cameraMovement: input.cameraMovement, prompt: input.prompt)
-        let sourceAspect = aspectRatioValue(input.generatedAspectRatio) ?? (4.0 / 3.0)
+        let motion = cropMotion(
+            cameraMovement: input.cameraMovement,
+            prompt: input.prompt,
+            promptProtocol: promptProtocol
+        )
+        let sourceAspect = aspectRatioValue(input.generatedAspectRatio) ?? (16.0 / 9.0)
         let targetAspect = aspectRatioValue(input.extractionTargetAspectRatio) ?? (16.0 / 9.0)
         let keyframes = cropKeyframes(
             intendedShot: intendedShot,
             motion: motion,
             sourceAspect: sourceAspect,
-            targetAspect: targetAspect
+            targetAspect: targetAspect,
+            promptProtocol: promptProtocol
         )
         let currentCrop = keyframes.first { $0.moment == input.moment }?.cropRect
             ?? keyframes.first?.cropRect
@@ -407,14 +545,46 @@ enum ShotFrameGenerationPlanResolver {
         let generatedShotText = generatedShot?.displayName ?? "wider than the intended crop"
         let intendedShotText = intendedShot.displayName
         let cropSummary = cropSummaryText(currentCrop)
-        let promptInstruction = [
-            "OPEN-MATTE / CROP-CONTROL CONTRACT:",
-            "Render a \(input.generatedAspectRatio) \(input.generatedImageSize) source plate, composed as \(generatedShotText), not as the final crop.",
-            "The intended editorial framing is \(intendedShotText), extracted later as \(input.extractionTargetAspectRatio) \(ShotFrameOpenMattePlan.defaultExtractionFrameSize) crops and eventually protected for \(input.finalDeliveryAspectRatio).",
-            "The app will simulate camera motion with deterministic crop keyframes (\(motion.displayName)); do not bake a pan, tilt, or zoom blur into the image.",
-            "Keep characters, landmarks, and critical action cleanly inside the central crop-safe zone while leaving extra usable environment on all sides for reframing.",
-            "Current \(input.moment.rawValue.lowercased()) normalized crop: \(cropSummary)."
-        ].joined(separator: " ")
+        let openMatteTemplates = promptProtocol.framePlan.templates.openMatte
+        let promptInstruction: String
+        if input.includeOpenMatteCropContractText {
+            promptInstruction = [
+                ShotPromptProtocolStore.applyTemplate(
+                    openMatteTemplates.detailedLine1Template,
+                    values: [
+                        "generatedAspectRatio": input.generatedAspectRatio,
+                        "generatedImageSize": input.generatedImageSize
+                    ]
+                ),
+                ShotPromptProtocolStore.applyTemplate(
+                    openMatteTemplates.detailedLine2Template,
+                    values: [
+                        "generatedShot": generatedShotText,
+                        "intendedShot": intendedShotText
+                    ]
+                ),
+                openMatteTemplates.detailedLine3Template,
+                ShotPromptProtocolStore.applyTemplate(
+                    openMatteTemplates.detailedLine4Template,
+                    values: ["cropSummary": cropSummary]
+                )
+            ].joined(separator: " ")
+        } else {
+            var compact = [
+                ShotPromptProtocolStore.applyTemplate(
+                    openMatteTemplates.compactLine1Template,
+                    values: [
+                        "generatedAspectRatio": input.generatedAspectRatio,
+                        "generatedImageSize": input.generatedImageSize
+                    ]
+                ),
+                openMatteTemplates.compactLine2Template
+            ]
+            if input.forbidVisibleFrameGuides {
+                compact.append(openMatteTemplates.compactGuidesForbiddenLine)
+            }
+            promptInstruction = compact.joined(separator: " ")
+        }
 
         return ShotFrameOpenMattePlan(
             generatedAspectRatio: input.generatedAspectRatio,
@@ -432,16 +602,18 @@ enum ShotFrameGenerationPlanResolver {
 
     private static func cropMotion(
         cameraMovement: CameraMovement?,
-        prompt: String
+        prompt: String,
+        promptProtocol: ShotPromptProtocolSettings
     ) -> ShotFrameCropMotion {
         let lower = prompt.lowercased()
-        if lower.contains("tilt up") || lower.contains("pan up") { return .tiltUp }
-        if lower.contains("tilt down") || lower.contains("pan down") { return .tiltDown }
-        if lower.contains("pan left") { return .panLeft }
-        if lower.contains("pan right") { return .panRight }
-        if lower.contains("zoom in") || lower.contains("push in") || lower.contains("dolly in") { return .zoomIn }
-        if lower.contains("zoom out") || lower.contains("pull back") || lower.contains("dolly out") { return .zoomOut }
-        if lower.contains("track") || lower.contains("follow") { return .track }
+        let keywordTemplates = promptProtocol.framePlan.motionKeywords
+        if keywordTemplates.keywords(for: .tiltUp).contains(where: { lower.contains($0) }) { return .tiltUp }
+        if keywordTemplates.keywords(for: .tiltDown).contains(where: { lower.contains($0) }) { return .tiltDown }
+        if keywordTemplates.keywords(for: .panLeft).contains(where: { lower.contains($0) }) { return .panLeft }
+        if keywordTemplates.keywords(for: .panRight).contains(where: { lower.contains($0) }) { return .panRight }
+        if keywordTemplates.keywords(for: .zoomIn).contains(where: { lower.contains($0) }) { return .zoomIn }
+        if keywordTemplates.keywords(for: .zoomOut).contains(where: { lower.contains($0) }) { return .zoomOut }
+        if keywordTemplates.keywords(for: .track).contains(where: { lower.contains($0) }) { return .track }
 
         switch cameraMovement {
         case .panLeft: return .panLeft
@@ -460,11 +632,12 @@ enum ShotFrameGenerationPlanResolver {
         intendedShot: CameraShot,
         motion: ShotFrameCropMotion,
         sourceAspect: Double,
-        targetAspect: Double
+        targetAspect: Double,
+        promptProtocol: ShotPromptProtocolSettings
     ) -> [ShotFrameCropKeyframe] {
         ImagineShotMoment.allCases.map { moment in
             let progress = progressValue(for: moment)
-            let baseWidth = cropWidth(for: intendedShot)
+            let baseWidth = cropWidth(for: intendedShot, promptProtocol: promptProtocol)
             let sizeMultiplier: Double
             switch motion {
             case .zoomIn:
@@ -510,15 +683,14 @@ enum ShotFrameGenerationPlanResolver {
         }
     }
 
-    private static func cropWidth(for shot: CameraShot) -> Double {
-        switch shot {
-        case .extremeWide: 0.94
-        case .wide: 0.86
-        case .medium: 0.72
-        case .mediumClose: 0.62
-        case .close: 0.50
-        case .extremeClose: 0.38
-        }
+    private static func cropWidth(
+        for shot: CameraShot,
+        promptProtocol: ShotPromptProtocolSettings
+    ) -> Double {
+        let value = promptProtocol.framePlan.cropWidthByIntendedShot[shot.rawValue]
+            ?? ShotFramePromptProtocol.default.cropWidthByIntendedShot[shot.rawValue]
+            ?? 0.72
+        return min(max(value, 0.20), 0.98)
     }
 
     private static func widerShot(for shot: CameraShot) -> CameraShot? {
@@ -580,6 +752,237 @@ enum ShotFrameGenerationPlanResolver {
 
     private static func cropSummaryText(_ rect: CropRect) -> String {
         "x \(String(format: "%.3f", rect.x)), y \(String(format: "%.3f", rect.y)), w \(String(format: "%.3f", rect.width)), h \(String(format: "%.3f", rect.height))"
+    }
+
+    private enum MotionProgressionProfile {
+        case leftToRight
+        case rightToLeft
+        case bottomToTop
+        case topToBottom
+        case zoomIn
+        case zoomOut
+    }
+
+    private static func momentProgressionInstruction(
+        _ moment: ImagineShotMoment,
+        basePrompt: String,
+        openMattePlan: ShotFrameOpenMattePlan,
+        promptProtocol: ShotPromptProtocolSettings
+    ) -> String {
+        let genericLine: String = switch moment {
+        case .beginning:
+            promptProtocol.framePlan.templates.momentProgressionBeginning
+        case .middle:
+            promptProtocol.framePlan.templates.momentProgressionMiddle
+        case .end:
+            promptProtocol.framePlan.templates.momentProgressionEnd
+        }
+
+        guard let profile = inferredMotionProgressionProfile(
+            from: basePrompt,
+            cropMotion: openMattePlan.cropMotion
+        ) else {
+            return genericLine
+        }
+
+        guard let spatialLine = spatialMomentInstruction(for: profile, moment: moment) else {
+            return genericLine
+        }
+
+        return [genericLine, spatialLine]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private static func inferredMotionProgressionProfile(
+        from basePrompt: String,
+        cropMotion: ShotFrameCropMotion
+    ) -> MotionProgressionProfile? {
+        let text = basePrompt.lowercased()
+
+        if containsAny(in: text, patterns: [
+            #"left\s*[-]?\s*to\s*[-]?\s*right"#,
+            #"from\s+left\s+to\s+right"#,
+            #"screen[-\s]?left\s+to\s+screen[-\s]?right"#,
+            #"toward[s]?\s+the\s+right"#,
+            #"toward[s]?\s+screen[-\s]?right"#,
+            #"moves?\s+right"#
+        ]) {
+            return .leftToRight
+        }
+
+        if containsAny(in: text, patterns: [
+            #"right\s*[-]?\s*to\s*[-]?\s*left"#,
+            #"from\s+right\s+to\s+left"#,
+            #"screen[-\s]?right\s+to\s+screen[-\s]?left"#,
+            #"toward[s]?\s+the\s+left"#,
+            #"toward[s]?\s+screen[-\s]?left"#,
+            #"moves?\s+left"#
+        ]) {
+            return .rightToLeft
+        }
+
+        if containsAny(in: text, patterns: [
+            #"bottom\s*[-]?\s*to\s*[-]?\s*top"#,
+            #"from\s+bottom\s+to\s+top"#,
+            #"rises?\s+up"#,
+            #"moves?\s+up"#
+        ]) {
+            return .bottomToTop
+        }
+
+        if containsAny(in: text, patterns: [
+            #"top\s*[-]?\s*to\s*[-]?\s*bottom"#,
+            #"from\s+top\s+to\s+bottom"#,
+            #"drops?\s+down"#,
+            #"moves?\s+down"#
+        ]) {
+            return .topToBottom
+        }
+
+        if containsAny(in: text, patterns: [
+            #"approach(es|ing)?"#,
+            #"comes?\s+closer"#,
+            #"closing\s+distance"#,
+            #"moves?\s+toward\s+camera"#
+        ]) {
+            return .zoomIn
+        }
+
+        if containsAny(in: text, patterns: [
+            #"recede(s|ing)?"#,
+            #"moves?\s+away"#,
+            #"pulls?\s+away"#,
+            #"fades?\s+into\s+distance"#
+        ]) {
+            return .zoomOut
+        }
+
+        switch cropMotion {
+        case .panRight, .track:
+            return .leftToRight
+        case .panLeft:
+            return .rightToLeft
+        case .tiltUp:
+            return .bottomToTop
+        case .tiltDown:
+            return .topToBottom
+        case .zoomIn:
+            return .zoomIn
+        case .zoomOut:
+            return .zoomOut
+        case .hold, .shake:
+            break
+        }
+
+        if containsAny(in: text, patterns: [
+            #"\bmoves?\b"#,
+            #"\bmoved\b"#,
+            #"\bmoving\b"#,
+            #"\btravels?\b"#,
+            #"\btraveled\b"#,
+            #"\btraveling\b"#,
+            #"\bcrosses\b"#,
+            #"\bcrossed\b"#,
+            #"\bcrossing\b"#,
+            #"\bclimbs\b"#,
+            #"\bclimbed\b"#,
+            #"\bclimbing\b"#,
+            #"\bdrives\b"#,
+            #"\bdrove\b"#,
+            #"\bdriving\b"#,
+            #"\bwalks\b"#,
+            #"\bwalked\b"#,
+            #"\bwalking\b"#,
+            #"\bruns\b"#,
+            #"\bran\b"#,
+            #"\brunning\b"#,
+            #"\bmarches\b"#,
+            #"\bmarched\b"#,
+            #"\bmarching\b"#,
+            #"\badvances\b"#,
+            #"\badvanced\b"#,
+            #"\badvancing\b"#
+        ]) {
+            return .leftToRight
+        }
+
+        return nil
+    }
+
+    private static func spatialMomentInstruction(
+        for profile: MotionProgressionProfile,
+        moment: ImagineShotMoment
+    ) -> String? {
+        switch profile {
+        case .leftToRight:
+            switch moment {
+            case .beginning:
+                return "Frame-state for this image: place moving subjects on the left third of frame, oriented toward the right."
+            case .middle:
+                return "Frame-state for this image: place moving subjects in the center of frame, oriented toward the right."
+            case .end:
+                return "Frame-state for this image: place moving subjects on the right third of frame, oriented toward the right."
+            }
+        case .rightToLeft:
+            switch moment {
+            case .beginning:
+                return "Frame-state for this image: place moving subjects on the right third of frame, oriented toward the left."
+            case .middle:
+                return "Frame-state for this image: place moving subjects in the center of frame, oriented toward the left."
+            case .end:
+                return "Frame-state for this image: place moving subjects on the left third of frame, oriented toward the left."
+            }
+        case .bottomToTop:
+            switch moment {
+            case .beginning:
+                return "Frame-state for this image: place moving subjects in the lower third of frame, oriented upward."
+            case .middle:
+                return "Frame-state for this image: place moving subjects in the middle vertical band of frame, oriented upward."
+            case .end:
+                return "Frame-state for this image: place moving subjects in the upper third of frame, oriented upward."
+            }
+        case .topToBottom:
+            switch moment {
+            case .beginning:
+                return "Frame-state for this image: place moving subjects in the upper third of frame, oriented downward."
+            case .middle:
+                return "Frame-state for this image: place moving subjects in the middle vertical band of frame, oriented downward."
+            case .end:
+                return "Frame-state for this image: place moving subjects in the lower third of frame, oriented downward."
+            }
+        case .zoomIn:
+            switch moment {
+            case .beginning:
+                return "Frame-state for this image: subjects appear slightly smaller with more surrounding environment visible."
+            case .middle:
+                return "Frame-state for this image: subjects fill a medium portion of the frame."
+            case .end:
+                return "Frame-state for this image: subjects appear larger and closer in frame."
+            }
+        case .zoomOut:
+            switch moment {
+            case .beginning:
+                return "Frame-state for this image: subjects appear larger and closer in frame."
+            case .middle:
+                return "Frame-state for this image: subjects fill a medium portion of the frame."
+            case .end:
+                return "Frame-state for this image: subjects appear smaller with more surrounding environment visible."
+            }
+        }
+    }
+
+    private static func containsAny(in text: String, patterns: [String]) -> Bool {
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                let range = NSRange(text.startIndex..<text.endIndex, in: text)
+                if regex.firstMatch(in: text, options: [], range: range) != nil {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private static func deduplicated<T: Hashable>(_ values: [T]) -> [T] {

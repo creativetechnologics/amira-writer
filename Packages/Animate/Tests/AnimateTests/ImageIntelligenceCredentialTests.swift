@@ -141,17 +141,17 @@ final class ImageIntelligenceCredentialTests: XCTestCase {
     func testImageIntelligenceSQLitePath() throws {
         let paths = ProjectPaths(root: tempDir)
         let expected = tempDir
-            .appendingPathComponent(".novotro", isDirectory: true)
+            .appendingPathComponent(".amira", isDirectory: true)
             .appendingPathComponent("image-intelligence.sqlite")
 
         XCTAssertEqual(paths.imageIntelligenceSQLite, expected)
     }
 
-    func testImageIntelligenceSQLiteIsInNovotroDir() throws {
+    func testImageIntelligenceSQLiteIsInAmiraDir() throws {
         let paths = ProjectPaths(root: tempDir)
         let sqlitePath = paths.imageIntelligenceSQLite
-        let novotroPath = paths.novotroDir
+        let amiraPath = paths.amiraDir
 
-        XCTAssertTrue(sqlitePath.path.hasPrefix(novotroPath.path))
+        XCTAssertTrue(sqlitePath.path.hasPrefix(amiraPath.path))
     }
 }

@@ -144,15 +144,15 @@ struct ShotFrameCropKeyframe: Codable, Equatable, Hashable, Sendable {
 
 @available(macOS 26.0, *)
 struct ShotFrameOpenMattePlan: Codable, Equatable, Hashable, Sendable {
-    static let defaultGeneratedAspectRatio = "4:3"
+    static let defaultGeneratedAspectRatio = "16:9"
     static let defaultGeneratedImageSize = "4K"
     static let defaultExtractionTargetAspectRatio = "16:9"
     static let defaultFinalDeliveryAspectRatio = "21:9"
     static let defaultExtractionFrameSize = "1920x1080"
 
-    /// Aspect ratio sent to Gemini for the source plate. Defaults to 4:3
-    /// because this emulates open-matte acquisition: generate more image than
-    /// the widescreen video frame needs, then crop deterministically.
+    /// Aspect ratio sent to Gemini for the source plate. Defaults to 16:9 for
+    /// direct widescreen framing while still supporting deterministic crop
+    /// keyframes and final-delivery protection.
     var generatedAspectRatio: String
     /// Image size sent to Gemini for the source plate. Defaults to 4K so a
     /// 1080p extraction can pan/tilt/zoom without asking the model to perform

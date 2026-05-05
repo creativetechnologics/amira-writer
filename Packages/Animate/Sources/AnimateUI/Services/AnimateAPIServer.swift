@@ -236,6 +236,30 @@ final class AnimateAPIRouter {
             await ensureProjectHydrated()
             return await automationFramesGenerateResponse(request)
         }
+        if request.method == "GET", request.path == "/automation/shot-card-projection/audit" {
+            await ensureProjectHydrated()
+            return automationShotCardProjectionAuditResponse()
+        }
+        if request.method == "POST", request.path == "/automation/shot-card-projection/sync" {
+            await ensureProjectHydrated()
+            return await automationShotCardProjectionSyncResponse()
+        }
+        if request.method == "POST", request.path == "/automation/director-inputs/propose" {
+            await ensureProjectHydrated()
+            return automationDirectorInputProposeResponse(request)
+        }
+        if request.method == "POST", request.path == "/automation/director-inputs/accept" {
+            await ensureProjectHydrated()
+            return automationDirectorInputStatusResponse(request, status: "accepted")
+        }
+        if request.method == "POST", request.path == "/automation/director-inputs/reject" {
+            await ensureProjectHydrated()
+            return automationDirectorInputStatusResponse(request, status: "rejected")
+        }
+        if request.method == "GET", let ids = automationDirectorInputIDs(from: request.path) {
+            await ensureProjectHydrated()
+            return automationDirectorInputGetResponse(sceneID: ids.sceneID, shotID: ids.shotID)
+        }
         if request.method == "POST", request.path == "/automation/feedback/rules/extract" {
             await ensureProjectHydrated()
             return await automationFeedbackRulesExtractResponse(request)
@@ -271,6 +295,27 @@ final class AnimateAPIRouter {
         case ("POST", "/places/generate"):
             await ensureProjectHydrated()
             return await generatePlaceResponse(request)
+        case ("GET", "/reference-lab/status"):
+            await ensureProjectHydrated()
+            return referenceLabStatusResponse()
+        case ("POST", "/reference-lab/plan"):
+            await ensureProjectHydrated()
+            return await referenceLabPlanResponse(request)
+        case ("POST", "/reference-lab/generate"):
+            await ensureProjectHydrated()
+            return await referenceLabGenerateResponse(request)
+        case ("POST", "/reference-lab/approve"):
+            await ensureProjectHydrated()
+            return referenceLabApproveResponse(request)
+        case ("POST", "/reference-lab/reject"):
+            await ensureProjectHydrated()
+            return referenceLabRejectResponse(request)
+        case ("POST", "/characters/prompt-notes"):
+            await ensureProjectHydrated()
+            return updateCharacterPromptNotesResponse(request)
+        case ("POST", "/characters/generate-costume-images"):
+            await ensureProjectHydrated()
+            return await generateCharacterCostumeImagesResponse(request)
         case ("GET", "/image-intelligence/status"):
             await ensureProjectHydrated()
             return await imageIntelligenceStatusResponse()
@@ -379,12 +424,14 @@ final class AnimateAPIRouter {
         let modelOverride: GeminiModel?
         if let modelRaw = body["model"] as? String, !modelRaw.isEmpty {
             switch modelRaw.lowercased() {
+            case "nano-banana", "nano_banana", "nanobanana", "nano banana", "regular", "v1":
+                modelOverride = .nanoBanana
             case "flash", "nano-banana-2", "nano_banana_2", "nanobanana2":
                 modelOverride = .flash
             case "pro", "nano-banana-pro", "nano_banana_pro", "nanobananapro":
                 modelOverride = .pro
             default:
-                return .error(400, "Invalid model: \(modelRaw) (use 'flash' or 'pro')")
+                return .error(400, "Invalid model: \(modelRaw) (use 'nano-banana', 'flash', or 'pro')")
             }
         } else {
             modelOverride = nil
@@ -438,6 +485,340 @@ final class AnimateAPIRouter {
             return .error(error.status, error.message)
         } catch {
             return .error(500, "Generation failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func referenceLabStatusResponse() -> AnimateHTTPResponse {
+        let vertex = ImageGenBackendStore.currentVertexSettings()
+        let trimmedGeminiKey = store.geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let availabilityError: String?
+        if !store.isGeminiAllowed() {
+            availabilityError = GeminiImageService.ServiceError.masterSwitchOff.localizedDescription
+        } else if trimmedGeminiKey.isEmpty {
+            availabilityError = GeminiImageService.ServiceError.noAPIKey.localizedDescription
+        } else {
+            availabilityError = nil
+        }
+        let plannerProvider = SupplementalLLMProvider.vertexGemini
+        let payload: [String: Any] = [
+            "ok": true,
+            "project": store.owpURL?.lastPathComponent ?? NSNull(),
+            "projectRoot": store.fileOWPURL?.path ?? NSNull(),
+            "placesCount": store.backgrounds.count,
+            "backend": ImageGenBackend.aiStudio.rawValue,
+            "backendDisplayName": ImageGenBackend.aiStudio.displayName,
+            "configuredGlobalBackend": ImageGenBackendStore.currentBackend().rawValue,
+            "vertexProjectID": vertex.projectID,
+            "vertexRegion": vertex.region,
+            "geminiAllowed": store.isGeminiAllowed(),
+            "geminiAPIKeyAvailable": !trimmedGeminiKey.isEmpty,
+            "imageGenerationAvailable": availabilityError == nil,
+            "imageGenerationError": availabilityError ?? NSNull(),
+            "models": [
+                "draftImage": [
+                    "key": "nano-banana",
+                    "model": GeminiModel.nanoBanana.rawValue,
+                    "displayName": GeminiModel.nanoBanana.displayName,
+                    "nativeMaxImageSize": "1K",
+                    "estimatedCostUSD": GeminiModel.nanoBanana.estimatedCost(for: "1K")
+                ],
+                "planner": [
+                    "provider": plannerProvider.rawValue,
+                    "providerDisplayName": "Gemini API",
+                    "model": plannerProvider.defaultModel
+                ],
+                "upscaleOrFinal2K": [
+                    "available": false,
+                    "reason": "Regular Nano Banana native output is limited to 1K; use an upscaler or alternate image model for true 2K."
+                ]
+            ]
+        ]
+        return .okJSON(payload)
+    }
+
+    private func referenceLabPlanResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        guard let body = request.jsonBody() else {
+            return .error(400, "Missing or malformed JSON body")
+        }
+        guard boolValue(body["confirmSpend"]) == true else {
+            return .error(400, "Set confirmSpend=true to run the planner.")
+        }
+
+        let plannerProvider = SupplementalLLMProvider(rawValue: stringValue(body["plannerProvider"]) ?? "")
+            ?? .vertexGemini
+        let plannerModel = firstNonEmpty(
+            stringValue(body["plannerModel"]),
+            plannerProvider.defaultModel
+        ) ?? plannerProvider.defaultModel
+        let apiKey: String = switch plannerProvider {
+        case .deepSeek:
+            store.deepSeekAPIKey
+        case .miniMax:
+            store.miniMaxAPIKey
+        case .vertexGemini:
+            store.geminiAPIKey
+        }
+        let config = SupplementalLLMConfiguration(
+            provider: plannerProvider,
+            apiKey: apiKey,
+            model: plannerModel
+        )
+        let client = SupplementalLLMClient(configuration: config)
+        let contextJSON: String
+        if let data = try? JSONSerialization.data(withJSONObject: body, options: [.prettyPrinted, .sortedKeys]),
+           let text = String(data: data, encoding: .utf8) {
+            contextJSON = text
+        } else {
+            contextJSON = "{}"
+        }
+        let systemPrompt = """
+        You are the Amira Reference Lab visual prompt planner. Return JSON only.
+        Produce exactly three distinct source-reference image candidates for the requested place.
+        Each candidate must explore a meaningfully different visual direction while preserving the place identity, story constraints, period, geography, and rejection memory.
+        Do not add unrelated lore, characters, captions, interface text, graphic design, logos, or poster language.
+        JSON schema: {"candidates":[{"candidate":1,"title":"2-5 word title","prompt":"single compact image-generation prompt"}]}
+        """
+        let userPrompt = """
+        Build three prompts from this Reference Lab context. Use all supplied feedback and decision memory. Keep each prompt production-design specific and suitable for Regular Nano Banana 1K draft generation.
+
+        \(contextJSON)
+        """
+
+        do {
+            let raw = try await client.complete(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                temperature: 0.7,
+                maxTokens: 6_000,
+                jsonMode: true
+            )
+            let jsonText = firstJSONObjectText(in: raw)
+            guard let data = jsonText.data(using: .utf8),
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let promptCandidates = try? referenceLabPromptCandidates(from: json["candidates"]) else {
+                return .error(502, "Planner did not return a usable candidates array.")
+            }
+            let candidates = Array(promptCandidates.prefix(3)).map { candidate in
+                [
+                    "candidate": candidate.candidate,
+                    "title": candidate.title,
+                    "prompt": candidate.prompt
+                ] as [String: Any]
+            }
+            return .okJSON([
+                "ok": true,
+                "provider": plannerProvider.rawValue,
+                "model": plannerModel,
+                "candidates": candidates,
+                "raw": raw
+            ])
+        } catch {
+            return .error(502, "Planner failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func referenceLabGenerateResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        guard let body = request.jsonBody() else {
+            return .error(400, "Missing or malformed JSON body")
+        }
+        guard boolValue(body["confirmSpend"]) == true else {
+            return .error(400, "Set confirmSpend=true to generate images.")
+        }
+        guard let identifier = firstNonEmpty(
+            stringValue(body["placeID"]),
+            stringValue(body["place"]),
+            stringValue(body["placeName"])
+        ) else {
+            return .error(400, "Pass placeID, place, or placeName.")
+        }
+
+        let workflowRaw = stringValue(body["workflow"]) ?? "photorealistic"
+        guard let workflow = PlaceWorkflowMode(rawValue: workflowRaw) else {
+            return .error(400, "Invalid workflow: \(workflowRaw)")
+        }
+        let model: GeminiModel
+        do {
+            model = try optionalGeminiModel(from: stringValue(body["model"])) ?? .nanoBanana
+        } catch {
+            return .error(400, error.localizedDescription)
+        }
+        guard let promptCandidates = try? referenceLabPromptCandidates(from: body["prompts"]),
+              !promptCandidates.isEmpty else {
+            return .error(400, "Pass prompts as an array of {candidate,title,prompt}.")
+        }
+        let aspectRatio = stringValue(body["aspectRatio"]) ?? "16:9"
+        let imageSize = stringValue(body["imageSize"]) ?? "1K"
+
+        do {
+            let result = try await store.generateReferenceLabPlaceImagesForAPI(
+                placeIdentifier: identifier,
+                workflow: workflow,
+                model: model,
+                prompts: promptCandidates,
+                aspectRatio: aspectRatio,
+                imageSize: imageSize
+            )
+            return .okJSON(referenceLabGenerationPayload(result))
+        } catch let error as AnimateStore.APIGenerationError {
+            return .error(error.status, error.message)
+        } catch {
+            return .error(500, "Reference Lab generation failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func referenceLabApproveResponse(_ request: AnimateHTTPRequest) -> AnimateHTTPResponse {
+        guard let body = request.jsonBody() else {
+            return .error(400, "Missing or malformed JSON body")
+        }
+        guard let placeRaw = firstNonEmpty(
+            stringValue(body["placeID"]),
+            stringValue(body["place"]),
+            stringValue(body["placeName"])
+        ) else {
+            return .error(400, "Pass placeID, place, or placeName.")
+        }
+        guard let imagePath = firstNonEmpty(
+            stringValue(body["imagePath"]),
+            stringValue(body["path"])
+        ) else {
+            return .error(400, "Pass imagePath.")
+        }
+        let workflowRaw = stringValue(body["workflow"]) ?? "photorealistic"
+        guard let workflow = PlaceWorkflowMode(rawValue: workflowRaw) else {
+            return .error(400, "Invalid workflow: \(workflowRaw)")
+        }
+        guard let placeID = resolvedPlaceID(from: placeRaw) else {
+            return .error(404, "No place found matching '\(placeRaw)'")
+        }
+        store.setApprovedPlaceImage(imagePath, placeID: placeID, workflow: workflow)
+        return .okJSON([
+            "ok": true,
+            "placeID": placeID.uuidString,
+            "workflow": workflow.rawValue,
+            "approvedImagePath": imagePath
+        ])
+    }
+
+    private func referenceLabRejectResponse(_ request: AnimateHTTPRequest) -> AnimateHTTPResponse {
+        guard let body = request.jsonBody() else {
+            return .error(400, "Missing or malformed JSON body")
+        }
+        guard let imagePath = firstNonEmpty(
+            stringValue(body["imagePath"]),
+            stringValue(body["path"])
+        ) else {
+            return .error(400, "Pass imagePath.")
+        }
+        store.setImageLibraryRejected(true, for: imagePath)
+        return .okJSON([
+            "ok": true,
+            "imagePath": imagePath,
+            "rejected": true
+        ])
+    }
+
+    private func generateCharacterCostumeImagesResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
+        guard let body = request.jsonBody() else {
+            return .error(400, "Missing or malformed JSON body")
+        }
+
+        let allCharacters = boolValue(body["allCharacters"]) ?? false
+        let characterSlugs = parseStringList(body["characterSlugs"])
+            ?? parseStringList(body["characters"])
+            ?? stringValue(body["characterSlug"]).map { [$0] }
+            ?? stringValue(body["character"]).map { [$0] }
+
+        if !allCharacters, characterSlugs?.isEmpty ?? true {
+            return .error(400, "Pass characterSlugs (array) or allCharacters=true.")
+        }
+
+        let count = intValue(body["count"])
+            ?? intValue(body["countPerCharacter"])
+            ?? 1
+        guard count >= 1, count <= 24 else {
+            return .error(400, "count must be between 1 and 24 per character.")
+        }
+
+        let imageSize = stringValue(body["imageSize"])
+        let aspectRatio = stringValue(body["aspectRatio"])
+        let outputCollection = stringValue(body["outputCollection"]) ?? "animated"
+        guard outputCollection.lowercased() == "animated" else {
+            return .error(400, "Invalid outputCollection: \(outputCollection). Only 'animated' is currently supported.")
+        }
+
+        let model: GeminiModel?
+        do {
+            model = try optionalGeminiModel(from: stringValue(body["model"]))
+        } catch {
+            return .error(400, error.localizedDescription)
+        }
+
+        do {
+            let references = try parseReferencePaths(body["referencePaths"])
+            let referencesByCharacter = try parseReferencePathMap(body["referencePathsByCharacter"])
+            let result = try await store.generateCharacterCostumeImagesForAPI(
+                characterSlugs: characterSlugs ?? [],
+                allCharacters: allCharacters,
+                count: count,
+                promptInstructions: firstNonEmpty(
+                    stringValue(body["prompt"]),
+                    stringValue(body["instructions"]),
+                    stringValue(body["promptInstructions"])
+                ),
+                styleInstructions: firstNonEmpty(
+                    stringValue(body["styleInstructions"]),
+                    stringValue(body["style"])
+                ),
+                imageSize: imageSize,
+                aspectRatio: aspectRatio,
+                model: model,
+                sharedReferencePaths: references.shared,
+                referencePathsByCharacter: mergeReferenceMaps(references.byCharacter, referencesByCharacter),
+                outputCollection: outputCollection
+            )
+            return .okJSON(characterCostumeGenerationPayload(result))
+        } catch let error as AnimateStore.APIGenerationError {
+            return .error(error.status, error.message)
+        } catch {
+            return .error(500, "Character costume generation failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func updateCharacterPromptNotesResponse(_ request: AnimateHTTPRequest) -> AnimateHTTPResponse {
+        guard let body = request.jsonBody() else {
+            return .error(400, "Missing or malformed JSON body")
+        }
+
+        guard let characterIdentifier = firstNonEmpty(
+            stringValue(body["characterSlug"]),
+            stringValue(body["character"]),
+            stringValue(body["characterID"]),
+            stringValue(body["name"])
+        ) else {
+            return .error(400, "Pass characterSlug, character, characterID, or name.")
+        }
+
+        guard let promptNotes = body["promptNotes"] as? String ?? body["notes"] as? String else {
+            return .error(400, "Pass promptNotes.")
+        }
+
+        do {
+            let character = try store.updateCharacterPromptNotesForAPI(
+                promptNotes,
+                characterIdentifier: characterIdentifier
+            )
+            return .okJSON([
+                "ok": true,
+                "characterID": character.id.uuidString,
+                "characterSlug": character.owpSlug,
+                "assetFolderSlug": character.assetFolderSlug,
+                "characterName": character.name,
+                "promptNotes": character.promptNotes
+            ])
+        } catch let error as AnimateStore.APIGenerationError {
+            return .error(error.status, error.message)
+        } catch {
+            return .error(500, "Could not update character prompt notes: \(error.localizedDescription)")
         }
     }
 
@@ -543,7 +924,8 @@ final class AnimateAPIRouter {
         }
         let body = request.jsonBody() ?? [:]
         let model = resolvedGeminiModel(from: stringValue(body["model"]))
-        let imageSize = stringValue(body["imageSize"]) ?? ShotFrameOpenMattePlan.defaultGeneratedImageSize
+        let shotSettings = ShotGenerationSettingsStore.load(projectRoot: projectRoot)
+        let imageSize = stringValue(body["imageSize"]) ?? shotSettings.generatedImageSize
         let maxCostUSD = doubleValue(body["maxCostUSD"])
         let writeSidecars = boolValue(body["write"]) ?? true
 
@@ -616,26 +998,28 @@ final class AnimateAPIRouter {
             return .error(400, "Invalid mode '\(mode)'. Use dry_run or execute.")
         }
         let normalizedMode = mode == "execute" ? "execute" : "dry_run"
-        let model = stringValue(body["model"]) ?? "MiniMax-M2.7"
+        let supplementalConfig = store.supplementalLLMConfiguration(modelOverride: stringValue(body["model"]))
+        let model = supplementalConfig.model
         let writeSidecars = boolValue(body["write"]) ?? true
 
         do {
             let sceneFilter = try resolvedSceneFilter(stringValue(body["scene"]) ?? "first")
             let matchedScenes = store.scenes.filter { scene in sceneFilter?.contains(scene.id) ?? false }
             guard let scene = matchedScenes.first else {
-                return .error(404, "No scene matched MiniMax scaffold request.")
+                return .error(404, "No scene matched supplemental scaffold request.")
             }
             guard matchedScenes.count <= 1 else {
-                return .error(400, "MiniMax scaffold currently accepts one scene at a time.")
+                return .error(400, "Supplemental scaffold currently accepts one scene at a time.")
             }
             let scaffold = try await MiniMaxAutomationScaffoldService(store: store).build(
                 .init(
                     scene: scene,
                     projectRoot: projectRoot,
                     mode: normalizedMode,
+                    provider: supplementalConfig.provider,
                     model: model,
                     writeSidecars: writeSidecars,
-                    apiKey: store.miniMaxAPIKey
+                    apiKey: supplementalConfig.apiKey
                 )
             )
             return .okCodable(AutomationMiniMaxScaffoldPayload(
@@ -663,6 +1047,7 @@ final class AnimateAPIRouter {
         let maxCostUSD = doubleValue(body["maxCostUSD"])
         let maxFrames = intValue(body["maxFrames"])
         let shotID = uuidValue(body["shotID"])
+        let useLLMPromptCompiler = boolValue(body["useLLMPromptCompiler"])
         do {
             let sceneFilter = try resolvedSceneFilter(stringValue(body["scene"]))
             let moments = try resolvedMoments(body["moments"])
@@ -675,12 +1060,145 @@ final class AnimateAPIRouter {
                 imageSize: imageSize,
                 mode: mode,
                 maxCostUSD: maxCostUSD,
-                maxFrames: maxFrames
+                maxFrames: maxFrames,
+                useLLMPromptCompiler: useLLMPromptCompiler
             )
             return .okCodable(response)
         } catch {
             return .error(400, error.localizedDescription)
         }
+    }
+
+    private func automationShotCardProjectionAuditResponse() -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        return .okCodable(ShotCardProjectionAuditService(store: store).audit(projectRoot: projectRoot))
+    }
+
+    private func automationShotCardProjectionSyncResponse() async -> AnimateHTTPResponse {
+        guard store.fileOWPURL != nil else {
+            return .error(400, "No project is loaded.")
+        }
+        guard let report = await store.syncShotProjectionsFromActiveCameraCards() else {
+            return .error(500, "Shot-card projection sync did not produce a report.")
+        }
+        return .okCodable(report)
+    }
+
+    private func automationDirectorInputProposeResponse(_ request: AnimateHTTPRequest) -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        let body = request.jsonBody() ?? [:]
+        guard let shotID = uuidValue(body["shotID"]) else {
+            return .error(400, "Missing required shotID.")
+        }
+        guard let located = locateShot(shotID: shotID) else {
+            return .error(404, "No shot matched \(shotID.uuidString).")
+        }
+        if let sceneID = uuidValue(body["sceneID"]), sceneID != located.scene.id {
+            return .error(400, "shotID does not belong to supplied sceneID.")
+        }
+
+        let transcript = stringValue(body["transcriptText"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sketchImagePath = stringValue(body["sketchImagePath"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sketchAnalysisPath = stringValue(body["sketchAnalysisPath"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let proposedNotes = stringValue(body["proposedNotes"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let proposedAction = stringValue(body["proposedAction"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let proposedCamera = stringValue(body["proposedCamera"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let proposedBlocking = stringValue(body["proposedBlocking"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let meaningfulInput = joinedNonEmpty(
+            [transcript, sketchImagePath, sketchAnalysisPath, proposedNotes, proposedAction, proposedCamera, proposedBlocking],
+            separator: " "
+        )
+        guard !meaningfulInput.isEmpty else {
+            return .error(400, "Shot Director input needs transcript text, sketch analysis, or proposed notes.")
+        }
+
+        do {
+            var record = ShotDirectorInputRecord(
+                sceneID: located.scene.id,
+                shotID: shotID,
+                shotIndex: located.shotIndex,
+                sourceKind: stringValue(body["sourceKind"]) ?? "director_review",
+                transcriptText: transcript,
+                sketchImagePath: sketchImagePath,
+                sketchAnalysisPath: sketchAnalysisPath,
+                proposedNotes: proposedNotes ?? transcript,
+                proposedAction: proposedAction,
+                proposedCamera: proposedCamera,
+                proposedBlocking: proposedBlocking
+            )
+            if let sketchAnalysisPath,
+               !sketchAnalysisPath.isEmpty,
+               !FileManager.default.fileExists(atPath: resolvedPath(sketchAnalysisPath, projectRoot: projectRoot) ?? sketchAnalysisPath) {
+                record.blockers.append(.init(
+                    code: .blockedUnacceptedDirectorInput,
+                    message: "Sketch analysis path is not readable yet; review before accepting.",
+                    field: "sketchAnalysisPath",
+                    severity: "warning"
+                ))
+            }
+            let url = try ShotDirectorInputStore.write(record, projectRoot: projectRoot)
+            return .okJSON([
+                "ok": true,
+                "path": url.path,
+                "recordID": record.id.uuidString,
+                "sceneID": record.sceneID.uuidString,
+                "shotID": record.shotID.uuidString,
+                "status": record.status
+            ])
+        } catch {
+            return .error(500, "Could not write Shot Director input: \(error.localizedDescription)")
+        }
+    }
+
+    private func automationDirectorInputStatusResponse(_ request: AnimateHTTPRequest, status: String) -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        let body = request.jsonBody() ?? [:]
+        guard let shotID = uuidValue(body["shotID"]) else {
+            return .error(400, "Missing required shotID.")
+        }
+        guard let located = locateShot(shotID: shotID) else {
+            return .error(404, "No shot matched \(shotID.uuidString).")
+        }
+        var record = ShotDirectorInputStore.read(projectRoot: projectRoot, sceneID: located.scene.id, shotID: shotID)
+        guard record != nil else {
+            return .error(404, "No Shot Director input exists for this shot.")
+        }
+        record!.status = status
+        record!.updatedAt = Date()
+        if status == "accepted" {
+            record!.acceptedAt = Date()
+            record!.rejectedAt = nil
+        } else {
+            record!.acceptedAt = nil
+            record!.rejectedAt = Date()
+        }
+        do {
+            let url = try ShotDirectorInputStore.write(record!, projectRoot: projectRoot)
+            return .okJSON([
+                "ok": true,
+                "path": url.path,
+                "recordID": record!.id.uuidString,
+                "status": record!.status
+            ])
+        } catch {
+            return .error(500, "Could not update Shot Director input: \(error.localizedDescription)")
+        }
+    }
+
+    private func automationDirectorInputGetResponse(sceneID: UUID, shotID: UUID) -> AnimateHTTPResponse {
+        guard let projectRoot = store.fileOWPURL else {
+            return .error(400, "No project is loaded.")
+        }
+        guard let record = ShotDirectorInputStore.read(projectRoot: projectRoot, sceneID: sceneID, shotID: shotID) else {
+            return .error(404, "No Shot Director input exists for this shot.")
+        }
+        return .okCodable(record)
     }
 
     private func automationFeedbackRulesExtractResponse(_ request: AnimateHTTPRequest) async -> AnimateHTTPResponse {
@@ -693,7 +1211,8 @@ final class AnimateAPIRouter {
             return .error(400, "Invalid mode: \(mode). Use dry_run or execute.")
         }
         let normalizedMode = mode == "execute" ? "execute" : "dry_run"
-        let model = stringValue(body["model"]) ?? "MiniMax-M2.7"
+        let supplementalConfig = store.supplementalLLMConfiguration(modelOverride: stringValue(body["model"]))
+        let model = supplementalConfig.model
         let writeSidecars = boolValue(body["write"]) ?? true
         let maxSources = intValue(body["maxSources"]) ?? 80
 
@@ -702,9 +1221,10 @@ final class AnimateAPIRouter {
                 .init(
                     projectRoot: projectRoot,
                     mode: normalizedMode,
+                    provider: supplementalConfig.provider,
                     model: model,
                     writeSidecars: writeSidecars,
-                    apiKey: store.miniMaxAPIKey,
+                    apiKey: supplementalConfig.apiKey,
                     maxSources: maxSources
                 )
             )
@@ -946,6 +1466,14 @@ final class AnimateAPIRouter {
     private func automationReferenceIDs(from path: String) -> (sceneID: UUID, shotID: UUID)? {
         let parts = path.split(separator: "/").map(String.init)
         guard parts.count == 4, parts[0] == "automation", parts[1] == "references",
+              let sceneID = UUID(uuidString: parts[2]),
+              let shotID = UUID(uuidString: parts[3]) else { return nil }
+        return (sceneID, shotID)
+    }
+
+    private func automationDirectorInputIDs(from path: String) -> (sceneID: UUID, shotID: UUID)? {
+        let parts = path.split(separator: "/").map(String.init)
+        guard parts.count == 4, parts[0] == "automation", parts[1] == "director-inputs",
               let sceneID = UUID(uuidString: parts[2]),
               let shotID = UUID(uuidString: parts[3]) else { return nil }
         return (sceneID, shotID)
@@ -1231,8 +1759,9 @@ final class AnimateAPIRouter {
         }
         let body = request.jsonBody() ?? [:]
         let model = resolvedGeminiModel(from: stringValue(body["model"]))
+        let shotSettings = ShotGenerationSettingsStore.load(projectRoot: projectRoot)
         let imageSize = stringValue(body["imageSize"])
-            ?? ShotFrameOpenMattePlan.defaultGeneratedImageSize
+            ?? shotSettings.generatedImageSize
 
         do {
             let sceneFilter = try resolvedSceneFilter(stringValue(body["scene"]))
@@ -1264,10 +1793,11 @@ final class AnimateAPIRouter {
         }
         let body = request.jsonBody() ?? [:]
         let model = resolvedGeminiModel(from: stringValue(body["model"]))
+        let shotSettings = ShotGenerationSettingsStore.load(projectRoot: projectRoot)
         let imageSize = stringValue(body["imageSize"])
-            ?? ShotFrameOpenMattePlan.defaultGeneratedImageSize
+            ?? shotSettings.generatedImageSize
         let aspectRatio = stringValue(body["aspectRatio"])
-            ?? ShotFrameOpenMattePlan.defaultGeneratedAspectRatio
+            ?? shotSettings.generatedAspectRatio
         let maxSpendUSD = doubleValue(body["maxSpendUSD"]) ?? 1.0
         let estimatedCost = model.estimatedCost(for: imageSize)
         guard estimatedCost <= maxSpendUSD else {
@@ -1517,6 +2047,52 @@ final class AnimateAPIRouter {
         ]
     }
 
+    private func characterCostumeGenerationPayload(
+        _ result: AnimateStore.APICharacterCostumeGenerationResult
+    ) -> [String: Any] {
+        [
+            "ok": true,
+            "runID": result.runID.uuidString,
+            "startedAt": isoString(result.startedAt),
+            "finishedAt": result.finishedAt.map(isoString) ?? NSNull(),
+            "model": result.model.rawValue,
+            "modelDisplayName": result.model.displayName,
+            "aspectRatio": result.aspectRatio,
+            "imageSize": result.imageSize,
+            "outputCollection": result.outputCollection,
+            "recordCount": result.records.count,
+            "completedCount": result.records.filter { $0.status == .completed }.count,
+            "failedCount": result.records.filter { $0.status == .failed }.count,
+            "generatedPaths": result.records.compactMap(\.storedPath),
+            "records": result.records.map(characterCostumeRecordPayload)
+        ]
+    }
+
+    private func characterCostumeRecordPayload(
+        _ record: AnimateStore.APICharacterCostumeGenerationRecord
+    ) -> [String: Any] {
+        [
+            "id": record.id.uuidString,
+            "activityID": record.activityID.uuidString,
+            "status": record.status.rawValue,
+            "characterID": record.characterID.uuidString,
+            "characterSlug": record.characterSlug,
+            "assetFolderSlug": record.assetFolderSlug,
+            "characterName": record.characterName,
+            "imageIndex": record.imageIndex,
+            "imageCount": record.imageCount,
+            "model": record.model.rawValue,
+            "modelDisplayName": record.model.displayName,
+            "aspectRatio": record.aspectRatio,
+            "imageSize": record.imageSize,
+            "referenceCount": record.referencePaths.count,
+            "referencePaths": record.referencePaths,
+            "storedPath": record.storedPath ?? NSNull(),
+            "absolutePath": record.absolutePath ?? NSNull(),
+            "errorMessage": record.errorMessage ?? NSNull()
+        ]
+    }
+
     // MARK: Parsing helpers
 
     private func parseLinkKinds(from raw: Any?) throws -> [ImageAssetLinkKind]? {
@@ -1544,8 +2120,170 @@ final class AnimateAPIRouter {
         return kinds.isEmpty ? nil : kinds
     }
 
+    private func parseStringList(_ raw: Any?) -> [String]? {
+        if raw == nil || raw is NSNull {
+            return nil
+        }
+        if let values = raw as? [String] {
+            return values
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        if let value = raw as? String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return [] }
+            return trimmed
+                .split(separator: ",")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+        return nil
+    }
+
+    private func parseReferencePaths(_ raw: Any?) throws -> (shared: [String]?, byCharacter: [String: [String]]) {
+        if raw == nil || raw is NSNull {
+            return (nil, [:])
+        }
+        if let shared = parseStringList(raw) {
+            return (shared, [:])
+        }
+        if let map = raw as? [String: Any] {
+            return (nil, try parseReferencePathMap(map))
+        }
+        throw apiError("referencePaths must be either an array of strings or an object keyed by character slug.")
+    }
+
+    private func parseReferencePathMap(_ raw: Any?) throws -> [String: [String]] {
+        guard let raw, !(raw is NSNull) else { return [:] }
+        guard let map = raw as? [String: Any] else {
+            throw apiError("referencePathsByCharacter must be an object keyed by character slug.")
+        }
+        var result: [String: [String]] = [:]
+        for (key, value) in map {
+            let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedKey.isEmpty else { continue }
+            guard let values = parseStringList(value) else {
+                throw apiError("reference paths for \(trimmedKey) must be a string array or comma-separated string.")
+            }
+            result[trimmedKey] = values
+        }
+        return result
+    }
+
+    private func mergeReferenceMaps(
+        _ lhs: [String: [String]],
+        _ rhs: [String: [String]]
+    ) -> [String: [String]] {
+        var merged = lhs
+        for (key, values) in rhs {
+            merged[key] = values
+        }
+        return merged
+    }
+
+    private func referenceLabPromptCandidates(
+        from raw: Any?
+    ) throws -> [AnimateStore.APIReferenceLabPromptCandidate] {
+        guard let items = raw as? [[String: Any]] else {
+            throw apiError("prompts must be an array of objects.")
+        }
+        return items.enumerated().compactMap { index, item in
+            guard let prompt = stringValue(item["prompt"]) else { return nil }
+            let candidate = intValue(item["candidate"])
+                ?? intValue(item["number"])
+                ?? index + 1
+            let title = firstNonEmpty(
+                stringValue(item["title"]),
+                stringValue(item["name"]),
+                "Candidate \(candidate)"
+            ) ?? "Candidate \(candidate)"
+            return AnimateStore.APIReferenceLabPromptCandidate(
+                candidate: candidate,
+                title: title,
+                prompt: prompt
+            )
+        }
+    }
+
+    private func referenceLabGenerationPayload(
+        _ result: AnimateStore.APIReferenceLabGenerationResult
+    ) -> [String: Any] {
+        [
+            "ok": true,
+            "placeID": result.placeID.uuidString,
+            "placeName": result.placeName,
+            "workflow": result.workflow.rawValue,
+            "model": result.model.rawValue,
+            "modelDisplayName": result.model.displayName,
+            "aspectRatio": result.aspectRatio,
+            "imageSize": result.imageSize,
+            "backend": ImageGenBackendStore.currentBackend().rawValue,
+            "records": result.records.map { record in
+                [
+                    "candidate": record.candidate,
+                    "title": record.title,
+                    "prompt": record.prompt,
+                    "activityID": record.activityID.uuidString,
+                    "status": record.status.rawValue,
+                    "storedPath": record.storedPath ?? NSNull(),
+                    "absolutePath": record.absolutePath ?? NSNull(),
+                    "errorMessage": record.errorMessage ?? NSNull()
+                ] as [String: Any]
+            }
+        ]
+    }
+
+    private func resolvedPlaceID(from raw: String) -> UUID? {
+        if let uuid = UUID(uuidString: raw),
+           store.backgrounds.contains(where: { $0.id == uuid }) {
+            return uuid
+        }
+        let needle = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if let exact = store.backgrounds.first(where: { $0.name.lowercased() == needle }) {
+            return exact.id
+        }
+        return store.backgrounds.first(where: { $0.name.lowercased().contains(needle) })?.id
+    }
+
+    private func firstJSONObjectText(in text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let start = trimmed.firstIndex(of: "{"),
+              let end = trimmed.lastIndex(of: "}"),
+              start <= end else {
+            return trimmed
+        }
+        return String(trimmed[start...end])
+    }
+
+    private func optionalGeminiModel(from raw: String?) throws -> GeminiModel? {
+        guard let raw else { return nil }
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return nil }
+        switch normalized {
+        case "nano-banana", "nano_banana", "nanobanana", "nano banana", "regular", "v1":
+            return .nanoBanana
+        case "flash", "nano-banana-2", "nano_banana_2", "nanobanana2", "nano banana 2":
+            return .flash
+        case "pro", "nano-banana-pro", "nano_banana_pro", "nanobananapro", "nano banana pro":
+            return .pro
+        default:
+            if let model = GeminiModel(rawValue: raw) {
+                return model
+            }
+            throw apiError("Invalid model: \(raw) (use 'nano-banana', 'flash', 'pro', or a Gemini model id).")
+        }
+    }
+
     private func resolvedGeminiModel(from raw: String?) -> GeminiModel {
         let normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if normalized == "nano-banana" ||
+            normalized == "nano_banana" ||
+            normalized == "nanobanana" ||
+            normalized == "nano banana" ||
+            normalized == "regular" ||
+            normalized == "v1" {
+            return .nanoBanana
+        }
         if normalized == "pro" || normalized.contains("pro") {
             return .pro
         }

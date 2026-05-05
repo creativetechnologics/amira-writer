@@ -40,10 +40,10 @@ private struct PlacesWorkspaceContent: View {
     @State private var renderPlacesInspectorContent = false
     @State private var startupStagingTask: Task<Void, Never>?
 
-    @AppStorage("novotro.places.sidebarVisible") private var sidebarVisible = true
-    @AppStorage("novotro.places.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
-    @AppStorage("novotro.places.showInspector") private var inspectorVisible = true
-    @AppStorage("novotro.places.inspector.width") private var inspectorWidth: Double = 320
+    @AppStorage("amira.places.sidebarVisible") private var sidebarVisible = true
+    @AppStorage("amira.places.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("amira.places.showInspector") private var inspectorVisible = true
+    @AppStorage("amira.places.inspector.width") private var inspectorWidth: Double = 320
 
     var body: some View {
         Group {

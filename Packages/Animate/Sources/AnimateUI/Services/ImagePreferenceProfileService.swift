@@ -520,7 +520,7 @@ enum ImagePreferenceProfileService {
              .characterMasterSource, .characterMasterSheetVariant, .characterHeadSheetVariant,
              .characterLookdevVariant, .characterHeadTurnVariant, .characterCostumeSheetVariant,
              .characterCostumeFullbodyVariant, .characterCostumeAccessoryVariant,
-             .characterCostumeReference, .characterCostumeVariation:
+             .characterCostumeReference, .characterCostumeVariation, .characterShotReference:
             return .character
         case .storyboardFrame, .sceneShotImage, .canvasGeneration:
             return nil

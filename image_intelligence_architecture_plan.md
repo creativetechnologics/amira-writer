@@ -127,7 +127,7 @@ Why:
 
 Preferred initial location:
 
-- `.novotro/image-intelligence.sqlite`
+- `.amira/image-intelligence.sqlite`
 
 Implementation detail:
 
@@ -135,13 +135,13 @@ Implementation detail:
 
 Why this is the best fit for this repo:
 
-- The app already uses SQLite under `.novotro/` for project-local indexing.
+- The app already uses SQLite under `.amira/` for project-local indexing.
 - This isolates image-intelligence schema and migration risk from the existing `ProjectDatabase` schema.
 - It avoids wedging analysis state into `Places/places-workflow.json` or character JSON payloads.
 
 Important pre-implementation check:
 
-- If Gary's sync setup does not replicate `.novotro/`, move the DB path to `Settings/image-intelligence.sqlite` before code lands.
+- If Gary's sync setup does not replicate `.amira/`, move the DB path to `Settings/image-intelligence.sqlite` before code lands.
 - Do not split the same subsystem across two storage locations.
 
 ### 3. Start with SQLite-backed vector storage plus in-process similarity search

@@ -94,8 +94,6 @@ struct UnifiedImageTile: View {
     var bottomTrailingOverlay: AnyView? = nil
 
     @State private var rightClickSpatialTagPoint: UnifiedImageSpatialTagPoint?
-    @State private var imagePixelSize: CGSize?
-
     private var effectivePath: String { resolvedPath ?? path }
     private var dragURL: URL? { projectImageDragURL(forResolvedPath: resolvedPath ?? (path.hasPrefix("/") ? path : nil)) }
     private var effectiveActions: UnifiedImageActions {
@@ -155,7 +153,7 @@ struct UnifiedImageTile: View {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 UnifiedImageRightClickLocationReader(
-                    imagePixelSize: imagePixelSize,
+                    imagePath: effectivePath,
                     contentMode: .fill,
                     onRightClick: { point in
                         rightClickSpatialTagPoint = point
@@ -175,18 +173,6 @@ struct UnifiedImageTile: View {
                     actions: effectiveActions,
                     spatialTagPoint: rightClickSpatialTagPoint
                 )
-            }
-            .task(id: effectivePath) {
-                let currentPath = effectivePath
-                let props = await Task.detached(priority: .utility) {
-                    ImageAssetInspector.imageProperties(path: currentPath)
-                }.value
-                guard !Task.isCancelled, currentPath == effectivePath else { return }
-                if let props {
-                    imagePixelSize = CGSize(width: CGFloat(props.width), height: CGFloat(props.height))
-                } else {
-                    imagePixelSize = nil
-                }
             }
     }
 
@@ -304,26 +290,26 @@ private struct TapHandlers: ViewModifier {
 
 @available(macOS 26.0, *)
 private struct UnifiedImageRightClickLocationReader: NSViewRepresentable {
-    let imagePixelSize: CGSize?
+    let imagePath: String
     let contentMode: ContentMode
     let onRightClick: (UnifiedImageSpatialTagPoint?) -> Void
 
     func makeNSView(context: Context) -> RightClickLocationView {
         let view = RightClickLocationView()
         view.onRightClick = onRightClick
-        view.imagePixelSize = imagePixelSize
+        view.imagePath = imagePath
         view.contentMode = contentMode
         return view
     }
 
     func updateNSView(_ nsView: RightClickLocationView, context: Context) {
         nsView.onRightClick = onRightClick
-        nsView.imagePixelSize = imagePixelSize
+        nsView.imagePath = imagePath
         nsView.contentMode = contentMode
     }
 
     final class RightClickLocationView: NSView {
-        var imagePixelSize: CGSize?
+        var imagePath = ""
         var contentMode: ContentMode = .fill
         var onRightClick: ((UnifiedImageSpatialTagPoint?) -> Void)?
         private var monitor: Any?
@@ -376,7 +362,7 @@ private struct UnifiedImageRightClickLocationReader: NSViewRepresentable {
         }
 
         private func normalizedImagePoint(for point: CGPoint) -> UnifiedImageSpatialTagPoint? {
-            guard let imagePixelSize,
+            guard let imagePixelSize = Self.imagePixelSize(for: imagePath),
                   imagePixelSize.width > 0,
                   imagePixelSize.height > 0,
                   bounds.width > 0,
@@ -414,6 +400,11 @@ private struct UnifiedImageRightClickLocationReader: NSViewRepresentable {
                 normalizedX: min(max(Double(x), 0), 1),
                 normalizedY: min(max(Double(y), 0), 1)
             )
+        }
+
+        private static func imagePixelSize(for path: String) -> CGSize? {
+            guard let props = ImageAssetInspector.imageProperties(path: path) else { return nil }
+            return CGSize(width: CGFloat(props.width), height: CGFloat(props.height))
         }
     }
 }

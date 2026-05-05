@@ -398,6 +398,6 @@ struct ObjectSetup: Identifiable, Codable, Sendable {
     }
 
     var resolvedApprovedImagePath: String? {
-        approvedImagePath ?? imagePaths.first
+        approvedImagePath
     }
 }

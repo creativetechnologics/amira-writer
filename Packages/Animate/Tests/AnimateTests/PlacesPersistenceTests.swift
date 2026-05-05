@@ -9,6 +9,14 @@ final class PlacesPersistenceTests: XCTestCase {
             at: projectURL.appendingPathComponent("Animate", isDirectory: true),
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: projectURL.appendingPathComponent("Places", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: projectURL.appendingPathComponent("Scenes", isDirectory: true),
+            withIntermediateDirectories: true
+        )
 
         let placeID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         let store = AnimateStore()
@@ -59,12 +67,12 @@ final class PlacesPersistenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: projectURL) }
 
         let (store, _) = try makeStore(projectURL: projectURL)
-        let animateDir = projectURL.appendingPathComponent("Animate", isDirectory: true)
+        let placesDir = projectURL.appendingPathComponent("Places", isDirectory: true)
 
         store.save()
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: animateDir.appendingPathComponent("places.json").path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: animateDir.appendingPathComponent("places-workflow.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: placesDir.appendingPathComponent("places.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: placesDir.appendingPathComponent("places-workflow.json").path))
     }
 
     func testExplicitPlaceSaveWritesPlacesSidecarsAndPreservesPlaceIDs() throws {
@@ -73,15 +81,15 @@ final class PlacesPersistenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: projectURL) }
 
         let (store, placeID) = try makeStore(projectURL: projectURL)
-        let animateDir = projectURL.appendingPathComponent("Animate", isDirectory: true)
+        let placesDir = projectURL.appendingPathComponent("Places", isDirectory: true)
 
         store.save(writePlaces: true)
 
-        let placesData = try Data(contentsOf: animateDir.appendingPathComponent("places.json"))
+        let placesData = try Data(contentsOf: placesDir.appendingPathComponent("places.json"))
         let decodedPlaces = try JSONDecoder().decode([BackgroundPlate].self, from: placesData)
         XCTAssertEqual(decodedPlaces.map(\.id), [placeID])
 
-        let workflowData = try Data(contentsOf: animateDir.appendingPathComponent("places-workflow.json"))
+        let workflowData = try Data(contentsOf: placesDir.appendingPathComponent("places-workflow.json"))
         let workflow = try JSONDecoder().decode(PlacesWorkflowLibrary.self, from: workflowData)
         XCTAssertEqual(workflow.masterMapImagePath, "Animate/backgrounds/master-map.png")
     }
@@ -92,7 +100,7 @@ final class PlacesPersistenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: projectURL) }
 
         let (store, placeID) = try makeStore(projectURL: projectURL)
-        let animateDir = projectURL.appendingPathComponent("Animate", isDirectory: true)
+        let placesDir = projectURL.appendingPathComponent("Places", isDirectory: true)
         let fixedDate = makeFixedDate()
 
         let routeID = UUID(uuidString: "66666666-7777-8888-9999-000000000001")!
@@ -273,7 +281,7 @@ final class PlacesPersistenceTests: XCTestCase {
 
         store.save(writePlaces: true)
 
-        let placesData = try Data(contentsOf: animateDir.appendingPathComponent("places.json"))
+        let placesData = try Data(contentsOf: placesDir.appendingPathComponent("places.json"))
         let persistedPlaces = try JSONDecoder().decode([BackgroundPlate].self, from: placesData)
         let persistedAngleImage = try XCTUnwrap(persistedPlaces.first?.angleImages.first)
         XCTAssertEqual(persistedAngleImage.id, angleImageID)
@@ -286,7 +294,7 @@ final class PlacesPersistenceTests: XCTestCase {
         XCTAssertEqual(persistedAngleImage.linkedGeneratedRecordID, recordID)
         XCTAssertEqual(persistedAngleImage.canonStatus, .canon)
 
-        let workflowData = try Data(contentsOf: animateDir.appendingPathComponent("places-workflow.json"))
+        let workflowData = try Data(contentsOf: placesDir.appendingPathComponent("places-workflow.json"))
         let persistedWorkflow = try JSONDecoder().decode(PlacesWorkflowLibrary.self, from: workflowData)
         XCTAssertEqual(persistedWorkflow.masterMapImagePath, masterMapPath)
         XCTAssertEqual(persistedWorkflow.landmarkReferences.first?.imagePath, landmarkPath)
@@ -346,7 +354,7 @@ final class PlacesPersistenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: projectURL) }
 
         let (store, placeID) = try makeStore(projectURL: projectURL)
-        let animateDir = projectURL.appendingPathComponent("Animate", isDirectory: true)
+        let placesDir = projectURL.appendingPathComponent("Places", isDirectory: true)
 
         let routeID = UUID(uuidString: "77777777-8888-9999-aaaa-bbbbbbbbbbbb")!
         let worldNodeID = UUID(uuidString: "77777777-8888-9999-aaaa-bbbbbbbbbbbc")!
@@ -443,7 +451,9 @@ final class PlacesPersistenceTests: XCTestCase {
         XCTAssertEqual(record.cameraPose, pose)
         XCTAssertEqual(record.canonStatus, .candidate)
 
-        let workflowData = try Data(contentsOf: animateDir.appendingPathComponent("places-workflow.json"))
+        store.save(writePlaces: true)
+
+        let workflowData = try Data(contentsOf: placesDir.appendingPathComponent("places-workflow.json"))
         let persistedWorkflow = try JSONDecoder().decode(PlacesWorkflowLibrary.self, from: workflowData)
         let persistedRecord = try XCTUnwrap(persistedWorkflow.generatedImageRecords.first(where: { $0.activePath == storedPath }))
         XCTAssertEqual(persistedRecord.linkedPlaceID, placeID)
@@ -452,5 +462,74 @@ final class PlacesPersistenceTests: XCTestCase {
         XCTAssertEqual(persistedRecord.mapPoint, mapPoint)
         XCTAssertEqual(persistedRecord.cameraPose, pose)
         XCTAssertEqual(persistedRecord.canonStatus, .candidate)
+    }
+
+    func testBackgroundPlateDoesNotUseFirstGalleryImageAsApproved() {
+        let plate = BackgroundPlate(
+            name: "Bridge Landing",
+            filename: "bridge-landing",
+            imagePaths: ["Animate/backgrounds/places/bridge-landing/candidate.png"],
+            approvedImagePath: nil,
+            animatedImagePaths: ["Animate/backgrounds/places/bridge-landing/animated-candidate.png"],
+            animatedApprovedImagePath: nil
+        )
+
+        XCTAssertNil(plate.resolvedApprovedImagePath)
+        XCTAssertNil(plate.resolvedAnimatedApprovedImagePath)
+        XCTAssertNil(plate.approvedImagePath(for: .photorealistic))
+        XCTAssertNil(plate.approvedImagePath(for: .animated))
+    }
+
+    func testRejectingPlaceImageClearsApprovedPointers() throws {
+        let projectURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlacesPersistenceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        let (store, placeID) = try makeStore(projectURL: projectURL)
+        let approvedPath = "Animate/backgrounds/bridge-landing.png"
+        let animatedPath = "Animate/backgrounds/bridge-landing-animated.png"
+        _ = try seedAsset(approvedPath, in: projectURL)
+        _ = try seedAsset(animatedPath, in: projectURL)
+        store.backgrounds[0].approvedImagePath = approvedPath
+        store.backgrounds[0].animatedImagePaths = [animatedPath]
+        store.backgrounds[0].animatedApprovedImagePath = animatedPath
+        store.placesWorkflowLibrary.worldGraph.nodes = [
+            PlaceWorldNode(
+                placeID: placeID,
+                approvedPhotorealImagePath: approvedPath,
+                approvedAnimatedImagePath: animatedPath
+            )
+        ]
+
+        store.setImageLibraryRejected(true, for: approvedPath)
+        store.setImageLibraryRejected(true, for: animatedPath)
+
+        XCTAssertNil(store.backgrounds[0].approvedImagePath)
+        XCTAssertNil(store.backgrounds[0].animatedApprovedImagePath)
+        XCTAssertNil(store.placesWorkflowLibrary.worldGraph.nodes[0].approvedPhotorealImagePath)
+        XCTAssertNil(store.placesWorkflowLibrary.worldGraph.nodes[0].approvedAnimatedImagePath)
+        XCTAssertTrue(store.placeImageIsRejected(path: approvedPath))
+        XCTAssertFalse(store.imageLibraryIsLiked(for: approvedPath))
+    }
+
+    func testApprovingPlaceImageMarksItPickedAndNotRejected() throws {
+        let projectURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlacesPersistenceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        let (store, placeID) = try makeStore(projectURL: projectURL)
+        let approvedPath = "Animate/backgrounds/bridge-landing.png"
+        let approvedURL = try seedAsset(approvedPath, in: projectURL)
+        ImageLibraryMetadataSidecarService.save(
+            ImageLibraryReviewMetadata(rating: nil, isRejected: true, isLiked: false, notes: "bad candidate", updatedAt: nil),
+            forImagePath: approvedURL.path
+        )
+
+        store.setApprovedPlaceImage(approvedPath, placeID: placeID, workflow: .photorealistic)
+
+        XCTAssertEqual(store.backgrounds[0].approvedImagePath, approvedPath)
+        let metadata = try XCTUnwrap(ImageLibraryMetadataSidecarService.load(forImagePath: approvedURL.path))
+        XCTAssertFalse(metadata.isRejected)
+        XCTAssertTrue(metadata.isLiked)
     }
 }

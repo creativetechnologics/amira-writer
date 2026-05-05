@@ -12,8 +12,10 @@ struct CharactersPageView: View {
     @State private var inspirationLastClicked: String?
     @State private var thumbnailBaseSize: CGFloat = 120
     @State private var showReferenceImages: Bool = false
+    @State private var showShotReferencePicker: Bool = false
     @State private var showExpressionBatchSheet: Bool = false
     @AppStorage("charactersPage.showCharacterNotesPane") private var showCharacterNotesPane: Bool = true
+    @AppStorage("charactersPage.showShotReferenceImagesPane") private var showShotReferenceImagesPane: Bool = true
     @AppStorage("charactersPage.showLookDevelopmentPane") private var showLookDevelopmentPane: Bool = true
     @AppStorage("charactersPage.showReferenceWorkflowPane") private var showReferenceWorkflowPane: Bool = true
     @AppStorage("charactersPage.showCostumesPane") private var showCostumesPane: Bool = true
@@ -64,6 +66,9 @@ struct CharactersPageView: View {
             }
             .sheet(isPresented: $showReferenceImages) {
                 referenceImagesSheet
+            }
+            .sheet(isPresented: $showShotReferencePicker) {
+                shotReferencePickerSheet
             }
             .onChange(of: store.selectedCharacterID) { _, _ in
                 scheduleDeferredCharacterPromptSave()
@@ -153,6 +158,23 @@ struct CharactersPageView: View {
                 character: character,
                 store: store,
                 onDismiss: { showReferenceImages = false }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var shotReferencePickerSheet: some View {
+        if let character = store.selectedCharacter {
+            UniversalImagePickerSheet(
+                store: store,
+                maxSelections: 24,
+                onConfirm: { paths in
+                    for path in paths {
+                        store.addShotReferenceImage(path, for: character.id)
+                    }
+                    showShotReferencePicker = false
+                },
+                onCancel: { showShotReferencePicker = false }
             )
         }
     }
@@ -416,6 +438,15 @@ struct CharactersPageView: View {
                     }
 
                     collapsiblePane(
+                        title: "Shot Reference Images",
+                        icon: "photo.stack",
+                        counterText: "\(character.shotReferenceImages.count) refs",
+                        isExpanded: $showShotReferenceImagesPane
+                    ) {
+                        shotReferenceImagesSection(character)
+                    }
+
+                    collapsiblePane(
                         title: "Look Development",
                         icon: "paintpalette",
                         counterText: nil,
@@ -562,10 +593,11 @@ struct CharactersPageView: View {
                     }
                 }
 
-                if !character.description.isEmpty {
-                    Text(character.description)
+                if !character.promptNotes.isEmpty {
+                    Text(character.promptNotes)
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
             }
 
@@ -690,11 +722,19 @@ struct CharactersPageView: View {
                 }
             }
 
-            Text("Inspiration-image generation uses Character Type, Gender, and Age when writing prompts.")
+            Text("Image generation uses Character Type, Gender, Age, and Prompt Notes when writing prompts.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             Divider()
+
+            DebouncedTextEditorRow(
+                title: "Prompt Notes",
+                icon: "sparkles",
+                storeValue: character.promptNotes,
+                placeholder: "Canonical visual and costume rules for future character image generation...",
+                onChange: { store.updateCharacterPromptNotes($0, for: character.id) }
+            )
 
             DebouncedTextEditorRow(
                 title: "Backstory",
@@ -900,11 +940,12 @@ struct CharactersPageView: View {
 
     private func textInfoSummary(for character: AnimationCharacter) -> String {
         var filledFields = 0
+        if !character.promptNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filledFields += 1 }
         if !character.backstory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filledFields += 1 }
         if !character.personality.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filledFields += 1 }
         if !character.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { filledFields += 1 }
 
-        return "\(filledFields)/3 filled"
+        return "\(filledFields)/4 filled"
     }
 
     private func collapsiblePane<Content: View, Trailing: View>(
@@ -966,6 +1007,166 @@ struct CharactersPageView: View {
             trailing: { EmptyView() },
             content: content
         )
+    }
+
+    @ViewBuilder
+    private func shotReferenceImagesSection(_ character: AnimationCharacter) -> some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 150, maximum: 170), spacing: 12, alignment: .top)],
+            alignment: .leading,
+            spacing: 16
+        ) {
+            ForEach(character.shotReferenceImages) { reference in
+                shotReferenceImageTile(reference, character: character)
+            }
+
+            shotReferenceAddTile(character)
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            let imageURLs = urls.filter { ["png", "jpg", "jpeg", "webp", "heic"].contains($0.pathExtension.lowercased()) }
+            guard !imageURLs.isEmpty else { return false }
+            store.importShotReferenceImages(from: imageURLs, for: character.id)
+            return true
+        }
+    }
+
+    private func shotReferenceImageTile(
+        _ reference: CharacterShotReferenceImage,
+        character: AnimationCharacter
+    ) -> some View {
+        let resolvedURL = store.resolvedCharacterAssetURL(for: reference.imagePath)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            UnifiedImageTile(
+                path: reference.imagePath,
+                resolvedPath: resolvedURL?.path,
+                thumbnailSize: 138,
+                sourceLabel: reference.view.displayName,
+                sourceSystemImage: reference.view == .front ? "person.fill" : "person.crop.square",
+                actions: UnifiedImageActions(
+                    onShowInFinder: {
+                        if let resolvedURL {
+                            NSWorkspace.shared.activateFileViewerSelecting([resolvedURL])
+                        }
+                    },
+                    onQuickLook: {
+                        openQuickLook(for: character.shotReferenceImages.map(\.imagePath), startingAt: character.shotReferenceImages.firstIndex(where: { $0.id == reference.id }) ?? 0)
+                    },
+                    onRemoveFromCollection: {
+                        store.removeShotReferenceImage(reference.id, for: character.id)
+                    }
+                ),
+                onDoubleTap: {
+                    openQuickLook(for: character.shotReferenceImages.map(\.imagePath), startingAt: character.shotReferenceImages.firstIndex(where: { $0.id == reference.id }) ?? 0)
+                },
+                topTrailingOverlay: AnyView(
+                    Button {
+                        store.removeShotReferenceImage(reference.id, for: character.id)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white, Color.black.opacity(0.55))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(5)
+                    .help("Remove shot reference")
+                )
+            )
+
+            shotReferencePicker(
+                "Framing",
+                selection: reference.framing,
+                options: CharacterShotReferenceFraming.allCases,
+                characterID: character.id,
+                referenceID: reference.id
+            )
+
+            shotReferencePicker(
+                "Wardrobe",
+                selection: reference.wardrobe,
+                options: CharacterShotReferenceWardrobe.allCases,
+                characterID: character.id,
+                referenceID: reference.id
+            )
+
+            shotReferencePicker(
+                "View",
+                selection: reference.view,
+                options: CharacterShotReferenceView.allCases,
+                characterID: character.id,
+                referenceID: reference.id
+            )
+        }
+        .frame(width: 150, alignment: .topLeading)
+    }
+
+    private func shotReferenceAddTile(_ character: AnimationCharacter) -> some View {
+        Button {
+            showShotReferencePicker = true
+        } label: {
+            VStack(spacing: 10) {
+                Image(systemName: "plus")
+                    .font(.system(size: 26, weight: .semibold))
+                Text("Add")
+                    .font(.caption)
+                    .fontWeight(.medium)
+            }
+            .frame(width: 138, height: 138)
+            .foregroundStyle(.secondary)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.white.opacity(0.035))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+                    .foregroundStyle(Color.secondary.opacity(0.45))
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Add shot reference images")
+        .frame(width: 150, alignment: .topLeading)
+    }
+
+    private func shotReferencePicker<Option>(
+        _ title: String,
+        selection: Option,
+        options: [Option],
+        characterID: UUID,
+        referenceID: UUID
+    ) -> some View where Option: CaseIterable & Hashable & Identifiable, Option.AllCases == [Option] {
+        Picker(
+            title,
+            selection: Binding<Option>(
+                get: { selection },
+                set: { newValue in
+                    if let framing = newValue as? CharacterShotReferenceFraming {
+                        store.updateShotReferenceImage(referenceID, for: characterID, framing: framing)
+                    } else if let wardrobe = newValue as? CharacterShotReferenceWardrobe {
+                        store.updateShotReferenceImage(referenceID, for: characterID, wardrobe: wardrobe)
+                    } else if let view = newValue as? CharacterShotReferenceView {
+                        store.updateShotReferenceImage(referenceID, for: characterID, view: view)
+                    }
+                }
+            )
+        ) {
+            ForEach(options) { option in
+                Text(shotReferenceOptionLabel(option))
+                    .tag(option)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .frame(width: 138)
+        .help(title)
+    }
+
+    private func shotReferenceOptionLabel<Option>(_ option: Option) -> String {
+        if let framing = option as? CharacterShotReferenceFraming { return framing.displayName }
+        if let wardrobe = option as? CharacterShotReferenceWardrobe { return wardrobe.displayName }
+        if let view = option as? CharacterShotReferenceView { return view.displayName }
+        return String(describing: option)
     }
 
     // MARK: - Image Gallery Components

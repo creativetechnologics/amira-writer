@@ -289,6 +289,26 @@ public final class ImageAssetDiscoveryService {
                 }
             }
 
+            // Shot reference images. These are wardrobe-sensitive generation
+            // inputs, so their current rig metadata must be kept in the
+            // intelligence DB on every discovery/backfill pass.
+            for reference in character.shotReferenceImages {
+                if let resolved = resolvePath(reference.imagePath) {
+                    assets.append(DiscoveredAsset(
+                        resolvedPath: resolved,
+                        projectRelativePath: relativePath(resolved),
+                        linkKind: .characterShotReference,
+                        ownerID: charID,
+                        context: [
+                            "referenceID": reference.id.uuidString,
+                            "framing": reference.framing.rawValue,
+                            "wardrobe": reference.wardrobe.rawValue,
+                            "view": reference.view.rawValue
+                        ]
+                    ))
+                }
+            }
+
             // Animated images
             for path in character.animatedImagePaths {
                 if let resolved = resolvePath(path) {

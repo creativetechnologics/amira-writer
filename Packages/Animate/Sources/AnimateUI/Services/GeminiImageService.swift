@@ -191,9 +191,10 @@ final class GeminiImageService {
     func generate(
         request: GenerationRequest,
         apiKey: String,
-        includePreviewImage: Bool = false
+        includePreviewImage: Bool = false,
+        backendOverride: ImageGenBackend? = nil
     ) async throws -> GenerationResult {
-        let backend = ImageGenBackendStore.currentBackend()
+        let backend = backendOverride ?? ImageGenBackendStore.currentBackend()
         if backend == .aiStudio {
             guard !apiKey.isEmpty else { throw ServiceError.noAPIKey }
         }
@@ -317,10 +318,6 @@ final class GeminiImageService {
                         httpStatusCode: httpResponse.statusCode
                     )
                 }
-                AnimateStore.recordVertexCreditUsageForSuccessfulImageGeneration(
-                    model: request.model,
-                    imageSize: request.imageSize
-                )
             }
 
             _ = httpResponse

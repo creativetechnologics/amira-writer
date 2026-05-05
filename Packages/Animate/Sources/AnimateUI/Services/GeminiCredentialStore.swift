@@ -5,8 +5,24 @@ import Foundation
 @available(macOS 26.0, *)
 struct GeminiCredentialStore: Sendable {
     func loadAPIKey() -> String {
-        guard ProjectCredentialStore.shared.isActive() else { return "" }
-        return ProjectCredentialStore.shared.geminiAPIKey()
+        let projectKey = ProjectCredentialStore.shared.isActive()
+            ? ProjectCredentialStore.shared.geminiAPIKey().trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        if !projectKey.isEmpty { return projectKey }
+
+        let environmentKey = ProcessInfo.processInfo.environment["GEMINI_API_KEY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !environmentKey.isEmpty { return environmentKey }
+
+        let legacyKeyURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".lora-maker/gemini_api_key")
+        if let key = try? String(contentsOf: legacyKeyURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !key.isEmpty {
+            return key
+        }
+
+        return ""
     }
 
     func saveAPIKey(_ apiKey: String) {

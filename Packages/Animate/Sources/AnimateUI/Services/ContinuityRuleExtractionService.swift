@@ -93,6 +93,7 @@ struct ContinuityRuleExtractionService {
     struct Request: Sendable {
         var projectRoot: URL
         var mode: String
+        var provider: SupplementalLLMProvider
         var model: String
         var writeSidecars: Bool
         var apiKey: String
@@ -107,7 +108,7 @@ struct ContinuityRuleExtractionService {
         var artifact = ContinuityRuleExtractionArtifact(
             id: UUID(),
             createdAt: Date(),
-            provider: normalizedMode == "execute" ? "minimax" : "local_heuristic",
+            provider: normalizedMode == "execute" ? request.provider.rawValue : "local_heuristic",
             model: request.model,
             mode: normalizedMode,
             isDryRun: normalizedMode != "execute",
@@ -128,14 +129,16 @@ struct ContinuityRuleExtractionService {
 
         if normalizedMode == "execute" {
             guard !request.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                artifact.errorMessage = "MiniMax API key is not configured."
-                artifact.blockers.append(.init(code: .failedProviderError, message: "MiniMax API key is not configured.", field: "miniMaxAPIKey"))
+                artifact.errorMessage = "\(request.provider.displayName) API key is not configured."
+                artifact.blockers.append(.init(code: .failedProviderError, message: "\(request.provider.displayName) API key is not configured.", field: request.provider.apiKeyFieldName))
                 if request.writeSidecars { artifact.artifactPath = try writeArtifact(artifact, projectRoot: request.projectRoot).path }
                 return artifact
             }
             do {
-                let raw = try await MiniMaxJSONClient(apiKey: request.apiKey, model: request.model)
-                    .completeJSON(systemPrompt: prompts.system, userPrompt: prompts.user)
+                let raw = try await SupplementalLLMClient(
+                    configuration: .init(provider: request.provider, apiKey: request.apiKey, model: request.model)
+                )
+                .complete(systemPrompt: prompts.system, userPrompt: prompts.user)
                 artifact.rawModelResponse = raw
                 artifact.fingerprints = try Self.decodeFingerprints(raw, fallbackSources: sources)
                 if request.writeSidecars {
@@ -143,7 +146,7 @@ struct ContinuityRuleExtractionService {
                 }
             } catch {
                 artifact.errorMessage = error.localizedDescription
-                artifact.blockers.append(.init(code: .failedProviderError, message: "MiniMax rule extraction failed: \(error.localizedDescription)", field: "minimax"))
+                artifact.blockers.append(.init(code: .failedProviderError, message: "\(request.provider.displayName) rule extraction failed: \(error.localizedDescription)", field: request.provider.rawValue))
             }
         }
 
@@ -250,7 +253,7 @@ struct ContinuityRuleExtractionService {
 
     private static func prompts(sources: [ContinuityFeedbackSource], heuristicRules: [ContinuityRuleFingerprint]) -> (system: String, user: String) {
         let system = """
-        You are MiniMax M2.7 acting as a script-supervisor continuity compiler for Amira Writer.
+        You are a script-supervisor continuity compiler for Amira Writer.
         Convert noisy user feedback and image-analysis snippets into durable canonical visual rules.
         Output JSON only. Do not include markdown. Be conservative: rules must trace to source feedback.
         Prefer concrete geography/costume/prop/style constraints over generic advice.
@@ -513,9 +516,9 @@ private enum ContinuityMiniMaxError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            return "Invalid response from MiniMax."
+            return "Invalid response from supplemental LLM."
         case .requestFailed(let statusCode, let body):
-            return "MiniMax request failed (HTTP \(statusCode)): \(body.prefix(500))"
+            return "Supplemental LLM request failed (HTTP \(statusCode)): \(body.prefix(500))"
         }
     }
 }

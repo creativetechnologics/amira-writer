@@ -4,6 +4,7 @@ import Foundation
 enum AutomationArtifactKind: String, Codable, Sendable, Hashable, CaseIterable {
     case transcriptImport = "transcript_import"
     case transcriptShotSpec = "transcript_shot_spec"
+    case shotDirectorInput = "shot_director_input"
     case effectiveShotSpec = "effective_shot_spec"
     case referenceContract = "reference_contract"
     case shotFrameGenerationPlan = "shot_frame_generation_plan"
@@ -16,12 +17,16 @@ enum AutomationArtifactKind: String, Codable, Sendable, Hashable, CaseIterable {
 
 @available(macOS 26.0, *)
 enum AutomationBlockerCode: String, Codable, Sendable, Hashable, CaseIterable {
+    case blockedStaleShotProjection = "blocked_stale_shot_projection"
     case blockedMissingPlace = "blocked_missing_place"
     case blockedMissingCharacter = "blocked_missing_character"
     case blockedMissingReferenceRole = "blocked_missing_reference_role"
     case blockedMissingEditSource = "blocked_missing_edit_source"
     case blockedUnapprovedStartFrame = "blocked_unapproved_start_frame"
     case blockedUnapprovedEndFrame = "blocked_unapproved_end_frame"
+    case blockedForbiddenPromptTerm = "blocked_forbidden_prompt_term"
+    case blockedVisualContractConflict = "blocked_visual_contract_conflict"
+    case blockedUnacceptedDirectorInput = "blocked_unaccepted_director_input"
     case blockedUploadFailed = "blocked_upload_failed"
     case blockedCostCap = "blocked_cost_cap"
     case failedProviderError = "failed_provider_error"
@@ -190,6 +195,170 @@ struct TranscriptShotSpec: Identifiable, Codable, Sendable, Hashable {
 }
 
 @available(macOS 26.0, *)
+struct ShotDirectorInputRecord: Identifiable, Codable, Sendable, Hashable {
+    static let currentSchemaVersion = 1
+    var schemaVersion: Int = Self.currentSchemaVersion
+    var id: UUID
+    var createdAt: Date
+    var updatedAt: Date
+    var status: String
+    var sceneID: UUID
+    var shotID: UUID
+    var shotIndex: Int
+    var sourceKind: String
+    var transcriptText: String?
+    var sketchImagePath: String?
+    var sketchAnalysisPath: String?
+    var proposedNotes: String?
+    var proposedAction: String?
+    var proposedCamera: String?
+    var proposedBlocking: String?
+    var acceptedAt: Date?
+    var rejectedAt: Date?
+    var blockers: [AutomationBlocker]
+
+    init(
+        id: UUID = UUID(),
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        status: String = "proposed",
+        sceneID: UUID,
+        shotID: UUID,
+        shotIndex: Int,
+        sourceKind: String = "director_review",
+        transcriptText: String? = nil,
+        sketchImagePath: String? = nil,
+        sketchAnalysisPath: String? = nil,
+        proposedNotes: String? = nil,
+        proposedAction: String? = nil,
+        proposedCamera: String? = nil,
+        proposedBlocking: String? = nil,
+        acceptedAt: Date? = nil,
+        rejectedAt: Date? = nil,
+        blockers: [AutomationBlocker] = []
+    ) {
+        self.id = id
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.status = status
+        self.sceneID = sceneID
+        self.shotID = shotID
+        self.shotIndex = shotIndex
+        self.sourceKind = sourceKind
+        self.transcriptText = transcriptText
+        self.sketchImagePath = sketchImagePath
+        self.sketchAnalysisPath = sketchAnalysisPath
+        self.proposedNotes = proposedNotes
+        self.proposedAction = proposedAction
+        self.proposedCamera = proposedCamera
+        self.proposedBlocking = proposedBlocking
+        self.acceptedAt = acceptedAt
+        self.rejectedAt = rejectedAt
+        self.blockers = blockers
+    }
+
+    var isAccepted: Bool {
+        status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "accepted"
+    }
+}
+
+@available(macOS 26.0, *)
+struct ShotCardProjectionIssue: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var sceneID: UUID
+    var sceneName: String
+    var songPath: String
+    var storedShotCount: Int
+    var activeCameraCardCount: Int
+    var mismatchedIndices: [Int]
+    var blocker: AutomationBlocker
+
+    init(
+        id: UUID = UUID(),
+        sceneID: UUID,
+        sceneName: String,
+        songPath: String,
+        storedShotCount: Int,
+        activeCameraCardCount: Int,
+        mismatchedIndices: [Int],
+        blocker: AutomationBlocker
+    ) {
+        self.id = id
+        self.sceneID = sceneID
+        self.sceneName = sceneName
+        self.songPath = songPath
+        self.storedShotCount = storedShotCount
+        self.activeCameraCardCount = activeCameraCardCount
+        self.mismatchedIndices = mismatchedIndices
+        self.blocker = blocker
+    }
+}
+
+@available(macOS 26.0, *)
+struct ShotCardProjectionAuditReport: Codable, Sendable, Hashable {
+    var schemaVersion: Int = 1
+    var generatedAt: Date = Date()
+    var projectRoot: String
+    var sceneCount: Int
+    var storedShotCount: Int
+    var activeCameraCardCount: Int
+    var issues: [ShotCardProjectionIssue]
+
+    var blockers: [AutomationBlocker] {
+        issues.map(\.blocker)
+    }
+
+    var isClean: Bool {
+        issues.isEmpty
+    }
+}
+
+@available(macOS 26.0, *)
+struct ShotCardProjectionSyncReport: Codable, Sendable, Hashable {
+    var schemaVersion: Int = 1
+    var generatedAt: Date = Date()
+    var projectRoot: String
+    var sceneCount: Int
+    var updatedSceneCount: Int
+    var oldShotCount: Int
+    var newShotCount: Int
+    var preservedShotIDCount: Int
+    var skippedScenes: [String]
+    var auditBefore: ShotCardProjectionAuditReport
+    var auditAfter: ShotCardProjectionAuditReport?
+}
+
+@available(macOS 26.0, *)
+struct ShotVisualContract: Codable, Sendable, Hashable {
+    var source: String
+    var sourceLineNumber: Int?
+    var cameraCardIndex: Int
+    var cameraCardCount: Int
+    var label: String?
+    var focus: String?
+    var visibleCharacters: [String]
+    var leftCharacters: [String]
+    var middleCharacters: [String]
+    var rightCharacters: [String]
+    var leftFacing: String?
+    var middleFacing: String?
+    var rightFacing: String?
+    var places: [String]
+    var props: [String]
+    var landmarks: [String]
+    var timeOfDay: String?
+    var interiorExterior: String?
+    var weatherAtmosphere: String?
+    var lightSource: String?
+    var lens: String?
+    var cameraAngle: String?
+    var depthOfField: String?
+    var continuityNotes: String?
+    var notes: String?
+    var acceptedDirectorNotes: String?
+}
+
+@available(macOS 26.0, *)
 struct EffectiveShotSpec: Identifiable, Codable, Sendable, Hashable {
     static let currentSchemaVersion = 1
     var schemaVersion: Int = Self.currentSchemaVersion
@@ -201,6 +370,14 @@ struct EffectiveShotSpec: Identifiable, Codable, Sendable, Hashable {
     var shotID: UUID
     var shotIndex: Int
     var shotName: String
+    var shotCardLabel: String?
+    var shotCardFocus: String?
+    var shotCardNotes: String?
+    var shotCardContinuityNotes: String?
+    var shotCardPlaces: [String]?
+    var shotCardProps: [String]?
+    var shotCardLandmarks: [String]?
+    var visualContract: ShotVisualContract?
     var startFrame: Int
     var endFrame: Int
     var backgroundID: UUID?

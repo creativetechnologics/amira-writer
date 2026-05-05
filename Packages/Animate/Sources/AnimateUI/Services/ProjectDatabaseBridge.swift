@@ -63,7 +63,7 @@ enum ProjectDatabaseBridge {
         let fileURL = projectURL.appendingPathComponent(animateMetadataPath)
         guard FileManager.default.fileExists(atPath: fileURL.path),
               let data = try? Data(contentsOf: fileURL),
-              let metadata = try? configuredDecoder().decode(AnimateMetadata.self, from: data) else {
+              let metadata = try? JSONCoders.makeDecoder().decode(AnimateMetadata.self, from: data) else {
             return nil
         }
         return metadata
@@ -105,7 +105,7 @@ enum ProjectDatabaseBridge {
 
         debugLog("[Animate] loadSavedScenes: read \(data.count) bytes from \(animateScenesPath)")
 
-        let decoder = configuredDecoder()
+        let decoder = JSONCoders.makeDecoder()
 
         // Try full-array decode first
         do {
@@ -161,7 +161,7 @@ enum ProjectDatabaseBridge {
         let fileURL = projectURL.appendingPathComponent(characterPackageSelectionsPath)
         guard FileManager.default.fileExists(atPath: fileURL.path),
               let data = try? Data(contentsOf: fileURL),
-              let manifest = try? configuredDecoder().decode(CharacterPackageSelectionManifest.self, from: data) else {
+              let manifest = try? JSONCoders.makeDecoder().decode(CharacterPackageSelectionManifest.self, from: data) else {
             return nil
         }
         return manifest
@@ -171,7 +171,7 @@ enum ProjectDatabaseBridge {
         let fileURL = projectURL.appendingPathComponent(shotPresetsPath)
         guard FileManager.default.fileExists(atPath: fileURL.path),
               let data = try? Data(contentsOf: fileURL),
-              let manifest = try? configuredDecoder().decode(SceneShotPresetManifest.self, from: data) else {
+              let manifest = try? JSONCoders.makeDecoder().decode(SceneShotPresetManifest.self, from: data) else {
             return nil
         }
         return manifest
@@ -184,7 +184,7 @@ enum ProjectDatabaseBridge {
 
         let fileURL = ProjectPaths(root: projectURL).animatedLookPromptJSON
         guard let data = try? Data(contentsOf: fileURL),
-              let payload = try? configuredDecoder().decode(Payload.self, from: data) else {
+              let payload = try? JSONCoders.makeDecoder().decode(Payload.self, from: data) else {
             return nil
         }
         let trimmed = payload.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -207,7 +207,7 @@ enum ProjectDatabaseBridge {
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let data = try configuredEncoder().encode(Payload(prompt: trimmed))
+        let data = try JSONCoders.makeEncoder().encode(Payload(prompt: trimmed))
         try data.write(to: fileURL)
     }
 
@@ -219,7 +219,7 @@ enum ProjectDatabaseBridge {
         let fileURL = projectURL.appendingPathComponent(relativePath)
         guard !FileManager.default.fileExists(atPath: fileURL.path) else { return }
         do {
-            let data = try configuredEncoder().encode(manifest)
+            let data = try JSONCoders.makeEncoder().encode(manifest)
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
@@ -238,7 +238,7 @@ enum ProjectDatabaseBridge {
         let fileURL = projectURL.appendingPathComponent(relativePath)
         guard FileManager.default.fileExists(atPath: fileURL.path),
               let data = try? Data(contentsOf: fileURL),
-              let manifest = try? configuredDecoder().decode(type, from: data) else {
+              let manifest = try? JSONCoders.makeDecoder().decode(type, from: data) else {
             return nil
         }
         return manifest
@@ -254,21 +254,8 @@ enum ProjectDatabaseBridge {
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let data = try configuredEncoder().encode(manifest)
+        let data = try JSONCoders.makeEncoder().encode(manifest)
         try data.write(to: fileURL, options: .atomic)
-    }
-
-    private static func configuredDecoder() -> JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }
-
-    private static func configuredEncoder() -> JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
     }
 
     // MARK: - Gemini Master Switch

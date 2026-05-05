@@ -778,6 +778,13 @@ final class AnimateStore {
         }
     }
 
+    var openAIAPIKey: String = "" {
+        didSet {
+            guard !isHydratingOpenAISettings else { return }
+            ProjectCredentialStore.shared.setOpenAIAPIKey(openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+
     // MARK: - Image Analysis Settings (Phase 1)
 
     @ObservationIgnored private var isHydratingImageAnalysisSettings = false
@@ -837,6 +844,27 @@ final class AnimateStore {
         didSet {
             guard !isHydratingMiniMaxSettings else { return }
             miniMaxCredentialStore.saveAPIKey(miniMaxAPIKey)
+        }
+    }
+    var deepSeekAPIKey: String = "" {
+        didSet {
+            guard !isHydratingMiniMaxSettings else { return }
+            ProjectCredentialStore.shared.setDeepSeekAPIKey(deepSeekAPIKey.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    }
+    var supplementalLLMProvider: SupplementalLLMProvider = .deepSeek {
+        didSet {
+            guard !isHydratingMiniMaxSettings else { return }
+            ProjectCredentialStore.shared.setSupplementalLLMProvider(supplementalLLMProvider)
+            if !supplementalLLMProvider.knownModels.contains(supplementalLLMModel) {
+                supplementalLLMModel = supplementalLLMProvider.defaultModel
+            }
+        }
+    }
+    var supplementalLLMModel: String = SupplementalLLMProvider.deepSeek.defaultModel {
+        didSet {
+            guard !isHydratingMiniMaxSettings else { return }
+            ProjectCredentialStore.shared.setSupplementalLLMModel(supplementalLLMModel.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
 
@@ -942,6 +970,7 @@ final class AnimateStore {
     @ObservationIgnored private var displayLinkRunning = false
     @ObservationIgnored private var displayLinkProxy: AnimateDisplayLinkProxy?
     @ObservationIgnored private var isHydratingGeminiSettings = false
+    @ObservationIgnored private var isHydratingOpenAISettings = false
     @ObservationIgnored private var isHydratingMiniMaxSettings = false
     @ObservationIgnored private var isHydratingViduSettings = false
     @ObservationIgnored private var isHydratingPlacesWorkflowLibrary = false
@@ -1166,7 +1195,7 @@ final class AnimateStore {
                     identifier: character.owpSlug.isEmpty ? character.id.uuidString : character.owpSlug,
                     name: character.name,
                     notes: [
-                        character.description,
+                        character.promptNotes,
                         character.defaultWardrobeType.rawValue,
                         character.genderType.rawValue
                     ]
@@ -2012,6 +2041,64 @@ final class AnimateStore {
         )
     }
 
+    public func imageIntelligenceShotReferenceAudit() async -> [String] {
+        guard let store = imageIntelligenceStore else {
+            return ["Image intelligence is not initialized for this project."]
+        }
+
+        var issues: [String] = []
+        for character in characters {
+            for reference in character.shotReferenceImages {
+                let rawPath = resolvedCharacterAssetURL(for: reference.imagePath)?.path ?? reference.imagePath
+                let standardizedPath = URL(fileURLWithPath: rawPath).standardizedFileURL.path
+                do {
+                    guard let asset = try await store.assetByPath(standardizedPath) else {
+                        issues.append("Missing DB asset for \(character.name) shot reference: \(reference.imagePath)")
+                        continue
+                    }
+                    let rows = try await store.query("""
+                        SELECT context_json
+                        FROM image_asset_links
+                        WHERE image_asset_id = ?
+                          AND link_kind = ?
+                          AND owner_id = ?
+                    """, [asset.id, ImageAssetLinkKind.characterShotReference.rawValue, character.id.uuidString])
+                    guard let context = rows.compactMap({ decodeImageAssetLinkContext($0["context_json"] as? String) }).first else {
+                        issues.append("Missing DB link context for \(character.name) shot reference: \(reference.imagePath)")
+                        continue
+                    }
+                    let expected: [String: String] = [
+                        "framing": reference.framing.rawValue,
+                        "wardrobe": reference.wardrobe.rawValue,
+                        "view": reference.view.rawValue
+                    ]
+                    for (key, value) in expected where context[key] != value {
+                        issues.append("\(character.name) \(URL(fileURLWithPath: reference.imagePath).lastPathComponent) has stale \(key): DB=\(context[key] ?? "nil"), rig=\(value)")
+                    }
+                } catch {
+                    issues.append("Failed to audit \(character.name) shot reference \(reference.imagePath): \(error.localizedDescription)")
+                }
+            }
+        }
+        if issues.isEmpty {
+            AppLog.log("IMAGE_INTELLIGENCE", "Shot reference audit passed with no metadata mismatches.")
+        } else {
+            AppLog.log("IMAGE_INTELLIGENCE", "Shot reference audit found \(issues.count) issue(s): \(issues.prefix(12).joined(separator: " | "))")
+        }
+        return issues
+    }
+
+    private func decodeImageAssetLinkContext(_ base64: String?) -> [String: String]? {
+        guard let base64,
+              let data = Data(base64Encoded: base64),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return object.reduce(into: [:]) { result, pair in
+            result[pair.key] = String(describing: pair.value)
+        }
+    }
+
     private func projectRelativePath(for standardizedPath: String) -> String? {
         guard let root = fileOWPURL?.standardizedFileURL.path else { return nil }
         let prefix = root.hasSuffix("/") ? root : root + "/"
@@ -2175,7 +2262,7 @@ final class AnimateStore {
         return showsRecentAgentUpdate ? "sparkles" : "arrow.triangle.2.circlepath"
     }
 
-    private static let geminiModelDefaultsKey = "novotro.animate.gemini.model"
+    private static let geminiModelDefaultsKey = "amira.animate.gemini.model"
     @ObservationIgnored private var vertexCreditDefaultsObserver: NSObjectProtocol?
 
     init() {
@@ -2184,6 +2271,7 @@ final class AnimateStore {
         observePersistedSaveState()
         observeVertexCreditTracking()
         hydrateGeminiSettings()
+        hydrateOpenAISettings()
         hydrateImageAnalysisSettings()
         hydrateMiniMaxSettings()
         hydrateViduSettings()
@@ -2210,6 +2298,20 @@ final class AnimateStore {
         isHydratingGeminiSettings = false
     }
 
+    func setOpenAIAPIKey(_ apiKey: String) {
+        openAIAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func clearOpenAIAPIKey() {
+        openAIAPIKey = ""
+    }
+
+    private func hydrateOpenAISettings() {
+        isHydratingOpenAISettings = true
+        openAIAPIKey = ProjectCredentialStore.shared.openAIAPIKey()
+        isHydratingOpenAISettings = false
+    }
+
     private func scheduleDeferredStartupRefreshes() {
         deferredStartupRefreshTask?.cancel()
         deferredStartupRefreshTask = Task { @MainActor [weak self] in
@@ -2224,6 +2326,12 @@ final class AnimateStore {
     private func hydrateMiniMaxSettings() {
         isHydratingMiniMaxSettings = true
         miniMaxAPIKey = miniMaxCredentialStore.loadAPIKey()
+        deepSeekAPIKey = ProjectCredentialStore.shared.deepSeekAPIKey()
+        supplementalLLMProvider = ProjectCredentialStore.shared.supplementalLLMProvider()
+        supplementalLLMModel = ProjectCredentialStore.shared.supplementalLLMModel()
+        if !supplementalLLMProvider.knownModels.contains(supplementalLLMModel) {
+            supplementalLLMModel = supplementalLLMProvider.defaultModel
+        }
         isHydratingMiniMaxSettings = false
     }
 
@@ -2239,6 +2347,26 @@ final class AnimateStore {
 
     func clearMiniMaxAPIKey() {
         miniMaxAPIKey = ""
+    }
+
+    func setDeepSeekAPIKey(_ apiKey: String) {
+        deepSeekAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func clearDeepSeekAPIKey() {
+        deepSeekAPIKey = ""
+    }
+
+    func supplementalLLMConfiguration(modelOverride: String? = nil) -> SupplementalLLMConfiguration {
+        let provider = supplementalLLMProvider
+        let model = modelOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedModel = (model?.isEmpty == false ? model! : supplementalLLMModel)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return SupplementalLLMConfiguration(
+            provider: provider,
+            apiKey: provider == .deepSeek ? deepSeekAPIKey : miniMaxAPIKey,
+            model: resolvedModel.isEmpty ? provider.defaultModel : resolvedModel
+        )
     }
 
     @MainActor
@@ -3215,6 +3343,127 @@ final class AnimateStore {
         }
     }
 
+    func syncShotProjectionsFromActiveCameraCards() async -> ShotCardProjectionSyncReport? {
+        guard let owpURL = fileOWPURL else { return nil }
+        let auditService = ShotCardProjectionAuditService(store: self)
+        let auditBefore = auditService.audit(projectRoot: owpURL)
+        let shotService = AnimateSceneShotSeedingService(store: self)
+        var updatedSceneCount = 0
+        var oldShotCount = 0
+        var newShotCount = 0
+        var preservedShotIDCount = 0
+        var skippedScenes: [String] = []
+
+        for index in scenes.indices {
+            let scene = scenes[index]
+            oldShotCount += scene.shots.count
+            guard let songData = await ProjectDatabaseBridge.hydrateSongData(
+                projectURL: owpURL,
+                relativePath: scene.owpSongPath
+            ) else {
+                skippedScenes.append("\(scene.name): could not hydrate \(scene.owpSongPath)")
+                newShotCount += scene.shots.count
+                continue
+            }
+            let lyrics = songData.extractLyrics().trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !lyrics.isEmpty else {
+                skippedScenes.append("\(scene.name): no active lyrics")
+                newShotCount += scene.shots.count
+                continue
+            }
+            let parseResult = SceneDirectionParser.parse(lyrics)
+            let activeCameraCardCount = parseResult.directions.filter { $0.tag == .camera }.count
+            guard activeCameraCardCount > 0 else {
+                skippedScenes.append("\(scene.name): no active camera cards")
+                newShotCount += scene.shots.count
+                continue
+            }
+
+            let seeded = shotService.seededShots(
+                for: scene,
+                songData: songData,
+                parseResult: parseResult
+            )
+            guard !seeded.isEmpty else {
+                skippedScenes.append("\(scene.name): no seeded shots")
+                newShotCount += scene.shots.count
+                continue
+            }
+
+            let reconciled = reconcileShotProjectionIDs(
+                seededShots: seeded,
+                existingShots: scene.shots,
+                preservedCount: &preservedShotIDCount
+            )
+            scenes[index].shots = normalizedSceneShots(reconciled)
+            newShotCount += scenes[index].shots.count
+            updatedSceneCount += 1
+            refreshImagineGalleryFromDisk(sceneID: scenes[index].id)
+        }
+
+        if updatedSceneCount > 0 {
+            syncSelectedSceneTimeline()
+            save()
+            statusMessage = "Synced \(updatedSceneCount) scenes from active camera cards"
+            NSLog("[Animate] syncShotProjections: synced %d scenes", updatedSceneCount)
+        }
+
+        let auditAfter = ShotCardProjectionAuditService(store: self).audit(projectRoot: owpURL)
+        return ShotCardProjectionSyncReport(
+            projectRoot: owpURL.path,
+            sceneCount: scenes.count,
+            updatedSceneCount: updatedSceneCount,
+            oldShotCount: oldShotCount,
+            newShotCount: newShotCount,
+            preservedShotIDCount: preservedShotIDCount,
+            skippedScenes: skippedScenes,
+            auditBefore: auditBefore,
+            auditAfter: auditAfter
+        )
+    }
+
+    private func reconcileShotProjectionIDs(
+        seededShots: [AnimationSceneShot],
+        existingShots: [AnimationSceneShot],
+        preservedCount: inout Int
+    ) -> [AnimationSceneShot] {
+        var usedExistingIDs = Set<UUID>()
+        var byLine: [Int: AnimationSceneShot] = [:]
+        var byLabel: [String: AnimationSceneShot] = [:]
+        for shot in existingShots {
+            if let line = shot.sourceLineNumber {
+                byLine[line] = shot
+            }
+            let label = shotProjectionKey(shot.name)
+            if !label.isEmpty {
+                byLabel[label] = shot
+            }
+        }
+
+        return seededShots.map { seeded in
+            var shot = seeded
+            let lineMatch = seeded.sourceLineNumber.flatMap { byLine[$0] }
+            let labelMatch = byLabel[shotProjectionKey(seeded.name)]
+            if let existing = lineMatch ?? labelMatch,
+               !usedExistingIDs.contains(existing.id) {
+                shot.id = existing.id
+                shot.shotFrameGeneration = existing.shotFrameGeneration
+                shot.shotBackgroundPlate = existing.shotBackgroundPlate
+                usedExistingIDs.insert(existing.id)
+                preservedCount += 1
+            }
+            return shot
+        }
+    }
+
+    private func shotProjectionKey(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Reload scene data from Animate/scenes.json on disk, preserving authored shot data.
     func reloadScenesFromDisk() {
         guard let projectURL = fileOWPURL else { return }
@@ -4188,6 +4437,23 @@ final class AnimateStore {
         return normalized
     }
 
+    private func normalizedCharacterShotReferenceImages(_ references: [CharacterShotReferenceImage]) -> [CharacterShotReferenceImage] {
+        var normalized: [CharacterShotReferenceImage] = []
+        var seen: Set<String> = []
+
+        for reference in references {
+            guard let repaired = normalizedCharacterAssetPath(reference.imagePath),
+                  seen.insert(repaired).inserted else {
+                continue
+            }
+            var updated = reference
+            updated.imagePath = repaired
+            normalized.append(updated)
+        }
+
+        return normalized
+    }
+
     private func normalizedLandmarkImagePath(_ path: String?) -> String? {
         guard let trimmed = normalizedMediaPath(path) else {
             return nil
@@ -4623,7 +4889,7 @@ final class AnimateStore {
             id: character.id,
             sortOrder: character.sortOrder,
             name: character.name,
-            description: character.description,
+            description: "",
             owpSlug: character.owpSlug,
             storageSlug: normalizedStorageSlug(for: character),
             renderMode: character.renderMode,
@@ -4633,6 +4899,7 @@ final class AnimateStore {
             backstory: character.backstory,
             personality: character.personality,
             notes: character.notes,
+            promptNotes: character.promptNotes,
             defaultWardrobeType: character.defaultWardrobeType,
             genderType: character.genderType,
             age: character.age,
@@ -4646,6 +4913,7 @@ final class AnimateStore {
             inspirationBatchJobs: normalizedInspirationBatchJobs(character.inspirationBatchJobs),
             referenceImagePaths: normalizedCharacterAssetPaths(character.referenceImagePaths),
             animatedImagePaths: normalizedCharacterAssetPaths(character.animatedImagePaths),
+            shotReferenceImages: normalizedCharacterShotReferenceImages(character.shotReferenceImages),
             lookDevelopmentSlots: normalizedLookDevelopmentSlots(character.lookDevelopmentSlots),
             masterReferenceSheetPrompt: character.masterReferenceSheetPrompt,
             masterReferenceSourceImagePaths: normalizedCharacterAssetPaths(character.masterReferenceSourceImagePaths),
@@ -6554,6 +6822,7 @@ final class AnimateStore {
             ProjectCredentialStore.shared.setActiveProject(effectiveProjectURL)
             AppLog.log("STARTUP", "Credentials: project store active at \(ProjectPaths(root: effectiveProjectURL).apiCredentialsJSON.path)")
             hydrateGeminiSettings()
+            hydrateOpenAISettings()
             hydrateImageAnalysisSettings()
             hydrateMiniMaxSettings()
             hydrateViduSettings()
@@ -6633,6 +6902,20 @@ final class AnimateStore {
             }
             scenes = newScenes
             selectedSceneID = scenes.first?.id
+
+            let storyboardMigration = StoryboardSceneIDMigrationService.migrate(
+                projectRoot: effectiveProjectURL,
+                scenes: scenes
+            )
+            if storyboardMigration.copied.count > 0 || storyboardMigration.errors.count > 0 {
+                let description = "Storyboard scene-ID migration: \(storyboardMigration.summary)."
+                AppLog.log("STORYBOARD", description)
+                if storyboardMigration.errors.isEmpty {
+                    StoryboardServerStatusModel.shared.recordStoryboardRecovery(description)
+                } else {
+                    StoryboardServerStatusModel.shared.recordStoryboardRecoveryError(description)
+                }
+            }
 
             let matchedCount = newScenes.filter { !$0.shots.isEmpty }.count
             let totalShots = newScenes.reduce(0) { $0 + $1.shots.count }
@@ -7813,6 +8096,11 @@ final class AnimateStore {
         }
         updated.referenceImagePaths = updated.referenceImagePaths.map { rewrittenCharacterAssetPath($0, fromSlug: oldSlug, toSlug: newSlug) ?? $0 }
         updated.animatedImagePaths = updated.animatedImagePaths.map { rewrittenCharacterAssetPath($0, fromSlug: oldSlug, toSlug: newSlug) ?? $0 }
+        updated.shotReferenceImages = updated.shotReferenceImages.map { reference in
+            var rewritten = reference
+            rewritten.imagePath = rewrittenCharacterAssetPath(reference.imagePath, fromSlug: oldSlug, toSlug: newSlug) ?? reference.imagePath
+            return rewritten
+        }
         updated.masterReferenceSourceImagePaths = updated.masterReferenceSourceImagePaths.map { rewrittenCharacterAssetPath($0, fromSlug: oldSlug, toSlug: newSlug) ?? $0 }
         updated.lookDevelopmentSlots = updated.lookDevelopmentSlots.map { slot in
             var rewritten = slot
@@ -7924,6 +8212,27 @@ final class AnimateStore {
         scheduleDebouncedSave()
     }
 
+    func updateCharacterPromptNotes(_ text: String, for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }),
+              characters[index].promptNotes != text else { return }
+        characters[index].promptNotes = text
+        scheduleDebouncedSave()
+    }
+
+    @discardableResult
+    func updateCharacterPromptNotesForAPI(_ text: String, characterIdentifier: String) throws -> AnimationCharacter {
+        guard let character = apiCharacterMatch(for: characterIdentifier),
+              let index = characters.firstIndex(where: { $0.id == character.id }) else {
+            throw APIGenerationError(status: 404, message: "No character matched: \(characterIdentifier)")
+        }
+
+        if characters[index].promptNotes != text {
+            characters[index].promptNotes = text
+            saveCharacterRig(characters[index].id)
+        }
+        return characters[index]
+    }
+
     func updateCharacterDefaultWardrobeType(_ wardrobeType: CharacterWardrobeType, for characterID: UUID) {
         guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
         characters[index].defaultWardrobeType = wardrobeType
@@ -8027,6 +8336,45 @@ final class AnimateStore {
         imageLibraryReviewMetadata(for: imagePath)?.isLiked ?? false
     }
 
+    private func normalizedAssetPath(_ path: String?) -> String? {
+        normalizedCharacterAssetPath(path)
+    }
+
+    private func assetPath(_ path: String?, matches normalizedPath: String) -> Bool {
+        normalizedAssetPath(path) == normalizedPath
+    }
+
+    @discardableResult
+    private func clearApprovedPlaceImageReferences(matching normalizedPath: String) -> Bool {
+        var didMutate = false
+
+        for index in backgrounds.indices {
+            if assetPath(backgrounds[index].approvedImagePath, matches: normalizedPath) {
+                backgrounds[index].approvedImagePath = nil
+                backgrounds[index].filename = ""
+                backgrounds[index].sourceURL = nil
+                didMutate = true
+            }
+            if assetPath(backgrounds[index].animatedApprovedImagePath, matches: normalizedPath) {
+                backgrounds[index].animatedApprovedImagePath = nil
+                didMutate = true
+            }
+        }
+
+        for index in placesWorkflowLibrary.worldGraph.nodes.indices {
+            if assetPath(placesWorkflowLibrary.worldGraph.nodes[index].approvedPhotorealImagePath, matches: normalizedPath) {
+                placesWorkflowLibrary.worldGraph.nodes[index].approvedPhotorealImagePath = nil
+                didMutate = true
+            }
+            if assetPath(placesWorkflowLibrary.worldGraph.nodes[index].approvedAnimatedImagePath, matches: normalizedPath) {
+                placesWorkflowLibrary.worldGraph.nodes[index].approvedAnimatedImagePath = nil
+                didMutate = true
+            }
+        }
+
+        return didMutate
+    }
+
     private func isRejectedCharacterImagePath(
         _ path: String,
         for character: AnimationCharacter,
@@ -8084,7 +8432,13 @@ final class AnimateStore {
                 metadata.isLiked = false
             }
         }
-        guard let normalizedPath = normalizedCharacterAssetPath(imagePath) else { return }
+        guard let normalizedPath = normalizedCharacterAssetPath(imagePath) else {
+            bumpAllImagesContentRevision()
+            return
+        }
+        let didClearPlaceApproval = isRejected
+            ? clearApprovedPlaceImageReferences(matching: normalizedPath)
+            : false
         var didMutateCharacterState = false
         for index in characters.indices where characterOwnsImagePath(normalizedPath, character: characters[index]) {
             if isRejected {
@@ -8102,6 +8456,9 @@ final class AnimateStore {
         }
         if didMutateCharacterState {
             save()
+        }
+        if didClearPlaceApproval {
+            scheduleDebouncedSave(writePlaces: true)
         }
         bumpAllImagesContentRevision()
     }
@@ -8360,6 +8717,94 @@ final class AnimateStore {
             analysisMode: .immediate
         )
         return storedPath
+    }
+
+    @discardableResult
+    func storeGeneratedCharacterCostumeImage(
+        _ data: Data,
+        prompt: String,
+        model: GeminiModel,
+        filenameStem: String,
+        for characterID: UUID,
+        runID: UUID,
+        runTimestamp: String,
+        aspectRatio: String,
+        imageSize: String,
+        referencePaths: [String]
+    ) throws -> (storedPath: String, absolutePath: String) {
+        let animateURL = try requireAnimateURL()
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else {
+            throw NSError(domain: "AnimateStore", code: 2, userInfo: [NSLocalizedDescriptionKey: "Character no longer exists."])
+        }
+
+        let paths = ProjectPaths(root: animateURL.deletingLastPathComponent())
+        let directory = paths
+            .characterFolder(slug: characters[charIndex].assetFolderSlug)
+            .appendingPathComponent("animated", isDirectory: true)
+            .appendingPathComponent("costume-studies", isDirectory: true)
+            .appendingPathComponent(runTimestamp, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let filename = "\(filenameStem)-\(UUID().uuidString.prefix(8)).png"
+        let storedURL = directory.appendingPathComponent(filename)
+        try data.write(to: storedURL, options: .atomic)
+
+        try writeGenerationMetadata(
+            prompt: prompt,
+            model: model,
+            aspectRatio: aspectRatio,
+            imageSize: imageSize,
+            referencePaths: referencePaths,
+            to: storedURL
+        )
+
+        let storedPath = projectRelativeCharacterAssetPath(from: storedURL.path)
+            ?? normalizedCharacterAssetPath(storedURL.path)
+            ?? storedURL.path
+        if !characters[charIndex].animatedImagePaths.contains(storedPath) {
+            characters[charIndex].animatedImagePaths.append(storedPath)
+        }
+
+        var metadata = ImageLibraryMetadataSidecarService.load(forImagePath: storedURL.path)
+            ?? ImageLibraryReviewMetadata(rating: nil, isRejected: false, notes: "", updatedAt: nil)
+        metadata.visualStyle = .animated
+        metadata.semanticRole = .character
+        metadata.characterTags = Array(Set([
+            characters[charIndex].owpSlug,
+            characters[charIndex].assetFolderSlug,
+            characters[charIndex].name
+        ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }))
+            .sorted()
+        metadata.notes = [
+            metadata.notes.trimmingCharacters(in: .whitespacesAndNewlines),
+            "character costume image",
+            "runID: \(runID.uuidString)",
+            "model: \(model.displayName) (\(model.rawValue))",
+            "prompt: \(prompt)"
+        ]
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n")
+        metadata.updatedAt = Date()
+        ImageLibraryMetadataSidecarService.save(metadata, forImagePath: storedURL.path)
+
+        scheduleDebouncedSave()
+        registerImageAsset(
+            path: storedURL.path,
+            linkKind: .characterAnimated,
+            ownerID: characterID.uuidString,
+            workflow: "costume-studies",
+            context: [
+                "prompt": prompt,
+                "model": model.rawValue,
+                "aspectRatio": aspectRatio,
+                "imageSize": imageSize,
+                "runID": runID.uuidString,
+                "referencePaths": referencePaths.joined(separator: "\n")
+            ],
+            analysisMode: .immediate
+        )
+        return (storedPath, storedURL.path)
     }
 
     func storeGeneratedPlaceImage(
@@ -8927,6 +9372,167 @@ final class AnimateStore {
                 statusMessage = "Failed to import image: \(url.lastPathComponent)"
             }
         }
+    }
+
+    // MARK: - Shot Reference Images
+
+    func addShotReferenceImage(
+        _ imagePath: String,
+        for characterID: UUID,
+        framing: CharacterShotReferenceFraming = .fullBody,
+        wardrobe: CharacterShotReferenceWardrobe = .soldier,
+        view: CharacterShotReferenceView = .front
+    ) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        guard let normalizedPath = projectRelativeCharacterAssetPath(from: imagePath)
+                ?? normalizedCharacterAssetPath(imagePath)
+                ?? (FileManager.default.fileExists(atPath: imagePath) ? imagePath : nil)
+        else {
+            statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
+            return
+        }
+        guard characterAssetExists(at: normalizedPath) || FileManager.default.fileExists(atPath: imagePath) else {
+            statusMessage = "Image file not found: \(URL(fileURLWithPath: imagePath).lastPathComponent)"
+            return
+        }
+        guard !characters[index].shotReferenceImages.contains(where: { $0.imagePath == normalizedPath }) else {
+            statusMessage = "Shot reference already added"
+            return
+        }
+
+        characters[index].shotReferenceImages.append(
+            CharacterShotReferenceImage(
+                imagePath: normalizedPath,
+                framing: framing,
+                wardrobe: wardrobe,
+                view: view
+            )
+        )
+        scheduleDebouncedSave()
+        if let reference = characters[index].shotReferenceImages.first(where: { $0.imagePath == normalizedPath }) {
+            registerShotReferenceImageAsset(
+                reference,
+                for: characterID,
+                enqueueForAnalysis: true
+            )
+        }
+        statusMessage = "Added shot reference image"
+    }
+
+    private func registerShotReferenceImageAsset(
+        _ reference: CharacterShotReferenceImage,
+        for characterID: UUID,
+        enqueueForAnalysis: Bool
+    ) {
+        registerImageAsset(
+            path: resolvedCharacterAssetURL(for: reference.imagePath)?.path ?? reference.imagePath,
+            linkKind: .characterShotReference,
+            ownerID: characterID.uuidString,
+            context: [
+                "referenceID": reference.id.uuidString,
+                "framing": reference.framing.rawValue,
+                "wardrobe": reference.wardrobe.rawValue,
+                "view": reference.view.rawValue
+            ],
+            enqueueForAnalysis: enqueueForAnalysis
+        )
+    }
+
+    func importShotReferenceImages(from urls: [URL], for characterID: UUID) {
+        guard let index = characters.firstIndex(where: { $0.id == characterID }),
+              let animateURL else { return }
+        for url in urls {
+            do {
+                let imagePath = try importedOrExistingProjectImagePath(
+                    from: url,
+                    characterSlug: characters[index].assetFolderSlug,
+                    category: "shot-references",
+                    animateURL: animateURL
+                )
+                addShotReferenceImage(imagePath, for: characterID)
+            } catch {
+                statusMessage = "Failed to import image: \(url.lastPathComponent)"
+            }
+        }
+    }
+
+    func updateShotReferenceImage(
+        _ referenceID: UUID,
+        for characterID: UUID,
+        framing: CharacterShotReferenceFraming? = nil,
+        wardrobe: CharacterShotReferenceWardrobe? = nil,
+        view: CharacterShotReferenceView? = nil
+    ) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }),
+              let refIndex = characters[charIndex].shotReferenceImages.firstIndex(where: { $0.id == referenceID }) else {
+            return
+        }
+        if let framing { characters[charIndex].shotReferenceImages[refIndex].framing = framing }
+        if let wardrobe { characters[charIndex].shotReferenceImages[refIndex].wardrobe = wardrobe }
+        if let view { characters[charIndex].shotReferenceImages[refIndex].view = view }
+        scheduleDebouncedSave()
+        registerShotReferenceImageAsset(
+            characters[charIndex].shotReferenceImages[refIndex],
+            for: characterID,
+            enqueueForAnalysis: false
+        )
+    }
+
+    func removeShotReferenceImage(_ referenceID: UUID, for characterID: UUID) {
+        guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return }
+        let removedReferences = characters[charIndex].shotReferenceImages.filter { $0.id == referenceID }
+        characters[charIndex].shotReferenceImages.removeAll { $0.id == referenceID }
+        scheduleDebouncedSave()
+        for reference in removedReferences {
+            unregisterShotReferenceImageAsset(reference, for: characterID)
+        }
+    }
+
+    private func unregisterShotReferenceImageAsset(
+        _ reference: CharacterShotReferenceImage,
+        for characterID: UUID
+    ) {
+        guard let store = imageIntelligenceStore else { return }
+        let rawPath = resolvedCharacterAssetURL(for: reference.imagePath)?.path ?? reference.imagePath
+        let standardizedPath = URL(fileURLWithPath: rawPath).standardizedFileURL.path
+        let ownerID = characterID.uuidString
+        Task.detached(priority: .utility) {
+            do {
+                guard let asset = try await store.assetByPath(standardizedPath) else { return }
+                _ = try await store.unlinkAsset(
+                    assetID: asset.id,
+                    kind: .characterShotReference,
+                    ownerID: ownerID
+                )
+            } catch {
+                AppLog.log("IMAGE_INTELLIGENCE", "Failed to unlink shot reference image: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func shotReferenceImagePaths(
+        for characterIDs: [UUID],
+        framing: CharacterShotReferenceFraming? = nil,
+        wardrobe: CharacterShotReferenceWardrobe? = nil,
+        view: CharacterShotReferenceView? = nil,
+        limit: Int = 6
+    ) -> [String] {
+        var result: [String] = []
+        var seen: Set<String> = []
+        let idSet = Set(characterIDs)
+        for character in characters where idSet.contains(character.id) {
+            let references = character.shotReferenceImages
+                .filter { framing == nil || $0.framing == framing }
+                .filter { wardrobe == nil || $0.wardrobe == wardrobe }
+                .filter { view == nil || $0.view == view }
+            for reference in references {
+                guard let normalized = normalizedCharacterAssetPath(reference.imagePath),
+                      seen.insert(normalized).inserted else { continue }
+                result.append(normalized)
+                if result.count >= limit { return result }
+            }
+        }
+        return result
     }
 
     // MARK: - Character Ordering
@@ -11434,30 +12040,21 @@ final class AnimateStore {
     func preferredPlaceContinuityImagePath(for place: BackgroundPlate, workflow: PlaceWorkflowMode) -> String? {
         let nodeCanon = worldNodes(placeID: place.id)
             .compactMap { $0.approvedImagePath(for: workflow) }
+            .filter { !imageLibraryIsRejected(for: $0) }
             .first
         if let nodeCanon {
             return nodeCanon
         }
 
         let approved = place.approvedImagePath(for: workflow)
-        let candidates = place.imagePaths(for: workflow)
-        let ranked = candidates.sorted { lhs, rhs in
-            let lhsPriority = generatedBackgroundReferencePriority(for: lhs)
-            let rhsPriority = generatedBackgroundReferencePriority(for: rhs)
-            if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
-            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
-        }
 
         if let approved,
+           !imageLibraryIsRejected(for: approved),
            generatedBackgroundReferencePriority(for: approved) >= 0 {
             return approved
         }
 
-        if let preferred = ranked.first(where: { generatedBackgroundReferencePriority(for: $0) >= 0 }) {
-            return preferred
-        }
-
-        return approved ?? ranked.first
+        return nil
     }
 
     func worldRoutes(for placeID: UUID? = nil) -> [PlaceWorldRoute] {
@@ -12328,6 +12925,12 @@ final class AnimateStore {
 
         var records = placesWorkflowLibrary.generatedImageRecords
         let discoveredSet = Set(discoveredPaths)
+        let fileBackedRecordPaths = Set(
+            records
+                .flatMap(generatedBackgroundRecordPaths)
+                .filter { resolvedCharacterAssetURL(for: $0) != nil }
+        )
+        let reachableSet = discoveredSet.union(fileBackedRecordPaths)
         let discoveredFingerprints = Set(fingerprintsByPath.values)
         var changed = false
 
@@ -12338,7 +12941,7 @@ final class AnimateStore {
                 changed = true
             }
             let dedupedDuplicates = Array(Set(records[index].duplicatePaths.compactMap { normalizedCharacterAssetPath($0) ?? $0 }))
-                .filter { $0 != records[index].activePath && discoveredSet.contains($0) }
+                .filter { $0 != records[index].activePath && reachableSet.contains($0) }
             if dedupedDuplicates.sorted() != records[index].duplicatePaths.sorted() {
                 records[index].duplicatePaths = dedupedDuplicates.sorted()
                 changed = true
@@ -12352,17 +12955,17 @@ final class AnimateStore {
                 records[index].priorVersions = normalizedHistory
                 changed = true
             }
-            let fingerprint = fingerprintsByPath[records[index].activePath]
-            if records[index].contentFingerprint != fingerprint {
+            if let fingerprint = fingerprintsByPath[records[index].activePath],
+               records[index].contentFingerprint != fingerprint {
                 records[index].contentFingerprint = fingerprint
                 changed = true
             }
         }
 
         let survivingRecords = records.filter { record in
-            if discoveredSet.contains(record.activePath) { return true }
-            if record.duplicatePaths.contains(where: { discoveredSet.contains($0) }) { return true }
-            if record.priorVersions.contains(where: { discoveredSet.contains($0.path) }) { return true }
+            if reachableSet.contains(record.activePath) { return true }
+            if record.duplicatePaths.contains(where: { reachableSet.contains($0) }) { return true }
+            if record.priorVersions.contains(where: { reachableSet.contains($0.path) }) { return true }
             if let fingerprint = record.contentFingerprint, discoveredFingerprints.contains(fingerprint) { return true }
             if shouldPersistGeneratedBackgroundReviewStateRecord(record) { return true }
             if shouldPersistPlacesWorldMapCanonRecord(record) { return true }
@@ -12373,7 +12976,7 @@ final class AnimateStore {
             changed = true
         }
 
-        let mergedRecords = mergeGeneratedBackgroundRecords(records, discoveredSet: discoveredSet)
+        let mergedRecords = mergeGeneratedBackgroundRecords(records, discoveredSet: reachableSet)
         if mergedRecords != records {
             records = mergedRecords
             changed = true
@@ -13759,6 +14362,10 @@ final class AnimateStore {
     func setApprovedPlaceImage(_ imagePath: String, placeID: UUID, workflow: PlaceWorkflowMode) {
         guard let index = backgrounds.firstIndex(where: { $0.id == placeID }),
               let normalizedPath = normalizedCharacterAssetPath(imagePath) else { return }
+        mutateImageLibrarySidecar(for: normalizedPath) { metadata in
+            metadata.isRejected = false
+            metadata.isLiked = true
+        }
         switch workflow {
         case .photorealistic:
             backgrounds[index].approvedImagePath = normalizedPath
@@ -13781,7 +14388,7 @@ final class AnimateStore {
             guard backgrounds[index].imagePaths.indices.contains(imageIndex) else { return }
             let removedPath = backgrounds[index].imagePaths.remove(at: imageIndex)
             if backgrounds[index].approvedImagePath == removedPath {
-                backgrounds[index].approvedImagePath = backgrounds[index].imagePaths.first
+                backgrounds[index].approvedImagePath = nil
             }
             if let approvedPath = backgrounds[index].approvedImagePath {
                 backgrounds[index].filename = URL(fileURLWithPath: approvedPath).lastPathComponent
@@ -13794,21 +14401,28 @@ final class AnimateStore {
             guard backgrounds[index].animatedImagePaths.indices.contains(imageIndex) else { return }
             let removedPath = backgrounds[index].animatedImagePaths.remove(at: imageIndex)
             if backgrounds[index].animatedApprovedImagePath == removedPath {
-                backgrounds[index].animatedApprovedImagePath = backgrounds[index].animatedImagePaths.first
+                backgrounds[index].animatedApprovedImagePath = nil
             }
         }
         scheduleDebouncedSave(writePlaces: true)
     }
 
-    // MARK: - Gemini Activity Queue
+    // MARK: - AI Generation Activity Queue
     //
-    // Global, cross-workspace tracker for in-flight Gemini image generations.
-    // Surfaces in the title-bar GeminiStatusBadge; callers register an entry
+    // Global, cross-workspace tracker for in-flight AI prompt and image work.
+    // Surfaces in the title-bar AI generation status badge; callers register an entry
     // before firing the API call and update it when complete or failed.
 
-    /// A single registered Gemini generation (immediate or batch-submitted).
+    /// A single registered AI generation task.
     struct GeminiActivityEntry: Identifiable, Sendable, Hashable {
-        enum Kind: String, Codable, Sendable { case immediate, batch, analysis }
+        enum Kind: String, Codable, Sendable {
+            case immediate
+            case batch
+            case analysis
+            case geminiImage
+            case openAIImage
+            case openAIText
+        }
         enum Status: String, Codable, Sendable { case queued, running, completed, failed }
 
         let id: UUID
@@ -14150,7 +14764,7 @@ final class AnimateStore {
         case .photorealistic:
             backgrounds[index].imagePaths.removeAll(where: { $0 == path })
             if backgrounds[index].approvedImagePath == path {
-                backgrounds[index].approvedImagePath = backgrounds[index].imagePaths.first
+                backgrounds[index].approvedImagePath = nil
             }
             if let approvedPath = backgrounds[index].approvedImagePath {
                 backgrounds[index].filename = URL(fileURLWithPath: approvedPath).lastPathComponent
@@ -14162,7 +14776,7 @@ final class AnimateStore {
         case .animated:
             backgrounds[index].animatedImagePaths.removeAll(where: { $0 == path })
             if backgrounds[index].animatedApprovedImagePath == path {
-                backgrounds[index].animatedApprovedImagePath = backgrounds[index].animatedImagePaths.first
+                backgrounds[index].animatedApprovedImagePath = nil
             }
         }
         scheduleDebouncedSave(writePlaces: true)
@@ -14201,10 +14815,10 @@ final class AnimateStore {
             backgrounds[i].imagePaths.removeAll { pathSet.contains($0) }
             backgrounds[i].animatedImagePaths.removeAll { pathSet.contains($0) }
             if let approved = backgrounds[i].approvedImagePath, pathSet.contains(approved) {
-                backgrounds[i].approvedImagePath = backgrounds[i].imagePaths.first
+                backgrounds[i].approvedImagePath = nil
             }
             if let approvedAnim = backgrounds[i].animatedApprovedImagePath, pathSet.contains(approvedAnim) {
-                backgrounds[i].animatedApprovedImagePath = backgrounds[i].animatedImagePaths.first
+                backgrounds[i].animatedApprovedImagePath = nil
             }
         }
 
@@ -14321,11 +14935,6 @@ final class AnimateStore {
             )
             backgrounds[index].angleImages.append(angleImage)
 
-            if backgrounds[index].approvedImagePath == nil {
-                backgrounds[index].approvedImagePath = imagePath
-                backgrounds[index].filename = URL(fileURLWithPath: imagePath).lastPathComponent
-                backgrounds[index].sourceURL = resolvedCharacterAssetURL(for: imagePath)
-            }
             scheduleDebouncedSave(writePlaces: true)
         } catch {
             statusMessage = "Failed to add angle image: \(error.localizedDescription)"
@@ -14457,10 +15066,15 @@ final class AnimateStore {
 
     @MainActor
     private func canonicalPlacesMasterMapPath() -> String? {
-        let candidate = "Animate/backgrounds/chosen-references/map/01-master_valley_topdown_map_4k_v5.png"
-        if let normalized = normalizedCharacterAssetPath(candidate),
-           resolvedCharacterAssetURL(for: normalized) != nil {
-            return normalized
+        let candidates = [
+            "Animate/backgrounds/chosen-references/map/05-master_valley_topdown_map_2026-04-22.png",
+            "Animate/backgrounds/chosen-references/map/01-master_valley_topdown_map_4k_v5.png"
+        ]
+        for candidate in candidates {
+            if let normalized = normalizedCharacterAssetPath(candidate),
+               resolvedCharacterAssetURL(for: normalized) != nil {
+                return normalized
+            }
         }
         return nil
     }
@@ -14850,7 +15464,9 @@ final class AnimateStore {
         placesWorkflowLibrary.landmarkProfiles[index].exteriorPlaceID = placeID
         if let placeID,
            let place = backgrounds.first(where: { $0.id == placeID }),
-           let approvedPath = place.approvedImagePath(for: .photorealistic) ?? place.approvedImagePath {
+           let approvedPath = place.approvedImagePath(for: .photorealistic),
+           !imageLibraryIsRejected(for: approvedPath),
+           imageLibraryIsLiked(for: approvedPath) {
             placesWorkflowLibrary.landmarkProfiles[index].exteriorImagePath = approvedPath
             let currentPrimary = placesWorkflowLibrary.landmarkProfiles[index].primaryImagePath
             placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths = normalizedLandmarkImagePaths(
@@ -14870,7 +15486,9 @@ final class AnimateStore {
         placesWorkflowLibrary.landmarkProfiles[index].interiorPlaceID = placeID
         if let placeID,
            let place = backgrounds.first(where: { $0.id == placeID }),
-           let approvedPath = place.approvedImagePath(for: .photorealistic) ?? place.approvedImagePath {
+           let approvedPath = place.approvedImagePath(for: .photorealistic),
+           !imageLibraryIsRejected(for: approvedPath),
+           imageLibraryIsLiked(for: approvedPath) {
             placesWorkflowLibrary.landmarkProfiles[index].interiorImagePath = approvedPath
             placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths = normalizedLandmarkImagePaths(
                 [approvedPath] + placesWorkflowLibrary.landmarkProfiles[index].galleryImagePaths
@@ -15005,7 +15623,9 @@ final class AnimateStore {
     @MainActor
     private func landmarkCandidateRecords(for kind: PlaceLandmarkProfile.Kind) -> [GeneratedBackgroundLibraryRecord] {
         placesWorkflowLibrary.generatedImageRecords.filter { record in
-            landmarkKind(forRecord: record) == kind
+            !record.isRejected
+                && !imageLibraryIsRejected(for: record.activePath)
+                && landmarkKind(forRecord: record) == kind
         }
     }
 
@@ -15101,7 +15721,9 @@ final class AnimateStore {
     ) -> String? {
         if let placeID,
            let place = backgrounds.first(where: { $0.id == placeID }),
-           let approved = place.approvedImagePath(for: .photorealistic) ?? place.approvedImagePath {
+           let approved = place.approvedImagePath(for: .photorealistic),
+           !imageLibraryIsRejected(for: approved),
+           imageLibraryIsLiked(for: approved) {
             return approved
         }
         return landmarkCandidateRecords(for: kind)
@@ -15175,7 +15797,9 @@ final class AnimateStore {
 
         if let exteriorPlaceID = profile.exteriorPlaceID,
            let place = backgrounds.first(where: { $0.id == exteriorPlaceID }),
-           let approved = place.approvedImagePath(for: .photorealistic) ?? place.approvedImagePath,
+           let approved = place.approvedImagePath(for: .photorealistic),
+           !imageLibraryIsRejected(for: approved),
+           imageLibraryIsLiked(for: approved),
            let record = generatedBackgroundRecord(for: approved),
            let point = record.mapPoint,
            record.mapPlacementStatus == .confirmed {
@@ -15230,6 +15854,63 @@ final class AnimateStore {
         let referencePaths: [String]
         let activityIDs: [UUID]
         let storedPaths: [String]
+    }
+
+    struct APIReferenceLabPromptCandidate {
+        let candidate: Int
+        let title: String
+        let prompt: String
+    }
+
+    struct APIReferenceLabGenerationRecord {
+        let candidate: Int
+        let title: String
+        let prompt: String
+        let activityID: UUID
+        let status: GeminiActivityEntry.Status
+        let storedPath: String?
+        let absolutePath: String?
+        let errorMessage: String?
+    }
+
+    struct APIReferenceLabGenerationResult {
+        let placeID: UUID
+        let placeName: String
+        let model: GeminiModel
+        let aspectRatio: String
+        let imageSize: String
+        let workflow: PlaceWorkflowMode
+        let records: [APIReferenceLabGenerationRecord]
+    }
+
+    struct APICharacterCostumeGenerationRecord {
+        let id: UUID
+        let activityID: UUID
+        let characterID: UUID
+        let characterSlug: String
+        let assetFolderSlug: String
+        let characterName: String
+        let imageIndex: Int
+        let imageCount: Int
+        let model: GeminiModel
+        let aspectRatio: String
+        let imageSize: String
+        let referencePaths: [String]
+        var status: GeminiActivityEntry.Status
+        var storedPath: String?
+        var absolutePath: String?
+        var errorMessage: String?
+    }
+
+    struct APICharacterCostumeGenerationResult {
+        let runID: UUID
+        let startedAt: Date
+        let finishedAt: Date?
+        let model: GeminiModel
+        let aspectRatio: String
+        let imageSize: String
+        let outputCollection: String
+        let records: [APICharacterCostumeGenerationRecord]
     }
 
     /// Minimal scene-agnostic anchor for API-triggered generations. All
@@ -15309,8 +15990,11 @@ final class AnimateStore {
         if let aspectRatio, !aspectRatio.isEmpty { config.aspectRatio = aspectRatio }
         if let imageSize, !imageSize.isEmpty { config.imageSize = imageSize }
         let effectiveModel = config.model
+        if effectiveModel == .nanoBanana {
+            config.imageSize = "1K"
+        }
 
-        guard effectiveModel == .flash || effectiveModel == .pro else {
+        guard effectiveModel == .nanoBanana || effectiveModel == .flash || effectiveModel == .pro else {
             throw APIGenerationError(status: 400,
                 message: "Unsupported model for API use: \(effectiveModel.rawValue)")
         }
@@ -15492,6 +16176,643 @@ final class AnimateStore {
         )
     }
 
+    func generateReferenceLabPlaceImagesForAPI(
+        placeIdentifier: String,
+        workflow: PlaceWorkflowMode,
+        model: GeminiModel,
+        prompts: [APIReferenceLabPromptCandidate],
+        aspectRatio: String,
+        imageSize: String
+    ) async throws -> APIReferenceLabGenerationResult {
+        guard isGeminiAllowed() else {
+            throw APIGenerationError(status: 403,
+                message: GeminiImageService.ServiceError.masterSwitchOff.localizedDescription)
+        }
+        guard !geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw APIGenerationError(status: 403,
+                message: GeminiImageService.ServiceError.noAPIKey.localizedDescription)
+        }
+
+        let place: BackgroundPlate
+        if let uuid = UUID(uuidString: placeIdentifier),
+           let match = backgrounds.first(where: { $0.id == uuid }) {
+            place = match
+        } else {
+            let needle = placeIdentifier.lowercased()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let match = backgrounds.first(where: { $0.name.lowercased() == needle }) {
+                place = match
+            } else if let match = backgrounds.first(where: {
+                $0.name.lowercased().contains(needle)
+            }) {
+                place = match
+            } else {
+                throw APIGenerationError(status: 404,
+                    message: "No place found matching '\(placeIdentifier)'")
+            }
+        }
+
+        guard !generatingPlaceIDs.contains(place.id) else {
+            throw APIGenerationError(status: 409,
+                message: "Place '\(place.name)' is already generating")
+        }
+
+        let cleanedPrompts = prompts
+            .filter { !$0.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .prefix(3)
+        guard !cleanedPrompts.isEmpty else {
+            throw APIGenerationError(status: 400, message: "At least one prompt is required.")
+        }
+
+        let effectiveImageSize = model == .nanoBanana ? "1K" : imageSize
+        let service = GeminiImageService()
+        let slug = PlacesScriptIndexService.fileStem(for: place.name)
+        var records: [APIReferenceLabGenerationRecord] = []
+
+        generatingPlaceIDs.insert(place.id)
+        defer { generatingPlaceIDs.remove(place.id) }
+
+        for promptCandidate in cleanedPrompts {
+            let title = "\(place.name) reference \(promptCandidate.candidate)"
+            placeGenerationStatusByID[place.id] = "Reference Lab generating candidate \(promptCandidate.candidate)…"
+            let activityID = registerGeminiActivity(
+                kind: .immediate,
+                title: title,
+                source: "Reference Lab • \(place.name)"
+            )
+            let request = GeminiImageService.GenerationRequest(
+                prompt: promptCandidate.prompt,
+                referenceImages: [],
+                model: model,
+                aspectRatio: aspectRatio,
+                imageSize: effectiveImageSize
+            )
+            logGeminiAPICall(endpoint: "reference-lab-image-generation",
+                             source: "AnimateStore.generateReferenceLabPlaceImagesForAPI()")
+
+            do {
+                let result = try await service.generate(
+                    request: request,
+                    apiKey: geminiAPIKey,
+                    backendOverride: .aiStudio
+                )
+                let filenameStem = "reference-lab-\(slug)-c\(String(format: "%02d", promptCandidate.candidate))"
+                let storedPath = try storeGeneratedPlaceImage(
+                    result.imageData,
+                    prompt: promptCandidate.prompt,
+                    model: model,
+                    filenameStem: filenameStem,
+                    for: place.id,
+                    workflow: workflow,
+                    aspectRatio: aspectRatio,
+                    imageSize: effectiveImageSize
+                )
+                updateGeminiActivity(activityID, status: .completed,
+                    outputFilename: URL(fileURLWithPath: storedPath).lastPathComponent)
+                records.append(APIReferenceLabGenerationRecord(
+                    candidate: promptCandidate.candidate,
+                    title: promptCandidate.title,
+                    prompt: promptCandidate.prompt,
+                    activityID: activityID,
+                    status: .completed,
+                    storedPath: storedPath,
+                    absolutePath: resolvedCharacterAssetURL(for: storedPath)?.path,
+                    errorMessage: nil
+                ))
+            } catch {
+                updateGeminiActivity(activityID, status: .failed,
+                    errorMessage: error.localizedDescription)
+                records.append(APIReferenceLabGenerationRecord(
+                    candidate: promptCandidate.candidate,
+                    title: promptCandidate.title,
+                    prompt: promptCandidate.prompt,
+                    activityID: activityID,
+                    status: .failed,
+                    storedPath: nil,
+                    absolutePath: nil,
+                    errorMessage: error.localizedDescription
+                ))
+            }
+        }
+
+        let completed = records.filter { $0.status == .completed }.count
+        placeGenerationStatusByID[place.id] = "Reference Lab generated \(completed) of \(records.count) candidate image\(records.count == 1 ? "" : "s")."
+        statusMessage = "Reference Lab generated \(completed) candidate image\(completed == 1 ? "" : "s") for \(place.name)"
+
+        return APIReferenceLabGenerationResult(
+            placeID: place.id,
+            placeName: place.name,
+            model: model,
+            aspectRatio: aspectRatio,
+            imageSize: effectiveImageSize,
+            workflow: workflow,
+            records: records
+        )
+    }
+
+    func generateCharacterCostumeImagesForAPI(
+        characterSlugs: [String],
+        allCharacters: Bool,
+        count: Int,
+        promptInstructions: String?,
+        styleInstructions: String?,
+        imageSize: String?,
+        aspectRatio: String?,
+        model: GeminiModel?,
+        sharedReferencePaths: [String]?,
+        referencePathsByCharacter: [String: [String]],
+        outputCollection: String
+    ) async throws -> APICharacterCostumeGenerationResult {
+        if let error = geminiImageGenerationAvailabilityError {
+            throw APIGenerationError(status: 403, message: error.localizedDescription)
+        }
+
+        let normalizedOutputCollection = outputCollection.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedOutputCollection == "animated" || normalizedOutputCollection.isEmpty else {
+            throw APIGenerationError(status: 400, message: "Only outputCollection=animated is currently supported.")
+        }
+
+        let selectedCharacters = try resolvedCharactersForAPICostumeGeneration(
+            characterSlugs: characterSlugs,
+            allCharacters: allCharacters
+        )
+        guard !selectedCharacters.isEmpty else {
+            throw APIGenerationError(status: 404, message: "No characters matched the costume-generation request.")
+        }
+        let generationRules = resolvedCharacterCostumeGenerationRules()
+
+        let effectiveModel = model ?? selectedGeminiModel
+        let effectiveImageSize = imageSize?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? imageSize!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : "4K"
+        let effectiveAspectRatio = aspectRatio?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? aspectRatio!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : "3:4"
+        let runID = UUID()
+        let startedAt = Date()
+        let runTimestamp = Self.apiCostumeGenerationTimestamp(from: startedAt)
+        let service = GeminiImageService()
+
+        struct PlannedCostumeGeneration {
+            let recordIndex: Int
+            let character: AnimationCharacter
+            let prompt: String
+        }
+
+        var records: [APICharacterCostumeGenerationRecord] = []
+        var plans: [PlannedCostumeGeneration] = []
+
+        for character in selectedCharacters {
+            let references = try apiCharacterCostumeReferencePaths(
+                for: character,
+                sharedReferencePaths: sharedReferencePaths,
+                referencePathsByCharacter: referencePathsByCharacter,
+                rules: generationRules
+            )
+            for imageIndex in 1...count {
+                let title = count > 1
+                    ? "\(character.name) costume study \(imageIndex)/\(count)"
+                    : "\(character.name) costume study"
+                let activityID = registerGeminiActivity(
+                    kind: .immediate,
+                    title: title,
+                    source: "Characters • \(character.name) • Costume Images",
+                    initialStatus: .queued
+                )
+                let prompt = apiCharacterCostumePrompt(
+                    for: character,
+                    imageIndex: imageIndex,
+                    imageCount: count,
+                    promptInstructions: promptInstructions,
+                    styleInstructions: styleInstructions,
+                    rules: generationRules
+                )
+                records.append(APICharacterCostumeGenerationRecord(
+                    id: UUID(),
+                    activityID: activityID,
+                    characterID: character.id,
+                    characterSlug: character.owpSlug,
+                    assetFolderSlug: character.assetFolderSlug,
+                    characterName: character.name,
+                    imageIndex: imageIndex,
+                    imageCount: count,
+                    model: effectiveModel,
+                    aspectRatio: effectiveAspectRatio,
+                    imageSize: effectiveImageSize,
+                    referencePaths: references,
+                    status: .queued
+                ))
+                plans.append(PlannedCostumeGeneration(
+                    recordIndex: records.count - 1,
+                    character: character,
+                    prompt: prompt
+                ))
+            }
+        }
+
+        var shouldStop = false
+        for plan in plans {
+            guard records.indices.contains(plan.recordIndex) else { continue }
+            if shouldStop {
+                records[plan.recordIndex].status = .failed
+                records[plan.recordIndex].errorMessage = "Skipped after earlier generation failure."
+                updateGeminiActivity(
+                    records[plan.recordIndex].activityID,
+                    status: .failed,
+                    errorMessage: "Skipped after earlier generation failure."
+                )
+                continue
+            }
+
+            records[plan.recordIndex].status = .running
+            updateGeminiActivity(records[plan.recordIndex].activityID, status: .running)
+            let referencePaths = records[plan.recordIndex].referencePaths
+            let referenceImages = referencePaths.compactMap { path -> GeminiImageService.ReferenceImage? in
+                let url = resolvedCharacterAssetURL(for: path)
+                    ?? (path.hasPrefix("/") ? URL(fileURLWithPath: path) : nil)
+                guard let url else { return nil }
+                return GeminiImageService.referenceImage(from: url)
+            }
+
+            let request = GeminiImageService.GenerationRequest(
+                prompt: plan.prompt,
+                referenceImages: referenceImages,
+                model: effectiveModel,
+                aspectRatio: effectiveAspectRatio,
+                imageSize: effectiveImageSize
+            )
+            logGeminiAPICall(
+                endpoint: "image-generation",
+                source: "AnimateStore.generateCharacterCostumeImagesForAPI()"
+            )
+
+            do {
+                let result = try await service.generate(request: request, apiKey: geminiAPIKey)
+                let filenameStem = "costume-study-\(String(format: "%03d", records[plan.recordIndex].imageIndex))"
+                let stored = try storeGeneratedCharacterCostumeImage(
+                    result.imageData,
+                    prompt: plan.prompt,
+                    model: effectiveModel,
+                    filenameStem: filenameStem,
+                    for: plan.character.id,
+                    runID: runID,
+                    runTimestamp: runTimestamp,
+                    aspectRatio: effectiveAspectRatio,
+                    imageSize: effectiveImageSize,
+                    referencePaths: referencePaths
+                )
+                records[plan.recordIndex].status = .completed
+                records[plan.recordIndex].storedPath = stored.storedPath
+                records[plan.recordIndex].absolutePath = stored.absolutePath
+                updateGeminiActivity(
+                    records[plan.recordIndex].activityID,
+                    status: .completed,
+                    outputFilename: URL(fileURLWithPath: stored.storedPath).lastPathComponent
+                )
+            } catch {
+                records[plan.recordIndex].status = .failed
+                records[plan.recordIndex].errorMessage = error.localizedDescription
+                updateGeminiActivity(
+                    records[plan.recordIndex].activityID,
+                    status: .failed,
+                    errorMessage: error.localizedDescription
+                )
+                statusMessage = "Character costume API generation failed: \(error.localizedDescription)"
+                shouldStop = true
+            }
+
+            if !shouldStop,
+               plan.recordIndex < plans.count - 1,
+               ImageGenBackendStore.currentBackend() == .vertex {
+                try? await Task.sleep(for: .milliseconds(2500))
+            }
+        }
+
+        let completedCount = records.filter { $0.status == .completed }.count
+        if completedCount > 0 {
+            statusMessage = "Generated \(completedCount) character costume image\(completedCount == 1 ? "" : "s") via loopback API"
+        }
+
+        return APICharacterCostumeGenerationResult(
+            runID: runID,
+            startedAt: startedAt,
+            finishedAt: Date(),
+            model: effectiveModel,
+            aspectRatio: effectiveAspectRatio,
+            imageSize: effectiveImageSize,
+            outputCollection: "animated",
+            records: records
+        )
+    }
+
+    private func resolvedCharactersForAPICostumeGeneration(
+        characterSlugs: [String],
+        allCharacters: Bool
+    ) throws -> [AnimationCharacter] {
+        if allCharacters {
+            return characters
+        }
+        var result: [AnimationCharacter] = []
+        var missing: [String] = []
+        var seenIDs: Set<UUID> = []
+        for raw in characterSlugs {
+            let needle = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !needle.isEmpty else { continue }
+            if let match = apiCharacterMatch(for: needle) {
+                if seenIDs.insert(match.id).inserted {
+                    result.append(match)
+                }
+            } else {
+                missing.append(needle)
+            }
+        }
+        if !missing.isEmpty {
+            throw APIGenerationError(status: 404, message: "No character matched: \(missing.joined(separator: ", "))")
+        }
+        return result
+    }
+
+    private func apiCharacterMatch(for raw: String) -> AnimationCharacter? {
+        if let uuid = UUID(uuidString: raw),
+           let match = characters.first(where: { $0.id == uuid }) {
+            return match
+        }
+        let needle = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return characters.first { character in
+            [
+                character.owpSlug,
+                character.assetFolderSlug,
+                character.name
+            ]
+            .contains { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == needle }
+        } ?? characters.first { character in
+            character.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().contains(needle)
+        }
+    }
+
+    private func resolvedCharacterCostumeGenerationRules() -> CharacterCostumeGenerationRules {
+        guard let projectRoot = fileOWPURL else {
+            return .default
+        }
+        return CharacterCostumeGenerationRulesStore.load(projectRoot: projectRoot)
+    }
+
+    private func apiCharacterCostumeReferencePaths(
+        for character: AnimationCharacter,
+        sharedReferencePaths: [String]?,
+        referencePathsByCharacter: [String: [String]],
+        rules: CharacterCostumeGenerationRules
+    ) throws -> [String] {
+        if let explicit = explicitAPIReferencePaths(
+            for: character,
+            sharedReferencePaths: sharedReferencePaths,
+            referencePathsByCharacter: referencePathsByCharacter
+        ) {
+            let resolved = normalizedExistingAPIReferencePaths(
+                explicit,
+                limit: rules.maxExplicitReferenceCount,
+                dropRejectedReferences: rules.dropRejectedReferences
+            )
+            if rules.failExplicitWhenAnyRejected, !resolved.rejected.isEmpty {
+                throw APIGenerationError(
+                    status: 400,
+                    message: "Explicit references for \(character.name) include rejected image(s): \(resolved.rejected.prefix(2).joined(separator: ", "))"
+                )
+            }
+            if resolved.accepted.isEmpty, rules.failExplicitWhenAllRejectedOrMissing {
+                throw APIGenerationError(
+                    status: 400,
+                    message: "All explicit reference paths for \(character.name) are missing or rejected."
+                )
+            }
+            return resolved.accepted
+        }
+        let autoResolved = autoCharacterCostumeReferencePaths(
+            for: character,
+            limit: rules.maxAutoReferenceCount,
+            rules: rules
+        )
+        if autoResolved.isEmpty {
+            throw APIGenerationError(
+                status: 400,
+                message: "No usable non-rejected reference paths were found for \(character.name)."
+            )
+        }
+        return autoResolved
+    }
+
+    private func explicitAPIReferencePaths(
+        for character: AnimationCharacter,
+        sharedReferencePaths: [String]?,
+        referencePathsByCharacter: [String: [String]]
+    ) -> [String]? {
+        if let sharedReferencePaths {
+            return sharedReferencePaths
+        }
+        let keys = [
+            character.owpSlug,
+            character.assetFolderSlug,
+            character.name,
+            character.id.uuidString
+        ]
+        for key in keys {
+            if let paths = referencePathsByCharacter[key] {
+                return paths
+            }
+            if let paths = referencePathsByCharacter.first(where: {
+                $0.key.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(key) == .orderedSame
+            })?.value {
+                return paths
+            }
+        }
+        return nil
+    }
+
+    private func autoCharacterCostumeReferencePaths(
+        for character: AnimationCharacter,
+        limit: Int,
+        rules: CharacterCostumeGenerationRules
+    ) -> [String] {
+        var candidates: [String] = []
+        func append(_ path: String?) {
+            guard let path else { return }
+            candidates.append(path)
+        }
+
+        // These source toggles are project-configurable in
+        // Settings/character-costume-generation-rules.json.
+        if rules.includeShotReferenceImages {
+            for reference in character.shotReferenceImages {
+                append(reference.imagePath)
+            }
+        }
+        if rules.includeRecentAnimatedImages {
+            for path in character.animatedImagePaths.reversed() {
+                append(path)
+            }
+        }
+
+        if rules.includeApprovedHeadTurnaroundSheet {
+            append(character.approvedHeadTurnaroundSheetVariant?.imagePath)
+        }
+        if rules.includeApprovedCostumeSheet {
+            for costume in character.costumeReferenceSets {
+                if let path = costume.approvedSheetVariant?.imagePath
+                    ?? costume.fullBodySlots.first(where: { $0.pose == .frontNeutral })?.approvedVariant?.imagePath
+                    ?? costume.fullBodySlots.first(where: { $0.approvedVariant != nil })?.approvedVariant?.imagePath {
+                    append(path)
+                    break
+                }
+            }
+        }
+        if rules.includeApprovedMasterSheet {
+            append(character.approvedMasterReferenceSheetVariant?.imagePath)
+        }
+        if rules.includeCharacterReferenceImages {
+            for path in character.referenceImagePaths { append(path) }
+        }
+        if rules.includeInspirationReferenceImage {
+            append(character.inspirationReferenceImagePath)
+        }
+        if rules.includeCuratedInspirationImages {
+            for path in character.curatedInspirationImagePaths { append(path) }
+        }
+        if rules.includeProfileImage {
+            append(character.profileImagePath)
+        }
+        return normalizedExistingAPIReferencePaths(
+            candidates,
+            limit: limit,
+            dropRejectedReferences: rules.dropRejectedReferences
+        ).accepted
+    }
+
+    private struct APIReferenceResolutionResult {
+        var accepted: [String] = []
+        var rejected: [String] = []
+    }
+
+    private func normalizedExistingAPIReferencePaths(
+        _ paths: [String],
+        limit: Int,
+        dropRejectedReferences: Bool
+    ) -> APIReferenceResolutionResult {
+        var result = APIReferenceResolutionResult()
+        var seen: Set<String> = []
+        for raw in paths {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let normalized = normalizedCharacterAssetPath(trimmed) ?? trimmed
+            let url = resolvedCharacterAssetURL(for: normalized)
+                ?? (trimmed.hasPrefix("/") ? URL(fileURLWithPath: trimmed) : nil)
+            guard let url, FileManager.default.fileExists(atPath: url.path) else { continue }
+            if ImageLibraryMetadataSidecarService.load(forImagePath: url.path)?.isRejected == true,
+               dropRejectedReferences {
+                result.rejected.append(normalizedCharacterAssetPath(url.path) ?? normalized)
+                continue
+            }
+            let stored = normalizedCharacterAssetPath(url.path) ?? normalized
+            guard seen.insert(stored).inserted else { continue }
+            result.accepted.append(stored)
+            if result.accepted.count >= limit { break }
+        }
+        return result
+    }
+
+    private func apiCharacterCostumePrompt(
+        for character: AnimationCharacter,
+        imageIndex: Int,
+        imageCount: Int,
+        promptInstructions: String?,
+        styleInstructions: String?,
+        rules: CharacterCostumeGenerationRules
+    ) -> String {
+        let userPrompt = promptInstructions?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let style = styleInstructions?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let characterPromptNotes = character.promptNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let promptProtocol = rules.promptProtocol
+        let templates = promptProtocol.templates
+        let sequenceLine = imageCount > 1
+            ? CharacterCostumeGenerationRulesStore.applyTemplate(
+                templates.multiImageSequenceLineTemplate,
+                values: [
+                    "imageIndex": String(imageIndex),
+                    "imageCount": String(imageCount)
+                ]
+            )
+            : templates.singleImageSequenceLine
+
+        var lines: [String] = []
+        for section in promptProtocol.sectionOrder {
+            switch section {
+            case .task:
+                lines.append(
+                    CharacterCostumeGenerationRulesStore.applyTemplate(
+                        templates.taskLineTemplate,
+                        values: [
+                            "characterName": character.name,
+                            "characterSlug": character.owpSlug
+                        ]
+                    )
+                )
+            case .sequence:
+                lines.append(sequenceLine)
+            case .identity:
+                lines.append(templates.identityLine)
+            case .notes:
+                guard !characterPromptNotes.isEmpty else { continue }
+                lines.append(
+                    CharacterCostumeGenerationRulesStore.applyTemplate(
+                        templates.notesLineTemplate,
+                        values: ["characterPromptNotes": characterPromptNotes]
+                    )
+                )
+            case .world:
+                lines.append(
+                    CharacterCostumeGenerationRulesStore.applyTemplate(
+                        templates.worldLineTemplate,
+                        values: ["worldSummary": CharacterPromptWorldContext.settingSummary]
+                    )
+                )
+            case .instructions:
+                guard !userPrompt.isEmpty else { continue }
+                lines.append(
+                    CharacterCostumeGenerationRulesStore.applyTemplate(
+                        templates.instructionsLineTemplate,
+                        values: ["userPrompt": userPrompt]
+                    )
+                )
+            case .style:
+                if style.isEmpty {
+                    lines.append(templates.defaultStyleLine)
+                } else {
+                    lines.append(
+                        CharacterCostumeGenerationRulesStore.applyTemplate(
+                            templates.styleLineTemplate,
+                            values: ["style": style]
+                        )
+                    )
+                }
+            case .composition:
+                lines.append(templates.compositionLine)
+            case .negative:
+                lines.append(templates.negativeLine)
+            }
+        }
+
+        return lines
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+    }
+
+    private static func apiCostumeGenerationTimestamp(from date: Date) -> String {
+        ISO8601DateFormatter()
+            .string(from: date)
+            .replacingOccurrences(of: ":", with: "")
+    }
+
     /// Returns camera shot types required for a given place based on scenes that use it.
     func requiredCameraShots(for placeID: UUID) -> Set<String> {
         if requiredCameraShotsByPlaceIDCache == nil {
@@ -15537,18 +16858,13 @@ final class AnimateStore {
             if !place.imagePaths.contains(imagePath) {
                 place.imagePaths.append(imagePath)
             }
-            if place.approvedImagePath == nil {
-                place.approvedImagePath = imagePath
+            if let approvedPath = place.approvedImagePath {
+                place.filename = URL(fileURLWithPath: approvedPath).lastPathComponent
+                place.sourceURL = resolvedCharacterAssetURL(for: approvedPath)
             }
-            let effectivePath = place.approvedImagePath ?? imagePath
-            place.filename = URL(fileURLWithPath: effectivePath).lastPathComponent
-            place.sourceURL = resolvedCharacterAssetURL(for: effectivePath)
         case .animated:
             if !place.animatedImagePaths.contains(imagePath) {
                 place.animatedImagePaths.append(imagePath)
-            }
-            if place.animatedApprovedImagePath == nil {
-                place.animatedApprovedImagePath = imagePath
             }
         }
     }
@@ -15566,7 +16882,6 @@ final class AnimateStore {
                 name: item.deletingPathExtension().lastPathComponent,
                 filename: item.lastPathComponent,
                 imagePaths: [projectRelativeCharacterAssetPath(from: item.path) ?? item.path],
-                approvedImagePath: projectRelativeCharacterAssetPath(from: item.path) ?? item.path,
                 sourceURL: item
             ))
         }
@@ -15591,11 +16906,14 @@ final class AnimateStore {
             var updated = place
             updated.imagePaths = normalizedCharacterAssetPaths(place.imagePaths)
             updated.approvedImagePath = normalizedCharacterAssetPath(place.approvedImagePath)
-            if updated.imagePaths.isEmpty, let fallback = diskItemsByFilename[place.filename]?.resolvedApprovedImagePath {
+            if updated.imagePaths.isEmpty, let fallback = diskItemsByFilename[place.filename]?.imagePaths.first {
                 updated.imagePaths = [fallback]
             }
-            if updated.approvedImagePath == nil {
-                updated.approvedImagePath = updated.imagePaths.first
+            if let approved = updated.approvedImagePath,
+               imageLibraryIsRejected(for: approved) {
+                updated.approvedImagePath = nil
+                updated.filename = ""
+                updated.sourceURL = nil
             }
             if updated.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 updated.name = URL(fileURLWithPath: updated.filename).deletingPathExtension().lastPathComponent
@@ -17051,10 +18369,8 @@ final class AnimateStore {
         var updated = background
         updated.imagePaths = normalizedCharacterAssetPaths(background.imagePaths)
         updated.approvedImagePath = normalizedCharacterAssetPath(background.approvedImagePath)
-            ?? updated.imagePaths.first
         updated.animatedImagePaths = normalizedCharacterAssetPaths(background.animatedImagePaths)
         updated.animatedApprovedImagePath = normalizedCharacterAssetPath(background.animatedApprovedImagePath)
-            ?? updated.animatedImagePaths.first
         updated.referenceImages = background.referenceImages.map { reference in
             var item = reference
             item.imagePath = normalizedCharacterAssetPath(reference.imagePath) ?? reference.imagePath
@@ -17076,10 +18392,8 @@ final class AnimateStore {
         var updated = background
         updated.imagePaths = normalizedCharacterAssetPaths(background.imagePaths)
         updated.approvedImagePath = normalizedCharacterAssetPath(background.approvedImagePath)
-            ?? updated.imagePaths.first
         updated.animatedImagePaths = normalizedCharacterAssetPaths(background.animatedImagePaths)
         updated.animatedApprovedImagePath = normalizedCharacterAssetPath(background.animatedApprovedImagePath)
-            ?? updated.animatedImagePaths.first
         updated.referenceImages = background.referenceImages.map { reference in
             var item = reference
             item.imagePath = normalizedCharacterAssetPath(reference.imagePath) ?? reference.imagePath
@@ -17501,7 +18815,11 @@ final class AnimateStore {
                         .map { ($0.name, $0) }
                 )
                 existing.name = resolvedName
-                existing.description = sourceCharacter.description ?? ""
+                let sourcePromptNotes = sourceCharacter.description ?? ""
+                if existing.promptNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    existing.promptNotes = sourcePromptNotes
+                }
+                existing.description = ""
                 existing.owpSlug = slug
                 existing.storageSlug = normalizedStorageSlug(
                     forName: resolvedName,
@@ -17514,6 +18832,7 @@ final class AnimateStore {
                 existing.inspirationBatchJobs = normalizedInspirationBatchJobs(existing.inspirationBatchJobs)
                 existing.referenceImagePaths = normalizedCharacterAssetPaths(existing.referenceImagePaths)
                 existing.animatedImagePaths = normalizedCharacterAssetPaths(existing.animatedImagePaths)
+                existing.shotReferenceImages = normalizedCharacterShotReferenceImages(existing.shotReferenceImages)
                 existing.lookDevelopmentSlots = normalizedLookDevelopmentSlots(existing.lookDevelopmentSlots)
                 let legacyPrompt = CharacterReferenceWorkflowCatalog.legacyDefaultMasterSheetPrompt(for: resolvedName)
                 existing.masterReferenceSheetPrompt = existing.masterReferenceSheetPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || existing.masterReferenceSheetPrompt == legacyPrompt
@@ -17571,7 +18890,7 @@ final class AnimateStore {
                     id: persistedCharacter?.id ?? UUID(),
                     sortOrder: persistedCharacter?.sortOrder ?? updatedCharacters.count,
                     name: resolvedName,
-                    description: sourceCharacter.description ?? "",
+                    description: "",
                     owpSlug: slug,
                     storageSlug: normalizedStorageSlug(
                         forName: resolvedName,
@@ -17584,6 +18903,9 @@ final class AnimateStore {
                     backstory: persistedCharacter?.backstory ?? "",
                     personality: persistedCharacter?.personality ?? "",
                     notes: persistedCharacter?.notes ?? "",
+                    promptNotes: persistedCharacter?.promptNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                        ? persistedCharacter?.promptNotes ?? ""
+                        : sourceCharacter.description ?? "",
                     defaultWardrobeType: persistedCharacter?.defaultWardrobeType ?? .soldier,
                     genderType: persistedCharacter?.genderType ?? .person,
                     age: persistedCharacter?.age,
@@ -17593,6 +18915,7 @@ final class AnimateStore {
                     inspirationBatchJobs: normalizedInspirationBatchJobs(persistedCharacter?.inspirationBatchJobs ?? []),
                     referenceImagePaths: normalizedCharacterAssetPaths(persistedCharacter?.referenceImagePaths ?? []),
                     animatedImagePaths: normalizedCharacterAssetPaths(persistedCharacter?.animatedImagePaths ?? []),
+                    shotReferenceImages: normalizedCharacterShotReferenceImages(persistedCharacter?.shotReferenceImages ?? []),
                     lookDevelopmentSlots: normalizedLookDevelopmentSlots(persistedCharacter?.lookDevelopmentSlots ?? []),
                     masterReferenceSheetPrompt: persistedCharacter?.masterReferenceSheetPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                         ? persistedCharacter?.masterReferenceSheetPrompt ?? ""
@@ -17602,7 +18925,7 @@ final class AnimateStore {
                             id: persistedCharacter?.id ?? UUID(),
                             sortOrder: persistedCharacter?.sortOrder ?? updatedCharacters.count,
                             name: resolvedName,
-                            description: sourceCharacter.description ?? "",
+                            description: "",
                             owpSlug: slug,
                             renderMode: persistedCharacter?.renderMode,
                             preferredViewAngle: persistedCharacter?.preferredViewAngle,
@@ -17611,6 +18934,9 @@ final class AnimateStore {
                             backstory: persistedCharacter?.backstory ?? "",
                             personality: persistedCharacter?.personality ?? "",
                             notes: persistedCharacter?.notes ?? "",
+                            promptNotes: persistedCharacter?.promptNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                                ? persistedCharacter?.promptNotes ?? ""
+                                : sourceCharacter.description ?? "",
                             defaultWardrobeType: persistedCharacter?.defaultWardrobeType ?? .soldier,
                             genderType: persistedCharacter?.genderType ?? .person,
                             age: persistedCharacter?.age,
@@ -17620,6 +18946,7 @@ final class AnimateStore {
                             inspirationBatchJobs: normalizedInspirationBatchJobs(persistedCharacter?.inspirationBatchJobs ?? []),
                             referenceImagePaths: normalizedCharacterAssetPaths(persistedCharacter?.referenceImagePaths ?? []),
                             animatedImagePaths: normalizedCharacterAssetPaths(persistedCharacter?.animatedImagePaths ?? []),
+                            shotReferenceImages: normalizedCharacterShotReferenceImages(persistedCharacter?.shotReferenceImages ?? []),
                             lookDevelopmentSlots: normalizedLookDevelopmentSlots(persistedCharacter?.lookDevelopmentSlots ?? []),
                             masterReferenceSheetPrompt: persistedCharacter?.masterReferenceSheetPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                                 ? persistedCharacter?.masterReferenceSheetPrompt ?? ""
@@ -17698,6 +19025,7 @@ final class AnimateStore {
             persistedCharacter.inspirationBatchJobs = normalizedInspirationBatchJobs(persistedCharacter.inspirationBatchJobs)
             persistedCharacter.referenceImagePaths = normalizedCharacterAssetPaths(persistedCharacter.referenceImagePaths)
             persistedCharacter.animatedImagePaths = normalizedCharacterAssetPaths(persistedCharacter.animatedImagePaths)
+            persistedCharacter.shotReferenceImages = normalizedCharacterShotReferenceImages(persistedCharacter.shotReferenceImages)
             persistedCharacter.lookDevelopmentSlots = normalizedLookDevelopmentSlots(persistedCharacter.lookDevelopmentSlots)
             persistedCharacter.masterReferenceSheetPrompt = persistedCharacter.masterReferenceSheetPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? CharacterReferenceWorkflowCatalog.defaultMasterSheetPrompt(for: resolvedName, gender: persistedCharacter.genderType)
@@ -18172,7 +19500,7 @@ final class AnimateStore {
                 LLMAnimationPlanGenerator.SceneContext.CharacterInfo(
                     name: $0.name,
                     slug: $0.assetFolderSlug,
-                    description: $0.description.isEmpty ? $0.name : $0.description
+                    description: $0.promptNotes.isEmpty ? $0.name : $0.promptNotes
                 )
             }
             let context = LLMAnimationPlanGenerator.SceneContext(

@@ -15,7 +15,7 @@ The Image Intelligence subsystem analyzes images in the Amira Writer / Opera app
 ### Core Components
 
 1. **ImageIntelligenceStore** - Actor-isolated SQLite database
-   - Location: `.novotro/image-intelligence.sqlite`
+   - Location: `.amira/image-intelligence.sqlite`
    - Tables: image_assets, image_asset_links, image_analysis_runs, image_visual_metadata, image_tags, image_tag_assignments, image_embeddings, image_analysis_jobs, image_qc_flags
 
 2. **GeminiImageAnalysisService** / **VertexImageAnalysisClient** - REST API clients
@@ -75,7 +75,7 @@ Set in Settings → Image Analysis tab:
 
 ### Database
 
-Auto-created at `<project>/.novotro/image-intelligence.sqlite`
+Auto-created at `<project>/.amira/image-intelligence.sqlite`
 - WAL mode enabled
 - Foreign keys enforced
 - Isolated from existing `project.sqlite`

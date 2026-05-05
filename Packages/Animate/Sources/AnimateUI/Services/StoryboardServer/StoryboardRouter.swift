@@ -55,6 +55,25 @@ final class StoryboardRouter {
         case _ where method == "PUT" && path.hasPrefix("/api/shots/") && path.hasSuffix("/summary"):
             let shotIDStr = extractPathComponent(from: path, prefix: "/api/shots/", suffix: "/summary")
             return await putSummaryResponse(shotIDStr: shotIDStr, request: request)
+        case _ where method == "GET" && path.hasPrefix("/api/scenes/") && path.contains("/storyboard/"):
+            guard let scoped = parseSceneScopedStoryboardPath(path) else {
+                return .badRequest("Malformed scene storyboard path")
+            }
+            return getStoryboardResponse(
+                sceneIDStr: scoped.sceneID,
+                shotIDStr: scoped.shotID,
+                frameStr: scoped.frame
+            )
+        case _ where method == "PUT" && path.hasPrefix("/api/scenes/") && path.contains("/storyboard/"):
+            guard let scoped = parseSceneScopedStoryboardPath(path) else {
+                return .badRequest("Malformed scene storyboard path")
+            }
+            return await putStoryboardResponse(
+                sceneIDStr: scoped.sceneID,
+                shotIDStr: scoped.shotID,
+                frameStr: scoped.frame,
+                request: request
+            )
         case _ where method == "GET" && path.hasPrefix("/api/storyboard/"):
             let parts = path.dropFirst("/api/storyboard/".count).split(separator: "/", maxSplits: 1)
             guard parts.count == 2 else { return .badRequest("Malformed storyboard path") }
@@ -374,18 +393,31 @@ final class StoryboardRouter {
         return SBHTTPResponse(status: 204, contentType: "application/json", body: Data())
     }
 
-    private func getStoryboardResponse(shotIDStr: String, frameStr: String) -> SBHTTPResponse {
+    private func getStoryboardResponse(
+        sceneIDStr: String? = nil,
+        shotIDStr: String,
+        frameStr: String
+    ) -> SBHTTPResponse {
         guard let frame = StoryboardFrame(rawValue: frameStr) else {
             return .badRequest("Invalid frame: \(frameStr). Must be begin, middle, or end.")
+        }
+        guard let shotID = UUID(uuidString: shotIDStr) else {
+            return .badRequest("Invalid shotId")
+        }
+        let requestedSceneID: UUID?
+        if let sceneIDStr {
+            guard let parsed = UUID(uuidString: sceneIDStr) else {
+                return .badRequest("Invalid sceneId")
+            }
+            requestedSceneID = parsed
+        } else {
+            requestedSceneID = nil
         }
         guard let ws = workspace, let root = projectRoot(ws) else {
             return .serviceUnavailable("no project open")
         }
-        guard let (sceneID, _) = ws.store.findShot(by: UUID(uuidString: shotIDStr)) else {
+        guard let (sceneID, _) = findStoryboardShot(in: ws.store, sceneID: requestedSceneID, shotID: shotID) else {
             return .notFound("Shot not found: \(shotIDStr)")
-        }
-        guard let shotID = UUID(uuidString: shotIDStr) else {
-            return .badRequest("Invalid shotId")
         }
         guard let data = diskStore.read(projectRoot: root, sceneID: sceneID, shotID: shotID, frame: frame) else {
             return .notFound("No \(frameStr) frame for shot \(shotIDStr)")
@@ -393,17 +425,31 @@ final class StoryboardRouter {
         return SBHTTPResponse(status: 200, contentType: "image/png", body: data)
     }
 
-    private func putStoryboardResponse(shotIDStr: String, frameStr: String, request: SBHTTPRequest) async -> SBHTTPResponse {
+    private func putStoryboardResponse(
+        sceneIDStr: String? = nil,
+        shotIDStr: String,
+        frameStr: String,
+        request: SBHTTPRequest
+    ) async -> SBHTTPResponse {
         guard let frame = StoryboardFrame(rawValue: frameStr) else {
             return .badRequest("Invalid frame: \(frameStr). Must be begin, middle, or end.")
         }
         guard let shotID = UUID(uuidString: shotIDStr) else {
             return .badRequest("Invalid shotId")
         }
+        let requestedSceneID: UUID?
+        if let sceneIDStr {
+            guard let parsed = UUID(uuidString: sceneIDStr) else {
+                return .badRequest("Invalid sceneId")
+            }
+            requestedSceneID = parsed
+        } else {
+            requestedSceneID = nil
+        }
         guard let ws = workspace, let root = projectRoot(ws) else {
             return .serviceUnavailable("no project open")
         }
-        guard let (sceneID, shot) = ws.store.findShot(by: shotID) else {
+        guard let (sceneID, shot) = findStoryboardShot(in: ws.store, sceneID: requestedSceneID, shotID: shotID) else {
             return .notFound("Shot not found: \(shotIDStr)")
         }
         guard let body = request.body, !body.isEmpty else {
@@ -610,6 +656,33 @@ final class StoryboardRouter {
         let end = path.index(path.endIndex, offsetBy: -suffix.count)
         guard start <= end else { return nil }
         return String(path[start..<end])
+    }
+
+    private func parseSceneScopedStoryboardPath(_ path: String) -> (sceneID: String, shotID: String, frame: String)? {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard parts.count == 7,
+              parts[0] == "api",
+              parts[1] == "scenes",
+              parts[3] == "shots",
+              parts[5] == "storyboard" else {
+            return nil
+        }
+        return (sceneID: parts[2], shotID: parts[4], frame: parts[6])
+    }
+
+    private func findStoryboardShot(
+        in store: AnimateStore,
+        sceneID: UUID?,
+        shotID: UUID
+    ) -> (sceneID: UUID, shot: AnimationSceneShot)? {
+        if let sceneID {
+            guard let scene = store.scenes.first(where: { $0.id == sceneID }),
+                  let shot = scene.shots.first(where: { $0.id == shotID }) else {
+                return nil
+            }
+            return (scene.id, shot)
+        }
+        return store.findShot(by: shotID)
     }
 }
 

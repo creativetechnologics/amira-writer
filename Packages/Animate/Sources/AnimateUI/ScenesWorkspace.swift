@@ -34,10 +34,10 @@ public struct ScenesWorkspace: View {
 private struct ScenesWorkspaceContent: View {
     @Bindable var store: AnimateStore
 
-    @AppStorage("novotro.imagine.sidebarVisible") private var sidebarVisible = true
-    @AppStorage("novotro.imagine.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
-    @AppStorage("novotro.imagine.showInspector") private var inspectorVisible = true
-    @AppStorage("novotro.imagine.inspector.width") private var inspectorWidth: Double = 320
+    @AppStorage("amira.imagine.sidebarVisible") private var sidebarVisible = true
+    @AppStorage("amira.imagine.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("amira.imagine.showInspector") private var inspectorVisible = true
+    @AppStorage("amira.imagine.inspector.width") private var inspectorWidth: Double = 320
 
     @State private var animateWorkspaceState = AnimateWorkspaceState()
 
@@ -64,70 +64,103 @@ private struct ScenesWorkspaceContent: View {
     }
 
     private var workspaceBody: some View {
-        HStack(spacing: 0) {
-            if sidebarVisible {
-                sidebarContent
-                    .frame(width: sidebarWidth)
-
-                OperaChromeSplitHandle(
-                    onDragChanged: resizeSidebar,
-                    onDragEnded: { }
+        GeometryReader { proxy in
+            let handleWidth: CGFloat = 10
+            let centerMinimumWidth = min(640, max(420, proxy.size.width * 0.42))
+            let sidebarHandleWidth = sidebarVisible ? handleWidth : 0
+            let inspectorHandleWidth = inspectorVisible ? handleWidth : 0
+            let maxSidebarWidth = max(
+                OperaChromeSidebarMetrics.minWidth,
+                min(
+                    OperaChromeSidebarMetrics.maxWidth,
+                    proxy.size.width - sidebarHandleWidth - inspectorHandleWidth - 280 - centerMinimumWidth
                 )
-            }
+            )
+            let effectiveSidebarWidth = sidebarVisible
+                ? min(max(CGFloat(sidebarWidth), OperaChromeSidebarMetrics.minWidth), maxSidebarWidth)
+                : 0
+            let availableAfterSidebar = proxy.size.width - effectiveSidebarWidth - sidebarHandleWidth - inspectorHandleWidth
+            let maxInspectorWidth = inspectorVisible
+                ? max(280, min(640, availableAfterSidebar - centerMinimumWidth))
+                : 0
+            let effectiveInspectorWidth = inspectorVisible
+                ? min(max(CGFloat(inspectorWidth), 280), maxInspectorWidth)
+                : 0
 
-            OperaChromeFlatPane {
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("SCENES")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .tracking(1.2)
-                            .foregroundStyle(OperaChromeTheme.textTertiary)
-                        Text(projectTitle)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(OperaChromeTheme.textPrimary)
-                            .lineLimit(1)
-                        Text(activeDetailTitle)
-                            .font(.system(size: 11))
-                            .foregroundStyle(OperaChromeTheme.textSecondary)
-                            .lineLimit(1)
-                    }
+            HStack(spacing: 0) {
+                if sidebarVisible {
+                    sidebarContent
+                        .frame(width: effectiveSidebarWidth)
 
-                    Spacer(minLength: 10)
+                    OperaChromeSplitHandle(
+                        onDragChanged: resizeSidebar,
+                        onDragEnded: { }
+                    )
+                    .frame(width: handleWidth)
                 }
-            } content: {
-                ImagineScenesPageView(store: store)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if inspectorVisible {
-                OperaChromeSplitHandle(
-                    onDragChanged: resizeInspector,
-                    onDragEnded: { }
-                )
 
                 OperaChromeFlatPane {
-                    OperaChromePaneHeader(
-                        eyebrow: "SCENES",
-                        title: "Inspector",
-                        subtitle: "Scenes"
-                    ) {
-                        OperaChromeActionButton(systemImage: "xmark") {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                inspectorVisible = false
-                            }
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("SCENES")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .tracking(1.2)
+                                .foregroundStyle(OperaChromeTheme.textTertiary)
+                            Text(projectTitle)
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(OperaChromeTheme.textPrimary)
+                                .lineLimit(1)
+                            Text(activeDetailTitle)
+                                .font(.system(size: 11))
+                                .foregroundStyle(OperaChromeTheme.textSecondary)
+                                .lineLimit(1)
                         }
+
+                        Spacer(minLength: 10)
                     }
                 } content: {
-                    InspectorView(
-                        store: store,
-                        currentPage: .scenes,
-                        animateWorkspaceState: animateWorkspaceState
-                    )
+                    ImagineScenesPageView(store: store)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(width: max(inspectorWidth, 250))
+                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
+
+                if inspectorVisible {
+                    OperaChromeSplitHandle(
+                        onDragChanged: { delta in
+                            resizeInspector(delta, maxWidth: maxInspectorWidth)
+                        },
+                        onDragEnded: { }
+                    )
+                    .frame(width: handleWidth)
+                    .zIndex(2)
+
+                    OperaChromeFlatPane {
+                        OperaChromePaneHeader(
+                            eyebrow: "SCENES",
+                            title: "Inspector",
+                            subtitle: "Scenes"
+                        ) {
+                            OperaChromeActionButton(systemImage: "xmark") {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    inspectorVisible = false
+                                }
+                            }
+                        }
+                    } content: {
+                        InspectorView(
+                            store: store,
+                            currentPage: .scenes,
+                            animateWorkspaceState: animateWorkspaceState
+                        )
+                    }
+                    .frame(width: effectiveInspectorWidth)
+                    .clipped()
+                }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .background(OperaChromeTheme.workspaceBackground)
         }
-        .background(OperaChromeTheme.workspaceBackground)
     }
 
     private var sidebarContent: some View {
@@ -151,10 +184,16 @@ private struct ScenesWorkspaceContent: View {
         )
     }
 
-    private func resizeInspector(_ delta: CGFloat) {
-        inspectorWidth = min(
-            max(inspectorWidth - Double(delta), 250),
-            600
+    private func resizeInspector(_ delta: CGFloat, maxWidth: CGFloat) {
+        let visibleAnchor = min(
+            max(CGFloat(inspectorWidth), 280),
+            maxWidth
+        )
+        inspectorWidth = Double(
+            min(
+                max(visibleAnchor - delta, 280),
+                maxWidth
+            )
         )
     }
 }
