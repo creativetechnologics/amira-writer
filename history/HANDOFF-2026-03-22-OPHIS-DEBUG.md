@@ -4,7 +4,7 @@ Date: March 22, 2026
 Workspace: `/Volumes/Storage VIII/Programming/Novotro Opera`
 Repo status at handoff: uncommitted local edits in:
 - `Packages/NovotroScore/Sources/NovotroScore/ScoreStore.swift`
-- `Sources/NovotroOpera/OperaShellView.swift`
+- `Sources/Opera/OperaShellView.swift`
 
 ## Immediate user-reported blockers
 
@@ -49,7 +49,7 @@ Why this matters:
 ### 2. Animate shell timeout patch that did NOT solve it
 
 File touched:
-- `Sources/NovotroOpera/OperaShellView.swift`
+- `Sources/Opera/OperaShellView.swift`
 
 Changes currently in the working tree:
 - Added recent-project migration and filtering.
@@ -120,7 +120,7 @@ Strong suggestion:
 ### B. Animate
 
 Most likely files:
-- `Sources/NovotroOpera/OperaShellView.swift`
+- `Sources/Opera/OperaShellView.swift`
 - `Packages/NovotroAnimate/Sources/NovotroAnimate/NovotroAnimateWorkspace.swift`
 - `Packages/NovotroAnimate/Sources/NovotroAnimate/AnimateStore.swift`
 - `Packages/NovotroAnimate/Sources/NovotroAnimate/Services/ProjectDatabaseBridge.swift`
@@ -210,6 +210,6 @@ The build succeeded and the app bundle was copied to Gary’s laptop, but the us
 
 At handoff time the workspace has local uncommitted edits in:
 - `Packages/NovotroScore/Sources/NovotroScore/ScoreStore.swift`
-- `Sources/NovotroOpera/OperaShellView.swift`
+- `Sources/Opera/OperaShellView.swift`
 
 Those edits represent attempted fixes that should be reviewed carefully rather than assumed correct.

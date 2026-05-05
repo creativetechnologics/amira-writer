@@ -762,7 +762,7 @@ Useful `mem_search` queries if you need more detail:
 - `"Retired headless WAV export doc"` — today's doc retirement
 - `"ProjectPaths"` / `"Waves A B C D E F"` — layout refactor
 
-Use `mem_context project="novotro-opera"` at session start.
+Use `mem_context project="amira-writer"` at session start.
 
 ---
 

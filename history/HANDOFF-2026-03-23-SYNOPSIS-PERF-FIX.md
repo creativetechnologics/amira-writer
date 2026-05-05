@@ -96,7 +96,7 @@ The workspace has many uncommitted modified files from this session and earlier 
 - `Packages/NovotroAnimate/*` (many files)
 - `Packages/NovotroScore/*` (many files)
 - `Packages/NovotroProjectKit/*`
-- `Sources/NovotroOpera/*`
+- `Sources/Opera/*`
 - `Sources/NovotroWrite/NovotroWriteWorkspace.swift`
 - `Sources/NovotroWrite/Views/ContentView.swift`
 

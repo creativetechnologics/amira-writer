@@ -22,7 +22,7 @@ This session delivered three user-facing UI changes and three critical bug fixes
 
 **Files changed:**
 - `Packages/NovotroProjectKit/Sources/NovotroProjectKit/OperaChrome.swift` — Added shared `SaveIndicatorState` enum (public) and `OperaChromeCompactSaveIndicator` view
-- `Sources/NovotroOpera/OperaShellView.swift` — Added `activeSaveIndicator` computed property + indicator in `tabBar`
+- `Sources/Opera/OperaShellView.swift` — Added `activeSaveIndicator` computed property + indicator in `tabBar`
 - `Sources/NovotroWrite/Views/ContentView.swift` — Removed save state from `OperaChromeStatusBar` call
 - `Sources/NovotroWrite/ScriptStore.swift` — Removed local `SaveIndicatorState` enum (now shared)
 - `Packages/NovotroScore/Sources/NovotroScore/ScoreStore.swift` — Removed local `SaveIndicatorState` enum (now shared)
@@ -39,7 +39,7 @@ This session delivered three user-facing UI changes and three critical bug fixes
 - Added `.padding(.top, 4)` to the tab bar in `OperaShellView`. This pushes the "Novotro Opera" text and mode buttons down 4px so they visually align with the macOS close/minimize/zoom (traffic light) buttons.
 
 **Files changed:**
-- `Sources/NovotroOpera/OperaShellView.swift`
+- `Sources/Opera/OperaShellView.swift`
 
 **Why:** The traffic lights were slightly above the title text, which looked misaligned.
 
@@ -93,7 +93,7 @@ The entire synopsis system was redesigned from a single shared file to per-scene
 
 **Fix:** Added `@State private var modeSwitchTask: Task<Void, Never>?` to `OperaShellView`. Each new mode selection cancels the previous task. Added `Task.isCancelled` checks at critical commit points inside `handleModeSelectionChange`.
 
-**Files:** `Sources/NovotroOpera/OperaShellView.swift`
+**Files:** `Sources/Opera/OperaShellView.swift`
 
 ---
 
@@ -109,7 +109,7 @@ The entire synopsis system was redesigned from a single shared file to per-scene
 
 ## Build Status
 
-- **Xcode build:** SUCCEEDED (scheme NovotroOpera)
+- **Xcode build:** SUCCEEDED (scheme Opera)
 - **Tests:** All 17 tests passed (NovotroWriteTests)
 
 ---
