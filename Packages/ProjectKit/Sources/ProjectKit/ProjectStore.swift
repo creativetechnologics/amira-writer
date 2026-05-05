@@ -176,7 +176,7 @@ public actor ProjectStore {
     private static let schemaVersion = 1
 
     public static func databaseDirectory(for projectURL: URL) -> URL {
-        ProjectPaths(root: projectURL).novotroDir
+        ProjectPaths(root: projectURL).amiraDir
     }
 
     public static func databaseURL(for projectURL: URL) -> URL {
@@ -1368,5 +1368,3 @@ private enum SQLiteValue {
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-
-public typealias NovotroProjectStore = ProjectStore

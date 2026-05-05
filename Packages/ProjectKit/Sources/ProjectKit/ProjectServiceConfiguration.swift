@@ -8,17 +8,22 @@ public enum ProjectServiceConfiguration {
     public static let allowedRootsEnvironmentKey = "PROJECT_SERVICE_ALLOWED_ROOTS"
     public static let endpointFileEnvironmentKey = "PROJECT_SERVICE_ENDPOINT_FILE"
 
-    private static let legacyAuthTokenEnvironmentKey = "NOVOTRO_PROJECT_SERVICE_TOKEN"
-    private static let legacyAuthTokenFileEnvironmentKey = "NOVOTRO_PROJECT_SERVICE_TOKEN_FILE"
-    private static let legacyAllowedRootsEnvironmentKey = "NOVOTRO_PROJECT_SERVICE_ALLOWED_ROOTS"
-    private static let legacyEndpointFileEnvironmentKey = "NOVOTRO_PROJECT_SERVICE_ENDPOINT_FILE"
+    private static let legacyAuthTokenEnvironmentKey = "AMIRA_PROJECT_SERVICE_TOKEN"
+    private static let legacyAuthTokenFileEnvironmentKey = "AMIRA_PROJECT_SERVICE_TOKEN_FILE"
+    private static let legacyAllowedRootsEnvironmentKey = "AMIRA_PROJECT_SERVICE_ALLOWED_ROOTS"
+    private static let legacyEndpointFileEnvironmentKey = "AMIRA_PROJECT_SERVICE_ENDPOINT_FILE"
+
+    private static let deprecatedAuthTokenEnvironmentKey = "NOVOTRO_PROJECT_SERVICE_TOKEN"
+    private static let deprecatedAuthTokenFileEnvironmentKey = "NOVOTRO_PROJECT_SERVICE_TOKEN_FILE"
+    private static let deprecatedAllowedRootsEnvironmentKey = "NOVOTRO_PROJECT_SERVICE_ALLOWED_ROOTS"
+    private static let deprecatedEndpointFileEnvironmentKey = "NOVOTRO_PROJECT_SERVICE_ENDPOINT_FILE"
 
     public static func loadAuthToken(
         fileManager: FileManager = .default,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> String? {
         if let explicit = firstEnvironmentValue(
-            keys: [authTokenEnvironmentKey, legacyAuthTokenEnvironmentKey],
+            keys: [authTokenEnvironmentKey, legacyAuthTokenEnvironmentKey, deprecatedAuthTokenEnvironmentKey],
             environment: environment
         ) {
             return explicit
@@ -26,7 +31,7 @@ public enum ProjectServiceConfiguration {
 
         let tokenURL: URL
         if let explicitPath = firstEnvironmentValue(
-            keys: [authTokenFileEnvironmentKey, legacyAuthTokenFileEnvironmentKey],
+            keys: [authTokenFileEnvironmentKey, legacyAuthTokenFileEnvironmentKey, deprecatedAuthTokenFileEnvironmentKey],
             environment: environment
         ) {
             tokenURL = URL(fileURLWithPath: NSString(string: explicitPath).expandingTildeInPath)
@@ -55,7 +60,7 @@ public enum ProjectServiceConfiguration {
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [URL] {
         if let explicit = firstEnvironmentValue(
-            keys: [allowedRootsEnvironmentKey, legacyAllowedRootsEnvironmentKey],
+            keys: [allowedRootsEnvironmentKey, legacyAllowedRootsEnvironmentKey, deprecatedAllowedRootsEnvironmentKey],
             environment: environment
         ) {
             let configured = explicit
@@ -161,5 +166,3 @@ public enum ProjectServiceConfiguration {
         return trimmed.isEmpty ? nil : trimmed
     }
 }
-
-public typealias NovotroProjectServiceConfiguration = ProjectServiceConfiguration

@@ -11,7 +11,8 @@ public actor ProjectDatabase {
 
     public init(projectURL: URL, databaseDirectoryURL: URL? = nil) {
         self.projectURL = projectURL
-        self.databaseDirectoryURL = databaseDirectoryURL ?? ProjectPaths(root: projectURL).novotroDir
+        ProjectPaths.migrateLegacyDatabaseDirIfNeeded(root: projectURL)
+        self.databaseDirectoryURL = databaseDirectoryURL ?? ProjectPaths(root: projectURL).amiraDir
         self.databaseURL = self.databaseDirectoryURL.appendingPathComponent("project.sqlite")
     }
 
@@ -733,6 +734,7 @@ public actor ProjectDatabase {
             """
         )
         try execute("CREATE INDEX IF NOT EXISTS idx_scene_versions_scene_id ON scene_versions(scene_id)")
+        try execute("CREATE INDEX IF NOT EXISTS idx_change_log_change_id ON change_log(change_id)")
     }
 
     private func migrateSchemaIfNeeded() throws {
@@ -1267,7 +1269,7 @@ public actor ProjectDatabase {
         var parts: [String] = []
         while let fileURL = enumerator?.nextObject() as? URL {
             let relative = relativePath(for: fileURL)
-            if relative.hasPrefix(".novotro/") { continue }
+            if relative.hasPrefix(".amira/") { continue }
             guard fileURL.hasDirectoryPath == false else { continue }
             guard isPrimarySongPath(relative) || isCanonicalProjectFile(relative) else { continue }
             let values = try fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
@@ -1303,7 +1305,7 @@ public actor ProjectDatabase {
         while let fileURL = enumerator?.nextObject() as? URL {
             guard fileURL.hasDirectoryPath == false else { continue }
             let relative = relativePath(for: fileURL)
-            guard relative.hasPrefix(".novotro/") == false else { continue }
+            guard relative.hasPrefix(".amira/") == false else { continue }
             guard isPrimarySongPath(relative) == false else { continue }
             guard isCanonicalProjectFile(relative) else { continue }
             files.append(relative)
@@ -1561,5 +1563,3 @@ public actor ProjectDatabase {
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-
-public typealias NovotroProjectDatabase = ProjectDatabase

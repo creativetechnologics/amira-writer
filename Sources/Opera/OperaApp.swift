@@ -13,8 +13,31 @@ struct OperaApp: App {
         // Opera is local-first in this workspace.
         // Force folder-based operation and avoid any remote/server-backed project sync in this process.
         setenv("PROJECT_SERVICE_DISABLE", "1", 1)
+        setenv("AMIRA_DISABLE_PROJECT_SERVICE", "1", 1)
         setenv("NOVOTRO_DISABLE_PROJECT_SERVICE", "1", 1)
         // Note: Score API server is intentionally enabled for remote diagnostics.
+
+        // One-time migration from novotro.* to amira.* UserDefaults keys.
+        migrateNovotroToAmiraDefaults()
+    }
+
+    /// Migrates all UserDefaults keys with the `novotro.` prefix to `amira.`.
+    /// Runs only once; subsequent launches are a no-op.
+    private func migrateNovotroToAmiraDefaults() {
+        let defaults = UserDefaults.standard
+        let migrationFlag = "amira.defaults.migration.complete"
+        guard !defaults.bool(forKey: migrationFlag) else { return }
+        defaults.set(true, forKey: migrationFlag)
+
+        let oldPrefix = "novotro."
+        let newPrefix = "amira."
+        for (key, value) in defaults.dictionaryRepresentation() {
+            guard key.hasPrefix(oldPrefix) else { continue }
+            let newKey = newPrefix + String(key.dropFirst(oldPrefix.count))
+            guard defaults.object(forKey: newKey) == nil else { continue }
+            defaults.set(value, forKey: newKey)
+            defaults.removeObject(forKey: key)
+        }
     }
 
     var body: some Scene {

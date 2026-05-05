@@ -32,6 +32,9 @@ Scripts/3d-map-pipeline/work/
 # Local server / pipeline logs
 *.log
 
+# ProjectKit test scratch fixtures; preserve locally, never commit generated SQLite projects.
+Packages/ProjectKit/.tmp-tests/
+
 # Codex Kimi companion agent state (contains credentials)
 .codex-kimi-companion/
 .codex-kimi-share/

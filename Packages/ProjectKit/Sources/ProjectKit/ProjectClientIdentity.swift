@@ -74,7 +74,7 @@ public enum ProjectClientIdentity {
     }
 }
 
-public typealias NovotroProjectClientIdentity = ProjectClientIdentity
+
 
 private extension SHA256Digest {
     var hexString: String {

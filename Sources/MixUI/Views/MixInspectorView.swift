@@ -35,7 +35,7 @@ enum MixInspectorTab: String, CaseIterable, Identifiable {
 @available(macOS 26.0, *)
 struct MixInspectorView: View {
     @Bindable var store: MixStore
-    @AppStorage("novotro.mix.inspector.tab") private var rawTab: String = MixInspectorTab.browser.rawValue
+    @AppStorage("amira.mix.inspector.tab") private var rawTab: String = MixInspectorTab.browser.rawValue
 
     private var selectedTab: Binding<MixInspectorTab> {
         Binding(
@@ -75,7 +75,7 @@ struct MixInspectorView: View {
 @available(macOS 26.0, *)
 struct MixBrowserTab: View {
     @Bindable var store: MixStore
-    @AppStorage("novotro.mix.browser.expandedPaths") private var rawExpandedPaths: String = "[]"
+    @AppStorage("amira.mix.browser.expandedPaths") private var rawExpandedPaths: String = "[]"
 
     private var isFilteringBrowser: Bool {
         store.browserSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false

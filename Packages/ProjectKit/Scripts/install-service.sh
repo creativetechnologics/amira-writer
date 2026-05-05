@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_PRODUCT="ProjectService"
 SERVICE_NAME="project-service"
-INSTALL_DIR="${PROJECT_SERVICE_INSTALL_DIR:-${NOVOTRO_INSTALL_DIR:-/Volumes/Storage VIII/Programming/!Applications}}"
+INSTALL_DIR="${PROJECT_SERVICE_INSTALL_DIR:-${AMIRA_INSTALL_DIR:-${NOVOTRO_INSTALL_DIR:-/Volumes/Storage VIII/Programming/!Applications}}}"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LAUNCH_AGENT_ID="com.opera.project-service"
 LAUNCH_AGENT_PATH="$LAUNCH_AGENTS_DIR/${LAUNCH_AGENT_ID}.plist"
@@ -12,7 +12,7 @@ LEGACY_LAUNCH_AGENT_ID="com.novotro.project-service"
 LEGACY_LAUNCH_AGENT_PATH="$LAUNCH_AGENTS_DIR/${LEGACY_LAUNCH_AGENT_ID}.plist"
 LEGACY_SERVICE_NAME="novotro-project-service"
 LOG_DIR="$HOME/Library/Logs/ProjectService"
-PORT="${PROJECT_SERVICE_PORT:-${NOVOTRO_PROJECT_SERVICE_PORT:-19847}}"
+PORT="${PROJECT_SERVICE_PORT:-${AMIRA_PROJECT_SERVICE_PORT:-${NOVOTRO_PROJECT_SERVICE_PORT:-19847}}}"
 SUPPORT_DIR_PREFERRED="$HOME/Library/Application Support/Opera"
 SUPPORT_DIR_LEGACY="$HOME/Library/Application Support/Novotro"
 if [[ -d "$SUPPORT_DIR_PREFERRED" || ! -d "$SUPPORT_DIR_LEGACY" ]]; then
@@ -20,7 +20,7 @@ if [[ -d "$SUPPORT_DIR_PREFERRED" || ! -d "$SUPPORT_DIR_LEGACY" ]]; then
 else
     SUPPORT_DIR="$SUPPORT_DIR_LEGACY"
 fi
-TOKEN_PATH="${PROJECT_SERVICE_TOKEN_FILE:-${NOVOTRO_PROJECT_SERVICE_TOKEN_FILE:-$SUPPORT_DIR/project-service-token}}"
+TOKEN_PATH="${PROJECT_SERVICE_TOKEN_FILE:-${AMIRA_PROJECT_SERVICE_TOKEN_FILE:-${NOVOTRO_PROJECT_SERVICE_TOKEN_FILE:-$SUPPORT_DIR/project-service-token}}}"
 
 BUILD_CONFIG="release"
 for arg in "$@"; do
@@ -69,6 +69,8 @@ cat > "$LAUNCH_AGENT_PATH" <<PLIST
     <key>EnvironmentVariables</key>
     <dict>
         <key>PROJECT_SERVICE_TOKEN_FILE</key>
+        <string>${TOKEN_PATH}</string>
+        <key>AMIRA_PROJECT_SERVICE_TOKEN_FILE</key>
         <string>${TOKEN_PATH}</string>
         <key>NOVOTRO_PROJECT_SERVICE_TOKEN_FILE</key>
         <string>${TOKEN_PATH}</string>

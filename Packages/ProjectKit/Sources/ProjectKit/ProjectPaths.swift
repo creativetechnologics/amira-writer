@@ -122,9 +122,34 @@ public struct ProjectPaths: Sendable {
         root.appendingPathComponent("config", isDirectory: true)
     }
 
-    /// `<project>/.novotro/`  (SQLite database directory)
+    /// `<project>/.amira/`  (SQLite database directory)
+    public var amiraDir: URL {
+        root.appendingPathComponent(".amira", isDirectory: true)
+    }
+
+    /// Legacy `<project>/.novotro/` — migrated to `.amira/` on first access.
+    @available(*, deprecated, message: "Use amiraDir instead.")
     public var novotroDir: URL {
         root.appendingPathComponent(".novotro", isDirectory: true)
+    }
+
+    /// Performs a one-time rename of `.novotro/` → `.amira/` if the legacy directory exists.
+    public static func migrateLegacyDatabaseDirIfNeeded(root: URL, fileManager: FileManager = .default) {
+        let amira = root.appendingPathComponent(".amira", isDirectory: true)
+        let novotro = root.appendingPathComponent(".novotro", isDirectory: true)
+        guard fileManager.fileExists(atPath: novotro.path),
+              !fileManager.fileExists(atPath: amira.path) else { return }
+        try? fileManager.moveItem(at: novotro, to: amira)
+    }
+
+    /// Returns the active database directory: `.amira/` if it exists, otherwise the legacy `.novotro/`.
+    /// New projects will use `.amira/`.
+    public var databaseDir: URL {
+        let dir = amiraDir
+        if FileManager.default.fileExists(atPath: dir.path) { return dir }
+        let legacy = novotroDir
+        if FileManager.default.fileExists(atPath: legacy.path) { return legacy }
+        return dir
     }
 
     /// `<project>/Animate/`
@@ -185,16 +210,30 @@ public struct ProjectPaths: Sendable {
         settings.appendingPathComponent("animated-look-prompt.json")
     }
 
-    /// `<project>/.novotro/project.sqlite`
-    public var projectSQLite: URL {
-        novotroDir.appendingPathComponent("project.sqlite")
+    /// `<project>/Settings/character-costume-generation-rules.json`
+    public var characterCostumeGenerationRulesJSON: URL {
+        settings.appendingPathComponent("character-costume-generation-rules.json")
     }
 
-    /// `<project>/.novotro/image-intelligence.sqlite`
+    /// `<project>/Settings/shot-generation-settings.json`
+    public var shotGenerationSettingsJSON: URL {
+        settings.appendingPathComponent("shot-generation-settings.json")
+    }
+
+    /// `<project>/Settings/shot-prompt-protocol.json`
+    public var shotPromptProtocolSettingsJSON: URL {
+        settings.appendingPathComponent("shot-prompt-protocol.json")
+    }
+
+    /// `<project>/.amira/project.sqlite`
+    public var projectSQLite: URL {
+        amiraDir.appendingPathComponent("project.sqlite")
+    }
+
+    /// `<project>/.amira/image-intelligence.sqlite`
     /// Phase 1: Dedicated SQLite store for image intelligence subsystem.
-    /// Note: If .novotro/ is not synced in your setup, move this to Settings/ before use.
     public var imageIntelligenceSQLite: URL {
-        novotroDir.appendingPathComponent("image-intelligence.sqlite")
+        amiraDir.appendingPathComponent("image-intelligence.sqlite")
     }
 
     // MARK: - Mix

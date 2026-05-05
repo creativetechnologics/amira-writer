@@ -383,5 +383,3 @@ public final class ProjectServerRegistry: @unchecked Sendable {
 }
 
 public typealias NPProjectServerRegistration = ProjectServerRegistration
-public typealias NovotroProjectPathIdentity = ProjectPathIdentity
-public typealias NovotroProjectServerRegistry = ProjectServerRegistry

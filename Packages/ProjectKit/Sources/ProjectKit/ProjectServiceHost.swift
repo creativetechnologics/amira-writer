@@ -704,7 +704,7 @@ public final class ProjectServiceHost: @unchecked Sendable {
         while let fileURL = enumerator?.nextObject() as? URL {
             guard fileURL.hasDirectoryPath == false else { continue }
             let relativePath = relativePath(for: fileURL, rootURL: projectURL)
-            guard relativePath.hasPrefix(".novotro/") == false else { continue }
+            guard relativePath.hasPrefix(".amira/") == false else { continue }
             let values = try fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
             let modifiedAt = values.contentModificationDate ?? .distantPast
             let fileSize = Int64(values.fileSize ?? 0)
@@ -734,7 +734,7 @@ public final class ProjectServiceHost: @unchecked Sendable {
         while let fileURL = enumerator?.nextObject() as? URL {
             guard fileURL.hasDirectoryPath == false else { continue }
             let relativePath = relativePath(for: fileURL, rootURL: projectURL)
-            guard relativePath.hasPrefix(".novotro/") == false else { continue }
+            guard relativePath.hasPrefix(".amira/") == false else { continue }
 
             let values = try fileURL.resourceValues(forKeys: [.fileSizeKey])
             assetCount += 1
@@ -1073,6 +1073,3 @@ enum ProjectServiceCodec {
         return formatter.string(from: date)
     }
 }
-
-typealias NovotroProjectServiceHost = ProjectServiceHost
-typealias NovotroProjectServiceCodec = ProjectServiceCodec

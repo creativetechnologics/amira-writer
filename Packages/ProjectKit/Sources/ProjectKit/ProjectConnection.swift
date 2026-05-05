@@ -306,10 +306,10 @@ public actor ProjectConnection {
 
     public nonisolated static func shouldPreferRemoteService(for projectURL: URL) -> Bool {
         let environment = ProcessInfo.processInfo.environment
-        if environment["PROJECT_SERVICE_DISABLE"] == "1" || environment["NOVOTRO_DISABLE_PROJECT_SERVICE"] == "1" {
+        if environment["PROJECT_SERVICE_DISABLE"] == "1" || environment["AMIRA_DISABLE_PROJECT_SERVICE"] == "1" || environment["NOVOTRO_DISABLE_PROJECT_SERVICE"] == "1" {
             return false
         }
-        if environment["PROJECT_SERVICE_FORCE"] == "1" || environment["NOVOTRO_FORCE_PROJECT_SERVICE"] == "1" {
+        if environment["PROJECT_SERVICE_FORCE"] == "1" || environment["AMIRA_FORCE_PROJECT_SERVICE"] == "1" || environment["NOVOTRO_FORCE_PROJECT_SERVICE"] == "1" {
             return true
         }
         guard projectURL.pathExtension.lowercased() == "owp" else { return false }
@@ -343,7 +343,7 @@ public actor ProjectConnection {
 }
 
 public actor ProjectRemoteClient {
-    public static let bonjourServiceType = "_novotro-project._tcp"
+    public static let bonjourServiceType = "_amira-project._tcp"
 
     private let endpoint: NWEndpoint
     private let projectURL: URL
@@ -675,7 +675,7 @@ public actor ProjectRemoteClient {
 
     private func send(_ request: ProjectServiceRequest) async throws -> ProjectServiceResponse {
         let connection = NWConnection(to: endpoint, using: .tcp)
-        let queue = DispatchQueue(label: "com.novotro.project.remote-client.\(UUID().uuidString)")
+        let queue = DispatchQueue(label: "com.amira.project.remote-client.\(UUID().uuidString)")
         defer { connection.cancel() }
 
         return try await withTaskCancellationHandler {
@@ -721,7 +721,7 @@ public actor ProjectRemoteClient {
             for: .bonjour(type: bonjourServiceType, domain: nil),
             using: .tcp
         )
-        let queue = DispatchQueue(label: "com.novotro.project.discovery")
+        let queue = DispatchQueue(label: "com.amira.project.discovery")
 
         return try await withTaskCancellationHandler {
             return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[NWEndpoint], Error>) in
@@ -959,7 +959,3 @@ public enum ProjectRemoteClientError: LocalizedError {
         }
     }
 }
-
-public typealias NovotroProjectConnection = ProjectConnection
-public typealias NovotroProjectRemoteClient = ProjectRemoteClient
-public typealias NovotroProjectRemoteClientError = ProjectRemoteClientError

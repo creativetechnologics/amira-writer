@@ -86,6 +86,7 @@ struct ProjectService {
 
     private static func parsePort(arguments: [String]) throws -> UInt16 {
         if let explicit = ProcessInfo.processInfo.environment["PROJECT_SERVICE_PORT"]
+            ?? ProcessInfo.processInfo.environment["AMIRA_PROJECT_SERVICE_PORT"]
             ?? ProcessInfo.processInfo.environment["NOVOTRO_PROJECT_SERVICE_PORT"],
            !explicit.isEmpty {
             guard let port = UInt16(explicit) else {

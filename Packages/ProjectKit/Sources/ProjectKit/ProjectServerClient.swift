@@ -319,5 +319,3 @@ private final class ProjectServerEndpointAccumulator: @unchecked Sendable {
         return snapshot
     }
 }
-
-public typealias NovotroProjectServerClient = ProjectServerClient
