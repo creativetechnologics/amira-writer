@@ -12,12 +12,15 @@ struct ProjectSettingsData: Codable {
     var directionMarkupColorHex: String?
     var storyboardingMarkupColorHex: String?
     var animateMarkupColorHex: String?
+    var scriptBackgroundColorHex: String?
 
     // MARK: - LLM Provider
     var llmProvider: String?
     var llmMiniMaxKey: String?
+    var llmDeepSeekKey: String?
     var llmOpenCodeKey: String?
     var llmMiniMaxModel: String?
+    var llmDeepSeekModel: String?
     var llmOpenCodeModel: String?
     var llmClaudeModel: String?
 }

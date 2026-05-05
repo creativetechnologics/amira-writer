@@ -99,6 +99,8 @@ public struct ScriptShotCard: Codable, Sendable, Equatable, Identifiable {
     public var action: String
     public var camera: CameraSpec
     public var tags: TagSet
+    public var characterFraming: ShotCharacterFramingSpec
+    public var setting: ShotSettingSpec
     public var timing: TimingSpec
     public var lyricAnchor: LyricAnchor?
     public var status: CardStatus
@@ -111,6 +113,8 @@ public struct ScriptShotCard: Codable, Sendable, Equatable, Identifiable {
         action: String = "",
         camera: CameraSpec = CameraSpec(),
         tags: TagSet = TagSet(),
+        characterFraming: ShotCharacterFramingSpec = ShotCharacterFramingSpec(),
+        setting: ShotSettingSpec = ShotSettingSpec(),
         timing: TimingSpec = TimingSpec(),
         lyricAnchor: LyricAnchor? = nil,
         status: CardStatus = .manual,
@@ -122,10 +126,155 @@ public struct ScriptShotCard: Codable, Sendable, Equatable, Identifiable {
         self.action = action
         self.camera = camera
         self.tags = tags
+        self.characterFraming = characterFraming
+        self.setting = setting
         self.timing = timing
         self.lyricAnchor = lyricAnchor
         self.status = status
         self.provenance = provenance
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case direction
+        case action
+        case camera
+        case tags
+        case characterFraming
+        case setting
+        case timing
+        case lyricAnchor
+        case status
+        case provenance
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
+        direction = try container.decodeIfPresent(String.self, forKey: .direction) ?? ""
+        action = try container.decodeIfPresent(String.self, forKey: .action) ?? ""
+        camera = try container.decodeIfPresent(CameraSpec.self, forKey: .camera) ?? CameraSpec()
+        tags = try container.decodeIfPresent(TagSet.self, forKey: .tags) ?? TagSet()
+        characterFraming = try container.decodeIfPresent(
+            ShotCharacterFramingSpec.self,
+            forKey: .characterFraming
+        ) ?? ShotCharacterFramingSpec()
+        setting = try container.decodeIfPresent(ShotSettingSpec.self, forKey: .setting) ?? ShotSettingSpec()
+        timing = try container.decodeIfPresent(TimingSpec.self, forKey: .timing) ?? TimingSpec()
+        lyricAnchor = try container.decodeIfPresent(LyricAnchor.self, forKey: .lyricAnchor)
+        status = try container.decodeIfPresent(CardStatus.self, forKey: .status) ?? .manual
+        provenance = try container.decodeIfPresent(CardProvenance.self, forKey: .provenance)
+            ?? CardProvenance(source: .manual)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(label, forKey: .label)
+        try container.encode(direction, forKey: .direction)
+        try container.encode(action, forKey: .action)
+        try container.encode(camera, forKey: .camera)
+        try container.encode(tags, forKey: .tags)
+        if !characterFraming.isEmpty {
+            try container.encode(characterFraming, forKey: .characterFraming)
+        }
+        if !setting.isEmpty {
+            try container.encode(setting, forKey: .setting)
+        }
+        try container.encode(timing, forKey: .timing)
+        try container.encodeIfPresent(lyricAnchor, forKey: .lyricAnchor)
+        try container.encode(status, forKey: .status)
+        try container.encode(provenance, forKey: .provenance)
+    }
+}
+
+public struct ShotSettingSpec: Codable, Sendable, Equatable {
+    public var timeOfDay: String?
+    public var interiorExterior: String?
+    public var weatherAtmosphere: String?
+    public var lightSource: String?
+    public var lens: String?
+    public var cameraAngle: String?
+    public var depthOfField: String?
+    public var continuityNotes: String?
+
+    public init(
+        timeOfDay: String? = nil,
+        interiorExterior: String? = nil,
+        weatherAtmosphere: String? = nil,
+        lightSource: String? = nil,
+        lens: String? = nil,
+        cameraAngle: String? = nil,
+        depthOfField: String? = nil,
+        continuityNotes: String? = nil
+    ) {
+        self.timeOfDay = timeOfDay
+        self.interiorExterior = interiorExterior
+        self.weatherAtmosphere = weatherAtmosphere
+        self.lightSource = lightSource
+        self.lens = lens
+        self.cameraAngle = cameraAngle
+        self.depthOfField = depthOfField
+        self.continuityNotes = continuityNotes
+    }
+
+    public var isEmpty: Bool {
+        (timeOfDay ?? "").isEmpty
+            && (interiorExterior ?? "").isEmpty
+            && (weatherAtmosphere ?? "").isEmpty
+            && (lightSource ?? "").isEmpty
+            && (lens ?? "").isEmpty
+            && (cameraAngle ?? "").isEmpty
+            && (depthOfField ?? "").isEmpty
+            && (continuityNotes ?? "").isEmpty
+    }
+}
+
+public struct ShotCharacterFramingSpec: Codable, Sendable, Equatable {
+    public var left: [String]
+    public var middle: [String]
+    public var right: [String]
+    public var leftFacing: String?
+    public var middleFacing: String?
+    public var rightFacing: String?
+
+    public init(
+        left: [String] = [],
+        middle: [String] = [],
+        right: [String] = [],
+        leftFacing: String? = nil,
+        middleFacing: String? = nil,
+        rightFacing: String? = nil
+    ) {
+        self.left = left
+        self.middle = middle
+        self.right = right
+        self.leftFacing = leftFacing
+        self.middleFacing = middleFacing
+        self.rightFacing = rightFacing
+    }
+
+    public var allCharacters: [String] {
+        var seen = Set<String>()
+        var ordered: [String] = []
+        for character in left + middle + right {
+            let trimmed = character.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = trimmed.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            ordered.append(trimmed)
+        }
+        return ordered
+    }
+
+    public var isEmpty: Bool {
+        left.isEmpty && middle.isEmpty && right.isEmpty
+            && (leftFacing ?? "").isEmpty
+            && (middleFacing ?? "").isEmpty
+            && (rightFacing ?? "").isEmpty
     }
 }
 
@@ -136,6 +285,10 @@ public struct CameraSpec: Codable, Sendable, Equatable {
     /// Mirrors Animate's `CameraShot` raw values; free string for forward
     /// compatibility with new framings.
     public var shotSize: String?
+    /// Optional starting framing for a movement shot.
+    public var fromShotSize: String?
+    /// Optional ending framing for a movement shot.
+    public var toShotSize: String?
     /// Movement keyword (zoom_in, pan_left, track, hold, …). Mirrors
     /// Animate's `CameraMovement` raw values.
     public var movement: String?
@@ -150,6 +303,8 @@ public struct CameraSpec: Codable, Sendable, Equatable {
 
     public init(
         shotSize: String? = nil,
+        fromShotSize: String? = nil,
+        toShotSize: String? = nil,
         movement: String? = nil,
         focus: String? = nil,
         intent: String? = nil,
@@ -157,6 +312,8 @@ public struct CameraSpec: Codable, Sendable, Equatable {
         notes: String? = nil
     ) {
         self.shotSize = shotSize
+        self.fromShotSize = fromShotSize
+        self.toShotSize = toShotSize
         self.movement = movement
         self.focus = focus
         self.intent = intent
@@ -165,7 +322,7 @@ public struct CameraSpec: Codable, Sendable, Equatable {
     }
 
     public var isEmpty: Bool {
-        shotSize == nil && movement == nil && focus == nil
+        shotSize == nil && fromShotSize == nil && toShotSize == nil && movement == nil && focus == nil
             && intent == nil && label == nil && (notes ?? "").isEmpty
     }
 }

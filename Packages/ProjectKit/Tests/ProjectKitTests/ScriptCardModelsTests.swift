@@ -60,7 +60,7 @@ final class ScriptCardModelsTests: XCTestCase {
         let dsl = ScriptCardDSLExporter.renderShot(shot)
         XCTAssertEqual(
             dsl,
-            "[camera: track | label=A1 | focus=luke | size=close | intent=isolation | bars=17-24]"
+            "[camera: track | label=A1 | focus=luke | size=close | intent=isolation | direction=Find Luke through the crowd | bars=17-24]"
         )
     }
 
@@ -74,6 +74,60 @@ final class ScriptCardModelsTests: XCTestCase {
         XCTAssertEqual(
             ScriptCardDSLExporter.renderShot(shot),
             "[camera: hold | focus=luke | bars=5]"
+        )
+    }
+
+    func testExporter_RendersShotCharacterFraming() {
+        let shot = ScriptShotCard(
+            camera: CameraSpec(shotSize: "wide"),
+            tags: TagSet(characters: ["johnny", "amira", "luke"]),
+            characterFraming: ShotCharacterFramingSpec(
+                left: ["johnny"],
+                middle: ["amira"],
+                right: ["luke"],
+                leftFacing: "towards_camera",
+                middleFacing: "left",
+                rightFacing: "away_from_camera"
+            ),
+            setting: ShotSettingSpec(
+                timeOfDay: "dusk",
+                interiorExterior: "exterior",
+                weatherAtmosphere: "haze",
+                lightSource: "moonlight",
+                lens: "wide",
+                cameraAngle: "low_angle",
+                depthOfField: "shallow_focus",
+                continuityNotes: "match dust on uniforms"
+            ),
+            status: .manual,
+            provenance: CardProvenance(source: .manual)
+        )
+
+        XCTAssertEqual(
+            ScriptCardDSLExporter.renderShot(shot),
+            "[camera: wide | time_of_day=dusk | interior_exterior=exterior | weather_atmosphere=haze | light_source=moonlight | lens=wide | camera_angle=low_angle | depth_of_field=shallow_focus | continuity_notes=match dust on uniforms | characters=johnny,amira,luke | character_left=johnny | character_left_facing=towards_camera | character_middle=amira | character_middle_facing=left | character_right=luke | character_right_facing=away_from_camera]"
+        )
+    }
+
+    func testExporter_CanIncludeStableIDAndMovementFraming() {
+        let id = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let shot = ScriptShotCard(
+            id: id,
+            camera: CameraSpec(
+                shotSize: "close",
+                fromShotSize: "wide",
+                toShotSize: "close",
+                movement: "zoom_in",
+                focus: "amira"
+            ),
+            timing: TimingSpec(startBar: 9, endBar: 12),
+            status: .manual,
+            provenance: CardProvenance(source: .manual)
+        )
+
+        XCTAssertEqual(
+            ScriptCardDSLExporter.renderShot(shot, includeID: true),
+            "[camera: zoom_in | id=11111111-2222-3333-4444-555555555555 | focus=amira | from=wide | to=close | bars=9-12]"
         )
     }
 

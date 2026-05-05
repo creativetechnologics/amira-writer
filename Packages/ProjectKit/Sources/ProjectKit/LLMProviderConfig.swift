@@ -4,6 +4,7 @@ import Foundation
 
 public enum LLMProviderType: String, Codable, CaseIterable, Identifiable, Sendable {
     case minimax = "minimax"
+    case deepseek = "deepseek"
     case opencode = "opencode"
     case claude = "claude"
 
@@ -12,6 +13,7 @@ public enum LLMProviderType: String, Codable, CaseIterable, Identifiable, Sendab
     public var displayName: String {
         switch self {
         case .minimax: return "MiniMax"
+        case .deepseek: return "DeepSeek"
         case .opencode: return "OpenCode Go"
         case .claude: return "Claude"
         }
@@ -20,6 +22,7 @@ public enum LLMProviderType: String, Codable, CaseIterable, Identifiable, Sendab
     public var baseURL: URL {
         switch self {
         case .minimax: return URL(string: "https://api.minimax.io/v1/chat/completions")!
+        case .deepseek: return URL(string: "https://api.deepseek.com/chat/completions")!
         case .opencode: return URL(string: "https://opencode.ai/zen/go/v1/chat/completions")!
         case .claude: return URL(string: "https://localhost")! // not used -- spawns CLI
         }
@@ -28,6 +31,7 @@ public enum LLMProviderType: String, Codable, CaseIterable, Identifiable, Sendab
     public var defaultModel: String {
         switch self {
         case .minimax: return "MiniMax-M2.7"
+        case .deepseek: return "deepseek-v4-flash"
         case .opencode: return "minimax-m2.7"
         case .claude: return "sonnet"
         }
@@ -46,6 +50,11 @@ public enum LLMProviderType: String, Codable, CaseIterable, Identifiable, Sendab
             return [
                 LLMModelInfo(id: "MiniMax-M2.7", name: "MiniMax M2.7", contextLength: 204800, promptPricing: nil, completionPricing: nil),
                 LLMModelInfo(id: "MiniMax-M2.5", name: "MiniMax M2.5", contextLength: 204800, promptPricing: nil, completionPricing: nil),
+            ]
+        case .deepseek:
+            return [
+                LLMModelInfo(id: "deepseek-v4-flash", name: "DeepSeek V4 Flash", contextLength: nil, promptPricing: nil, completionPricing: nil),
+                LLMModelInfo(id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", contextLength: nil, promptPricing: nil, completionPricing: nil),
             ]
         case .opencode:
             return [
@@ -146,6 +155,7 @@ public final class LLMProviderConfig {
     private func defaultKey(for provider: LLMProviderType) -> String {
         switch provider {
         case .minimax: return "sk-cp-xepY5kt4tB-vUIs2Px9b1y_b2heeUfeFTR7NFQjD0elajPaHusqtuImNpLFSRJMPdSct3Sd_8H53PRfVbuoO-8J5_A7QQ1y83-SNs1d55TktWVdlqQS9oME"
+        case .deepseek: return ""
         case .opencode: return "sk-Ei0YBhstxFaZmeqJIxjLdrSKRlsCgSRlSN2j6g2klvPjDpxOztgemX8CXPfNmF1C"
         case .claude: return ""  // Uses CLI auth, no API key needed
         }

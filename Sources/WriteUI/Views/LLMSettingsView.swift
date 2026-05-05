@@ -33,6 +33,7 @@ struct LLMSettingsView: View {
 
             Picker("", selection: $selectedProvider) {
                 Text("MiniMax").tag(LLMProviderType.minimax)
+                Text("DeepSeek").tag(LLMProviderType.deepseek)
                 Text("OpenCode Go").tag(LLMProviderType.opencode)
                 Text("Claude").tag(LLMProviderType.claude)
             }
@@ -70,6 +71,9 @@ struct LLMSettingsView: View {
 
             case .minimax:
                 apiKeyField(hint: "Uses your MiniMax Coding Plan subscription")
+
+            case .deepseek:
+                apiKeyField(hint: "Uses DeepSeek's OpenAI-compatible Chat Completions API")
 
             case .opencode:
                 apiKeyField(hint: "Uses your OpenCode Go subscription")

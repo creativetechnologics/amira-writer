@@ -33,38 +33,60 @@ public enum ScriptCardDSLExporter {
     }
 
     /// Render a single shot card to a single `[camera: …]` line.
-    public static func renderShot(_ shot: ScriptShotCard) -> String {
+    public static func renderShot(
+        _ shot: ScriptShotCard,
+        includeID: Bool = false,
+        preserveImportedRaw: Bool = true
+    ) -> String {
         // If the importer preserved the original substring and the card
         // hasn't been edited, prefer the verbatim raw markup. We detect
         // "unedited" by checking that no structured field carries data
         // beyond what the raw string would have produced — simplest proxy
         // is: status == .importedLegacy && originalRawMarkup non-nil.
-        if shot.status == .importedLegacy,
+        if preserveImportedRaw,
+           shot.status == .importedLegacy,
            let raw = shot.provenance.originalRawMarkup,
            !raw.isEmpty {
             return raw
         }
 
         var params: [(String, String)] = []
+        if includeID {
+            params.append(("id", shot.id.uuidString))
+        }
         if let label = nonEmpty(shot.camera.label) {
             params.append(("label", label))
         }
         if let focus = nonEmpty(shot.camera.focus) {
             params.append(("focus", focus))
         }
-        if let shotSize = nonEmpty(shot.camera.shotSize) {
+        if let fromShotSize = nonEmpty(shot.camera.fromShotSize) {
+            params.append(("from", fromShotSize))
+        }
+        if let toShotSize = nonEmpty(shot.camera.toShotSize) {
+            params.append(("to", toShotSize))
+        }
+        let primary = primaryValue(for: shot)
+        if let shotSize = nonEmpty(shot.camera.shotSize),
+           shotSize != primary,
+           nonEmpty(shot.camera.fromShotSize) == nil,
+           nonEmpty(shot.camera.toShotSize) == nil {
             params.append(("size", shotSize))
         }
         if let intent = nonEmpty(shot.camera.intent) {
             params.append(("intent", intent))
         }
+        if let direction = nonEmpty(shot.direction) {
+            params.append(("direction", direction))
+        }
+        appendSettingParams(shot.setting, into: &params)
         appendTimingParams(shot.timing, into: &params)
         appendTagParams(shot.tags, into: &params)
+        appendCharacterFramingParams(shot.characterFraming, into: &params)
         if let notes = nonEmpty(shot.camera.notes) {
             params.append(("notes", notes))
         }
 
-        let primary = nonEmpty(shot.camera.movement) ?? "hold"
         return formatBracket(tag: "camera", primary: primary, params: params)
     }
 
@@ -87,6 +109,17 @@ public enum ScriptCardDSLExporter {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func primaryValue(for shot: ScriptShotCard) -> String {
+        if let movement = nonEmpty(shot.camera.movement),
+           movement != "hold" {
+            return movement
+        }
+        if let shotSize = nonEmpty(shot.camera.shotSize) {
+            return shotSize
+        }
+        return nonEmpty(shot.camera.movement) ?? "hold"
+    }
+
     private static func appendTimingParams(
         _ timing: TimingSpec,
         into params: inout [(String, String)]
@@ -105,6 +138,36 @@ public enum ScriptCardDSLExporter {
             params.append(("frames", "\(start)-\(end)"))
         } else if let start = timing.startFrame {
             params.append(("frames", "\(start)"))
+        }
+    }
+
+    private static func appendSettingParams(
+        _ setting: ShotSettingSpec,
+        into params: inout [(String, String)]
+    ) {
+        if let timeOfDay = nonEmpty(setting.timeOfDay) {
+            params.append(("time_of_day", timeOfDay))
+        }
+        if let interiorExterior = nonEmpty(setting.interiorExterior) {
+            params.append(("interior_exterior", interiorExterior))
+        }
+        if let weatherAtmosphere = nonEmpty(setting.weatherAtmosphere) {
+            params.append(("weather_atmosphere", weatherAtmosphere))
+        }
+        if let lightSource = nonEmpty(setting.lightSource) {
+            params.append(("light_source", lightSource))
+        }
+        if let lens = nonEmpty(setting.lens) {
+            params.append(("lens", lens))
+        }
+        if let cameraAngle = nonEmpty(setting.cameraAngle) {
+            params.append(("camera_angle", cameraAngle))
+        }
+        if let depthOfField = nonEmpty(setting.depthOfField) {
+            params.append(("depth_of_field", depthOfField))
+        }
+        if let continuityNotes = nonEmpty(setting.continuityNotes) {
+            params.append(("continuity_notes", continuityNotes))
         }
     }
 
@@ -132,6 +195,30 @@ public enum ScriptCardDSLExporter {
         }
         if !tags.automation.isEmpty {
             params.append(("automation", tags.automation.joined(separator: ",")))
+        }
+    }
+
+    private static func appendCharacterFramingParams(
+        _ framing: ShotCharacterFramingSpec,
+        into params: inout [(String, String)]
+    ) {
+        if !framing.left.isEmpty {
+            params.append(("character_left", framing.left.joined(separator: ",")))
+        }
+        if let leftFacing = nonEmpty(framing.leftFacing) {
+            params.append(("character_left_facing", leftFacing))
+        }
+        if !framing.middle.isEmpty {
+            params.append(("character_middle", framing.middle.joined(separator: ",")))
+        }
+        if let middleFacing = nonEmpty(framing.middleFacing) {
+            params.append(("character_middle_facing", middleFacing))
+        }
+        if !framing.right.isEmpty {
+            params.append(("character_right", framing.right.joined(separator: ",")))
+        }
+        if let rightFacing = nonEmpty(framing.rightFacing) {
+            params.append(("character_right_facing", rightFacing))
         }
     }
 

@@ -52,14 +52,14 @@ let package = Package(
             ],
             path: "Sources/Opera"
         ),
-        // .testTarget(
-        //     name: "WriteTests",
-        //     dependencies: [
-        //         "WriteUI",
-        //         .product(name: "ProjectKit", package: "ProjectKit")
-        //     ],
-        //     path: "Tests/WriteTests"
-        // ),
+        .testTarget(
+            name: "WriteTests",
+            dependencies: [
+                "WriteUI",
+                .product(name: "ProjectKit", package: "ProjectKit")
+            ],
+            path: "Tests/WriteTests"
+        ),
         // .testTarget(
         //     name: "MixTests",
         //     dependencies: [

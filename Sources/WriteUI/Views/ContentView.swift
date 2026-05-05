@@ -10,16 +10,16 @@ struct ContentView: View {
     var appName: String = "Write"
 
     @Environment(\.openWindow) private var openWindow
-    @AppStorage("novotro.write.showInspector") private var showInspector: Bool = true
-    @AppStorage("novotro.write.showScratchpad") private var showScratchpad: Bool = true
-    @AppStorage("novotro.write.showLyricIterations") private var showLyricIterations: Bool = true
-    @AppStorage("novotro.write.showCards") private var showCards: Bool = true
-    @AppStorage("novotro.write.lyricIterationSlot") private var selectedLyricIterationSlot: Int = 1
-    @AppStorage("novotro.write.showSummaries") private var showSummaries: Bool = false
-    @AppStorage("novotro.write.sidebarVisible") private var showSidebar: Bool = true
-    @AppStorage("novotro.write.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("amira.write.showInspector") private var showInspector: Bool = true
+    @AppStorage("amira.write.showScratchpad") private var showScratchpad: Bool = true
+    @AppStorage("amira.write.showLyricIterations") private var showLyricIterations: Bool = true
+    @AppStorage("amira.write.showCards") private var showCards: Bool = true
+    @AppStorage("amira.write.lyricIterationSlot") private var selectedLyricIterationSlot: Int = 1
+    @AppStorage("amira.write.showSummaries") private var showSummaries: Bool = false
+    @AppStorage("amira.write.sidebarVisible") private var showSidebar: Bool = true
+    @AppStorage("amira.write.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
 
-    @AppStorage("novotro.write.inspector.width") private var inspectorWidth: Double = 360
+    @AppStorage("amira.write.inspector.width") private var inspectorWidth: Double = 360
 
     private var projectTitle: String {
         store.projectURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
@@ -112,7 +112,7 @@ struct ContentView: View {
                 )
             }
 
-            OperaChromeFlatPane(background: Color.black) {
+            OperaChromeFlatPane(background: store.scriptBackgroundColor) {
                 OperaChromePaneHeader(
                     eyebrow: "LIBRETTO",
                     title: projectTitle,

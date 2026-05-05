@@ -8,6 +8,12 @@ private struct ChatCompletionRequest: Encodable {
     let temperature: Double
     let stream: Bool
     let max_completion_tokens: Int?
+    let max_tokens: Int?
+    let thinking: ThinkingConfig?
+
+    struct ThinkingConfig: Encodable {
+        let type: String
+    }
 }
 
 private struct ChatCompletionResponse: Decodable {
@@ -267,7 +273,9 @@ public final class LLMClient {
             messages: messages,
             temperature: 0.7,
             stream: true,
-            max_completion_tokens: 4096
+            max_completion_tokens: config.activeProvider == .deepseek ? nil : 4096,
+            max_tokens: config.activeProvider == .deepseek ? 4096 : nil,
+            thinking: config.activeProvider == .deepseek ? .init(type: "disabled") : nil
         )
         request.httpBody = try JSONEncoder().encode(body)
 
@@ -426,7 +434,9 @@ public final class LLMClient {
             messages: apiMessages,
             temperature: 0.7,
             stream: false,
-            max_completion_tokens: 4096
+            max_completion_tokens: config.activeProvider == .deepseek ? nil : 4096,
+            max_tokens: config.activeProvider == .deepseek ? 4096 : nil,
+            thinking: config.activeProvider == .deepseek ? .init(type: "disabled") : nil
         )
         request.httpBody = try JSONEncoder().encode(body)
 

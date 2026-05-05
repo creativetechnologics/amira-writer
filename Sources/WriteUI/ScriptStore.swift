@@ -7,7 +7,7 @@ import AppKit
 
 // MARK: - Debug Logging
 
-private func novotroDebugLog(_ message: String) {
+private func amiraDebugLog(_ message: String) {
     let ts = ISO8601DateFormatter().string(from: Date())
     let line = "[\(ts)] [Write] \(message)\n"
     let url = URL(fileURLWithPath: "/tmp/write-debug.log")
@@ -24,6 +24,7 @@ enum ScriptMarkupPalette {
     static let defaultDirectionHex = "#59C7CC"
     static let defaultStoryboardingHex = "#F2A640"
     static let defaultAnimateHex = "#D973B3"
+    static let defaultScriptBackgroundHex = "#121314"
 
     static func color(from hex: String, fallback fallbackHex: String) -> Color {
         let resolvedHex = normalizedHex(hex) ?? fallbackHex
@@ -584,7 +585,7 @@ enum OWPProjectIO {
         let metadata: ProjectMetadata = {
             let metaURL = url.appendingPathComponent(projectMetadataFile)
             if let data = try? Data(contentsOf: metaURL, options: .mappedIfSafe),
-               let decoded = try? configuredDecoder().decode(ProjectMetadata.self, from: data) {
+               let decoded = try? JSONCoders.makeDecoder().decode(ProjectMetadata.self, from: data) {
                 return decoded
             }
             return ProjectMetadata.fresh(named: url.deletingPathExtension().lastPathComponent)
@@ -637,7 +638,7 @@ enum OWPProjectIO {
         let jsonURL = packageURL.appendingPathComponent(charactersFile)
         guard FileManager.default.fileExists(atPath: jsonURL.path) else { return [] }
         let data = try Data(contentsOf: jsonURL, options: .mappedIfSafe)
-        let file = try configuredDecoder().decode(OPWCharactersFile.self, from: data)
+        let file = try JSONCoders.makeDecoder().decode(OPWCharactersFile.self, from: data)
         return file.characters
     }
 
@@ -707,20 +708,6 @@ enum OWPProjectIO {
         )
     }
 
-    // MARK: - JSON Coders
-
-    static func configuredEncoder() -> JSONEncoder {
-        let e = JSONEncoder()
-        e.dateEncodingStrategy = .iso8601
-        e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return e
-    }
-
-    static func configuredDecoder() -> JSONDecoder {
-        let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
-        return d
-    }
 }
 
 // MARK: - ScriptStore
@@ -740,6 +727,7 @@ final class ScriptStore {
     var songAssets: [OWSSongAsset] = []
     var songStubs: [SongStub] = []
     var librettoFiles: [ProjectTextFile] = []
+    var librettoContentRevisionByPath: [String: Int] = [:]
     var characters: [OPWCharacter] = []
     var isDirty: Bool = false
     var statusMessage: String = "No project loaded"
@@ -752,8 +740,8 @@ final class ScriptStore {
     var selectedSongPath: String?
     var scrollTarget: String?
     var activeSongPath: String?
-    var isLibrettoEditMode: Bool = UserDefaults.standard.object(forKey: "novotro.write.librettoEditMode") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(isLibrettoEditMode, forKey: "novotro.write.librettoEditMode") }
+    var isLibrettoEditMode: Bool = UserDefaults.standard.object(forKey: "amira.write.librettoEditMode") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(isLibrettoEditMode, forKey: "amira.write.librettoEditMode") }
     }
     var showDirections: Bool = UserDefaults.standard.object(forKey: "showDirections") as? Bool ?? false {
         didSet { UserDefaults.standard.set(showDirections, forKey: "showDirections"); saveProjectSettings() }
@@ -764,36 +752,47 @@ final class ScriptStore {
     var showAnimateDirections: Bool = UserDefaults.standard.object(forKey: "showAnimateDirections") as? Bool ?? false {
         didSet { UserDefaults.standard.set(showAnimateDirections, forKey: "showAnimateDirections"); saveProjectSettings() }
     }
-    var directionMarkupColorHex: String = UserDefaults.standard.string(forKey: "novotro.write.directionMarkupColorHex") ?? ScriptMarkupPalette.defaultDirectionHex {
+    var directionMarkupColorHex: String = UserDefaults.standard.string(forKey: "amira.write.directionMarkupColorHex") ?? ScriptMarkupPalette.defaultDirectionHex {
         didSet {
             let normalized = ScriptMarkupPalette.normalizedHex(directionMarkupColorHex) ?? ScriptMarkupPalette.defaultDirectionHex
             guard normalized == directionMarkupColorHex else {
                 directionMarkupColorHex = normalized
                 return
             }
-            UserDefaults.standard.set(directionMarkupColorHex, forKey: "novotro.write.directionMarkupColorHex")
+            UserDefaults.standard.set(directionMarkupColorHex, forKey: "amira.write.directionMarkupColorHex")
             saveProjectSettings()
         }
     }
-    var storyboardingMarkupColorHex: String = UserDefaults.standard.string(forKey: "novotro.write.storyboardingMarkupColorHex") ?? ScriptMarkupPalette.defaultStoryboardingHex {
+    var storyboardingMarkupColorHex: String = UserDefaults.standard.string(forKey: "amira.write.storyboardingMarkupColorHex") ?? ScriptMarkupPalette.defaultStoryboardingHex {
         didSet {
             let normalized = ScriptMarkupPalette.normalizedHex(storyboardingMarkupColorHex) ?? ScriptMarkupPalette.defaultStoryboardingHex
             guard normalized == storyboardingMarkupColorHex else {
                 storyboardingMarkupColorHex = normalized
                 return
             }
-            UserDefaults.standard.set(storyboardingMarkupColorHex, forKey: "novotro.write.storyboardingMarkupColorHex")
+            UserDefaults.standard.set(storyboardingMarkupColorHex, forKey: "amira.write.storyboardingMarkupColorHex")
             saveProjectSettings()
         }
     }
-    var animateMarkupColorHex: String = UserDefaults.standard.string(forKey: "novotro.write.animateMarkupColorHex") ?? ScriptMarkupPalette.defaultAnimateHex {
+    var animateMarkupColorHex: String = UserDefaults.standard.string(forKey: "amira.write.animateMarkupColorHex") ?? ScriptMarkupPalette.defaultAnimateHex {
         didSet {
             let normalized = ScriptMarkupPalette.normalizedHex(animateMarkupColorHex) ?? ScriptMarkupPalette.defaultAnimateHex
             guard normalized == animateMarkupColorHex else {
                 animateMarkupColorHex = normalized
                 return
             }
-            UserDefaults.standard.set(animateMarkupColorHex, forKey: "novotro.write.animateMarkupColorHex")
+            UserDefaults.standard.set(animateMarkupColorHex, forKey: "amira.write.animateMarkupColorHex")
+            saveProjectSettings()
+        }
+    }
+    var scriptBackgroundColorHex: String = UserDefaults.standard.string(forKey: "amira.write.scriptBackgroundColorHex") ?? ScriptMarkupPalette.defaultScriptBackgroundHex {
+        didSet {
+            let normalized = ScriptMarkupPalette.normalizedHex(scriptBackgroundColorHex) ?? ScriptMarkupPalette.defaultScriptBackgroundHex
+            guard normalized == scriptBackgroundColorHex else {
+                scriptBackgroundColorHex = normalized
+                return
+            }
+            UserDefaults.standard.set(scriptBackgroundColorHex, forKey: "amira.write.scriptBackgroundColorHex")
             saveProjectSettings()
         }
     }
@@ -811,6 +810,10 @@ final class ScriptStore {
 
     var animateMarkupColor: Color {
         ScriptMarkupPalette.color(from: animateMarkupColorHex, fallback: ScriptMarkupPalette.defaultAnimateHex)
+    }
+
+    var scriptBackgroundColor: Color {
+        ScriptMarkupPalette.color(from: scriptBackgroundColorHex, fallback: ScriptMarkupPalette.defaultScriptBackgroundHex)
     }
 
     var collaborationBadgeLabel: String? {
@@ -918,9 +921,9 @@ final class ScriptStore {
     // MARK: - Load Project
 
     func loadProject(url: URL) async {
-        novotroDebugLog("loadProject START url=\(url.path)")
+        amiraDebugLog("loadProject START url=\(url.path)")
         guard !isLoadingProject else {
-            novotroDebugLog("loadProject SKIPPED: already loading")
+            amiraDebugLog("loadProject SKIPPED: already loading")
             return
         }
 
@@ -976,6 +979,7 @@ final class ScriptStore {
             self.songStubs = stubs
             self.songAssets = []
             self.librettoFiles = []
+            self.librettoContentRevisionByPath = [:]
             self.scratchpadFiles = []
             self.lyricIterationFiles = []
             self.scratchpadDocumentText = ""
@@ -1005,6 +1009,7 @@ final class ScriptStore {
                             relativePath: asset.relativePath,
                             content: version.lyrics
                         ))
+                        bumpLibrettoRevision(for: asset.relativePath)
                     }
                 }
                 characters = loaded.characters
@@ -1023,6 +1028,7 @@ final class ScriptStore {
                                 relativePath: asset.relativePath,
                                 content: version.lyrics
                             ))
+                            bumpLibrettoRevision(for: stub.relativePath)
                         }
                         hydratedScenePaths.insert(stub.relativePath)
                     } catch {
@@ -1199,6 +1205,7 @@ final class ScriptStore {
         // Update librettoFiles
         if let idx = librettoFiles.firstIndex(where: { $0.relativePath == path }) {
             librettoFiles[idx].content = lyrics
+            bumpLibrettoRevision(for: path)
         }
 
         // Update the song asset's active version lyrics
@@ -1211,6 +1218,10 @@ final class ScriptStore {
         }
 
         markDirty(path: path)
+    }
+
+    private func bumpLibrettoRevision(for path: String) {
+        librettoContentRevisionByPath[path, default: 0] += 1
     }
 
     // MARK: - Per-Scene Synopsis (embedded in libretto)
@@ -1331,6 +1342,7 @@ final class ScriptStore {
             relativePath: relativePath,
             content: ""
         ))
+        bumpLibrettoRevision(for: relativePath)
         normalizeScratchpadFiles()
 
         scrollTarget = relativePath
@@ -1381,6 +1393,7 @@ final class ScriptStore {
         songAssets[songIdx].document.activeVersionID = id
         if let libIdx = librettoFiles.firstIndex(where: { $0.relativePath == path }) {
             librettoFiles[libIdx].content = versionLyrics
+            bumpLibrettoRevision(for: path)
         }
         previewingVersionID = nil
         previewingSongPath = nil
@@ -1792,6 +1805,7 @@ final class ScriptStore {
         if let v = settings.directionMarkupColorHex { directionMarkupColorHex = v }
         if let v = settings.storyboardingMarkupColorHex { storyboardingMarkupColorHex = v }
         if let v = settings.animateMarkupColorHex { animateMarkupColorHex = v }
+        if let v = settings.scriptBackgroundColorHex { scriptBackgroundColorHex = v }
 
         // Apply LLM settings
         let config = LLMProviderConfig.shared
@@ -1801,10 +1815,14 @@ final class ScriptStore {
         if let key = settings.llmMiniMaxKey, !key.isEmpty {
             config.setAPIKey(key, for: .minimax)
         }
+        if let key = settings.llmDeepSeekKey, !key.isEmpty {
+            config.setAPIKey(key, for: .deepseek)
+        }
         if let key = settings.llmOpenCodeKey, !key.isEmpty {
             config.setAPIKey(key, for: .opencode)
         }
         if let model = settings.llmMiniMaxModel { config.setModelID(model, for: .minimax) }
+        if let model = settings.llmDeepSeekModel { config.setModelID(model, for: .deepseek) }
         if let model = settings.llmOpenCodeModel { config.setModelID(model, for: .opencode) }
         if let model = settings.llmClaudeModel { config.setModelID(model, for: .claude) }
     }
@@ -1871,10 +1889,13 @@ final class ScriptStore {
             directionMarkupColorHex: directionMarkupColorHex,
             storyboardingMarkupColorHex: storyboardingMarkupColorHex,
             animateMarkupColorHex: animateMarkupColorHex,
+            scriptBackgroundColorHex: scriptBackgroundColorHex,
             llmProvider: config.activeProvider.rawValue,
             llmMiniMaxKey: config.apiKey(for: .minimax),
+            llmDeepSeekKey: config.apiKey(for: .deepseek),
             llmOpenCodeKey: config.apiKey(for: .opencode),
             llmMiniMaxModel: config.modelID(for: .minimax),
+            llmDeepSeekModel: config.modelID(for: .deepseek),
             llmOpenCodeModel: config.modelID(for: .opencode),
             llmClaudeModel: config.modelID(for: .claude)
         )
@@ -2007,6 +2028,9 @@ final class ScriptStore {
         librettoFiles = stubs.map { stub in
             librettoByPath[stub.relativePath]
                 ?? ProjectTextFile(id: UUID(), relativePath: stub.relativePath, content: "")
+        }
+        for path in stubs.map(\.relativePath) {
+            bumpLibrettoRevision(for: path)
         }
 
         hydratedScenePaths.formIntersection(currentPathSet)
@@ -2201,6 +2225,7 @@ final class ScriptStore {
                 if let version = asset.document.activeVersion(),
                    let libIdx = librettoFiles.firstIndex(where: { $0.relativePath == path }) {
                     librettoFiles[libIdx].content = version.lyrics
+                    bumpLibrettoRevision(for: path)
                 }
                 normalizeScratchpadFiles()
                 normalizeLyricIterationFiles()
@@ -2518,6 +2543,7 @@ final class ScriptStore {
                     ProjectTextFile(id: UUID(), relativePath: path, content: activeLyrics)
                 )
             }
+            bumpLibrettoRevision(for: path)
         }
 
         hydratedScenePaths.insert(path)

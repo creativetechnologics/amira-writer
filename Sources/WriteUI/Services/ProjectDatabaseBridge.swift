@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 @available(macOS 26.0, *)
 enum ProjectDatabaseBridge {
@@ -31,7 +32,7 @@ enum ProjectDatabaseBridge {
 
     static func decodeCharacters(from artifactData: Data?) throws -> [OPWCharacter] {
         guard let artifactData else { return [] }
-        let decoded = try OWPProjectIO.configuredDecoder().decode(OPWCharactersFile.self, from: artifactData)
+        let decoded = try JSONCoders.makeDecoder().decode(OPWCharactersFile.self, from: artifactData)
         return decoded.characters
     }
 
