@@ -522,9 +522,16 @@ final class MixStore {
     var isScanningInputs = false
     var previewingPath: String?
     var selectedTool: MixEditTool = .pointer
-    var playheadSeconds: Double = 0
-    var isPlaying = false
-    var isRecording = false
+    /// High-frequency playback state isolated from the store's @Observable tracking
+    /// so 60 fps playhead writes don't trigger re-evaluation of unrelated views.
+    let transport = MixTransportState()
+    /// Backward-compatible stored property for internal code. Marked @ObservationIgnored
+    /// so changes do NOT propagate through MixStore observation — only views that
+    /// explicitly observe `MixTransportState` (via `store.transport`) are notified.
+    /// Views should read `store.transport.playheadSeconds` directly.
+    @ObservationIgnored var playheadSeconds: Double = 0
+    @ObservationIgnored var isPlaying: Bool = false
+    @ObservationIgnored var isRecording: Bool = false
     var toolbarAvailableWidth: Double = 1000
     let waveformCache = MixWaveformCache()
 
@@ -2203,14 +2210,14 @@ final class MixStore {
     }
 
     func movePlayhead(by deltaSeconds: Double) {
-        playheadSeconds = min(max(playheadSeconds + deltaSeconds, 0), activeSceneDurationSeconds)
+        setPlayhead(min(max(playheadSeconds + deltaSeconds, 0), activeSceneDurationSeconds))
         if isPlaying {
             startPlayback()
         }
     }
 
     func seekPlayhead(to seconds: Double) {
-        playheadSeconds = min(max(seconds, 0), activeSceneDurationSeconds)
+        setPlayhead(min(max(seconds, 0), activeSceneDurationSeconds))
         guard isPlaying else { return }
         // Debounce rapid seeks (ruler drag scrubbing) so we only restart the
         // transport once the user pauses dragging, rather than creating a full
@@ -2530,11 +2537,20 @@ final class MixStore {
         transportDisplayLink = link
     }
 
+    /// Write playhead position to both the local @ObservationIgnored store (for
+    /// internal code) and the isolated MixTransportState (for SwiftUI views), so
+    /// 60 fps CADisplayLink ticks do NOT trigger MixStore observation.
+    private func setPlayhead(_ seconds: Double) {
+        playheadSeconds = seconds
+        transport.playheadSeconds = seconds
+    }
+
     private func updatePlayheadFromTransportClock() {
         guard isPlaying else { return }
         guard let transportStartedAt else { return }
         let elapsed = max(Date().timeIntervalSince(transportStartedAt), 0)
-        playheadSeconds = min(transportStartedPlayheadSeconds + elapsed, activeSceneDurationSeconds)
+        let newPlayhead = min(transportStartedPlayheadSeconds + elapsed, activeSceneDurationSeconds)
+        setPlayhead(newPlayhead)
         if playheadSeconds >= activeSceneDurationSeconds {
             teardownTransport(resetPlayhead: false, updateStatus: false)
             statusMessage = "Reached end of mix."
@@ -2556,7 +2572,7 @@ final class MixStore {
         transportStartedAt = nil
         isPlaying = false
         if resetPlayhead {
-            playheadSeconds = 0
+            setPlayhead(0)
         }
         if updateStatus {
             statusMessage = resetPlayhead ? "Transport stopped." : "Playback stopped."

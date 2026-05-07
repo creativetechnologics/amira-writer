@@ -953,6 +953,40 @@ struct ScriptTextEditor: NSViewRepresentable {
     /// Apply syntax coloring and, when toggles are disabled, project the text
     /// into a view that hides the selected markup families while preserving the
     /// underlying raw text.
+    /// Cache key for text projection results — avoids re-running 4+ regex scans
+    /// when the raw text and visibility toggles are unchanged.
+    private nonisolated(unsafe) static var projectionCache:
+        [String: (key: String, projection: DisplayProjection)] = [:]
+    private static let projectionCacheMax = 5
+
+    private static func cachedProjection(
+        rawText: String,
+        showDirections: Bool,
+        showStoryboarding: Bool,
+        showAnimateDirections: Bool,
+        showInlineShotCards: Bool,
+        expandedShotCardIDs: Set<String>
+    ) -> DisplayProjection? {
+        let key = "\(rawText.hashValue)|\(showDirections)|\(showStoryboarding)|\(showAnimateDirections)|\(showInlineShotCards)"
+        guard let entry = projectionCache[key], entry.key == key else { return nil }
+        return entry.projection
+    }
+
+    private static func storeProjectionCache(
+        rawText: String,
+        showDirections: Bool,
+        showStoryboarding: Bool,
+        showAnimateDirections: Bool,
+        showInlineShotCards: Bool,
+        projection: DisplayProjection
+    ) {
+        let key = "\(rawText.hashValue)|\(showDirections)|\(showStoryboarding)|\(showAnimateDirections)|\(showInlineShotCards)"
+        projectionCache[key] = (key, projection)
+        if projectionCache.count > projectionCacheMax {
+            projectionCache.removeValue(forKey: projectionCache.keys.first!)
+        }
+    }
+
     @discardableResult
     static func applyDirectionStyling(
         to textView: NSTextView,
@@ -967,14 +1001,37 @@ struct ScriptTextEditor: NSViewRepresentable {
         expandedShotCardIDs: Set<String> = []
     ) -> DisplayProjection {
         let sourceText = prepareEditableText(from: rawText ?? textView.string)
-        let projection = displayProjection(
-            from: sourceText,
+
+        // Use cached projection when text and toggles haven't changed —
+        // eliminates redundant regex passes when called from updateNSView.
+        let projection: DisplayProjection
+        if let cached = cachedProjection(
+            rawText: sourceText,
             showDirections: show,
             showStoryboarding: showStoryboarding,
             showAnimateDirections: showAnimateDirections,
             showInlineShotCards: showInlineShotCards,
             expandedShotCardIDs: expandedShotCardIDs
-        )
+        ) {
+            projection = cached
+        } else {
+            projection = displayProjection(
+                from: sourceText,
+                showDirections: show,
+                showStoryboarding: showStoryboarding,
+                showAnimateDirections: showAnimateDirections,
+                showInlineShotCards: showInlineShotCards,
+                expandedShotCardIDs: expandedShotCardIDs
+            )
+            storeProjectionCache(
+                rawText: sourceText,
+                showDirections: show,
+                showStoryboarding: showStoryboarding,
+                showAnimateDirections: showAnimateDirections,
+                showInlineShotCards: showInlineShotCards,
+                projection: projection
+            )
+        }
 
         textView.undoManager?.disableUndoRegistration()
         defer { textView.undoManager?.enableUndoRegistration() }
@@ -1017,8 +1074,13 @@ struct ScriptTextEditor: NSViewRepresentable {
             }
         }
 
+        // Compute animate ranges once; share with StoryboardPromptParser to
+        // eliminate its independent call to canonicalPromptRanges (a second
+        // full-text regex scan).
+        let animateCanonicalRanges = AnimatePromptParser.canonicalPromptRanges(in: textView.string)
+
         let storyboardRanges = Self.mergedRanges(
-            StoryboardPromptParser.promptRanges(in: textView.string)
+            StoryboardPromptParser.promptRanges(in: textView.string, animateRanges: animateCanonicalRanges)
                 + Self.parentheticalStageDirectionRanges(in: textView.string)
         )
         if !storyboardRanges.isEmpty {
@@ -1035,15 +1097,15 @@ struct ScriptTextEditor: NSViewRepresentable {
             }
         }
 
-        let animateRanges = AnimatePromptParser.promptRanges(in: textView.string)
-        if !animateRanges.isEmpty {
+        // Use the pre-computed canonical ranges — no need to re-scan.
+        if !animateCanonicalRanges.isEmpty {
             let pinkColor = showAnimateDirections
                 ? nsColor(
                     from: animateMarkupColorHex,
                     fallback: ScriptMarkupPalette.defaultAnimateHex
                 ).withAlphaComponent(0.86)
                 : NSColor.clear
-            for range in animateRanges {
+            for range in animateCanonicalRanges {
                 layoutManager.addTemporaryAttribute(
                     .foregroundColor, value: pinkColor, forCharacterRange: range
                 )
