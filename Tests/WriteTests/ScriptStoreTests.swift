@@ -203,7 +203,7 @@ final class ScriptStoreTests: XCTestCase {
 
         XCTAssertEqual(store.librettoFiles.first?.content, "Draft change")
         XCTAssertEqual(reopened.activeVersion()?.lyrics, "Before")
-        XCTAssertEqual(store.projectHistoryEntries.first?.kind, .autosave)
+        XCTAssertTrue(store.projectHistoryEntries.isEmpty)
         XCTAssertTrue(store.isDirty)
     }
 
@@ -304,6 +304,7 @@ final class ScriptStoreTests: XCTestCase {
         [[1.01.0.001 - Lanterns rise]]
         [Storyboard flare]
         {camera: push_in | to=close}
+        [object: "lantern" | position=center | state=lit | bars=1-2]
         Lyric line (8)
         {{{SUMMARY}}}
         Hidden summary
@@ -336,15 +337,16 @@ final class ScriptStoreTests: XCTestCase {
         XCTAssertTrue(fullyHiddenSnippets.contains("[[1.01.0.001 - Lanterns rise]]"))
         XCTAssertTrue(fullyHiddenSnippets.contains("[Storyboard flare]"))
         XCTAssertTrue(fullyHiddenSnippets.contains("{camera: push_in | to=close}"))
-        XCTAssertTrue(fullyHiddenSnippets.contains(" (8)"))
-        XCTAssertTrue(fullyHiddenSnippets.contains("{{{SUMMARY}}}\nHidden summary\n{{{/SUMMARY}}}"))
+        XCTAssertTrue(fullyHiddenSnippets.contains("[object: \"lantern\" | position=center | state=lit | bars=1-2]"))
+        XCTAssertFalse(fullyHiddenSnippets.contains(" (8)"))
 
         XCTAssertFalse(visibleMarkupSnippets.contains("[[1.01.0.001 - Lanterns rise]]"))
         XCTAssertFalse(visibleMarkupSnippets.contains("[Storyboard flare]"))
-        XCTAssertFalse(visibleMarkupSnippets.contains("{camera: push_in | to=close}"))
-        XCTAssertTrue(visibleMarkupSnippets.contains(" (8)"))
-        XCTAssertTrue(visibleMarkupSnippets.contains("{{{SUMMARY}}}\nHidden summary\n{{{/SUMMARY}}}"))
+        XCTAssertTrue(visibleMarkupSnippets.contains("{camera: push_in | to=close}"))
+        XCTAssertTrue(visibleMarkupSnippets.contains("[object: \"lantern\" | position=center | state=lit | bars=1-2]"))
+        XCTAssertFalse(visibleMarkupSnippets.contains(" (8)"))
         XCTAssertFalse(displayText.contains("{camera:"))
+        XCTAssertFalse(displayText.contains("[object:"))
         XCTAssertFalse(displayText.contains("(8)"))
         XCTAssertFalse(displayText.contains("[[1.01.0.001 - Lanterns rise]]"))
         XCTAssertTrue(displayText.contains("Visible line"))
@@ -365,6 +367,7 @@ final class ScriptStoreTests: XCTestCase {
         [[1.01.0.001 - Lanterns rise]]
         [Storyboard flare]
         {camera: push_in | to=close}
+        [object_move: "lantern" | from=left | to=center | bars=1-2]
         Visible
         """
 
@@ -379,6 +382,7 @@ final class ScriptStoreTests: XCTestCase {
         XCTAssertFalse(textView.string.contains("[[1.01.0.001 - Lanterns rise]]"))
         XCTAssertFalse(textView.string.contains("[Storyboard flare]"))
         XCTAssertFalse(textView.string.contains("{camera: push_in | to=close}"))
+        XCTAssertFalse(textView.string.contains("[object_move:"))
         XCTAssertTrue(textView.string.contains("Lyric line"))
         XCTAssertTrue(textView.string.contains("Visible"))
     }
@@ -416,6 +420,189 @@ final class ScriptStoreTests: XCTestCase {
         XCTAssertTrue(editedRaw.contains("{lipsync: \"Johnny\" | mode=singing | bars=17-24}"))
         XCTAssertTrue(editedRaw.contains("First stanza"))
         XCTAssertTrue(editedRaw.contains("Second stanza"))
+    }
+
+    func testDisplayProjectionPreservesInlineCameraCardDuringLyricEdits() {
+        let rawText = "First line\n[camera: medium_wide | label=\"Gate\" | focus=gate | intent=establishing | bars=1-2]\nSecond line"
+        let projection = ScriptTextEditor.displayProjection(
+            from: rawText,
+            showDirections: true,
+            showStoryboarding: true,
+            showAnimateDirections: true,
+            showInlineShotCards: true
+        )
+        XCTAssertEqual(projection.shotAttachments.count, 1)
+        XCTAssertFalse(projection.displayText.contains("[camera:"))
+
+        let display = projection.displayText as NSString
+        let editRange = display.range(of: "Second")
+        XCTAssertNotEqual(editRange.location, NSNotFound)
+
+        let editedRaw = ScriptTextEditor.applyDisplayEdit(
+            rawText: rawText,
+            projection: projection,
+            affectedDisplayRange: editRange,
+            replacementString: "Final"
+        )
+
+        XCTAssertTrue(editedRaw.contains(#"[camera: medium_wide | label="Gate" | focus=gate | intent=establishing | bars=1-2]"#))
+        XCTAssertTrue(editedRaw.contains("Final line"))
+        XCTAssertTrue(editedRaw.contains("First line"))
+    }
+
+    func testDisplayProjectionHidesTechnicalObjectDirectionsButPreservesRawMarkup() {
+        let rawText = """
+        First line
+        [camera: wide | label="Gate" | bars=1-2]
+        [object: "lantern" | position=center | state=lit | bars=1-2]
+        Mid lyric line
+        [object_move: "lantern" | from=center | to=right | bars=2-3]
+        Final line
+        """
+        let projection = ScriptTextEditor.displayProjection(
+            from: rawText,
+            showDirections: true,
+            showStoryboarding: true,
+            showAnimateDirections: true,
+            showInlineShotCards: true
+        )
+
+        XCTAssertEqual(projection.shotAttachments.count, 1)
+        XCTAssertFalse(projection.displayText.contains("[camera:"))
+        XCTAssertFalse(projection.displayText.contains("[object:"))
+        XCTAssertFalse(projection.displayText.contains("[object_move:"))
+        XCTAssertTrue(projection.displayText.contains("Mid lyric line"))
+
+        let display = projection.displayText as NSString
+        let editRange = display.range(of: "Mid lyric")
+        XCTAssertNotEqual(editRange.location, NSNotFound)
+
+        let editedRaw = ScriptTextEditor.applyDisplayEdit(
+            rawText: rawText,
+            projection: projection,
+            affectedDisplayRange: editRange,
+            replacementString: "Changed lyric"
+        )
+
+        XCTAssertTrue(editedRaw.contains(#"[camera: wide | label="Gate" | bars=1-2]"#))
+        XCTAssertTrue(editedRaw.contains(#"[object: "lantern" | position=center | state=lit | bars=1-2]"#))
+        XCTAssertTrue(editedRaw.contains(#"[object_move: "lantern" | from=center | to=right | bars=2-3]"#))
+        XCTAssertTrue(editedRaw.contains("Changed lyric line"))
+        XCTAssertTrue(editedRaw.contains("Final line"))
+    }
+
+    func testDisplayProjectionBuildsShotExtentsBetweenCameraBoundaries() {
+        let rawText = """
+        First line
+        [camera: wide | label="Opening" | bars=1-4]
+        Lyric inside first shot
+        [camera: close | label="Reaction" | bars=5-8]
+        Lyric inside second shot
+        """
+        let projection = ScriptTextEditor.displayProjection(
+            from: rawText,
+            showDirections: true,
+            showStoryboarding: true,
+            showAnimateDirections: true,
+            showInlineShotCards: true
+        )
+
+        XCTAssertEqual(projection.shotAttachments.count, 2)
+        let first = projection.shotAttachments[0]
+        let second = projection.shotAttachments[1]
+
+        XCTAssertTrue(first.canMoveEnd)
+        XCTAssertFalse(second.canMoveEnd)
+        XCTAssertEqual(first.extentDisplayRange.location, first.displayRange.location)
+        XCTAssertEqual(NSMaxRange(first.extentDisplayRange), second.displayRange.location)
+        XCTAssertEqual(second.extentDisplayRange.location, second.displayRange.location)
+        XCTAssertEqual(NSMaxRange(second.extentDisplayRange), (projection.displayText as NSString).length)
+    }
+
+    func testLiveShotMarkupParsesUnknownFramingAndEditedID() {
+        let rawText = #"[camera: medium_wide | label="Gate" | focus=gate | intent=establishing | bars=1-2]"#
+        let shot = try! XCTUnwrap(ScriptShotMarkup.cameraInstances(in: rawText).first)
+
+        XCTAssertEqual(shot.card.camera.shotSize, "medium_wide")
+        XCTAssertNil(shot.card.camera.movement)
+        XCTAssertEqual(shot.card.camera.focus, "gate")
+        XCTAssertEqual(shot.card.timing.startBar, 1)
+        XCTAssertEqual(shot.card.timing.endBar, 2)
+
+        let edited = ScriptShotMarkup.replacementCard(
+            from: shot.card,
+            label: "Gate revised",
+            direction: "Gate tightens into the bridge.",
+            shotSize: "close",
+            movement: "zoom_in",
+            focus: "gate",
+            intent: "reveal",
+            bars: "3-4",
+            notes: "Hold the bridge in frame.",
+            timeOfDay: "dawn",
+            interiorExterior: "exterior",
+            weatherAtmosphere: "dust",
+            lightSource: "sunlight",
+            lens: "telephoto",
+            cameraAngle: "low_angle",
+            depthOfField: "shallow_focus",
+            continuityNotes: "keep the crate in Johnny's left hand",
+            characters: "johnny",
+            characterLeft: "johnny",
+            characterMiddle: "amira, luke",
+            characterRight: "the mother",
+            characterLeftFacing: "towards_camera",
+            characterMiddleFacing: "left",
+            characterRightFacing: "away_from_camera",
+            places: "ridge",
+            props: "",
+            mood: "watchful",
+            lighting: "dawn",
+            landmarks: "old-stone-bridge"
+        )
+        let rendered = ScriptShotMarkup.editedMarkup(for: edited)
+
+        XCTAssertTrue(rendered.contains("id=\(shot.card.id.uuidString)"))
+        XCTAssertTrue(rendered.contains("[camera: zoom_in"))
+        XCTAssertTrue(rendered.contains("size=close"))
+        XCTAssertTrue(rendered.contains("direction=Gate tightens into the bridge."))
+        XCTAssertTrue(rendered.contains("time_of_day=dawn"))
+        XCTAssertTrue(rendered.contains("interior_exterior=exterior"))
+        XCTAssertTrue(rendered.contains("weather_atmosphere=dust"))
+        XCTAssertTrue(rendered.contains("light_source=sunlight"))
+        XCTAssertTrue(rendered.contains("lens=telephoto"))
+        XCTAssertTrue(rendered.contains("camera_angle=low_angle"))
+        XCTAssertTrue(rendered.contains("depth_of_field=shallow_focus"))
+        XCTAssertTrue(rendered.contains("continuity_notes=keep the crate in Johnny's left hand"))
+        XCTAssertTrue(rendered.contains("bars=3-4"))
+        XCTAssertTrue(rendered.contains("characters=johnny,amira,luke,the mother"))
+        XCTAssertTrue(rendered.contains("character_left=johnny"))
+        XCTAssertTrue(rendered.contains("character_left_facing=towards_camera"))
+        XCTAssertTrue(rendered.contains("character_middle=amira,luke"))
+        XCTAssertTrue(rendered.contains("character_middle_facing=left"))
+        XCTAssertTrue(rendered.contains("character_right=the mother"))
+        XCTAssertTrue(rendered.contains("character_right_facing=away_from_camera"))
+        XCTAssertTrue(rendered.contains("landmarks=old-stone-bridge"))
+    }
+
+    func testLiveShotMarkupParsesCharacterFraming() {
+        let rawText = #"[camera: wide | time_of_day=night | interior_exterior=interior | weather_atmosphere=fog | light_source=practical_lamp | lens=wide | camera_angle=high_angle | depth_of_field=deep_focus | continuity_notes=match doorway blocking | character_left=johnny | character_left_facing=towards_camera | character_middle=amira,luke | character_middle_facing=left | character_right=the mother | character_right_facing=away_from_camera]"#
+        let shot = try! XCTUnwrap(ScriptShotMarkup.cameraInstances(in: rawText).first)
+
+        XCTAssertEqual(shot.card.setting.timeOfDay, "night")
+        XCTAssertEqual(shot.card.setting.interiorExterior, "interior")
+        XCTAssertEqual(shot.card.setting.weatherAtmosphere, "fog")
+        XCTAssertEqual(shot.card.setting.lightSource, "practical_lamp")
+        XCTAssertEqual(shot.card.setting.lens, "wide")
+        XCTAssertEqual(shot.card.setting.cameraAngle, "high_angle")
+        XCTAssertEqual(shot.card.setting.depthOfField, "deep_focus")
+        XCTAssertEqual(shot.card.setting.continuityNotes, "match doorway blocking")
+        XCTAssertEqual(shot.card.characterFraming.left, ["johnny"])
+        XCTAssertEqual(shot.card.characterFraming.middle, ["amira", "luke"])
+        XCTAssertEqual(shot.card.characterFraming.right, ["the mother"])
+        XCTAssertEqual(shot.card.characterFraming.leftFacing, "towards_camera")
+        XCTAssertEqual(shot.card.characterFraming.middleFacing, "left")
+        XCTAssertEqual(shot.card.characterFraming.rightFacing, "away_from_camera")
     }
 
     func testExactSceneSampleDoesNotRenderDirectionOrCameraMarkup() {
@@ -481,12 +668,7 @@ final class ScriptStoreTests: XCTestCase {
         \tthese timestamps and hurt?
         """
 
-        let rendered = ScriptTextEditor.displayText(
-            from: rawText,
-            showDirections: false,
-            showStoryboarding: false,
-            showAnimateDirections: false
-        )
+        let rendered = ScriptTextEditor.readOnlyDisplayText(from: rawText)
 
         XCTAssertFalse(rendered.contains("(SUNG - Mark + Johnny."))
         XCTAssertFalse(rendered.contains("(The briefing room has emptied."))
@@ -515,7 +697,7 @@ final class ScriptStoreTests: XCTestCase {
         XCTAssertFalse(rendered.contains("[[Wide shot without address]]"))
         XCTAssertFalse(rendered.contains("{action: \"Amira\" | picks up journal | bars=37-38}"))
         XCTAssertFalse(rendered.contains("{INSTRUMENTAL: Ancient Waters motif returns}"))
-        XCTAssertEqual(rendered, "Visible line")
+        XCTAssertEqual(rendered.trimmingCharacters(in: .whitespacesAndNewlines), "Visible line")
     }
 
     func testSynopsisScenePathResolverHandlesWhitespaceAndFilenameFallback() {

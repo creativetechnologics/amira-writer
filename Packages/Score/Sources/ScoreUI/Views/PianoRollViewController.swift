@@ -2,6 +2,7 @@
 import AppKit
 import AVFoundation
 // Combine removed — ScoreStore uses @Observable, not @Published
+import ProjectKit
 import SwiftUI
 import UniformTypeIdentifiers
 

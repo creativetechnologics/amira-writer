@@ -10,7 +10,7 @@ import Network
 final class APIServer: @unchecked Sendable {
 
     private let listener: NWListener
-    private let queue = DispatchQueue(label: "com.novotro.score.api", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "com.amira.score.api", qos: .userInitiated)
     /// Guarded by `queue` — only access from queue or via queue.sync.
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     /// Per-connection receive buffers for handling TCP fragmentation.

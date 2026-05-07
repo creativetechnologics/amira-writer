@@ -41,6 +41,21 @@ struct GeminiPromptComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Spacer()
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(prompt, forType: .string)
+                } label: {
+                    Label("Copy Prompt", systemImage: "doc.on.doc")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .help("Copy the full prompt text.")
+            }
+
             ResizablePromptEditor(
                 text: $prompt,
                 persistenceID: promptPersistenceID,

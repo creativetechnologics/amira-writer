@@ -1,4 +1,5 @@
 #if os(macOS)
+import ProjectKit
 import SwiftUI
 
 // MARK: - Mixer View

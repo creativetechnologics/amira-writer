@@ -9,6 +9,7 @@ struct MiniMaxAutomationScaffoldService {
         var scene: AnimationScene
         var projectRoot: URL
         var mode: String
+        var provider: SupplementalLLMProvider
         var model: String
         var writeSidecars: Bool
         var apiKey: String
@@ -21,7 +22,7 @@ struct MiniMaxAutomationScaffoldService {
         var artifact = MiniMaxAutomationScaffoldArtifact(
             id: UUID(),
             createdAt: Date(),
-            provider: "minimax",
+            provider: request.provider.rawValue,
             model: request.model,
             mode: isExecute ? "execute" : "dry_run",
             isDryRun: !isExecute,
@@ -56,8 +57,8 @@ struct MiniMaxAutomationScaffoldService {
         }
 
         guard !request.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            artifact.errorMessage = "MiniMax API key is not configured."
-            artifact.blockers.append(.init(code: .failedProviderError, message: "MiniMax API key is not configured.", field: "miniMaxAPIKey"))
+            artifact.errorMessage = "\(request.provider.displayName) API key is not configured."
+            artifact.blockers.append(.init(code: .failedProviderError, message: "\(request.provider.displayName) API key is not configured.", field: request.provider.apiKeyFieldName))
             if request.writeSidecars {
                 artifact.artifactPath = try writeArtifact(artifact, projectRoot: request.projectRoot).path
             }
@@ -65,8 +66,10 @@ struct MiniMaxAutomationScaffoldService {
         }
 
         do {
-            let raw = try await MiniMaxAutomationClient(apiKey: request.apiKey, model: request.model)
-                .completeJSON(systemPrompt: prompts.system, userPrompt: prompts.user)
+            let raw = try await SupplementalLLMClient(
+                configuration: .init(provider: request.provider, apiKey: request.apiKey, model: request.model)
+            )
+            .complete(systemPrompt: prompts.system, userPrompt: prompts.user)
             artifact.rawModelResponse = raw
             artifact.modelOutput = try Self.decodeModelOutput(raw)
             artifact.blockers.append(contentsOf: validateOutput(artifact.modelOutput, input: input))
@@ -80,7 +83,7 @@ struct MiniMaxAutomationScaffoldService {
             }
         } catch {
             artifact.errorMessage = error.localizedDescription
-            artifact.blockers.append(.init(code: .failedProviderError, message: "MiniMax scaffold failed: \(error.localizedDescription)", field: "minimax"))
+            artifact.blockers.append(.init(code: .failedProviderError, message: "\(request.provider.displayName) scaffold failed: \(error.localizedDescription)", field: request.provider.rawValue))
         }
 
         if request.writeSidecars {
@@ -164,13 +167,13 @@ struct MiniMaxAutomationScaffoldService {
         input: MiniMaxAutomationScaffoldInput
     ) -> [AutomationBlocker] {
         guard let output else {
-            return [.init(code: .failedProviderError, message: "MiniMax did not return a valid scaffold JSON object.", field: "modelOutput")]
+            return [.init(code: .failedProviderError, message: "Supplemental LLM did not return a valid scaffold JSON object.", field: "modelOutput")]
         }
         let expectedIDs = Set(input.shots.map { $0.shotID.uuidString.lowercased() })
         let actualIDs = Set(output.shots.map { $0.shotID.lowercased() })
         let missing = expectedIDs.subtracting(actualIDs)
         guard !missing.isEmpty else { return [] }
-        return [.init(code: .failedProviderError, message: "MiniMax scaffold omitted \(missing.count) shot(s).", field: "modelOutput.shots")]
+        return [.init(code: .failedProviderError, message: "Supplemental LLM scaffold omitted \(missing.count) shot(s).", field: "modelOutput.shots")]
     }
 
     private func writePromptSidecar(
@@ -239,7 +242,7 @@ struct MiniMaxAutomationScaffoldService {
 
     private static func prompts(for input: MiniMaxAutomationScaffoldInput) -> (system: String, user: String) {
         let system = """
-        You are MiniMax M2.7 acting as a strict structured-data compiler for an animation pipeline.
+        You are a strict structured-data compiler for an animation pipeline.
 
         You must convert scene, shot, and image-analysis metadata into script-supervisor continuity JSON.
         Do not write prose outside JSON. Do not include markdown fences. Do not hallucinate project lore.
@@ -393,11 +396,11 @@ private enum MiniMaxAutomationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidUTF8:
-            return "MiniMax response was not valid UTF-8."
+            return "Supplemental LLM response was not valid UTF-8."
         case .invalidResponse:
-            return "MiniMax response did not contain assistant content."
+            return "Supplemental LLM response did not contain assistant content."
         case .requestFailed(let statusCode, let body):
-            return "MiniMax request failed with status \(statusCode): \(body.prefix(500))"
+            return "Supplemental LLM request failed with status \(statusCode): \(body.prefix(500))"
         }
     }
 }

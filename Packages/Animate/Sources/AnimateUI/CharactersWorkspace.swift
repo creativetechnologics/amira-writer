@@ -56,10 +56,10 @@ private struct CharactersWorkspaceContent: View {
     @State private var animateWorkspaceState = AnimateWorkspaceState()
     @State private var selectedTab: CharactersDetailTab = .reference
 
-    @AppStorage("novotro.characters.sidebarVisible") private var sidebarVisible = true
-    @AppStorage("novotro.characters.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
-    @AppStorage("novotro.characters.showInspector") private var inspectorVisible = true
-    @AppStorage("novotro.characters.inspector.width") private var inspectorWidth: Double = 320
+    @AppStorage("amira.characters.sidebarVisible") private var sidebarVisible = true
+    @AppStorage("amira.characters.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("amira.characters.showInspector") private var inspectorVisible = true
+    @AppStorage("amira.characters.inspector.width") private var inspectorWidth: Double = 320
 
     var body: some View {
         Group {

@@ -9,11 +9,11 @@ struct ContentView: View {
     var appName: String = "Score"
 
     @State private var selectedSongID: UUID?
-    @AppStorage("novotro.score.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
-    @AppStorage("novotro.score.sidebarVisible") private var showSidebar: Bool = true
+    @AppStorage("amira.score.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("amira.score.sidebarVisible") private var showSidebar: Bool = true
 
-    @AppStorage("novotro.score.showInspector") private var showInspector: Bool = true
-    @AppStorage("novotro.score.inspector.width") private var inspectorWidth: Double = 360
+    @AppStorage("amira.score.showInspector") private var showInspector: Bool = true
+    @AppStorage("amira.score.inspector.width") private var inspectorWidth: Double = 360
 
     @State private var pianoRollController: PianoRollViewController?
     @State private var spacebarMonitor: Any?
@@ -387,7 +387,7 @@ enum InspectorSectionID: String, CaseIterable, Identifiable {
 struct ScoreInspectorView: View {
     @Bindable var store: ScoreStore
 
-    @AppStorage("novotro.score.inspector.activeSection") private var activeSection: String = "instruments"
+    @AppStorage("amira.score.inspector.activeSection") private var activeSection: String = "instruments"
     private let tabOrder: [InspectorSectionID] = [.instruments, .export, .libretto, .versions, .files, .suno]
 
     private var selectedSection: Binding<InspectorSectionID> {

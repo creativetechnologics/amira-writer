@@ -2,8 +2,8 @@ import AppKit
 import ProjectKit
 import SwiftUI
 
-/// Title-bar indicator that shows whether any Gemini image work is in flight
-/// (generation or Image Intelligence analysis). Click to see the recent-activity
+/// Title-bar indicator that shows whether any AI generation work is in flight
+/// (image generation, prompt generation, or Image Intelligence analysis). Click to see the recent-activity
 /// popover (queued/running/recently-completed entries with source + filename).
 ///
 /// - Gray capsule with sparkle icon = idle
@@ -29,8 +29,8 @@ struct GeminiStatusBadge: View {
     }
 
     private func helpText(activeCount: Int) -> String {
-        if activeCount == 0 { return "No active Gemini work. Click for recent activity." }
-        return "\(activeCount) Gemini job\(activeCount == 1 ? "" : "s") in flight. Click for details."
+        if activeCount == 0 { return "No active AI generation work. Click for recent activity." }
+        return "\(activeCount) AI generation job\(activeCount == 1 ? "" : "s") in flight. Click for details."
     }
 
     @ViewBuilder
@@ -51,7 +51,7 @@ struct GeminiStatusBadge: View {
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(.green)
             }
-            Text(isIdle ? "Gemini" : "working")
+            Text(isIdle ? "AI Gen" : "working")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(isIdle ? Color.secondary : Color.green)
         }
@@ -63,20 +63,6 @@ struct GeminiStatusBadge: View {
 }
 
 @available(macOS 26.0, *)
-struct VertexCreditTitleBarLabel: View {
-    @Bindable var store: AnimateStore
-
-    var body: some View {
-        if ImageGenBackendStore.currentBackend() == .vertex {
-            Text("Vertex $\(String(format: "%.2f", store.vertexCreditRemainingUSD))")
-                .font(.system(size: 10, weight: .medium).monospacedDigit())
-                .foregroundStyle(Color.secondary.opacity(0.75))
-                .help("Estimated Vertex AI remaining credit. Adjust it in Settings if it drifts.")
-        }
-    }
-}
-
-@available(macOS 26.0, *)
 struct GeminiActivityPopover: View {
     @Bindable var store: AnimateStore
 
@@ -84,7 +70,7 @@ struct GeminiActivityPopover: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Gemini Activity")
+                    Text("AI Generation Activity")
                         .font(.headline)
                     Text("\(store.geminiActivityActiveCount) active · \(store.geminiActivityLog.count) recent")
                         .font(.caption)
@@ -108,7 +94,7 @@ struct GeminiActivityPopover: View {
                     Image(systemName: "sparkle")
                         .font(.title)
                         .foregroundStyle(.tertiary)
-                    Text("No recent Gemini activity")
+                    Text("No recent AI generation activity")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -175,7 +161,7 @@ struct GeminiActivityPopover: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Cancel this Gemini job")
+                .help("Cancel this AI generation job")
                 .padding(.top, 1)
             }
         }
@@ -231,6 +217,9 @@ private extension AnimateStore.GeminiActivityEntry.Kind {
         case .batch: return "BATCH"
         case .immediate: return "IMMEDIATE"
         case .analysis: return "ANALYSIS"
+        case .geminiImage: return "GEMINI"
+        case .openAIImage: return "OPENAI IMG"
+        case .openAIText: return "OPENAI TEXT"
         }
     }
 
@@ -239,6 +228,9 @@ private extension AnimateStore.GeminiActivityEntry.Kind {
         case .batch: return .purple
         case .immediate: return .blue
         case .analysis: return .teal
+        case .geminiImage: return .blue
+        case .openAIImage: return .green
+        case .openAIText: return .orange
         }
     }
 }

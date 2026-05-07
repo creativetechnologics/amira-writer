@@ -19,8 +19,12 @@ final class ProjectCredentialStore: @unchecked Sendable {
 
     struct Payload: Codable, Equatable {
         var geminiAPIKey: String = ""
+        var openAIAPIKey: String = ""
         var imageAnalysisGeminiAPIKey: String = ""
         var miniMaxAPIKey: String = ""
+        var deepSeekAPIKey: String = ""
+        var supplementalLLMProvider: String = SupplementalLLMProvider.deepSeek.rawValue
+        var supplementalLLMModel: String = SupplementalLLMProvider.deepSeek.defaultModel
         var viduAPIKey: String = ""
         var runPodAPIKey: String = ""
         var vertexProjectID: String = ""
@@ -70,16 +74,42 @@ final class ProjectCredentialStore: @unchecked Sendable {
     // MARK: - Accessors
 
     func geminiAPIKey() -> String { ioQueue.sync { cachedPayload.geminiAPIKey } }
+    func openAIAPIKey() -> String { ioQueue.sync { cachedPayload.openAIAPIKey } }
     func imageAnalysisGeminiAPIKey() -> String { ioQueue.sync { cachedPayload.imageAnalysisGeminiAPIKey } }
     func miniMaxAPIKey() -> String { ioQueue.sync { cachedPayload.miniMaxAPIKey } }
+    func deepSeekAPIKey() -> String { ioQueue.sync { cachedPayload.deepSeekAPIKey } }
+    func supplementalLLMProvider() -> SupplementalLLMProvider {
+        ioQueue.sync {
+            SupplementalLLMProvider(rawValue: cachedPayload.supplementalLLMProvider) ?? .deepSeek
+        }
+    }
+    func supplementalLLMModel() -> String {
+        ioQueue.sync {
+            let provider = SupplementalLLMProvider(rawValue: cachedPayload.supplementalLLMProvider) ?? .deepSeek
+            let stored = cachedPayload.supplementalLLMModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            return stored.isEmpty ? provider.defaultModel : stored
+        }
+    }
     func viduAPIKey() -> String { ioQueue.sync { cachedPayload.viduAPIKey } }
     func runPodAPIKey() -> String { ioQueue.sync { cachedPayload.runPodAPIKey } }
     func vertexProjectID() -> String { ioQueue.sync { cachedPayload.vertexProjectID } }
     func vertexRegion() -> String { ioQueue.sync { cachedPayload.vertexRegion } }
 
     func setGeminiAPIKey(_ value: String) { update { $0.geminiAPIKey = value } }
+    func setOpenAIAPIKey(_ value: String) { update { $0.openAIAPIKey = value } }
     func setImageAnalysisGeminiAPIKey(_ value: String) { update { $0.imageAnalysisGeminiAPIKey = value } }
     func setMiniMaxAPIKey(_ value: String) { update { $0.miniMaxAPIKey = value } }
+    func setDeepSeekAPIKey(_ value: String) { update { $0.deepSeekAPIKey = value } }
+    func setSupplementalLLMProvider(_ value: SupplementalLLMProvider) {
+        update {
+            $0.supplementalLLMProvider = value.rawValue
+            if $0.supplementalLLMModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !value.knownModels.contains($0.supplementalLLMModel) {
+                $0.supplementalLLMModel = value.defaultModel
+            }
+        }
+    }
+    func setSupplementalLLMModel(_ value: String) { update { $0.supplementalLLMModel = value } }
     func setViduAPIKey(_ value: String) { update { $0.viduAPIKey = value } }
     func setRunPodAPIKey(_ value: String) { update { $0.runPodAPIKey = value } }
     func setVertexProjectID(_ value: String) { update { $0.vertexProjectID = value } }

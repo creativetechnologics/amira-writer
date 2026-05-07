@@ -18,7 +18,9 @@ public final class ScoreWorkspaceController: ObservableObject {
     /// UserInfo keys: "wavURL" (URL), "songRelativePath" (String).
     public static let didExportSongToMix = ScoreStore.didExportSongToMix
     private var isAPIServerDisabled: Bool {
-        ProcessInfo.processInfo.environment["NOVOTRO_DISABLE_SCORE_API_SERVER"] == "1"
+        let env = ProcessInfo.processInfo.environment
+        return env["AMIRA_DISABLE_SCORE_API_SERVER"] == "1"
+            || env["NOVOTRO_DISABLE_SCORE_API_SERVER"] == "1"
     }
 
     public init() {

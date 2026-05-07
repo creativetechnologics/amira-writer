@@ -42,7 +42,7 @@ enum InspectorSectionID: String, CaseIterable, Identifiable, Sendable {
 @available(macOS 26.0, *)
 struct ScriptInspectorView: View {
     @Bindable var store: ScriptStore
-    @AppStorage("novotro.write.inspector.activeTab") private var activeTab: String = InspectorSectionID.synopsis.rawValue
+    @AppStorage("amira.write.inspector.activeTab") private var activeTab: String = InspectorSectionID.synopsis.rawValue
 
     private let tabOrder: [InspectorSectionID] = [.synopsis, .tools, .notes, .versionHistory, .sunoLyrics]
 
@@ -130,6 +130,13 @@ struct ToolsSectionContent: View {
         )
     }
 
+    private var scriptBackgroundColorBinding: Binding<Color> {
+        Binding(
+            get: { store.scriptBackgroundColor },
+            set: { store.scriptBackgroundColorHex = ScriptMarkupPalette.hex(from: $0, fallback: ScriptMarkupPalette.defaultScriptBackgroundHex) }
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -161,6 +168,10 @@ struct ToolsSectionContent: View {
                 isOn: $store.showAnimateDirections,
                 color: animateColorBinding
             )
+
+            Divider()
+
+            backgroundColorRow()
 
             Divider()
 
@@ -260,6 +271,31 @@ struct ToolsSectionContent: View {
                     importMatchResults = []
                 }
             )
+        }
+    }
+
+    @ViewBuilder
+    private func backgroundColorRow() -> some View {
+        HStack(spacing: 10) {
+            Label("Page Background", systemImage: "rectangle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            ColorPicker("", selection: scriptBackgroundColorBinding, supportsOpacity: false)
+                .labelsHidden()
+                .frame(width: 28)
+
+            Button {
+                store.scriptBackgroundColorHex = ScriptMarkupPalette.defaultScriptBackgroundHex
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("Reset page background")
         }
     }
 

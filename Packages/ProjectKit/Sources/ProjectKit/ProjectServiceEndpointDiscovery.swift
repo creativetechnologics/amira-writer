@@ -4,9 +4,11 @@ import Network
 public enum ProjectServiceEndpointDiscovery {
     public static let endpointEnvironmentKey = "PROJECT_SERVICE_ENDPOINT"
 
-    private static let legacyEndpointEnvironmentKey = "NOVOTRO_PROJECT_SERVICE_ENDPOINT"
+    private static let legacyEndpointEnvironmentKey = "AMIRA_PROJECT_SERVICE_ENDPOINT"
+    private static let deprecatedEndpointEnvironmentKey = "NOVOTRO_PROJECT_SERVICE_ENDPOINT"
     private static let lastSuccessfulEndpointDefaultsKey = "ProjectService.LastSuccessfulEndpoint"
-    private static let legacyLastSuccessfulEndpointDefaultsKey = "NovotroProjectService.LastSuccessfulEndpoint"
+    private static let legacyLastSuccessfulEndpointDefaultsKey = "AmiraProjectService.LastSuccessfulEndpoint"
+    private static let deprecatedLastSuccessfulEndpointDefaultsKey = "NovotroProjectService.LastSuccessfulEndpoint"
 
     public static func candidateEndpoints(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -22,7 +24,7 @@ public enum ProjectServiceEndpointDiscovery {
             endpoints.append(endpoint)
         }
 
-        if let explicit = trimmed(environment[endpointEnvironmentKey] ?? environment[legacyEndpointEnvironmentKey]) {
+        if let explicit = trimmed(environment[endpointEnvironmentKey] ?? environment[legacyEndpointEnvironmentKey] ?? environment[deprecatedEndpointEnvironmentKey]) {
             append(endpoint(from: explicit))
         }
 
@@ -35,7 +37,8 @@ public enum ProjectServiceEndpointDiscovery {
         }
 
         if let remembered = defaults.string(forKey: lastSuccessfulEndpointDefaultsKey)
-            ?? defaults.string(forKey: legacyLastSuccessfulEndpointDefaultsKey) {
+            ?? defaults.string(forKey: legacyLastSuccessfulEndpointDefaultsKey)
+            ?? defaults.string(forKey: deprecatedLastSuccessfulEndpointDefaultsKey) {
             append(endpoint(from: remembered))
         }
 
@@ -50,6 +53,7 @@ public enum ProjectServiceEndpointDiscovery {
         guard let serialized = serializedEndpointString(endpoint) else { return }
         defaults.set(serialized, forKey: lastSuccessfulEndpointDefaultsKey)
         defaults.removeObject(forKey: legacyLastSuccessfulEndpointDefaultsKey)
+        defaults.removeObject(forKey: deprecatedLastSuccessfulEndpointDefaultsKey)
     }
 
     static func endpoint(from string: String) -> NWEndpoint? {
@@ -115,5 +119,3 @@ public enum ProjectServiceEndpointDiscovery {
         return trimmed.isEmpty ? nil : trimmed
     }
 }
-
-public typealias NovotroProjectServiceEndpointDiscovery = ProjectServiceEndpointDiscovery

@@ -72,13 +72,13 @@ struct ActionImageService {
         return poses
     }
 
-    /// Use MiniMax to generate an image generation prompt for an action pose.
+    /// Use the configured supplemental LLM to generate an image generation prompt for an action pose.
     static func generatePrompt(
         for pose: ActionPose,
         character: AnimationCharacter,
-        apiKey: String
+        configuration: SupplementalLLMConfiguration
     ) async throws -> String {
-        guard !apiKey.isEmpty else { throw ActionImageError.noAPIKey }
+        guard !configuration.apiKey.isEmpty else { throw ActionImageError.noAPIKey }
 
         let subject = character.age.map { "a \($0)-year-old \(character.genderType.promptNoun)" }
             ?? "a \(character.genderType.promptNoun)"
@@ -104,38 +104,14 @@ struct ActionImageService {
         Make it a full-body dynamic action pose with clear body mechanics, cinematic lighting, and a believable grounded environment.
         """
 
-        let body: [String: Any] = [
-            "model": "MiniMax-M2.7",
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": userPrompt]
-            ],
-            "max_tokens": 500,
-            "temperature": 0.7
-        ]
-
-        guard let endpointURL = URL(string: "https://api.minimaxi.chat/v1/text/chatcompletion_v2") else {
-            throw ActionImageError.invalidEndpoint
-        }
-
-        var request = URLRequest(url: endpointURL)
-        request.httpMethod = "POST"
-        request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw ActionImageError.requestFailed
-        }
-
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let choices = json?["choices"] as? [[String: Any]],
-              let message = choices.first?["message"] as? [String: Any],
-              let content = message["content"] as? String
-        else { throw ActionImageError.invalidResponse }
-
-        return content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await SupplementalLLMClient(configuration: configuration)
+            .complete(
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                temperature: 0.7,
+                maxTokens: 500,
+                jsonMode: false
+            )
     }
 
     /// Directory where action images are stored for a character.
@@ -175,10 +151,10 @@ struct ActionImageService {
         case noAPIKey, invalidEndpoint, requestFailed, invalidResponse
         var errorDescription: String? {
             switch self {
-            case .noAPIKey: "MiniMax API key is not set."
-            case .invalidEndpoint: "MiniMax endpoint URL is invalid."
-            case .requestFailed: "MiniMax request failed."
-            case .invalidResponse: "Invalid response from MiniMax."
+            case .noAPIKey: "Supplemental LLM API key is not set."
+            case .invalidEndpoint: "Supplemental LLM endpoint URL is invalid."
+            case .requestFailed: "Supplemental LLM request failed."
+            case .invalidResponse: "Invalid response from supplemental LLM."
             }
         }
     }

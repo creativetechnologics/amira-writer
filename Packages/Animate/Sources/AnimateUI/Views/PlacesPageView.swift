@@ -774,7 +774,7 @@ struct PlacesSidebarView: View {
     private func placeRow(_ place: BackgroundPlate) -> some View {
         HStack(spacing: OperaChromeSidebarMetrics.rowIconSpacing) {
             if showsThumbnails,
-               let image = cachedSidebarThumbnail(for: place.approvedImagePath(for: workflowMode)) {
+               let image = cachedSidebarThumbnail(for: verifiedApprovedPlacePath(for: place, workflow: workflowMode)) {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -797,6 +797,15 @@ struct PlacesSidebarView: View {
                     .foregroundStyle(OperaChromeTheme.textSecondary)
             }
         }
+    }
+
+    private func verifiedApprovedPlacePath(for place: BackgroundPlate, workflow: PlaceWorkflowMode) -> String? {
+        guard let path = place.approvedImagePath(for: workflow),
+              !store.placeImageIsRejected(path: path),
+              store.imageLibraryIsLiked(for: path) else {
+            return nil
+        }
+        return path
     }
 
     @ViewBuilder
@@ -1082,6 +1091,11 @@ struct PlacesPageView: View {
             stagedGridPlaceCount = min(totalPlaces, 4)
 
             try? await Task.sleep(for: .milliseconds(140))
+            guard !Task.isCancelled else { return }
+            stagedGridPlaceCount = totalPlaces
+            renderGridThumbnails = true
+
+            try? await Task.sleep(for: .milliseconds(80))
             guard !Task.isCancelled else { return }
             renderOverviewDetails = true
             renderSidebarThumbnails = true
@@ -2465,8 +2479,18 @@ struct PlacesPageView: View {
         )
     }
 
+    private func verifiedApprovedPlacePath(for place: BackgroundPlate, workflow: PlaceWorkflowMode) -> String? {
+        guard let path = place.approvedImagePath(for: workflow),
+              !store.placeImageIsRejected(path: path),
+              store.imageLibraryIsLiked(for: path) else {
+            return nil
+        }
+        return path
+    }
+
     private func placeHeader(_ place: BackgroundPlate) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let verifiedApprovedPath = verifiedApprovedPlacePath(for: place, workflow: workflowMode)
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(place.name)
@@ -2519,7 +2543,7 @@ struct PlacesPageView: View {
             HStack(spacing: 10) {
                 placeSummaryPill(title: "\(workflowMode.shortLabel) Images", value: "\(place.imagePaths(for: workflowMode).count)", systemImage: workflowMode == .photorealistic ? "camera" : "paintbrush.pointed")
                 placeSummaryPill(title: "Scenes", value: "\(sceneUsageCount(for: place.id))", systemImage: "film.stack")
-                placeSummaryPill(title: "Approved", value: place.approvedImagePath(for: workflowMode) == nil ? "No" : "Yes", systemImage: "checkmark.seal")
+                placeSummaryPill(title: "Approved", value: verifiedApprovedPath == nil ? "No" : "Yes", systemImage: "checkmark.seal")
                 placeSummaryPill(title: "Nodes", value: "\(worldbuildingSnapshot.placeNodeCounts[place.id] ?? 0)", systemImage: "scope")
                 placeSummaryPill(title: "Flags", value: "\(worldbuildingSnapshot.placeFlaggedCounts[place.id] ?? 0)", systemImage: "exclamationmark.triangle")
             }
@@ -2633,7 +2657,7 @@ struct PlacesPageView: View {
 
     private func workflowOutputSection(_ place: BackgroundPlate) -> some View {
         let galleryPaths = place.imagePaths(for: workflowMode)
-        let approvedPath = place.approvedImagePath(for: workflowMode)
+        let approvedPath = verifiedApprovedPlacePath(for: place, workflow: workflowMode)
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -2700,6 +2724,7 @@ struct PlacesPageView: View {
             if let firstSelected = workflowSelectedPaths.first,
                workflowSelectedPaths.count == 1,
                galleryPaths.contains(firstSelected),
+               !store.placeImageIsRejected(path: firstSelected),
                firstSelected != approvedPath {
                 HStack {
                     if worldbuildingSnapshot.placeFlaggedCounts[place.id, default: 0] > 0 {
@@ -3827,7 +3852,7 @@ struct PlacesPageView: View {
         // (e.g. "courtyard" inside an Interior-tagged place).
         let exteriorCanon: String
         if place.isExteriorLike {
-            exteriorCanon = "The scene is outdoors, under open sky. If the river is visible, settlement appears only on the north bank per the master valley map, never on both sides. The town reads as inhabited and maintained: worn stone, repaired mud-brick, textiles, awnings, and daily-life detail."
+            exteriorCanon = "The scene is outdoors, under open sky. If the river or bridge is visible, preserve this geography: old stone bridge crosses only the ravine/river to a bare village-side landing; an exposed dirt road climbs from that landing before the hillside town begins. Never place market streets, storefronts, vendors, or dense town blocks at the river or bridge. The town reads as inhabited and maintained: worn stone, repaired mud-brick, textiles, awnings, and daily-life detail."
         } else {
             exteriorCanon = "The scene is indoors, fully enclosed inside a room with walls and a roof. Any windows reveal only a narrow framed slice of what the brief describes — never a panoramic view. The room reads as in active use, not abandoned or in total ruin."
         }
@@ -3864,15 +3889,21 @@ struct PlacesPageView: View {
         var drafts: [GeminiGenerationReferenceDraft] = []
         var seen: Set<String> = []
 
-        func append(label: String, path: String?, included: Bool = true) {
+        func append(label: String, path: String?, included: Bool = true, requirePicked: Bool = true) {
             guard let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            guard !AnimateStore.isGeographyTaintedReferencePath(path) else { return }
+            if requirePicked {
+                guard store.imageLibraryIsPickedReference(for: path) else { return }
+            } else {
+                guard !store.imageLibraryIsRejected(for: path) else { return }
+            }
             guard !seen.contains(path) else { return }
             seen.insert(path)
             drafts.append(GeminiGenerationReferenceDraft(label: label, path: path, isIncluded: included))
         }
 
         if place.isExteriorLike {
-            append(label: "Master Map", path: store.effectivePlacesMasterMapPath(), included: true)
+            append(label: "Master Map", path: store.effectivePlacesMasterMapPath(), included: true, requirePicked: false)
         }
 
         switch workflow {
@@ -5571,9 +5602,18 @@ private struct PlaceLandmarkDetailView: View {
         return nil
     }
 
+    private func verifiedApprovedPlacePath(for place: BackgroundPlate, workflow: PlaceWorkflowMode) -> String? {
+        guard let path = place.approvedImagePath(for: workflow),
+              !store.placeImageIsRejected(path: path),
+              store.imageLibraryIsLiked(for: path) else {
+            return nil
+        }
+        return path
+    }
+
     private func exteriorScore(_ place: BackgroundPlate) -> Int {
         var score = 0
-        if place.approvedImagePath(for: workflowMode) != nil || place.approvedImagePath != nil { score += 100 }
+        if verifiedApprovedPlacePath(for: place, workflow: workflowMode) != nil { score += 100 }
         if placeNameHasExteriorCue(place.name) { score += 40 }
         if placeNameHasInteriorCue(place.name) { score -= 60 }
         return score
@@ -5647,12 +5687,21 @@ private struct PlaceLandmarkProfileCard: View {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    private func verifiedApprovedPlacePath(for place: BackgroundPlate, workflow: PlaceWorkflowMode) -> String? {
+        guard let path = place.approvedImagePath(for: workflow),
+              !store.placeImageIsRejected(path: path),
+              store.imageLibraryIsLiked(for: path) else {
+            return nil
+        }
+        return path
+    }
+
     private var exteriorImageCandidates: [String] {
         var values: [String] = []
         if let current = profile.exteriorImagePath { values.append(current) }
         if let place = exteriorPlaces.first(where: { $0.id == profile.exteriorPlaceID }) {
-            values.append(contentsOf: place.imagePaths(for: workflowMode))
-            if let approved = place.approvedImagePath(for: workflowMode) ?? place.approvedImagePath {
+            values.append(contentsOf: place.imagePaths(for: workflowMode).filter { !store.placeImageIsRejected(path: $0) })
+            if let approved = verifiedApprovedPlacePath(for: place, workflow: workflowMode) {
                 values.append(approved)
             }
         }
@@ -5664,8 +5713,8 @@ private struct PlaceLandmarkProfileCard: View {
         var values: [String] = []
         if let current = profile.interiorImagePath { values.append(current) }
         if let place = interiorPlaces.first(where: { $0.id == profile.interiorPlaceID }) {
-            values.append(contentsOf: place.imagePaths(for: workflowMode))
-            if let approved = place.approvedImagePath(for: workflowMode) ?? place.approvedImagePath {
+            values.append(contentsOf: place.imagePaths(for: workflowMode).filter { !store.placeImageIsRejected(path: $0) })
+            if let approved = verifiedApprovedPlacePath(for: place, workflow: workflowMode) {
                 values.append(approved)
             }
         }
@@ -5804,6 +5853,7 @@ private struct PlaceLandmarkProfileCard: View {
         accent: Color,
         openPlaceAction: @escaping (UUID) -> Void
     ) -> some View {
+        let displayPath = currentPath.flatMap { store.placeImageIsRejected(path: $0) ? nil : $0 }
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
                 .font(.subheadline.weight(.semibold))
@@ -5827,8 +5877,8 @@ private struct PlaceLandmarkProfileCard: View {
             .pickerStyle(.menu)
 
             ZStack(alignment: .bottomTrailing) {
-                if let currentPath,
-                   let url = store.resolvedCharacterAssetURL(for: currentPath) ?? (FileManager.default.fileExists(atPath: currentPath) ? URL(fileURLWithPath: currentPath) : nil) {
+                if let displayPath,
+                   let url = store.resolvedCharacterAssetURL(for: displayPath) ?? (FileManager.default.fileExists(atPath: displayPath) ? URL(fileURLWithPath: displayPath) : nil) {
                     CachedThumbnailView(path: url.path, size: 220)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(
@@ -5838,7 +5888,7 @@ private struct PlaceLandmarkProfileCard: View {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             // Populate the Details inspector with this record.
-                            store.selectGeneratedBackgroundRecord(for: currentPath)
+                            store.selectGeneratedBackgroundRecord(for: displayPath)
                         }
                 } else {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -5861,9 +5911,9 @@ private struct PlaceLandmarkProfileCard: View {
                     .buttonStyle(.bordered)
                 }
                 Spacer()
-                if let currentPath {
+                if let displayPath {
                     Button("Reveal") {
-                        onShowInFinder(currentPath)
+                        onShowInFinder(displayPath)
                     }
                     .buttonStyle(.bordered)
                 }
@@ -5894,7 +5944,9 @@ private struct PlaceLandmarkProfileCard: View {
     private func matchingGeneratedRecords(preferredInterior: Bool) -> [GeneratedBackgroundLibraryRecord] {
         store.placesWorkflowLibrary.generatedImageRecords
             .filter { record in
-                guard record.workflow == workflowMode, !record.isRejected else { return false }
+                guard record.workflow == workflowMode,
+                      !record.isRejected,
+                      !store.placeImageIsRejected(path: record.activePath) else { return false }
                 return landmarkKind(for: record) == profile.kind
             }
             .sorted { lhs, rhs in

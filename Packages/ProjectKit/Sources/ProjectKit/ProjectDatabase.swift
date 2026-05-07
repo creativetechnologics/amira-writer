@@ -11,7 +11,8 @@ public actor ProjectDatabase {
 
     public init(projectURL: URL, databaseDirectoryURL: URL? = nil) {
         self.projectURL = projectURL
-        self.databaseDirectoryURL = databaseDirectoryURL ?? ProjectPaths(root: projectURL).novotroDir
+        ProjectPaths.migrateLegacyDatabaseDirIfNeeded(root: projectURL)
+        self.databaseDirectoryURL = databaseDirectoryURL ?? ProjectPaths(root: projectURL).amiraDir
         self.databaseURL = self.databaseDirectoryURL.appendingPathComponent("project.sqlite")
     }
 
@@ -172,14 +173,14 @@ public actor ProjectDatabase {
 
     public func loadCharacters() throws -> [NPCharacterRecord] {
         try openIfNeeded()
-        return try query(
+        return try queryTyped(
             "SELECT character_id, name, json_blob, updated_at FROM characters ORDER BY name ASC"
         ).map { row in
             NPCharacterRecord(
-                id: parseUUID(row[0]) ?? UUID(),
-                name: row[1] ?? "Character",
-                jsonData: blobValue(row[2]),
-                updatedAt: parseDate(row[3])
+                id: row.string(at: 0).flatMap(UUID.init(uuidString:)) ?? UUID(),
+                name: row.string(at: 1) ?? "Character",
+                jsonData: row.data(at: 2) ?? Data(),
+                updatedAt: row.string(at: 3).flatMap(Self.parseDate) ?? .distantPast
             )
         }
     }
@@ -196,7 +197,7 @@ public actor ProjectDatabase {
         let rootColumn = includeRootJSON ? "root_json" : "NULL AS root_json"
         let animateColumn = includeAnimateSceneJSON ? "animate_scene_json" : "NULL AS animate_scene_json"
 
-        let rows = try query(
+        let rows = try queryTyped(
             """
             SELECT
                 scene_id,
@@ -218,21 +219,21 @@ public actor ProjectDatabase {
         )
 
         return try rows.map { row in
-            let sceneID = parseUUID(row[0]) ?? UUID()
+            let sceneID = row.string(at: 0).flatMap(UUID.init(uuidString:)) ?? UUID()
             return NPSceneRecord(
                 id: sceneID,
-                songID: parseUUID(row[1]) ?? sceneID,
-                relativePath: row[2] ?? "",
-                title: row[3] ?? "",
-                canonicalTitle: row[4] ?? "",
-                notes: row[5] ?? "",
-                updatedAt: parseDate(row[6]),
-                activeVersionID: parseUUID(row[7]),
-                orderIndex: parseInt(row[8]),
-                rootJSON: optionalBlobValue(row[9]),
-                animateSceneJSON: optionalBlobValue(row[10]),
-                animateTrackCount: parseInt(row[11]),
-                animateKeyframeCount: parseInt(row[12]),
+                songID: row.string(at: 1).flatMap(UUID.init(uuidString:)) ?? sceneID,
+                relativePath: row.string(at: 2) ?? "",
+                title: row.string(at: 3) ?? "",
+                canonicalTitle: row.string(at: 4) ?? "",
+                notes: row.string(at: 5) ?? "",
+                updatedAt: row.string(at: 6).flatMap(Self.parseDate) ?? .distantPast,
+                activeVersionID: row.string(at: 7).flatMap(UUID.init(uuidString:)),
+                orderIndex: row.int(at: 8),
+                rootJSON: row.data(at: 9),
+                animateSceneJSON: row.data(at: 10),
+                animateTrackCount: row.int(at: 11),
+                animateKeyframeCount: row.int(at: 12),
                 versions: includeVersions
                     ? try loadSceneVersions(
                         sceneID: sceneID,
@@ -257,7 +258,7 @@ public actor ProjectDatabase {
         let rootColumn = includeRootJSON ? "root_json" : "NULL AS root_json"
         let animateColumn = includeAnimateSceneJSON ? "animate_scene_json" : "NULL AS animate_scene_json"
 
-        guard let row = try querySingle(
+        guard let row = try querySingleTyped(
             """
             SELECT
                 scene_id,
@@ -282,21 +283,21 @@ public actor ProjectDatabase {
             return nil
         }
 
-        let sceneID = parseUUID(row[0]) ?? UUID()
+        let sceneID = row.string(at: 0).flatMap(UUID.init(uuidString:)) ?? UUID()
         return NPSceneRecord(
             id: sceneID,
-            songID: parseUUID(row[1]) ?? sceneID,
-            relativePath: row[2] ?? "",
-            title: row[3] ?? "",
-            canonicalTitle: row[4] ?? "",
-            notes: row[5] ?? "",
-            updatedAt: parseDate(row[6]),
-            activeVersionID: parseUUID(row[7]),
-            orderIndex: parseInt(row[8]),
-            rootJSON: optionalBlobValue(row[9]),
-            animateSceneJSON: optionalBlobValue(row[10]),
-            animateTrackCount: parseInt(row[11]),
-            animateKeyframeCount: parseInt(row[12]),
+            songID: row.string(at: 1).flatMap(UUID.init(uuidString:)) ?? sceneID,
+            relativePath: row.string(at: 2) ?? "",
+            title: row.string(at: 3) ?? "",
+            canonicalTitle: row.string(at: 4) ?? "",
+            notes: row.string(at: 5) ?? "",
+            updatedAt: row.string(at: 6).flatMap(Self.parseDate) ?? .distantPast,
+            activeVersionID: row.string(at: 7).flatMap(UUID.init(uuidString:)),
+            orderIndex: row.int(at: 8),
+            rootJSON: row.data(at: 9),
+            animateSceneJSON: row.data(at: 10),
+            animateTrackCount: row.int(at: 11),
+            animateKeyframeCount: row.int(at: 12),
             versions: includeVersions
                 ? try loadSceneVersions(
                     sceneID: sceneID,
@@ -368,7 +369,7 @@ public actor ProjectDatabase {
 
     public func loadProjectFile(path: String) throws -> NPProjectFileRecord? {
         try openIfNeeded()
-        guard let row = try querySingle(
+        guard let row = try querySingleTyped(
             "SELECT path, json_blob FROM project_files WHERE path = ? LIMIT 1",
             binds: [.text(path)]
         ) else {
@@ -382,18 +383,18 @@ public actor ProjectDatabase {
         }
 
         return NPProjectFileRecord(
-            path: row[0] ?? path,
-            jsonData: blobValue(row[1])
+            path: row.string(at: 0) ?? path,
+            jsonData: row.data(at: 1) ?? Data()
         )
     }
 
     private func loadAllProjectFiles() throws -> [NPProjectFileRecord] {
-        try query(
+        try queryTyped(
             "SELECT path, json_blob FROM project_files ORDER BY path ASC"
         ).map { row in
             NPProjectFileRecord(
-                path: row[0] ?? "",
-                jsonData: blobValue(row[1])
+                path: row.string(at: 0) ?? "",
+                jsonData: row.data(at: 1) ?? Data()
             )
         }
     }
@@ -406,7 +407,7 @@ public actor ProjectDatabase {
         let versionColumn = includeVersionJSON ? "version_json" : "NULL AS version_json"
         let playbackColumn = includePlaybackJSON ? "playback_json" : "NULL AS playback_json"
 
-        return try query(
+        return try queryTyped(
             """
             SELECT
                 version_id,
@@ -429,19 +430,19 @@ public actor ProjectDatabase {
             binds: [.text(sceneID.uuidString)]
         ).map { row in
             NPSceneVersionRecord(
-                id: parseUUID(row[0]) ?? UUID(),
-                sortIndex: parseInt(row[1]),
-                label: row[2] ?? "Version",
-                saveType: row[3] ?? "manual",
-                userLabel: row[4],
-                isBookmarked: parseInt(row[5]) != 0,
-                createdAt: parseDate(row[6]),
-                updatedAt: parseDate(row[7]),
-                lyrics: row[8] ?? "",
-                versionJSON: optionalBlobValue(row[9]),
-                playbackJSON: optionalBlobValue(row[10]),
-                noteCount: parseInt(row[11]),
-                lengthTicks: parseInt(row[12])
+                id: row.string(at: 0).flatMap(UUID.init(uuidString:)) ?? UUID(),
+                sortIndex: row.int(at: 1),
+                label: row.string(at: 2) ?? "Version",
+                saveType: row.string(at: 3) ?? "manual",
+                userLabel: row.string(at: 4),
+                isBookmarked: row.int(at: 5) != 0,
+                createdAt: row.string(at: 6).flatMap(Self.parseDate) ?? .distantPast,
+                updatedAt: row.string(at: 7).flatMap(Self.parseDate) ?? .distantPast,
+                lyrics: row.string(at: 8) ?? "",
+                versionJSON: row.data(at: 9),
+                playbackJSON: row.data(at: 10),
+                noteCount: row.int(at: 11),
+                lengthTicks: row.int(at: 12)
             )
         }
     }
@@ -462,6 +463,24 @@ public actor ProjectDatabase {
         try recordChange(scope: "project_file", entityID: path, kind: "upsert", actorID: actorID)
     }
 
+    /// Lightweight lookup returning (sceneID, activeVersionID, firstVersionID)
+    /// without loading any BLOB columns — avoids MBs of unnecessary I/O.
+    private func lookupSceneVersionIDs(relativePath: String) throws -> (UUID, UUID?, UUID?)? {
+        try openIfNeeded()
+        guard let row = try querySingleTyped("""
+            SELECT s.scene_id, s.active_version_id,
+                   (SELECT v.version_id FROM scene_versions v WHERE v.scene_id = s.scene_id
+                    ORDER BY v.sort_index ASC, v.updated_at DESC, v.created_at DESC, v.version_id ASC LIMIT 1)
+            FROM scenes s WHERE s.relative_path = ? LIMIT 1
+            """, binds: [.text(relativePath)]) else {
+            return nil
+        }
+        guard let sceneID = row.string(at: 0).flatMap(UUID.init(uuidString:)) else { return nil }
+        let activeVID = row.string(at: 1).flatMap(UUID.init(uuidString:))
+        let firstVID = row.string(at: 2).flatMap(UUID.init(uuidString:))
+        return (sceneID, activeVID, firstVID)
+    }
+
     public func updateSongText(
         relativePath: String,
         lyrics: String,
@@ -469,25 +488,36 @@ public actor ProjectDatabase {
         actorID: String = "system"
     ) throws {
         try openIfNeeded()
-        guard var scene = try loadScene(relativePath: relativePath) else {
+        guard let (sceneID, activeVID, firstVID) = try lookupSceneVersionIDs(relativePath: relativePath) else {
             throw missingSceneError(relativePath: relativePath)
         }
-        let now = Date()
 
-        let targetVersionID = versionID ?? scene.activeVersionID
-        if let targetVersionID,
-           let index = scene.versions.firstIndex(where: { $0.id == targetVersionID }) {
-            scene.activeVersionID = targetVersionID
-            scene.versions[index].lyrics = lyrics
-            scene.versions[index].updatedAt = now
-        } else if let index = scene.versions.indices.first {
-            scene.activeVersionID = scene.versions[index].id
-            scene.versions[index].lyrics = lyrics
-            scene.versions[index].updatedAt = now
+        let targetVersionID = versionID ?? activeVID ?? firstVID
+        guard let targetVersionID else {
+            throw missingSceneError(relativePath: relativePath)
         }
 
-        scene.updatedAt = now
-        try upsertScene(scene, actorID: actorID)
+        let now = Date()
+        let nowStr = Self.isoFormatter.string(from: now)
+
+        // Targeted UPDATEs instead of DELETE-all/re-INSERT — avoids WAL bloat
+        // and unnecessary I/O when only one field changes.
+        try execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try execute(
+                "UPDATE scene_versions SET lyrics = ?, updated_at = ? WHERE version_id = ?",
+                binds: [.text(lyrics), .text(nowStr), .text(targetVersionID.uuidString)]
+            )
+            try execute(
+                "UPDATE scenes SET active_version_id = ?, updated_at = ? WHERE scene_id = ?",
+                binds: [.text(targetVersionID.uuidString), .text(nowStr), .text(sceneID.uuidString)]
+            )
+            try recordChange(scope: "scene", entityID: relativePath, kind: "upsert", actorID: actorID)
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
     }
 
     public func updateSongPlayback(
@@ -497,22 +527,39 @@ public actor ProjectDatabase {
         actorID: String = "system"
     ) throws {
         try openIfNeeded()
-        guard var scene = try loadScene(relativePath: relativePath) else {
+        guard let (sceneID, activeVID, firstVID) = try lookupSceneVersionIDs(relativePath: relativePath) else {
             throw missingSceneError(relativePath: relativePath)
         }
-        let targetVersionID = versionID ?? scene.activeVersionID ?? scene.versions.first?.id
-        guard let targetVersionID,
-              let index = scene.versions.firstIndex(where: { $0.id == targetVersionID }) else {
-            return
-        }
+
+        let targetVersionID = versionID ?? activeVID ?? firstVID
+        guard let targetVersionID else { return }
 
         let metrics = summarizePlaybackJSON(playbackJSON)
-        scene.versions[index].playbackJSON = playbackJSON
-        scene.versions[index].noteCount = metrics.noteCount
-        scene.versions[index].lengthTicks = metrics.lengthTicks
-        scene.versions[index].updatedAt = Date()
-        scene.updatedAt = scene.versions[index].updatedAt
-        try upsertScene(scene, actorID: actorID)
+        let now = Date()
+        let nowStr = Self.isoFormatter.string(from: now)
+
+        try execute("BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try execute(
+                "UPDATE scene_versions SET playback_json = ?, note_count = ?, length_ticks = ?, updated_at = ? WHERE version_id = ?",
+                binds: [
+                    bindBlob(playbackJSON),
+                    .int(metrics.noteCount),
+                    .int(metrics.lengthTicks),
+                    .text(nowStr),
+                    .text(targetVersionID.uuidString)
+                ]
+            )
+            try execute(
+                "UPDATE scenes SET updated_at = ? WHERE scene_id = ?",
+                binds: [.text(nowStr), .text(sceneID.uuidString)]
+            )
+            try recordChange(scope: "scene", entityID: relativePath, kind: "upsert", actorID: actorID)
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
     }
 
     public func upsertAnimationScene(owsPath: String, jsonData: Data, actorID: String = "system") throws {
@@ -733,6 +780,7 @@ public actor ProjectDatabase {
             """
         )
         try execute("CREATE INDEX IF NOT EXISTS idx_scene_versions_scene_id ON scene_versions(scene_id)")
+        try execute("CREATE INDEX IF NOT EXISTS idx_change_log_change_id ON change_log(change_id)")
     }
 
     private func migrateSchemaIfNeeded() throws {
@@ -1177,6 +1225,104 @@ public actor ProjectDatabase {
         }
     }
 
+    // MARK: - Typed Query Layer
+    // Returns Data directly for BLOB columns instead of base64 strings,
+    // eliminating the encode-then-decode roundtrip that doubled CPU and added
+    // 33% memory overhead on every BLOB read.
+
+    private struct SQLiteRow {
+        private let values: [SQLiteValue]
+
+        init(statement: OpaquePointer?) {
+            let count = Int(sqlite3_column_count(statement))
+            var values: [SQLiteValue] = []
+            values.reserveCapacity(count)
+            for index in 0..<count {
+                let type = sqlite3_column_type(statement, Int32(index))
+                switch type {
+                case SQLITE_INTEGER:
+                    values.append(.int64(sqlite3_column_int64(statement, Int32(index))))
+                case SQLITE_FLOAT:
+                    values.append(.double(sqlite3_column_double(statement, Int32(index))))
+                case SQLITE_TEXT:
+                    if let pointer = sqlite3_column_text(statement, Int32(index)) {
+                        values.append(.string(String(cString: pointer)))
+                    } else {
+                        values.append(.null)
+                    }
+                case SQLITE_BLOB:
+                    let bytes = sqlite3_column_blob(statement, Int32(index))
+                    let length = Int(sqlite3_column_bytes(statement, Int32(index)))
+                    if let bytes, length > 0 {
+                        values.append(.data(Data(bytes: bytes, count: length)))
+                    } else {
+                        values.append(.data(Data()))
+                    }
+                default:
+                    values.append(.null)
+                }
+            }
+            self.values = values
+        }
+
+        func string(at index: Int) -> String? {
+            guard index < values.count else { return nil }
+            switch values[index] {
+            case .string(let value): return value
+            case .int64(let value): return String(value)
+            case .double(let value): return String(value)
+            case .null, .data: return nil
+            }
+        }
+
+        func int(at index: Int) -> Int { Int(int64(at: index)) }
+        func int64(at index: Int) -> Int64 {
+            guard index < values.count else { return 0 }
+            switch values[index] {
+            case .int64(let value): return value
+            case .double(let value): return Int64(value)
+            case .string(let value): return Int64(value) ?? 0
+            case .null, .data: return 0
+            }
+        }
+
+        func data(at index: Int) -> Data? {
+            guard index < values.count else { return nil }
+            switch values[index] {
+            case .data(let value): return value
+            case .null, .string, .int64, .double: return nil
+            }
+        }
+    }
+
+    private enum SQLiteValue {
+        case string(String)
+        case int64(Int64)
+        case double(Double)
+        case data(Data)
+        case null
+    }
+
+    private func queryTyped(_ sql: String, binds: [SQLiteBind] = []) throws -> [SQLiteRow] {
+        guard let db else { throw databaseClosedError() }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw sqliteError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        try bind(binds, to: statement)
+
+        var rows: [SQLiteRow] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            rows.append(SQLiteRow(statement: statement))
+        }
+        return rows
+    }
+
+    private func querySingleTyped(_ sql: String, binds: [SQLiteBind] = []) throws -> SQLiteRow? {
+        try queryTyped(sql, binds: binds).first
+    }
+
     private func columnExists(table: String, column: String) throws -> Bool {
         try query("PRAGMA table_info(\(table))").contains { row in
             row.indices.contains(1) && row[1] == column
@@ -1267,7 +1413,7 @@ public actor ProjectDatabase {
         var parts: [String] = []
         while let fileURL = enumerator?.nextObject() as? URL {
             let relative = relativePath(for: fileURL)
-            if relative.hasPrefix(".novotro/") { continue }
+            if relative.hasPrefix(".amira/") { continue }
             guard fileURL.hasDirectoryPath == false else { continue }
             guard isPrimarySongPath(relative) || isCanonicalProjectFile(relative) else { continue }
             let values = try fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
@@ -1303,7 +1449,7 @@ public actor ProjectDatabase {
         while let fileURL = enumerator?.nextObject() as? URL {
             guard fileURL.hasDirectoryPath == false else { continue }
             let relative = relativePath(for: fileURL)
-            guard relative.hasPrefix(".novotro/") == false else { continue }
+            guard relative.hasPrefix(".amira/") == false else { continue }
             guard isPrimarySongPath(relative) == false else { continue }
             guard isCanonicalProjectFile(relative) else { continue }
             files.append(relative)
@@ -1517,15 +1663,6 @@ public actor ProjectDatabase {
         Int(value ?? "") ?? 0
     }
 
-    private func blobValue(_ value: String?) -> Data {
-        Data(base64Encoded: value ?? "") ?? Data()
-    }
-
-    private func optionalBlobValue(_ value: String?) -> Data? {
-        guard let value else { return nil }
-        return Data(base64Encoded: value)
-    }
-
     private func bindUUID(_ value: UUID?) -> SQLiteBind {
         if let value {
             return .text(value.uuidString)
@@ -1561,5 +1698,3 @@ public actor ProjectDatabase {
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-
-public typealias NovotroProjectDatabase = ProjectDatabase

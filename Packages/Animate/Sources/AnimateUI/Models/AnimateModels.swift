@@ -673,6 +673,70 @@ enum CharacterGenderType: String, Codable, Sendable, CaseIterable, Identifiable,
     }
 }
 
+enum CharacterShotReferenceFraming: String, Codable, Sendable, CaseIterable, Identifiable, Hashable {
+    case closeUp = "close_up"
+    case fullBody = "full_body"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .closeUp: "Close-up"
+        case .fullBody: "Full-body"
+        }
+    }
+}
+
+enum CharacterShotReferenceWardrobe: String, Codable, Sendable, CaseIterable, Identifiable, Hashable {
+    case soldier
+    case civilian
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .soldier: "Soldier"
+        case .civilian: "Civilian"
+        }
+    }
+}
+
+enum CharacterShotReferenceView: String, Codable, Sendable, CaseIterable, Identifiable, Hashable {
+    case front
+    case back
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .front: "Front"
+        case .back: "Back"
+        }
+    }
+}
+
+struct CharacterShotReferenceImage: Identifiable, Codable, Sendable, Hashable {
+    var id: UUID
+    var imagePath: String
+    var framing: CharacterShotReferenceFraming
+    var wardrobe: CharacterShotReferenceWardrobe
+    var view: CharacterShotReferenceView
+
+    init(
+        id: UUID = UUID(),
+        imagePath: String,
+        framing: CharacterShotReferenceFraming = .fullBody,
+        wardrobe: CharacterShotReferenceWardrobe = .soldier,
+        view: CharacterShotReferenceView = .front
+    ) {
+        self.id = id
+        self.imagePath = imagePath
+        self.framing = framing
+        self.wardrobe = wardrobe
+        self.view = view
+    }
+}
+
 
 struct CharacterExpressionReferenceSet: Identifiable, Codable, Sendable, Hashable {
     var id: String { presetID }
@@ -700,7 +764,7 @@ struct CharacterExpressionReferenceSet: Identifiable, Codable, Sendable, Hashabl
 }
 
 struct AnimationCharacter: Identifiable, Codable, Sendable {
-    static let currentSchemaVersion = 3
+    static let currentSchemaVersion = 4
 
     var schemaVersion: Int
     var id: UUID
@@ -717,6 +781,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
     var backstory: String
     var personality: String
     var notes: String
+    var promptNotes: String
     var defaultWardrobeType: CharacterWardrobeType
     var genderType: CharacterGenderType
     var age: Int?
@@ -736,6 +801,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
     var inspirationBatchJobs: [CharacterInspirationBatchJob]
     var referenceImagePaths: [String]
     var animatedImagePaths: [String]
+    var shotReferenceImages: [CharacterShotReferenceImage]
     var lookDevelopmentSlots: [CharacterLookDevelopmentSlot]
     var masterReferenceSheetPrompt: String
     var masterReferenceSourceImagePaths: [String]
@@ -767,6 +833,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         backstory: String = "",
         personality: String = "",
         notes: String = "",
+        promptNotes: String = "",
         defaultWardrobeType: CharacterWardrobeType = .soldier,
         genderType: CharacterGenderType = .person,
         age: Int? = nil,
@@ -780,6 +847,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         inspirationBatchJobs: [CharacterInspirationBatchJob] = [],
         referenceImagePaths: [String] = [],
         animatedImagePaths: [String] = [],
+        shotReferenceImages: [CharacterShotReferenceImage] = [],
         lookDevelopmentSlots: [CharacterLookDevelopmentSlot] = [],
         masterReferenceSheetPrompt: String = "",
         masterReferenceSourceImagePaths: [String] = [],
@@ -810,6 +878,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         self.backstory = backstory
         self.personality = personality
         self.notes = notes
+        self.promptNotes = promptNotes
         self.defaultWardrobeType = defaultWardrobeType
         self.genderType = genderType
         self.age = age
@@ -823,6 +892,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         self.inspirationBatchJobs = inspirationBatchJobs
         self.referenceImagePaths = referenceImagePaths
         self.animatedImagePaths = animatedImagePaths
+        self.shotReferenceImages = shotReferenceImages
         self.lookDevelopmentSlots = lookDevelopmentSlots
         self.masterReferenceSheetPrompt = masterReferenceSheetPrompt
         self.masterReferenceSourceImagePaths = masterReferenceSourceImagePaths
@@ -846,7 +916,8 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         id = try c.decode(UUID.self, forKey: .id)
         sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder)
         name = try c.decode(String.self, forKey: .name)
-        description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        let legacyDescription = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        description = legacyDescription
         owpSlug = try c.decodeIfPresent(String.self, forKey: .owpSlug) ?? ""
         storageSlug = try c.decodeIfPresent(String.self, forKey: .storageSlug)
         renderMode = try c.decodeIfPresent(CharacterCanvasRenderMode.self, forKey: .renderMode)
@@ -856,6 +927,10 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         backstory = try c.decodeIfPresent(String.self, forKey: .backstory) ?? ""
         personality = try c.decodeIfPresent(String.self, forKey: .personality) ?? ""
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        let decodedPromptNotes = try c.decodeIfPresent(String.self, forKey: .promptNotes) ?? ""
+        promptNotes = decodedPromptNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? legacyDescription
+            : decodedPromptNotes
         defaultWardrobeType = try c.decodeIfPresent(CharacterWardrobeType.self, forKey: .defaultWardrobeType) ?? .soldier
         genderType = try c.decodeIfPresent(CharacterGenderType.self, forKey: .genderType) ?? .person
         age = try c.decodeIfPresent(Int.self, forKey: .age)
@@ -869,6 +944,7 @@ struct AnimationCharacter: Identifiable, Codable, Sendable {
         inspirationBatchJobs = try c.decodeIfPresent([CharacterInspirationBatchJob].self, forKey: .inspirationBatchJobs) ?? []
         referenceImagePaths = try c.decodeIfPresent([String].self, forKey: .referenceImagePaths) ?? []
         animatedImagePaths = try c.decodeIfPresent([String].self, forKey: .animatedImagePaths) ?? []
+        shotReferenceImages = try c.decodeIfPresent([CharacterShotReferenceImage].self, forKey: .shotReferenceImages) ?? []
         lookDevelopmentSlots = try c.decodeIfPresent([CharacterLookDevelopmentSlot].self, forKey: .lookDevelopmentSlots) ?? []
         masterReferenceSheetPrompt = try c.decodeIfPresent(String.self, forKey: .masterReferenceSheetPrompt) ?? ""
         masterReferenceSourceImagePaths = try c.decodeIfPresent([String].self, forKey: .masterReferenceSourceImagePaths) ?? []
@@ -2309,9 +2385,10 @@ public struct PlacesWorldContextBlocks: Codable, Sendable, Equatable, Hashable {
     public static let defaultEnvironmental = """
     Exterior environment with open sky
     Persian-Afghan highland valley landscape
-    Settlement on the north bank of the main river only
+    Hillside settlement set back uphill from the main river
+    Old stone bridge crosses only to a bare landing; dirt road climbs from there before town begins
     Textured stone and mud-brick facades, weathered surfaces
-    Overhead power lines and irregular signage
+    Irregular hand-painted signage and practical repaired materials
     Dry dust haze characteristic of arid subtropical climate
     """
 
@@ -2573,11 +2650,11 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
     }
 
     var resolvedApprovedImagePath: String? {
-        approvedImagePath ?? imagePaths.first
+        approvedImagePath
     }
 
     var resolvedAnimatedApprovedImagePath: String? {
-        animatedApprovedImagePath ?? animatedImagePaths.first
+        animatedApprovedImagePath
     }
 
     func imagePaths(for workflow: PlaceWorkflowMode) -> [String] {
@@ -2657,11 +2734,13 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
 // MARK: - Gemini
 
 enum GeminiModel: String, Codable, Sendable, CaseIterable {
+    case nanoBanana = "gemini-2.5-flash-image"
     case flash = "gemini-3.1-flash-image-preview"
     case pro = "gemini-3-pro-image-preview"
 
     var displayName: String {
         switch self {
+        case .nanoBanana: "Nano Banana"
         case .flash: "Nano Banana 2"
         case .pro: "Nano Banana Pro"
         }
@@ -2673,6 +2752,8 @@ enum GeminiModel: String, Codable, Sendable, CaseIterable {
 
     func estimatedCost(for imageSize: String) -> Double {
         switch self {
+        case .nanoBanana:
+            0.039
         case .flash:
             switch imageSize {
             case "4K": 0.150
@@ -2689,6 +2770,8 @@ enum GeminiModel: String, Codable, Sendable, CaseIterable {
 
     func estimatedBatchCost(for imageSize: String) -> Double {
         switch self {
+        case .nanoBanana:
+            0.0195
         case .flash:
             switch imageSize {
             case "4K": 0.076

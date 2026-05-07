@@ -140,6 +140,10 @@ struct ShotFrameGenerationDryRunPlanner {
         model: GeminiModel,
         imageSize: String = ShotFrameOpenMattePlan.defaultGeneratedImageSize
     ) async -> ShotFrameGenerationDryRunReport {
+        let shotSettings = ShotGenerationSettingsStore.load(projectRoot: projectRoot)
+        let resolvedImageSize = imageSize.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? shotSettings.generatedImageSize
+            : imageSize.trimmingCharacters(in: .whitespacesAndNewlines)
         let promptService = ImagineScenePromptService(store: store)
         let scenesToPlan = scenes.filter { scene in
             sceneFilter?.contains(scene.id) ?? true
@@ -167,7 +171,7 @@ struct ShotFrameGenerationDryRunPlanner {
                         scene: scene,
                         shotIndex: shotIndex,
                         moment: moment,
-                        prompt: prompt
+                        projectRoot: projectRoot
                     )
                     let plan = ShotFrameGenerationPlanResolver.resolve(
                         input: ShotFrameGenerationPlanResolver.Input(
@@ -185,10 +189,13 @@ struct ShotFrameGenerationDryRunPlanner {
                             manualReferenceCount: 0,
                             cameraShot: resolvedCameraShot(for: scene, shot: shot),
                             cameraMovement: resolvedCameraMovement(for: shot),
-                            generatedImageSize: imageSize
+                            generatedAspectRatio: shotSettings.generatedAspectRatio,
+                            generatedImageSize: resolvedImageSize,
+                            extractionTargetAspectRatio: shotSettings.extractionTargetAspectRatio,
+                            finalDeliveryAspectRatio: shotSettings.finalDeliveryAspectRatio
                         )
                     )
-                    let planImageSize = plan.openMattePlan?.generatedImageSize ?? imageSize
+                    let planImageSize = plan.openMattePlan?.generatedImageSize ?? resolvedImageSize
                     frames.append(
                         ShotFrameGenerationDryRunFrame(
                             scene: scene,
@@ -209,7 +216,7 @@ struct ShotFrameGenerationDryRunPlanner {
 
         return ShotFrameGenerationDryRunReport(
             model: model,
-            imageSize: imageSize,
+            imageSize: resolvedImageSize,
             sceneFilter: sceneFilter.map { Array($0).sorted { $0.uuidString < $1.uuidString } },
             frames: frames
         )
@@ -248,36 +255,53 @@ struct ShotFrameGenerationDryRunPlanner {
         scene: AnimationScene,
         shotIndex: Int,
         moment: ImagineShotMoment,
-        prompt: String
+        projectRoot: URL
     ) async -> [String] {
         guard shotIndex >= 0,
-              shotIndex < scene.shots.count,
-              let searchService = store.imageIntelligenceSearchService() else {
+              shotIndex < scene.shots.count else {
             return []
         }
 
-        let shot = scene.shots[shotIndex]
-        let input = ImageSearchService.SelectorInput(
-            sceneID: scene.id.uuidString,
-            shotID: shot.id.uuidString,
-            moment: moment.directoryName,
-            characterIDs: resolvedCharacterIDs(for: scene, shot: shot),
-            placeID: scene.backgroundID?.uuidString,
-            queryText: referenceQueryText(scene: scene, shot: shot, prompt: prompt)
-        )
-
         do {
-            let selections = try await searchService.selectForShot(input: input, maxImages: 5)
+            let spec = EffectiveShotSpecBuilder(store: store).build(
+                scene: scene,
+                shotIndex: shotIndex,
+                projectRoot: projectRoot
+            )
+            guard hasCanonicalShotCardMapping(spec) else { return [] }
+            let resolved = try ReferenceContractResolver(store: store).resolve(
+                spec: spec,
+                projectRoot: projectRoot,
+                write: false
+            )
             var seen = Set<String>()
-            return selections.compactMap { selection in
-                let path = URL(fileURLWithPath: selection.resolvedPath).standardizedFileURL.path
+            let paths = resolved.contract.usableReferences.compactMap { item -> String? in
+                let path = URL(fileURLWithPath: item.path).standardizedFileURL.path
                 guard FileManager.default.fileExists(atPath: path),
+                      isAutomaticReferenceImagePath(path),
                       seen.insert(path).inserted else { return nil }
                 return path
             }
+            _ = moment
+            return Array(paths.prefix(5))
         } catch {
             return []
         }
+    }
+
+    private func hasCanonicalShotCardMapping(_ spec: EffectiveShotSpec) -> Bool {
+        if spec.shotCardLabel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return true }
+        if spec.shotCardFocus?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return true }
+        if spec.shotCardNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return true }
+        if spec.shotCardContinuityNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return true }
+        if spec.shotCardPlaces?.isEmpty == false { return true }
+        if spec.shotCardProps?.isEmpty == false { return true }
+        if spec.shotCardLandmarks?.isEmpty == false { return true }
+        return false
+    }
+
+    private func isAutomaticReferenceImagePath(_ path: String) -> Bool {
+        ["png", "jpg", "jpeg", "webp"].contains(URL(fileURLWithPath: path).pathExtension.lowercased())
     }
 
     private func resolvedCharacterIDs(
@@ -310,16 +334,14 @@ struct ShotFrameGenerationDryRunPlanner {
 
     private func referenceQueryText(
         scene: AnimationScene,
-        shot: AnimationSceneShot,
-        prompt: String
+        shot: AnimationSceneShot
     ) -> String {
         [
             scene.name,
             scene.directionTemplate?.notes,
             shot.name,
             shot.notes,
-            shot.sourceLyricExcerpt,
-            prompt
+            shot.sourceLyricExcerpt
         ]
         .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty }

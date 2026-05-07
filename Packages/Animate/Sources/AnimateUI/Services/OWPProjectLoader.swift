@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import ProjectKit
 
 /// Loads OWP project packages and extracts data relevant for animation:
@@ -166,7 +167,7 @@ struct OWPProjectLoader: Sendable {
 
             let displayName = fileURL.deletingPathExtension().lastPathComponent
             songs.append(OWPSongStub(
-                id: UUID(),
+                id: stableSongID(fileURL: fileURL, fallbackSeed: relativePath),
                 title: displayName.toTitleCase(),
                 owsPath: relativePath,
                 durationTicks: nil
@@ -174,6 +175,29 @@ struct OWPProjectLoader: Sendable {
         }
 
         return songs.sorted { $0.owsPath < $1.owsPath }
+    }
+
+    private func stableSongID(fileURL: URL, fallbackSeed: String) -> UUID {
+        guard let data = try? Data(contentsOf: fileURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawSongID = object["songID"] as? String,
+              let songID = UUID(uuidString: rawSongID) else {
+            return deterministicUUID(seed: fallbackSeed)
+        }
+        return songID
+    }
+
+    private func deterministicUUID(seed: String) -> UUID {
+        let digest = SHA256.hash(data: Data(seed.utf8))
+        var bytes = Array(digest.prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
     }
 }
 

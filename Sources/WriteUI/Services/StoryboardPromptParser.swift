@@ -30,12 +30,21 @@ enum StoryboardPromptParser {
     ///
     /// Returns `[NSRange]` suitable for applying temporary attributes
     /// (e.g., hiding or styling prompt text in the editor's NSTextView).
-    static func promptRanges(in text: String) -> [NSRange] {
+    /// Accepts optional pre-computed animate prompt ranges to avoid forcing
+    /// `AnimatePromptParser.canonicalPromptRanges()` to run a second full-text
+    /// regex scan (it is already called once by the caller for coloring).
+    /// When nil, this method falls back to running it independently (old behavior).
+    static func promptRanges(in text: String, animateRanges: [NSRange]? = nil) -> [NSRange] {
         let nsString = text as NSString
         let fullRange = NSRange(location: 0, length: nsString.length)
-        let animateKeys = Set(AnimatePromptParser.canonicalPromptRanges(in: text).map { "\($0.location):\($0.length)" })
+        let keys: Set<String>
+        if let animateRanges {
+            keys = Set(animateRanges.map { "\($0.location):\($0.length)" })
+        } else {
+            keys = Set(AnimatePromptParser.canonicalPromptRanges(in: text).map { "\($0.location):\($0.length)" })
+        }
         return pattern.matches(in: text, range: fullRange)
             .map(\.range)
-            .filter { !animateKeys.contains("\($0.location):\($0.length)") }
+            .filter { !keys.contains("\($0.location):\($0.length)") }
     }
 }

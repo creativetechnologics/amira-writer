@@ -47,9 +47,9 @@ struct ScriptScrollContent: View {
     var showLyricIterations: Bool
     var showCards: Bool
     var selectedLyricIterationSlot: Int
-    @AppStorage("novotro.write.lyricIterations.width") private var lyricIterationsWidth: Double = 340
-    @AppStorage("novotro.write.scratchpad.width") private var scratchpadWidth: Double = 340
-    @AppStorage("novotro.write.cards.width") private var cardsWidth: Double = 340
+    @AppStorage("amira.write.lyricIterations.width") private var lyricIterationsWidth: Double = 340
+    @AppStorage("amira.write.scratchpad.width") private var scratchpadWidth: Double = 340
+    @State private var activeSectionUpdateWorkItem: DispatchWorkItem?
 
     private var displayNamesByPath: [String: String] {
         Dictionary(uniqueKeysWithValues: store.songAssets.map { ($0.relativePath, $0.displayName) })
@@ -72,7 +72,7 @@ struct ScriptScrollContent: View {
                                 showScratchpad: showScratchpad,
                                 scratchpadWidth: scratchpadWidth,
                                 showCards: showCards,
-                                cardsWidth: cardsWidth
+                                cardsWidth: 0
                             )
                             .id(libretto.relativePath)
                             .background(
@@ -91,14 +91,14 @@ struct ScriptScrollContent: View {
 
                         Spacer().frame(height: 200)
                     }
-                    .padding(.horizontal, (showScratchpad || showLyricIterations || showCards) ? 28 : 40)
+                    .padding(.horizontal, (showScratchpad || showLyricIterations) ? 28 : 40)
                     .padding(.top, 20)
                     .padding(.bottom, 40)
                 }
                 .coordinateSpace(name: "scriptScroll")
-                .background(Color.black)
+                .background(store.scriptBackgroundColor)
                 .onPreferenceChange(SectionVisibilityKey.self) { sections in
-                    self.updateActiveSection(from: sections)
+                    self.scheduleActiveSectionUpdate(from: sections)
                 }
                 .onChange(of: store.scrollTarget) { _, target in
                     guard let target else { return }
@@ -111,6 +111,15 @@ struct ScriptScrollContent: View {
                 }
             }
         }
+    }
+
+    private func scheduleActiveSectionUpdate(from sections: [SectionVisibility]) {
+        activeSectionUpdateWorkItem?.cancel()
+        let workItem = DispatchWorkItem {
+            self.updateActiveSection(from: sections)
+        }
+        activeSectionUpdateWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: workItem)
     }
 
     private func updateActiveSection(from sections: [SectionVisibility]) {
@@ -172,7 +181,8 @@ private struct ScriptSectionRowView: View {
                     index: index,
                     displayName: displayName,
                     path: path,
-                    store: store
+                    store: store,
+                    showInlineShotCards: showCards
                 )
                 .frame(maxWidth: .infinity, alignment: .topLeading)
 
@@ -195,14 +205,6 @@ private struct ScriptSectionRowView: View {
                     .frame(width: scratchpadWidth, alignment: .topLeading)
                 }
 
-                if showCards {
-                    ScriptCardLaneView(
-                        displayName: displayName,
-                        path: path,
-                        store: store
-                    )
-                    .frame(width: cardsWidth, alignment: .topLeading)
-                }
             }
         }
     }
@@ -216,12 +218,15 @@ struct ScriptSectionView: View {
     let displayName: String
     let path: String
     @Bindable var store: ScriptStore
+    let showInlineShotCards: Bool
 
     @State private var localText: String = ""
     @State private var hasLoaded: Bool = false
     @State private var editorHeight: CGFloat = 60
     @State private var suppressWriteBack: Bool = false
+    @State private var pendingWriteBackWorkItem: DispatchWorkItem?
     @State private var glowOpacity: Double = 0
+    @State private var expandedShotCardIDs: Set<String> = []
     
     // Track external change highlighting
     @State private var externalChangeRanges: [NSRange] = []
@@ -245,6 +250,10 @@ struct ScriptSectionView: View {
         store.pendingAgentEdits[path] != nil
     }
 
+    private var characterNames: [String] {
+        store.characters.map(\.name)
+    }
+
     private func editableText(from rawContent: String) -> String {
         ScriptTextEditor.prepareEditableText(
             from: SynopsisEmbedding.stripForDisplay(content: rawContent)
@@ -266,33 +275,87 @@ struct ScriptSectionView: View {
         return SynopsisEmbedding.update(content: sanitizedText, synopsis: existingSynopsis)
     }
 
+    private func currentStoredContent() -> String {
+        store.librettoFiles.first(where: { $0.relativePath == path })?.content ?? ""
+    }
+
+    private func scheduleWriteBack(_ newValue: String) {
+        pendingWriteBackWorkItem?.cancel()
+        let workItem = DispatchWorkItem {
+            let fullContent = storedContent(from: newValue)
+            guard fullContent != currentStoredContent() else { return }
+            store.applyEditorChange(path: path, lyrics: fullContent)
+        }
+        pendingWriteBackWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: workItem)
+    }
+
+    private func flushPendingWriteBack() {
+        pendingWriteBackWorkItem?.cancel()
+        pendingWriteBackWorkItem = nil
+        let fullContent = storedContent(from: localText)
+        guard fullContent != currentStoredContent() else { return }
+        store.applyEditorChange(path: path, lyrics: fullContent)
+    }
+
+    @ViewBuilder
     private var editorView: some View {
-        ScriptTextEditor(
+        StructuredScriptTextEditor(
             text: $localText,
             reportedHeight: $editorHeight,
             isEditable: store.isLibrettoEditMode,
-            showDirections: store.showDirections,
-            showStoryboarding: store.showStoryboarding,
-            showAnimateDirections: store.showAnimateDirections,
+            showInlineShotCards: showInlineShotCards,
+            showLyricCards: showInlineShotCards,
+            characterNames: characterNames,
             directionMarkupColorHex: store.directionMarkupColorHex,
             storyboardingMarkupColorHex: store.storyboardingMarkupColorHex,
             animateMarkupColorHex: store.animateMarkupColorHex,
-            pendingHighlightRanges: pendingDiffRanges,
-            externalChangeRanges: externalChangeRanges,
-            externalChangeOpacity: externalChangeHighlightOpacity
+            expandedShotCardIDs: $expandedShotCardIDs,
+            allowsShotBoundaryEditing: store.isLibrettoEditMode && !isPreviewingThisSection && !hasPendingEdit,
+            allowsShotCardEditing: !isPreviewingThisSection && !hasPendingEdit
         )
     }
 
+    @ViewBuilder
     private var readOnlyView: some View {
-        let raw = store.librettoFiles.first(where: { $0.relativePath == path })?.content ?? ""
-        let text = isPreviewingThisSection ? (previewLyrics.map(readOnlyText) ?? "") : readOnlyText(from: raw)
+        if showInlineShotCards && !isPreviewingThisSection {
+            StructuredScriptTextEditor(
+                text: $localText,
+                reportedHeight: $editorHeight,
+                isEditable: false,
+                showInlineShotCards: showInlineShotCards,
+                showLyricCards: showInlineShotCards,
+                characterNames: characterNames,
+                directionMarkupColorHex: store.directionMarkupColorHex,
+                storyboardingMarkupColorHex: store.storyboardingMarkupColorHex,
+                animateMarkupColorHex: store.animateMarkupColorHex,
+                expandedShotCardIDs: $expandedShotCardIDs,
+                allowsShotBoundaryEditing: false,
+                allowsShotCardEditing: !hasPendingEdit
+            )
+            .frame(height: max(40, editorHeight))
+        } else {
+            let raw = store.librettoFiles.first(where: { $0.relativePath == path })?.content ?? ""
+            let text = isPreviewingThisSection
+                ? (previewLyrics.map { SynopsisEmbedding.stripForDisplay(content: $0) } ?? "")
+                : SynopsisEmbedding.stripForDisplay(content: raw)
 
-        return Text(verbatim: text)
-            .font(.system(size: 13, weight: .regular, design: .monospaced))
-            .foregroundStyle(Color.white.opacity(0.88))
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(.vertical, 6)
+            StructuredScriptTextEditor(
+                text: .constant(text),
+                reportedHeight: $editorHeight,
+                isEditable: false,
+                showInlineShotCards: showInlineShotCards,
+                showLyricCards: showInlineShotCards,
+                characterNames: characterNames,
+                directionMarkupColorHex: store.directionMarkupColorHex,
+                storyboardingMarkupColorHex: store.storyboardingMarkupColorHex,
+                animateMarkupColorHex: store.animateMarkupColorHex,
+                expandedShotCardIDs: $expandedShotCardIDs,
+                allowsShotBoundaryEditing: false,
+                allowsShotCardEditing: false
+            )
+            .frame(height: max(40, editorHeight))
+        }
     }
 
     private var editorContainer: some View {
@@ -329,7 +392,7 @@ struct ScriptSectionView: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color.black.opacity(0.80))
+                .fill(store.scriptBackgroundColor.opacity(0.88))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
@@ -385,17 +448,18 @@ struct ScriptSectionView: View {
                 }
             }
             .onChange(of: localText) { _, newValue in
-                guard store.isLibrettoEditMode, hasLoaded, !suppressWriteBack else { return }
-                let fullContent = storedContent(from: newValue)
-                let current = store.librettoFiles.first(where: { $0.relativePath == path })?.content ?? ""
-                guard fullContent != current else { return }
-                store.applyEditorChange(path: path, lyrics: fullContent)
+                let allowsStructuredCardWriteBack = showInlineShotCards && !isPreviewingThisSection && !hasPendingEdit
+                guard (store.isLibrettoEditMode || allowsStructuredCardWriteBack),
+                      hasLoaded,
+                      !suppressWriteBack else { return }
+                scheduleWriteBack(newValue)
             }
-            .onChange(of: store.librettoFiles) { _, files in
+            .onChange(of: store.librettoContentRevisionByPath[path] ?? 0) { _, _ in
                 guard hasLoaded, !hasPendingEdit else { return }
-                let raw = files.first(where: { $0.relativePath == path })?.content ?? ""
+                let raw = currentStoredContent()
                 let incoming = editableText(from: raw)
                 guard incoming != localText else { return }
+                pendingWriteBackWorkItem?.cancel()
                 suppressWriteBack = true
                 localText = incoming
                 DispatchQueue.main.async {
@@ -474,6 +538,11 @@ struct ScriptSectionView: View {
         }
         .onAppear {
             store.ensureSceneHydrated(path: path)
+        }
+        .onDisappear {
+            if pendingWriteBackWorkItem != nil {
+                flushPendingWriteBack()
+            }
         }
     }
 
@@ -711,10 +780,25 @@ struct ScriptTextEditor: NSViewRepresentable {
     var pendingHighlightRanges: [NSRange] = []
     var externalChangeRanges: [NSRange] = []
     var externalChangeOpacity: Double = 0
+    var showInlineShotCards: Bool = false
+    var expandedShotCardIDs: Binding<Set<String>> = .constant([])
+    var allowsShotCardEditing: Bool = false
+    var allowsShotBoundaryEditing: Bool = false
 
     struct VisibleChunk: Equatable {
         let rawRange: NSRange
         let displayRange: NSRange
+    }
+
+    struct ShotAttachment: Equatable, Identifiable {
+        let id: String
+        let rawRange: NSRange
+        let displayRange: NSRange
+        var extentDisplayRange: NSRange
+        let rawMarkup: String
+        let card: ScriptShotCard
+        let isExpanded: Bool
+        var canMoveEnd: Bool
     }
 
     struct DisplayProjection: Equatable {
@@ -722,6 +806,7 @@ struct ScriptTextEditor: NSViewRepresentable {
         let displayText: String
         let hiddenRanges: [NSRange]
         let visibleChunks: [VisibleChunk]
+        let shotAttachments: [ShotAttachment]
     }
 
     private struct DisplayEdit {
@@ -732,6 +817,18 @@ struct ScriptTextEditor: NSViewRepresentable {
     private enum BoundaryBias {
         case previous
         case next
+    }
+
+    fileprivate enum ShotBoundaryEdge: Equatable {
+        case start
+        case end
+    }
+
+    fileprivate enum ShotHandleKind: Equatable {
+        case startBoundary
+        case endBoundary
+        case moveShot
+        case toggleCard
     }
 
     private struct ChunkBoundary {
@@ -799,6 +896,10 @@ struct ScriptTextEditor: NSViewRepresentable {
         context.coordinator.lastHighlightRanges = pendingHighlightRanges
         context.coordinator.lastExternalRanges = externalChangeRanges
         context.coordinator.lastExternalOpacity = externalChangeOpacity
+        context.coordinator.lastShowInlineShotCards = showInlineShotCards
+        context.coordinator.lastExpandedShotCardIDs = expandedShotCardIDs.wrappedValue
+        context.coordinator.lastAllowsShotCardEditing = allowsShotCardEditing
+        context.coordinator.lastAllowsShotBoundaryEditing = allowsShotBoundaryEditing
         context.coordinator.refreshDisplay(to: textView, rawText: text)
 
         return host
@@ -820,8 +921,12 @@ struct ScriptTextEditor: NSViewRepresentable {
         let highlightChanged = coordinator.lastHighlightRanges != pendingHighlightRanges
         let externalChanged = coordinator.lastExternalRanges != externalChangeRanges
             || coordinator.lastExternalOpacity != externalChangeOpacity
+        let inlineShotChanged = coordinator.lastShowInlineShotCards != showInlineShotCards
+            || coordinator.lastExpandedShotCardIDs != expandedShotCardIDs.wrappedValue
+            || coordinator.lastAllowsShotCardEditing != allowsShotCardEditing
+            || coordinator.lastAllowsShotBoundaryEditing != allowsShotBoundaryEditing
 
-        if textChanged || editabilityChanged || toggleChanged || externalChanged {
+        if textChanged || editabilityChanged || toggleChanged || externalChanged || inlineShotChanged {
             coordinator.lastIsEditable = isEditable
             coordinator.lastShowDirections = showDirections
             coordinator.lastShowStoryboarding = showStoryboarding
@@ -832,6 +937,10 @@ struct ScriptTextEditor: NSViewRepresentable {
             coordinator.lastHighlightRanges = pendingHighlightRanges
             coordinator.lastExternalRanges = externalChangeRanges
             coordinator.lastExternalOpacity = externalChangeOpacity
+            coordinator.lastShowInlineShotCards = showInlineShotCards
+            coordinator.lastExpandedShotCardIDs = expandedShotCardIDs.wrappedValue
+            coordinator.lastAllowsShotCardEditing = allowsShotCardEditing
+            coordinator.lastAllowsShotBoundaryEditing = allowsShotBoundaryEditing
             coordinator.refreshDisplay(to: host.textView, rawText: text)
         } else if highlightChanged {
             coordinator.lastHighlightRanges = pendingHighlightRanges
@@ -844,6 +953,40 @@ struct ScriptTextEditor: NSViewRepresentable {
     /// Apply syntax coloring and, when toggles are disabled, project the text
     /// into a view that hides the selected markup families while preserving the
     /// underlying raw text.
+    /// Cache key for text projection results — avoids re-running 4+ regex scans
+    /// when the raw text and visibility toggles are unchanged.
+    private nonisolated(unsafe) static var projectionCache:
+        [String: (key: String, projection: DisplayProjection)] = [:]
+    private static let projectionCacheMax = 5
+
+    private static func cachedProjection(
+        rawText: String,
+        showDirections: Bool,
+        showStoryboarding: Bool,
+        showAnimateDirections: Bool,
+        showInlineShotCards: Bool,
+        expandedShotCardIDs: Set<String>
+    ) -> DisplayProjection? {
+        let key = "\(rawText.hashValue)|\(showDirections)|\(showStoryboarding)|\(showAnimateDirections)|\(showInlineShotCards)"
+        guard let entry = projectionCache[key], entry.key == key else { return nil }
+        return entry.projection
+    }
+
+    private static func storeProjectionCache(
+        rawText: String,
+        showDirections: Bool,
+        showStoryboarding: Bool,
+        showAnimateDirections: Bool,
+        showInlineShotCards: Bool,
+        projection: DisplayProjection
+    ) {
+        let key = "\(rawText.hashValue)|\(showDirections)|\(showStoryboarding)|\(showAnimateDirections)|\(showInlineShotCards)"
+        projectionCache[key] = (key, projection)
+        if projectionCache.count > projectionCacheMax {
+            projectionCache.removeValue(forKey: projectionCache.keys.first!)
+        }
+    }
+
     @discardableResult
     static func applyDirectionStyling(
         to textView: NSTextView,
@@ -853,15 +996,42 @@ struct ScriptTextEditor: NSViewRepresentable {
         showAnimateDirections: Bool = true,
         directionMarkupColorHex: String = ScriptMarkupPalette.defaultDirectionHex,
         storyboardingMarkupColorHex: String = ScriptMarkupPalette.defaultStoryboardingHex,
-        animateMarkupColorHex: String = ScriptMarkupPalette.defaultAnimateHex
+        animateMarkupColorHex: String = ScriptMarkupPalette.defaultAnimateHex,
+        showInlineShotCards: Bool = false,
+        expandedShotCardIDs: Set<String> = []
     ) -> DisplayProjection {
         let sourceText = prepareEditableText(from: rawText ?? textView.string)
-        let projection = displayProjection(
-            from: sourceText,
+
+        // Use cached projection when text and toggles haven't changed —
+        // eliminates redundant regex passes when called from updateNSView.
+        let projection: DisplayProjection
+        if let cached = cachedProjection(
+            rawText: sourceText,
             showDirections: show,
             showStoryboarding: showStoryboarding,
-            showAnimateDirections: showAnimateDirections
-        )
+            showAnimateDirections: showAnimateDirections,
+            showInlineShotCards: showInlineShotCards,
+            expandedShotCardIDs: expandedShotCardIDs
+        ) {
+            projection = cached
+        } else {
+            projection = displayProjection(
+                from: sourceText,
+                showDirections: show,
+                showStoryboarding: showStoryboarding,
+                showAnimateDirections: showAnimateDirections,
+                showInlineShotCards: showInlineShotCards,
+                expandedShotCardIDs: expandedShotCardIDs
+            )
+            storeProjectionCache(
+                rawText: sourceText,
+                showDirections: show,
+                showStoryboarding: showStoryboarding,
+                showAnimateDirections: showAnimateDirections,
+                showInlineShotCards: showInlineShotCards,
+                projection: projection
+            )
+        }
 
         textView.undoManager?.disableUndoRegistration()
         defer { textView.undoManager?.enableUndoRegistration() }
@@ -904,8 +1074,13 @@ struct ScriptTextEditor: NSViewRepresentable {
             }
         }
 
+        // Compute animate ranges once; share with StoryboardPromptParser to
+        // eliminate its independent call to canonicalPromptRanges (a second
+        // full-text regex scan).
+        let animateCanonicalRanges = AnimatePromptParser.canonicalPromptRanges(in: textView.string)
+
         let storyboardRanges = Self.mergedRanges(
-            StoryboardPromptParser.promptRanges(in: textView.string)
+            StoryboardPromptParser.promptRanges(in: textView.string, animateRanges: animateCanonicalRanges)
                 + Self.parentheticalStageDirectionRanges(in: textView.string)
         )
         if !storyboardRanges.isEmpty {
@@ -922,15 +1097,15 @@ struct ScriptTextEditor: NSViewRepresentable {
             }
         }
 
-        let animateRanges = AnimatePromptParser.promptRanges(in: textView.string)
-        if !animateRanges.isEmpty {
+        // Use the pre-computed canonical ranges — no need to re-scan.
+        if !animateCanonicalRanges.isEmpty {
             let pinkColor = showAnimateDirections
                 ? nsColor(
                     from: animateMarkupColorHex,
                     fallback: ScriptMarkupPalette.defaultAnimateHex
                 ).withAlphaComponent(0.86)
                 : NSColor.clear
-            for range in animateRanges {
+            for range in animateCanonicalRanges {
                 layoutManager.addTemporaryAttribute(
                     .foregroundColor, value: pinkColor, forCharacterRange: range
                 )
@@ -1003,57 +1178,127 @@ struct ScriptTextEditor: NSViewRepresentable {
         from text: String,
         showDirections: Bool,
         showStoryboarding: Bool,
-        showAnimateDirections: Bool
+        showAnimateDirections: Bool,
+        showInlineShotCards: Bool = false,
+        expandedShotCardIDs: Set<String> = []
     ) -> DisplayProjection {
         let editableText = prepareEditableText(from: text)
         let nsString = editableText as NSString
         let fullRange = NSRange(location: 0, length: nsString.length)
-        let hiddenRanges = hiddenRanges(
-            in: editableText,
-            showDirections: showDirections,
-            showStoryboarding: showStoryboarding,
-            showAnimateDirections: showAnimateDirections
+        let shotInstances = ScriptShotMarkup.cameraInstances(in: editableText)
+        let shotRawRanges = shotInstances.map(\.rawRange)
+        let nonShotHiddenRanges = subtractRanges(
+            collectHiddenRanges(
+                in: editableText,
+                showDirections: showDirections,
+                showStoryboarding: showStoryboarding,
+                showAnimateDirections: showAnimateDirections,
+                includeCameraRanges: true
+            ),
+            excluding: shotRawRanges
         )
+        let hiddenEvents = (nonShotHiddenRanges.map { HiddenProjectionEvent(rawRange: $0, shot: nil) }
+            + shotInstances.map { HiddenProjectionEvent(rawRange: $0.rawRange, shot: $0) })
+            .sorted {
+                if $0.rawRange.location == $1.rawRange.location { return $0.rawRange.length < $1.rawRange.length }
+                return $0.rawRange.location < $1.rawRange.location
+            }
 
-        guard !hiddenRanges.isEmpty else {
+        guard !hiddenEvents.isEmpty else {
             let visibleChunks = fullRange.length > 0 ? [VisibleChunk(rawRange: fullRange, displayRange: fullRange)] : []
             return DisplayProjection(
                 rawText: editableText,
                 displayText: editableText,
                 hiddenRanges: [],
-                visibleChunks: visibleChunks
+                visibleChunks: visibleChunks,
+                shotAttachments: []
             )
         }
 
-        let mutable = NSMutableString(string: editableText)
-        for range in hiddenRanges.reversed() {
-            mutable.replaceCharacters(in: range, with: "")
-        }
-
+        var display = ""
         var visibleChunks: [VisibleChunk] = []
+        var shotAttachments: [ShotAttachment] = []
         var rawCursor = 0
         var displayCursor = 0
-        for hidden in hiddenRanges {
-            if hidden.location > rawCursor {
-                let rawRange = NSRange(location: rawCursor, length: hidden.location - rawCursor)
+
+        for event in hiddenEvents {
+            guard event.rawRange.location >= rawCursor else { continue }
+            if event.rawRange.location > rawCursor {
+                let rawRange = NSRange(location: rawCursor, length: event.rawRange.location - rawCursor)
                 let displayRange = NSRange(location: displayCursor, length: rawRange.length)
+                display += nsString.substring(with: rawRange)
                 visibleChunks.append(VisibleChunk(rawRange: rawRange, displayRange: displayRange))
                 displayCursor += rawRange.length
             }
-            rawCursor = NSMaxRange(hidden)
+
+            if let shot = event.shot {
+                let id = shot.card.id.uuidString
+                let isExpanded = expandedShotCardIDs.contains(id)
+                let placeholder = shotPlaceholder(isVisible: showInlineShotCards, isExpanded: isExpanded)
+                let displayRange = NSRange(location: displayCursor, length: (placeholder as NSString).length)
+                display += placeholder
+                shotAttachments.append(
+                    ShotAttachment(
+                        id: id,
+                        rawRange: shot.rawRange,
+                        displayRange: displayRange,
+                        extentDisplayRange: displayRange,
+                        rawMarkup: shot.rawMarkup,
+                        card: shot.card,
+                        isExpanded: isExpanded,
+                        canMoveEnd: false
+                    )
+                )
+                displayCursor += displayRange.length
+            }
+            rawCursor = NSMaxRange(event.rawRange)
         }
+
         if rawCursor < fullRange.length {
             let rawRange = NSRange(location: rawCursor, length: fullRange.length - rawCursor)
             let displayRange = NSRange(location: displayCursor, length: rawRange.length)
+            display += nsString.substring(with: rawRange)
             visibleChunks.append(VisibleChunk(rawRange: rawRange, displayRange: displayRange))
+        }
+
+        let displayLength = (display as NSString).length
+        for index in shotAttachments.indices {
+            let start = shotAttachments[index].displayRange.location
+            let end = index + 1 < shotAttachments.count
+                ? shotAttachments[index + 1].displayRange.location
+                : displayLength
+            let minLength = shotAttachments[index].displayRange.length
+            shotAttachments[index].extentDisplayRange = NSRange(
+                location: start,
+                length: max(minLength, end - start)
+            )
+            shotAttachments[index].canMoveEnd = index + 1 < shotAttachments.count
         }
 
         return DisplayProjection(
             rawText: editableText,
-            displayText: mutable as String,
-            hiddenRanges: hiddenRanges,
-            visibleChunks: visibleChunks
+            displayText: display,
+            hiddenRanges: hiddenEvents.map(\.rawRange),
+            visibleChunks: visibleChunks,
+            shotAttachments: shotAttachments
         )
+    }
+
+    private struct HiddenProjectionEvent {
+        let rawRange: NSRange
+        let shot: ScriptCameraMarkupInstance?
+    }
+
+    private static func shotPlaceholder(isVisible: Bool, isExpanded: Bool) -> String {
+        let lineCount = isVisible ? (isExpanded ? 18 : 3) : 2
+        return "\n" + Array(repeating: " ", count: lineCount).joined(separator: "\n") + "\n"
+    }
+
+    private static func subtractRanges(_ ranges: [NSRange], excluding exclusions: [NSRange]) -> [NSRange] {
+        guard !ranges.isEmpty, !exclusions.isEmpty else { return ranges }
+        return ranges.filter { range in
+            !exclusions.contains { NSIntersectionRange($0, range).length > 0 }
+        }
     }
 
     static func hiddenRanges(
@@ -1062,8 +1307,27 @@ struct ScriptTextEditor: NSViewRepresentable {
         showStoryboarding: Bool,
         showAnimateDirections: Bool
     ) -> [NSRange] {
+        mergedRanges(
+            collectHiddenRanges(
+                in: text,
+                showDirections: showDirections,
+                showStoryboarding: showStoryboarding,
+                showAnimateDirections: showAnimateDirections,
+                includeCameraRanges: true
+            )
+        )
+    }
+
+    private static func collectHiddenRanges(
+        in text: String,
+        showDirections: Bool,
+        showStoryboarding: Bool,
+        showAnimateDirections: Bool,
+        includeCameraRanges: Bool
+    ) -> [NSRange] {
         let editableText = prepareEditableText(from: text)
         var ranges: [NSRange] = []
+        ranges.append(contentsOf: ScriptShotMarkup.technicalDirectionRanges(in: editableText))
         if !showDirections {
             ranges.append(contentsOf: directionMarkupRanges(in: editableText))
         }
@@ -1074,7 +1338,10 @@ struct ScriptTextEditor: NSViewRepresentable {
         if !showAnimateDirections {
             ranges.append(contentsOf: AnimatePromptParser.promptRanges(in: editableText))
         }
-        return mergedRanges(ranges)
+        if includeCameraRanges {
+            ranges.append(contentsOf: ScriptShotMarkup.cameraInstances(in: editableText).map(\.rawRange))
+        }
+        return ranges
     }
 
     static func renderHiddenRanges(
@@ -1202,23 +1469,26 @@ struct ScriptTextEditor: NSViewRepresentable {
         affectedDisplayRange: NSRange,
         replacementString: String?
     ) -> String {
+        guard !editTouchesShotAttachment(affectedDisplayRange, attachments: projection.shotAttachments) else {
+            return prepareEditableText(from: rawText)
+        }
+
         let replacement = replacementString ?? ""
         let sourceText = prepareEditableText(from: rawText)
-        let displayText = projection.displayText
-        let totalDisplayLength = (displayText as NSString).length
+        let totalDisplayLength = (projection.displayText as NSString).length
         let displayStart = max(0, min(affectedDisplayRange.location, totalDisplayLength))
         let displayEnd = max(displayStart, min(NSMaxRange(affectedDisplayRange), totalDisplayLength))
-        let displayDeleteLength = displayEnd - displayStart
-        let mutable = NSMutableString(string: displayText)
+        let rawStart = displayToRaw(displayStart, projection: projection)
+        let rawEnd = displayToRaw(displayEnd, projection: projection)
+        let nsSource = sourceText as NSString
+        guard rawStart <= rawEnd, rawStart <= nsSource.length else { return sourceText }
+        let clampedRawEnd = max(rawStart, min(rawEnd, nsSource.length))
+        let mutable = NSMutableString(string: sourceText)
         mutable.replaceCharacters(
-            in: NSRange(location: displayStart, length: displayDeleteLength),
+            in: NSRange(location: rawStart, length: clampedRawEnd - rawStart),
             with: replacement
         )
-        let rebuilt = rebuildRawText(
-            newDisplayText: mutable as String,
-            rawText: sourceText,
-            hiddenRanges: projection.hiddenRanges
-        )
+        let rebuilt = mutable as String
         guard validateHiddenContentPreserved(
             original: sourceText,
             edited: rebuilt,
@@ -1227,6 +1497,50 @@ struct ScriptTextEditor: NSViewRepresentable {
             return sourceText
         }
         return prepareEditableText(from: rebuilt)
+    }
+
+    private static func editTouchesShotAttachment(
+        _ editRange: NSRange,
+        attachments: [ShotAttachment]
+    ) -> Bool {
+        guard !attachments.isEmpty else { return false }
+        for attachment in attachments {
+            let protected = attachment.displayRange
+            if editRange.length == 0 {
+                if editRange.location > protected.location && editRange.location < NSMaxRange(protected) {
+                    return true
+                }
+            } else if NSIntersectionRange(editRange, protected).length > 0 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func removeAdjustedShotPlaceholders(
+        from displayText: String,
+        attachments: [ShotAttachment],
+        editRange: NSRange,
+        replacementLength: Int
+    ) -> String {
+        guard !attachments.isEmpty else { return displayText }
+        let delta = replacementLength - editRange.length
+        let editEnd = NSMaxRange(editRange)
+        let adjustedRanges = attachments.map { attachment -> NSRange in
+            var range = attachment.displayRange
+            if range.location >= editEnd {
+                range.location += delta
+            }
+            return range
+        }
+        let mutable = NSMutableString(string: displayText)
+        let fullLength = mutable.length
+        for range in adjustedRanges.sorted(by: { $0.location > $1.location }) {
+            let clamped = NSIntersectionRange(range, NSRange(location: 0, length: fullLength))
+            guard clamped.length > 0 else { continue }
+            mutable.replaceCharacters(in: clamped, with: "")
+        }
+        return mutable as String
     }
 
     /// Verify that every piece of hidden content from the original raw text
@@ -1271,6 +1585,9 @@ struct ScriptTextEditor: NSViewRepresentable {
             let displayStart = chunk.displayRange.location
             let displayEnd = NSMaxRange(chunk.displayRange)
 
+            if displayOffset < displayStart {
+                return chunk.rawRange.location
+            }
             if displayOffset <= displayEnd {
                 // Position is within or at the end of this chunk.
                 // Map directly: raw = chunk.rawRange.location + (display - chunk.displayRange.location)
@@ -1478,17 +1795,21 @@ struct ScriptTextEditor: NSViewRepresentable {
         var isEditing = false
         var isStyling = false
         var currentRawText = ""
-        var currentProjection = DisplayProjection(rawText: "", displayText: "", hiddenRanges: [], visibleChunks: [])
+        var currentProjection = DisplayProjection(rawText: "", displayText: "", hiddenRanges: [], visibleChunks: [], shotAttachments: [])
         var lastIsEditable = true
         var lastShowDirections = true
         var lastShowStoryboarding = true
         var lastShowAnimateDirections = true
+        var lastShowInlineShotCards = false
+        var lastAllowsShotCardEditing = false
+        var lastAllowsShotBoundaryEditing = false
         var lastDirectionMarkupColorHex = ScriptMarkupPalette.defaultDirectionHex
         var lastStoryboardingMarkupColorHex = ScriptMarkupPalette.defaultStoryboardingHex
         var lastAnimateMarkupColorHex = ScriptMarkupPalette.defaultAnimateHex
         var lastHighlightRanges: [NSRange] = []
         var lastExternalRanges: [NSRange] = []
         var lastExternalOpacity: Double = 0
+        var lastExpandedShotCardIDs: Set<String> = []
         private var pendingDisplayEdit: DisplayEdit?
 
         // MARK: - Undo/Redo Stack (raw text level)
@@ -1594,11 +1915,14 @@ struct ScriptTextEditor: NSViewRepresentable {
                 showAnimateDirections: parent.showAnimateDirections,
                 directionMarkupColorHex: parent.directionMarkupColorHex,
                 storyboardingMarkupColorHex: parent.storyboardingMarkupColorHex,
-                animateMarkupColorHex: parent.animateMarkupColorHex
+                animateMarkupColorHex: parent.animateMarkupColorHex,
+                showInlineShotCards: parent.showInlineShotCards,
+                expandedShotCardIDs: parent.expandedShotCardIDs.wrappedValue
             )
             currentRawText = sourceText
             currentProjection = projection
             applyProjectedHighlights(to: tv)
+            applyShotPlaceholderStyling(to: tv)
 
             // Restore cursor position, clamped to the new text length.
             let newLength = (tv.string as NSString).length
@@ -1607,7 +1931,336 @@ struct ScriptTextEditor: NSViewRepresentable {
             tv.setSelectedRange(NSRange(location: clampedLocation, length: clampedEnd - clampedLocation))
 
             hostView?.recalcHeight()
+            updateShotOverlays(in: tv)
             isStyling = false
+        }
+
+        func applyShotPlaceholderStyling(to tv: NSTextView) {
+            guard let layoutManager = tv.layoutManager else { return }
+            for attachment in currentProjection.shotAttachments {
+                let fullRange = NSRange(location: 0, length: (tv.string as NSString).length)
+                let range = NSIntersectionRange(attachment.displayRange, fullRange)
+                guard range.length > 0 else { continue }
+                layoutManager.addTemporaryAttribute(
+                    .foregroundColor,
+                    value: NSColor.clear,
+                    forCharacterRange: range
+                )
+            }
+        }
+
+        func updateShotOverlays(in tv: NSTextView) {
+            guard let hostView else { return }
+            hostView.shotOverlayView.resetHandleRegions()
+            hostView.shotOverlayView.subviews.forEach { $0.removeFromSuperview() }
+            guard !currentProjection.shotAttachments.isEmpty else { return }
+
+            guard let layoutManager = tv.layoutManager,
+                  let textContainer = tv.textContainer else { return }
+            layoutManager.ensureLayout(for: textContainer)
+
+            for attachment in currentProjection.shotAttachments {
+                let frame = overlayFrame(for: attachment, textView: tv)
+                let host = ShotOverlayHostingView(
+                    rootView: InlineShotCardOverlayView(
+                        attachment: attachment,
+                        showCard: parent.showInlineShotCards,
+                        canEdit: parent.allowsShotCardEditing,
+                        onToggleExpanded: { [weak self] id in
+                            self?.toggleShotCardExpansion(id: id)
+                        },
+                        onCommit: { [weak self] updated in
+                            self?.replaceShotCard(attachment: attachment, with: updated, in: tv)
+                        },
+                        onMoveBoundary: { [weak self] edge, translation in
+                            self?.moveShotBoundary(attachment: attachment, edge: edge, translation: translation, in: tv)
+                        }
+                    )
+                )
+                host.topHitHeight = topHitHeight(for: attachment)
+                host.topDragHeight = parent.showInlineShotCards ? 62 : 24
+                host.bottomHitHeight = parent.showInlineShotCards && attachment.canMoveEnd ? 44 : 0
+                host.onFallbackBoundaryDrag = { [weak self] edge, translation in
+                    self?.moveShotBoundary(attachment: attachment, edge: edge, translation: translation, in: tv)
+                }
+                host.onFallbackClick = { [weak self] point in
+                    if attachment.isExpanded {
+                        if point.x < 54, point.y < 34 {
+                            self?.toggleShotCardExpansion(id: attachment.id)
+                        }
+                    } else {
+                        self?.toggleShotCardExpansion(id: attachment.id)
+                    }
+                }
+                host.frame = frame
+                host.autoresizingMask = [.width]
+                hostView.shotOverlayView.addSubview(host)
+                addShotHandleOverlays(
+                    for: attachment,
+                    frame: frame,
+                    in: hostView.shotOverlayView,
+                    textView: tv
+                )
+            }
+        }
+
+        private func addShotHandleOverlays(
+            for attachment: ShotAttachment,
+            frame: NSRect,
+            in overlayView: ShotOverlayContainerView,
+            textView tv: NSTextView
+        ) {
+            let canEditBoundaries = parent.allowsShotBoundaryEditing
+
+            if canEditBoundaries {
+                overlayView.addHandleRegion(
+                    kind: .startBoundary,
+                    frame: NSRect(
+                        x: frame.minX + 2,
+                        y: frame.minY,
+                        width: max(40, frame.width - 4),
+                        height: 18
+                    ),
+                    onDragEnded: { [weak self] translation in
+                        self?.moveShotBoundary(attachment: attachment, edge: .start, translation: translation, in: tv)
+                    },
+                    onRemove: { [weak self] in
+                        self?.removeShot(attachment: attachment, in: tv)
+                    }
+                )
+            }
+
+            overlayView.addHandleRegion(
+                kind: .toggleCard,
+                frame: NSRect(
+                    x: frame.minX + 6,
+                    y: frame.minY + 9,
+                    width: 30,
+                    height: 28
+                ),
+                onClick: { [weak self] in
+                    self?.toggleShotCardExpansion(id: attachment.id)
+                }
+            )
+
+            guard canEditBoundaries else { return }
+
+            overlayView.addHandleRegion(
+                kind: .moveShot,
+                frame: NSRect(
+                    x: frame.maxX - 54,
+                    y: frame.minY + 7,
+                    width: 34,
+                    height: 34
+                ),
+                onDragEnded: { [weak self] translation in
+                    self?.moveShotBoundary(attachment: attachment, edge: .start, translation: translation, in: tv)
+                },
+                onRemove: { [weak self] in
+                    self?.removeShot(attachment: attachment, in: tv)
+                }
+            )
+
+            if attachment.canMoveEnd {
+                overlayView.addHandleRegion(
+                    kind: .endBoundary,
+                    frame: NSRect(
+                        x: frame.minX + 2,
+                        y: frame.maxY - 44,
+                        width: max(40, frame.width - 4),
+                        height: 44
+                    ),
+                    onDragEnded: { [weak self] translation in
+                        self?.moveShotBoundary(attachment: attachment, edge: .end, translation: translation, in: tv)
+                    },
+                    onRemove: { [weak self] in
+                        self?.removeShot(attachment: attachment, in: tv)
+                    }
+                )
+            }
+        }
+
+        private func overlayFrame(for attachment: ShotAttachment, textView tv: NSTextView) -> NSRect {
+            guard let layoutManager = tv.layoutManager,
+                  let textContainer = tv.textContainer else {
+                return NSRect(x: 0, y: 0, width: tv.bounds.width, height: 24)
+            }
+            let visualRange = parent.showInlineShotCards ? attachment.extentDisplayRange : attachment.displayRange
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: visualRange,
+                actualCharacterRange: nil
+            )
+            var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            rect.origin.x += tv.textContainerOrigin.x
+            rect.origin.y += tv.textContainerOrigin.y
+            let minHeight = topHitHeight(for: attachment)
+                + (parent.showInlineShotCards && attachment.canMoveEnd ? 24 : 0)
+                + 8
+            return NSRect(
+                x: 0,
+                y: max(0, rect.minY),
+                width: max(40, tv.bounds.width),
+                height: max(minHeight, rect.height)
+            )
+        }
+
+        private func topHitHeight(for attachment: ShotAttachment) -> CGFloat {
+            guard parent.showInlineShotCards else { return 24 }
+            return attachment.isExpanded ? 370 : 62
+        }
+
+        private func toggleShotCardExpansion(id: String) {
+            var ids = parent.expandedShotCardIDs.wrappedValue
+            if ids.contains(id) {
+                ids.remove(id)
+            } else {
+                ids.insert(id)
+            }
+            parent.expandedShotCardIDs.wrappedValue = ids
+            lastExpandedShotCardIDs = ids
+            if let tv = hostView?.textView {
+                refreshDisplay(to: tv, rawText: currentRawText)
+            }
+        }
+
+        private func replaceShotCard(
+            attachment: ShotAttachment,
+            with updated: ScriptShotCard,
+            in tv: NSTextView
+        ) {
+            let raw = currentRawText as NSString
+            guard NSMaxRange(attachment.rawRange) <= raw.length else { return }
+            let replacement = ScriptShotMarkup.editedMarkup(for: updated)
+            let mutable = NSMutableString(string: currentRawText)
+            mutable.replaceCharacters(in: attachment.rawRange, with: replacement)
+            let newRawText = ScriptTextEditor.prepareEditableText(from: mutable as String)
+            guard newRawText != currentRawText else { return }
+            pushUndo(currentRawText)
+            currentRawText = newRawText
+            parent.text = newRawText
+            refreshDisplay(to: tv, rawText: newRawText)
+        }
+
+        private func moveShotBoundary(
+            attachment: ShotAttachment,
+            edge: ShotBoundaryEdge,
+            translation: CGSize,
+            in tv: NSTextView
+        ) {
+            guard parent.allowsShotBoundaryEditing else { return }
+            guard abs(translation.height) > 6 || abs(translation.width) > 12 else { return }
+            let movingAttachment: ShotAttachment
+            switch edge {
+            case .start:
+                movingAttachment = attachment
+            case .end:
+                guard let nextAttachment = nextShotAttachment(after: attachment) else { return }
+                movingAttachment = nextAttachment
+            }
+            let raw = currentRawText as NSString
+            guard NSMaxRange(movingAttachment.rawRange) <= raw.length else { return }
+            guard let targetDisplayOffset = displayOffset(
+                for: attachment,
+                edge: edge,
+                translation: translation,
+                in: tv
+            ) else { return }
+            var destinationRawOffset = ScriptTextEditor.displayToRaw(
+                targetDisplayOffset,
+                projection: currentProjection
+            )
+            if destinationRawOffset >= movingAttachment.rawRange.location,
+               destinationRawOffset <= NSMaxRange(movingAttachment.rawRange) {
+                return
+            }
+            destinationRawOffset = clampedShotBoundaryDestination(
+                destinationRawOffset,
+                movingAttachment: movingAttachment,
+                rawLength: raw.length
+            )
+            if destinationRawOffset >= movingAttachment.rawRange.location,
+               destinationRawOffset <= NSMaxRange(movingAttachment.rawRange) {
+                return
+            }
+
+            let movingMarkup = raw.substring(with: movingAttachment.rawRange)
+            let mutable = NSMutableString(string: currentRawText)
+            mutable.replaceCharacters(in: movingAttachment.rawRange, with: "")
+            if destinationRawOffset > movingAttachment.rawRange.location {
+                destinationRawOffset -= movingAttachment.rawRange.length
+            }
+            destinationRawOffset = max(0, min(destinationRawOffset, mutable.length))
+            mutable.insert(movingMarkup, at: destinationRawOffset)
+            let newRawText = ScriptTextEditor.prepareEditableText(from: mutable as String)
+            guard newRawText != currentRawText else { return }
+            pushUndo(currentRawText)
+            currentRawText = newRawText
+            parent.text = newRawText
+            refreshDisplay(to: tv, rawText: newRawText)
+        }
+
+        private func removeShot(
+            attachment: ShotAttachment,
+            in tv: NSTextView
+        ) {
+            guard parent.allowsShotBoundaryEditing else { return }
+            let raw = currentRawText as NSString
+            guard NSMaxRange(attachment.rawRange) <= raw.length else { return }
+            let mutable = NSMutableString(string: currentRawText)
+            mutable.replaceCharacters(in: attachment.rawRange, with: "")
+            let newRawText = ScriptTextEditor.prepareEditableText(from: mutable as String)
+            guard newRawText != currentRawText else { return }
+            pushUndo(currentRawText)
+            currentRawText = newRawText
+            parent.text = newRawText
+            refreshDisplay(to: tv, rawText: newRawText)
+        }
+
+        private func clampedShotBoundaryDestination(
+            _ destination: Int,
+            movingAttachment: ShotAttachment,
+            rawLength: Int
+        ) -> Int {
+            guard let index = currentProjection.shotAttachments.firstIndex(where: { $0.id == movingAttachment.id }) else {
+                return max(0, min(destination, rawLength))
+            }
+            let lowerBound = index > 0
+                ? NSMaxRange(currentProjection.shotAttachments[index - 1].rawRange)
+                : 0
+            let upperBound = index + 1 < currentProjection.shotAttachments.count
+                ? currentProjection.shotAttachments[index + 1].rawRange.location
+                : rawLength
+            return max(lowerBound, min(destination, upperBound))
+        }
+
+        private func nextShotAttachment(after attachment: ShotAttachment) -> ShotAttachment? {
+            guard let index = currentProjection.shotAttachments.firstIndex(where: { $0.id == attachment.id }),
+                  index + 1 < currentProjection.shotAttachments.count else {
+                return nil
+            }
+            return currentProjection.shotAttachments[index + 1]
+        }
+
+        private func displayOffset(
+            for attachment: ShotAttachment,
+            edge: ShotBoundaryEdge,
+            translation: CGSize,
+            in tv: NSTextView
+        ) -> Int? {
+            guard let layoutManager = tv.layoutManager,
+                  let textContainer = tv.textContainer else { return nil }
+            let frame = overlayFrame(for: attachment, textView: tv)
+            var point = NSPoint(
+                x: min(max(frame.midX + translation.width, 0), max(0, tv.bounds.width - 1)),
+                y: max(0, (edge == .start ? frame.minY + 10 : frame.maxY - 8) + translation.height)
+            )
+            point.x -= tv.textContainerOrigin.x
+            point.y -= tv.textContainerOrigin.y
+            return layoutManager.characterIndex(
+                for: point,
+                in: textContainer,
+                fractionOfDistanceBetweenInsertionPoints: nil
+            )
         }
 
         func applyProjectedHighlights(to tv: NSTextView) {
@@ -1652,6 +2305,463 @@ struct ScriptTextEditor: NSViewRepresentable {
     }
 }
 
+// MARK: - Inline Shot Cards
+
+@available(macOS 26.0, *)
+private struct InlineShotCardOverlayView: View {
+    let attachment: ScriptTextEditor.ShotAttachment
+    let showCard: Bool
+    let canEdit: Bool
+    let onToggleExpanded: (String) -> Void
+    let onCommit: (ScriptShotCard) -> Void
+    let onMoveBoundary: (ScriptTextEditor.ShotBoundaryEdge, CGSize) -> Void
+
+    @State private var label: String
+    @State private var shotSize: String
+    @State private var movement: String
+    @State private var focus: String
+    @State private var intent: String
+    @State private var bars: String
+    @State private var notes: String
+    @State private var timeOfDay: String
+    @State private var interiorExterior: String
+    @State private var weatherAtmosphere: String
+    @State private var lightSource: String
+    @State private var lens: String
+    @State private var cameraAngle: String
+    @State private var depthOfField: String
+    @State private var continuityNotes: String
+    @State private var characterLeft: String
+    @State private var characterMiddle: String
+    @State private var characterRight: String
+    @State private var characterLeftFacing: String
+    @State private var characterMiddleFacing: String
+    @State private var characterRightFacing: String
+    @State private var places: String
+    @State private var props: String
+    @State private var mood: String
+    @State private var lighting: String
+    @State private var landmarks: String
+
+    init(
+        attachment: ScriptTextEditor.ShotAttachment,
+        showCard: Bool,
+        canEdit: Bool,
+        onToggleExpanded: @escaping (String) -> Void,
+        onCommit: @escaping (ScriptShotCard) -> Void,
+        onMoveBoundary: @escaping (ScriptTextEditor.ShotBoundaryEdge, CGSize) -> Void
+    ) {
+        self.attachment = attachment
+        self.showCard = showCard
+        self.canEdit = canEdit
+        self.onToggleExpanded = onToggleExpanded
+        self.onCommit = onCommit
+        self.onMoveBoundary = onMoveBoundary
+        _label = State(initialValue: attachment.card.label ?? attachment.card.camera.label ?? "")
+        _shotSize = State(initialValue: attachment.card.camera.shotSize ?? "")
+        _movement = State(initialValue: attachment.card.camera.movement ?? "")
+        _focus = State(initialValue: attachment.card.camera.focus ?? "")
+        _intent = State(initialValue: attachment.card.camera.intent ?? "")
+        _bars = State(initialValue: Self.barsString(from: attachment.card.timing))
+        _notes = State(initialValue: attachment.card.camera.notes ?? "")
+        _timeOfDay = State(initialValue: attachment.card.setting.timeOfDay ?? "")
+        _interiorExterior = State(initialValue: attachment.card.setting.interiorExterior ?? "")
+        _weatherAtmosphere = State(initialValue: attachment.card.setting.weatherAtmosphere ?? "")
+        _lightSource = State(initialValue: attachment.card.setting.lightSource ?? "")
+        _lens = State(initialValue: attachment.card.setting.lens ?? "")
+        _cameraAngle = State(initialValue: attachment.card.setting.cameraAngle ?? "")
+        _depthOfField = State(initialValue: attachment.card.setting.depthOfField ?? "")
+        _continuityNotes = State(initialValue: attachment.card.setting.continuityNotes ?? "")
+        let framing = Self.characterFramingStrings(for: attachment.card)
+        _characterLeft = State(initialValue: framing.left)
+        _characterMiddle = State(initialValue: framing.middle)
+        _characterRight = State(initialValue: framing.right)
+        _characterLeftFacing = State(initialValue: attachment.card.characterFraming.leftFacing ?? "")
+        _characterMiddleFacing = State(initialValue: attachment.card.characterFraming.middleFacing ?? "")
+        _characterRightFacing = State(initialValue: attachment.card.characterFraming.rightFacing ?? "")
+        _places = State(initialValue: attachment.card.tags.places.joined(separator: ", "))
+        _props = State(initialValue: attachment.card.tags.props.joined(separator: ", "))
+        _mood = State(initialValue: attachment.card.tags.mood.joined(separator: ", "))
+        _lighting = State(initialValue: attachment.card.tags.lighting.joined(separator: ", "))
+        _landmarks = State(initialValue: attachment.card.tags.landmarks.joined(separator: ", "))
+    }
+
+    var body: some View {
+        if showCard {
+            cardBody
+        } else {
+            shotBreakLine
+        }
+    }
+
+    private var cardBody: some View {
+        ZStack(alignment: .top) {
+            LinearGradient(
+                stops: [
+                    .init(color: Color(red: 0.09, green: 0.10, blue: 0.11).opacity(0.96), location: 0),
+                    .init(color: Color(red: 0.07, green: 0.08, blue: 0.09).opacity(0.58), location: 0.38),
+                    .init(color: Color.black.opacity(0.02), location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 8) {
+                    header
+                    if attachment.isExpanded {
+                        expandedControls
+                    }
+                }
+                .padding(.vertical, 7)
+                .padding(.horizontal, 10)
+
+                Spacer(minLength: 0)
+
+                if attachment.canMoveEnd {
+                    endHandle
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(0.14))
+                .frame(height: 0.7)
+        }
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Color.white.opacity(0.10))
+                .frame(width: 0.7)
+        }
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color.white.opacity(0.10))
+                .frame(width: 0.7)
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 2)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: attachment.isExpanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 16, height: 16)
+                .contentShape(Rectangle())
+            .help(attachment.isExpanded ? "Collapse Shot" : "Expand Shot")
+
+            Image(systemName: "video")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.orange.opacity(0.85))
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("DIRECTION")
+                    .font(.system(size: 8, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.orange.opacity(0.62))
+                Text(headline)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.86))
+                    .lineLimit(1)
+                if !subline.isEmpty {
+                    Text(subline)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.48))
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.32))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+                .help("Move Shot")
+
+            if canEdit {
+                Button {
+                    commit()
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help("Apply Shot")
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var endHandle: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(Color.clear)
+                .frame(height: 1)
+            VStack(spacing: 2) {
+                Capsule()
+                    .fill(Color.white.opacity(0.20))
+                    .frame(width: 34, height: 2)
+                Capsule()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(width: 22, height: 2)
+            }
+            Rectangle()
+                .fill(Color.clear)
+                .frame(height: 1)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 24)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 3)
+                .onEnded { value in
+                    onMoveBoundary(.end, value.translation)
+                }
+        )
+        .help("Drag Shot End")
+    }
+
+    private var expandedControls: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            shotTextField("Direction", text: $notes)
+            HStack(spacing: 8) {
+                shotPicker(title: "Frame", value: $shotSize, options: framingOptions)
+                shotPicker(title: "Move", value: $movement, options: movementOptions)
+                shotPicker(title: "Intent", value: $intent, options: intentOptions)
+            }
+            HStack(spacing: 8) {
+                shotTextField("Label", text: $label)
+                shotTextField("Focus", text: $focus)
+                shotTextField("Bars", text: $bars)
+            }
+            HStack(spacing: 8) {
+                shotTextField("Places", text: $places)
+                shotPicker(title: "Time", value: $timeOfDay, options: timeOfDayOptions)
+                shotPicker(title: "Int/Ext", value: $interiorExterior, options: interiorExteriorOptions)
+            }
+            HStack(spacing: 8) {
+                shotPicker(title: "Weather", value: $weatherAtmosphere, options: weatherAtmosphereOptions)
+                shotPicker(title: "Light Source", value: $lightSource, options: lightSourceOptions)
+            }
+            HStack(spacing: 8) {
+                characterFrameControl("Character Left", text: $characterLeft, facing: $characterLeftFacing)
+                characterFrameControl("Character Middle", text: $characterMiddle, facing: $characterMiddleFacing)
+                characterFrameControl("Character Right", text: $characterRight, facing: $characterRightFacing)
+            }
+            HStack(spacing: 8) {
+                shotPicker(title: "Lens", value: $lens, options: lensOptions)
+                shotPicker(title: "Angle", value: $cameraAngle, options: cameraAngleOptions)
+                shotPicker(title: "DOF", value: $depthOfField, options: depthOfFieldOptions)
+            }
+            HStack(spacing: 8) {
+                shotTextField("Props", text: $props)
+                shotTextField("Mood", text: $mood)
+                shotTextField("Light", text: $lighting)
+            }
+            HStack(spacing: 8) {
+                shotTextField("Landmarks", text: $landmarks)
+                shotTextField("Continuity", text: $continuityNotes)
+            }
+        }
+        .disabled(!canEdit)
+        .opacity(canEdit ? 1 : 0.72)
+    }
+
+    private var shotBreakLine: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(Color.orange.opacity(0.32))
+                .frame(height: 1)
+            Image(systemName: "video")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Color.orange.opacity(0.46))
+            Rectangle()
+                .fill(Color.orange.opacity(0.32))
+                .frame(height: 1)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 2)
+        .contentShape(Rectangle())
+        .help("Shot Break")
+    }
+
+    private func shotPicker(title: String, value: Binding<String>, options: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title.uppercased())
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.38))
+            Picker(title, selection: value) {
+                ForEach(optionsWithCurrent(value.wrappedValue, options: options), id: \.self) { option in
+                    Text(option.isEmpty ? "Unset" : option.replacingOccurrences(of: "_", with: " "))
+                        .tag(option)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+            .onChange(of: value.wrappedValue) { _, _ in
+                commit()
+            }
+        }
+    }
+
+    private func shotTextField(_ title: String, text: Binding<String>) -> some View {
+        TextField(title, text: text)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 10))
+            .onSubmit { commit() }
+    }
+
+    private func characterFrameControl(
+        _ title: String,
+        text: Binding<String>,
+        facing: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            shotTextField(title, text: text)
+            shotPicker(title: "Facing", value: facing, options: facingOptions)
+        }
+    }
+
+    private var headline: String {
+        let resolved = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !resolved.isEmpty { return resolved }
+        if !shotSize.isEmpty { return shotSize.replacingOccurrences(of: "_", with: " ").capitalized }
+        if !movement.isEmpty { return movement.replacingOccurrences(of: "_", with: " ").capitalized }
+        if !notes.isEmpty { return notes }
+        return "Direction"
+    }
+
+    private var subline: String {
+        [
+            shotSize.nilIfEmpty,
+            movement.nilIfEmpty,
+            focus.nilIfEmpty.map { "on \($0)" },
+            intent.nilIfEmpty,
+            bars.nilIfEmpty.map { "bars \($0)" }
+        ]
+        .compactMap { $0 }
+        .joined(separator: "  |  ")
+    }
+
+    private var framingOptions: [String] {
+        ["", "extreme_wide", "wide", "medium_wide", "medium", "medium_close", "close", "extreme_close"]
+    }
+
+    private var movementOptions: [String] {
+        ["", "hold", "zoom_in", "zoom_out", "pan_left", "pan_right", "pan_up", "pan_down", "track", "shake"]
+    }
+
+    private var intentOptions: [String] {
+        ["", "establishing", "reveal", "reaction", "handoff", "dialogue", "movement", "confrontation", "insert", "transition", "emotional"]
+    }
+
+    private var timeOfDayOptions: [String] {
+        ["", "pre_dawn", "dawn", "morning", "midday", "afternoon", "golden_hour", "sunset", "dusk", "night", "late_night"]
+    }
+
+    private var interiorExteriorOptions: [String] {
+        ["", "interior", "exterior", "interior_to_exterior", "exterior_to_interior"]
+    }
+
+    private var weatherAtmosphereOptions: [String] {
+        ["", "clear", "haze", "dust", "smoke", "rain", "storm", "fog", "snow", "wind", "heat_shimmer"]
+    }
+
+    private var lightSourceOptions: [String] {
+        ["", "natural_window", "sunlight", "moonlight", "firelight", "practical_lamp", "fluorescent", "neon", "vehicle_headlights", "candlelight", "stage_light"]
+    }
+
+    private var lensOptions: [String] {
+        ["", "wide", "normal", "telephoto", "macro", "anamorphic"]
+    }
+
+    private var cameraAngleOptions: [String] {
+        ["", "eye_level", "low_angle", "high_angle", "overhead", "dutch_angle", "ground_level", "shoulder_level"]
+    }
+
+    private var depthOfFieldOptions: [String] {
+        ["", "deep_focus", "medium_depth", "shallow_focus", "background_blur", "foreground_blur"]
+    }
+
+    private var facingOptions: [String] {
+        ["", "towards_camera", "away_from_camera", "left", "right", "three_quarter_left", "three_quarter_right", "profile_left", "profile_right", "up", "down"]
+    }
+
+    private func optionsWithCurrent(_ current: String, options: [String]) -> [String] {
+        if current.isEmpty || options.contains(current) { return options }
+        return options + [current]
+    }
+
+    private func commit() {
+        guard canEdit else { return }
+        let updated = ScriptShotMarkup.replacementCard(
+            from: attachment.card,
+            label: label,
+            direction: attachment.card.direction,
+            shotSize: shotSize,
+            movement: movement,
+            focus: focus,
+            intent: intent,
+            bars: bars,
+            notes: notes,
+            timeOfDay: timeOfDay,
+            interiorExterior: interiorExterior,
+            weatherAtmosphere: weatherAtmosphere,
+            lightSource: lightSource,
+            lens: lens,
+            cameraAngle: cameraAngle,
+            depthOfField: depthOfField,
+            continuityNotes: continuityNotes,
+            characters: "",
+            characterLeft: characterLeft,
+            characterMiddle: characterMiddle,
+            characterRight: characterRight,
+            characterLeftFacing: characterLeftFacing,
+            characterMiddleFacing: characterMiddleFacing,
+            characterRightFacing: characterRightFacing,
+            places: places,
+            props: props,
+            mood: mood,
+            lighting: lighting,
+            landmarks: landmarks
+        )
+        onCommit(updated)
+    }
+
+    private static func barsString(from timing: TimingSpec) -> String {
+        if let start = timing.startBar, let end = timing.endBar {
+            return "\(start)-\(end)"
+        }
+        if let start = timing.startBar {
+            return "\(start)"
+        }
+        return ""
+    }
+
+    private static func characterFramingStrings(for card: ScriptShotCard) -> (left: String, middle: String, right: String) {
+        let framing = card.characterFraming
+        if !framing.isEmpty {
+            return (
+                framing.left.joined(separator: ", "),
+                framing.middle.joined(separator: ", "),
+                framing.right.joined(separator: ", ")
+            )
+        }
+        return ("", card.tags.characters.joined(separator: ", "), "")
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
+    }
+}
+
 // MARK: - Script Text Host View
 
 /// Custom NSView that hosts an NSTextView directly (no NSScrollView)
@@ -1659,6 +2769,7 @@ struct ScriptTextEditor: NSViewRepresentable {
 @MainActor
 final class ScriptTextHostView: NSView {
     let textView = NSTextView()
+    let shotOverlayView = ShotOverlayContainerView()
     var onHeightChanged: ((CGFloat) -> Void)?
     private var lastReportedHeight: CGFloat = 0
 
@@ -1667,6 +2778,10 @@ final class ScriptTextHostView: NSView {
         textView.autoresizingMask = [.width, .height]
         textView.backgroundColor = .clear
         addSubview(textView)
+        shotOverlayView.wantsLayer = true
+        shotOverlayView.layer?.backgroundColor = NSColor.clear.cgColor
+        shotOverlayView.autoresizingMask = [.width, .height]
+        addSubview(shotOverlayView, positioned: .above, relativeTo: textView)
     }
 
     @available(*, unavailable)
@@ -1677,11 +2792,22 @@ final class ScriptTextHostView: NSView {
     override func layout() {
         super.layout()
         textView.frame = bounds
+        shotOverlayView.frame = bounds
+        addSubview(shotOverlayView, positioned: .above, relativeTo: textView)
         let w = bounds.width
         if w > 0 {
             textView.textContainer?.containerSize = NSSize(width: w, height: .greatestFiniteMagnitude)
             recalcHeight()
         }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let overlayPoint = shotOverlayView.convert(point, from: self)
+        if let overlayHit = shotOverlayView.hitTest(overlayPoint) {
+            return overlayHit
+        }
+        let textPoint = textView.convert(point, from: self)
+        return textView.hitTest(textPoint)
     }
 
     func recalcHeight() {
@@ -1695,6 +2821,224 @@ final class ScriptTextHostView: NSView {
             lastReportedHeight = clamped
             onHeightChanged?(clamped)
         }
+    }
+}
+
+@MainActor
+final class ShotOverlayHostingView<Content: View>: NSHostingView<Content> {
+    var onFallbackClick: ((NSPoint) -> Void)?
+    fileprivate var onFallbackBoundaryDrag: ((ScriptTextEditor.ShotBoundaryEdge, CGSize) -> Void)?
+    var topHitHeight: CGFloat = 60
+    var topDragHeight: CGFloat = 60
+    var bottomHitHeight: CGFloat = 0
+    private var mouseDownPoint: NSPoint?
+    private var mouseDownEdge: ScriptTextEditor.ShotBoundaryEdge?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        if let hit, hit !== self {
+            return hit
+        }
+        return isInteractive(point) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        mouseDownPoint = point
+        mouseDownEdge = dragEdge(for: point)
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let upPoint = convert(event.locationInWindow, from: nil)
+        let downPoint = mouseDownPoint
+        let edge = mouseDownEdge
+        super.mouseUp(with: event)
+        defer {
+            mouseDownPoint = nil
+            mouseDownEdge = nil
+        }
+        guard let downPoint, let edge else { return }
+        let dx = upPoint.x - downPoint.x
+        let dy = upPoint.y - downPoint.y
+        if hypot(dx, dy) >= 4 {
+            onFallbackBoundaryDrag?(edge, CGSize(width: dx, height: dy))
+            return
+        }
+        if edge == .start {
+            onFallbackClick?(upPoint)
+        }
+    }
+
+    private func isInteractive(_ point: NSPoint) -> Bool {
+        let yFromTop = isFlipped ? point.y : bounds.height - point.y
+        if yFromTop >= 0, yFromTop <= topHitHeight {
+            return true
+        }
+        if bottomHitHeight > 0 {
+            let yFromBottom = bounds.height - yFromTop
+            if yFromBottom >= 0, yFromBottom <= bottomHitHeight {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func dragEdge(for point: NSPoint) -> ScriptTextEditor.ShotBoundaryEdge? {
+        let yFromTop = isFlipped ? point.y : bounds.height - point.y
+        if yFromTop >= 0, yFromTop <= topDragHeight {
+            return .start
+        }
+        if bottomHitHeight > 0 {
+            let yFromBottom = bounds.height - yFromTop
+            if yFromBottom >= 0, yFromBottom <= bottomHitHeight {
+                return .end
+            }
+        }
+        return nil
+    }
+}
+
+@MainActor
+private struct ShotOverlayHandleRegion {
+    fileprivate let kind: ScriptTextEditor.ShotHandleKind
+    fileprivate let frame: NSRect
+    fileprivate var onDragEnded: ((CGSize) -> Void)?
+    fileprivate var onClick: (() -> Void)?
+    fileprivate var onRemove: (() -> Void)?
+
+    fileprivate var cursor: NSCursor {
+        switch kind {
+        case .startBoundary, .endBoundary:
+            return .resizeUpDown
+        case .moveShot:
+            return .openHand
+        case .toggleCard:
+            return .pointingHand
+        }
+    }
+}
+
+@MainActor
+final class ShotOverlayContainerView: NSView {
+    private var handleRegions: [ShotOverlayHandleRegion] = []
+    private var activeHandle: ShotOverlayHandleRegion?
+    private var mouseDownPoint: NSPoint?
+    private var pendingRemoveAction: (() -> Void)?
+
+    override var isFlipped: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    func resetHandleRegions() {
+        handleRegions.removeAll()
+        activeHandle = nil
+        mouseDownPoint = nil
+        discardCursorRects()
+    }
+
+    fileprivate func addHandleRegion(
+        kind: ScriptTextEditor.ShotHandleKind,
+        frame: NSRect,
+        onDragEnded: ((CGSize) -> Void)? = nil,
+        onClick: (() -> Void)? = nil,
+        onRemove: (() -> Void)? = nil
+    ) {
+        handleRegions.append(
+            ShotOverlayHandleRegion(
+                kind: kind,
+                frame: frame,
+                onDragEnded: onDragEnded,
+                onClick: onClick,
+                onRemove: onRemove
+            )
+        )
+        discardCursorRects()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if handleRegion(at: point) != nil {
+            return self
+        }
+        for subview in subviews.reversed() {
+            let converted = subview.convert(point, from: self)
+            if let hit = subview.hitTest(converted) {
+                return hit
+            }
+        }
+        return nil
+    }
+
+    override func resetCursorRects() {
+        for handle in handleRegions {
+            addCursorRect(handle.frame, cursor: handle.cursor)
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        activeHandle = handleRegion(at: point)
+        mouseDownPoint = point
+        if activeHandle?.kind == .moveShot {
+            NSCursor.closedHand.set()
+        } else {
+            activeHandle?.cursor.set()
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if activeHandle?.kind == .moveShot {
+            NSCursor.closedHand.set()
+        } else {
+            activeHandle?.cursor.set()
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let upPoint = convert(event.locationInWindow, from: nil)
+        defer {
+            activeHandle = nil
+            mouseDownPoint = nil
+        }
+        guard let handle = activeHandle, let downPoint = mouseDownPoint else { return }
+        let dx = upPoint.x - downPoint.x
+        let dy = upPoint.y - downPoint.y
+        if hypot(dx, dy) >= 4 {
+            handle.onDragEnded?(CGSize(width: dx, height: dy))
+        } else {
+            handle.onClick?()
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let handle = handleRegion(at: point),
+              let onRemove = handle.onRemove else { return }
+        pendingRemoveAction = onRemove
+        let menu = NSMenu()
+        let remove = NSMenuItem(
+            title: "Remove Shot",
+            action: #selector(removeShotFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        remove.target = self
+        menu.addItem(remove)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func removeShotFromMenu(_ sender: Any?) {
+        pendingRemoveAction?()
+        pendingRemoveAction = nil
+    }
+
+    private func handleRegion(at point: NSPoint) -> ShotOverlayHandleRegion? {
+        handleRegions.reversed().first { $0.frame.contains(point) }
     }
 }
 

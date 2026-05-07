@@ -149,6 +149,7 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
                 emptyState
             }
         }
+        .textSelection(.enabled)
         .onAppear {
             // Seed live @State from persisted value so subsequent drags
             // mutate only @State and leave UserDefaults untouched until the
@@ -382,7 +383,7 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
     private func referenceImagesSection(_ items: [GenerationReferenceImageItem]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Text("Reference Images")
+                Text("Submitted Images")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("\(items.count)")
@@ -394,28 +395,45 @@ struct UnifiedDetailsInspectorSection<Selection: DetailedImageSelection, ExtraAc
             }
 
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 78, maximum: 90), spacing: 8)],
+                columns: [GridItem(.adaptive(minimum: 104, maximum: 122), spacing: 8)],
                 alignment: .leading,
                 spacing: 8
             ) {
                 ForEach(items) { item in
-                    let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: item.resolvedPath)
-                    UnifiedImageTile(
-                        path: item.rawPath,
-                        resolvedPath: item.resolvedPath,
-                        thumbnailSize: 72,
-                        sourceLabel: referenceSourceLabel(for: item),
-                        sourceSystemImage: referenceSourceIcon(for: item),
-                        isRejected: metadata?.isRejected ?? false,
-                        isLiked: metadata?.isLiked ?? false,
-                        hasNotes: !(metadata?.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
-                        rating: metadata?.rating
-                    )
-                    .frame(width: 84, height: 84)
-                    .help(referenceHelpText(for: item))
+                    submittedImageTile(for: item)
                 }
             }
         }
+    }
+
+    private func submittedImageTile(for item: GenerationReferenceImageItem) -> some View {
+        let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: item.resolvedPath)
+        let filename = URL(fileURLWithPath: item.resolvedPath).lastPathComponent
+
+        return VStack(alignment: .leading, spacing: 4) {
+            UnifiedImageTile(
+                path: item.rawPath,
+                resolvedPath: item.resolvedPath,
+                thumbnailSize: 72,
+                sourceLabel: referenceSourceLabel(for: item),
+                sourceSystemImage: referenceSourceIcon(for: item),
+                isRejected: metadata?.isRejected ?? false,
+                isLiked: metadata?.isLiked ?? false,
+                hasNotes: !(metadata?.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+                rating: metadata?.rating
+            )
+            .frame(width: 84, height: 84)
+
+            Text(filename)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .frame(width: 104, alignment: .leading)
+        }
+        .frame(width: 104, alignment: .leading)
+        .help(referenceHelpText(for: item))
     }
 
     private func referenceSourceLabel(for item: GenerationReferenceImageItem) -> String {

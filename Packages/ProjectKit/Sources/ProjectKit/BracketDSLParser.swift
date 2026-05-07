@@ -84,8 +84,8 @@ public enum BracketDSLParser {
 
     public static func stripOuterBrackets(_ raw: String) -> String {
         var s = raw
-        if s.hasPrefix("[") { s.removeFirst() }
-        if s.hasSuffix("]") { s.removeLast() }
+        if s.hasPrefix("[") || s.hasPrefix("{") { s.removeFirst() }
+        if s.hasSuffix("]") || s.hasSuffix("}") { s.removeLast() }
         return s
     }
 

@@ -109,7 +109,7 @@ Notable status:
 Image Intelligence is the local/project image understanding layer.
 
 Core store:
-- DB path: `/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/.novotro/image-intelligence.sqlite`
+- DB path: `/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/.amira/image-intelligence.sqlite`
 - Main schema includes:
   - `image_assets`
   - `image_asset_links`
@@ -202,7 +202,7 @@ Before cleanup:
 - Therefore every running run was orphaned.
 
 Backup made first:
-- `/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/.novotro/backups/image-intelligence-before-orphan-cleanup-20260424-125039.sqlite`
+- `/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/.amira/backups/image-intelligence-before-orphan-cleanup-20260424-125039.sqlite`
 - raw sidecar backup copies also saved in the same backup directory.
 
 Cleanup action:
@@ -337,7 +337,7 @@ Before the smoke-test fixes, the app was also deployed after API controls:
 ## Current known project DB state after cleanup
 
 For:
-- `/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/.novotro/image-intelligence.sqlite`
+- `/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/.amira/image-intelligence.sqlite`
 
 Current important counts:
 - `image_assets = 1566`
@@ -495,7 +495,7 @@ This needs careful migration/UI work so existing script markup is not broken.
 ### Check Image Intelligence DB status
 
 ```bash
-DB="/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/.novotro/image-intelligence.sqlite"
+DB="/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera/.amira/image-intelligence.sqlite"
 sqlite3 -header -column "$DB" "
 SELECT status, COUNT(*) AS count FROM image_analysis_runs GROUP BY status;
 SELECT status, COUNT(*) AS count FROM image_analysis_jobs GROUP BY status;

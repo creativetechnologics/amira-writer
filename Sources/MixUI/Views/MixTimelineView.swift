@@ -119,10 +119,13 @@ struct MixArrangementView: View {
                                             // does NOT read store.playheadSeconds — avoids
                                             // rebuilding clipsByTrack 30-60×/sec during playback.
                                             MixRulerPlayheadWrapper(
+                                                transport: store.transport,
                                                 store: store,
                                                 duration: store.activeSceneDurationSeconds,
                                                 pixelsPerSecond: pixelsPerSecond,
-                                                rulerHeight: rulerHeight
+                                                rulerHeight: rulerHeight,
+                                                viewportOffsetX: timelineScrollOffsetX,
+                                                viewportWidth: timelineViewportWidth
                                             )
 
                                             ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
@@ -153,11 +156,11 @@ struct MixArrangementView: View {
                                             }
                                         }
 
-                                        // Playhead line: isolated view reads
-                                        // store.playheadSeconds without triggering
-                                        // parent body re-evaluation.
+                                        // Playhead line: observes `transport` directly
+                                        // so 60fps CADisplayLink writes do not re-evaluate
+                                        // parent body or unrelated views.
                                         MixPlayheadLineView(
-                                            store: store,
+                                            transport: store.transport,
                                             pixelsPerSecond: pixelsPerSecond,
                                             height: contentHeight
                                         )
@@ -200,29 +203,37 @@ struct MixArrangementView: View {
 // playback. With them, only these tiny leaf views re-evaluate on each tick.
 
 /// Wraps the ruler so the parent body does not read `store.playheadSeconds`.
+/// Observes the isolated `MixTransportState` instead — 60 fps playhead writes
+/// from the CADisplayLink do NOT re-evaluate views that observe `MixStore`.
 @available(macOS 26.0, *)
 private struct MixRulerPlayheadWrapper: View {
-    @Bindable var store: MixStore
+    @Bindable var transport: MixTransportState
+    let store: MixStore
     let duration: Double
     let pixelsPerSecond: CGFloat
     let rulerHeight: CGFloat
+    let viewportOffsetX: CGFloat
+    let viewportWidth: CGFloat
 
     var body: some View {
         MixTimelineRulerView(
             duration: duration,
             pixelsPerSecond: pixelsPerSecond,
             height: rulerHeight,
-            playheadSeconds: store.playheadSeconds,
+            playheadSeconds: transport.playheadSeconds,
+            viewportOffsetX: viewportOffsetX,
+            viewportWidth: viewportWidth,
             onSeek: { store.seekPlayhead(to: $0) }
         )
     }
 }
 
-/// Thin red vertical line spanning all lanes — reads `store.playheadSeconds`
-/// in its own body so the parent view tree stays stable during playback.
+/// Thin red vertical line spanning all lanes — reads `transport.playheadSeconds`
+/// on the isolated ``MixTransportState`` so 60 fps CADisplayLink writes do not
+/// trigger re-evaluation of views that observe the main ``MixStore``.
 @available(macOS 26.0, *)
 private struct MixPlayheadLineView: View {
-    @Bindable var store: MixStore
+    @Bindable var transport: MixTransportState
     let pixelsPerSecond: CGFloat
     let height: CGFloat
 
@@ -230,7 +241,7 @@ private struct MixPlayheadLineView: View {
         Rectangle()
             .fill(Color.red.opacity(0.85))
             .frame(width: 2, height: height)
-            .offset(x: CGFloat(store.playheadSeconds) * pixelsPerSecond - 1)
+            .offset(x: CGFloat(transport.playheadSeconds) * pixelsPerSecond - 1)
             .allowsHitTesting(false)
     }
 }
@@ -338,7 +349,7 @@ struct MixEmptyArrangeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MixTimelineRulerView(duration: min(max(store.activeSceneDurationSeconds, 45), 36_000), pixelsPerSecond: pixelsPerSecond, height: 34)
+            MixTimelineRulerView(duration: min(max(store.activeSceneDurationSeconds, 45), 36_000), pixelsPerSecond: pixelsPerSecond, height: 34, viewportWidth: max(viewportWidth, 1600))
 
             Rectangle()
                 .fill(MixPalette.arrangeBackground)

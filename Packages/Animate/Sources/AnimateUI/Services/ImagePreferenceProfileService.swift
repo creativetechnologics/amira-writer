@@ -173,13 +173,10 @@ enum ImagePreferenceProfileService {
 
     static func referencePreferenceScore(forImagePath imagePath: String) -> Double? {
         guard let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: imagePath),
-              metadata.isRejected == false else { return nil }
+              metadata.isRejected == false,
+              metadata.isLiked else { return nil }
         let rating = metadata.rating.map { Double(min(max($0, 1), 5)) } ?? 0
-        if metadata.isLiked {
-            return max(5.5, rating + 0.75)
-        }
-        guard rating > 0 else { return nil }
-        return rating
+        return max(5.5, rating + 0.75)
     }
 
     static func referenceUpdatedAt(forImagePath imagePath: String) -> Date? {
@@ -520,7 +517,7 @@ enum ImagePreferenceProfileService {
              .characterMasterSource, .characterMasterSheetVariant, .characterHeadSheetVariant,
              .characterLookdevVariant, .characterHeadTurnVariant, .characterCostumeSheetVariant,
              .characterCostumeFullbodyVariant, .characterCostumeAccessoryVariant,
-             .characterCostumeReference, .characterCostumeVariation:
+             .characterCostumeReference, .characterCostumeVariation, .characterShotReference:
             return .character
         case .storyboardFrame, .sceneShotImage, .canvasGeneration:
             return nil

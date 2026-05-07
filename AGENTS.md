@@ -71,3 +71,9 @@
 Do **not** use `Scripts/export-headless-wav.sh` or the `Score` package binary — they produce sine tones, not real audio.
 
 The env-var headless full-mix export path (`AMIRA_HEADLESS_FULLMIX_EXPORT`) is **not** a supported agent workflow: it was documented once and retired because it did not work reliably end-to-end from an agent context. If you need a WAV headlessly, drive the open app via the HTTP API.
+
+## Write Page Card Timeline
+
+- For scratchpad-to-libretto/card conversion, follow `docs/specs/2026-04-29-write-page-card-authoring-contract.md`.
+- Do not target the old side-lane script-card workflow for new Write page shot/action/lyric work.
+- The visible Write page is a card timeline: story/lyrics/action on the left, shot/camera/direction/notes on the right, with `.ows` lyrics bracket markup as the hidden compatibility layer.

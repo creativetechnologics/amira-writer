@@ -27,7 +27,7 @@
 | `Packages/NovotroScore/Sources/NovotroScore/ScoreStore.swift` | Score state — `setMasterInstrumentMode()` at ~line 963 triggers the mode switch |
 | `Packages/NovotroScore/Sources/NovotroScore/Services/APIRouter.swift` | HTTP API endpoints for remote control |
 | `Packages/NovotroScore/Sources/NovotroScore/Services/APIServer.swift` | Lightweight HTTP server on port 19847 |
-| `Sources/NovotroOpera/OperaShellView.swift` | Shell view with file-based remote control (`/tmp/novotro-command.txt`) |
+| `Sources/Opera/OperaShellView.swift` | Shell view with file-based remote control (`/tmp/novotro-command.txt`) |
 
 ### Key Functions in MIDIPlaybackEngine.swift
 
@@ -297,7 +297,7 @@ ssh gary@Garys-Laptop.local "lldb -p \$(pgrep -f 'Amira Writer')"
 
 These bugs were fixed earlier in this session and are working:
 
-1. **Score playback no sound** — Fixed by removing `setenv("NOVOTRO_DISABLE_SCORE_API_SERVER", "1", 1)` from NovotroOperaApp.swift
+1. **Score playback no sound** — Fixed by removing `setenv("NOVOTRO_DISABLE_SCORE_API_SERVER", "1", 1)` from OperaApp.swift
 2. **CPU spike (900%)** — Fixed by disabling external file watcher for Opera mode in Score and Animate stores
 3. **Animate mode-switch stalling** — Fixed by `suspendBackgroundWork()` on mode switch + `sqlite3_busy_timeout(5000)`
 4. **`withEnginePaused` not pausing** — Fixed by changing condition to `shouldPause = engine.isRunning` (always pause when running)

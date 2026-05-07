@@ -36,11 +36,13 @@ final class StoryboardRouter {
         case ("GET", "/api/project"):
             return projectResponse()
         case ("GET", "/api/shots"):
-            return shotsResponse()
+            return await shotsResponse()
         case ("GET", "/api/places"):
             return placesResponse()
         case ("GET", "/api/landmarks"):
             return landmarksResponse()
+        case ("GET", "/api/scaffolds"):
+            return scaffoldsResponse()
         case ("POST", "/api/shots"):
             return await postShotResponse(sceneIDStr: nil, request: request)
         case ("POST", "/api/shots/reorder"):
@@ -55,6 +57,25 @@ final class StoryboardRouter {
         case _ where method == "PUT" && path.hasPrefix("/api/shots/") && path.hasSuffix("/summary"):
             let shotIDStr = extractPathComponent(from: path, prefix: "/api/shots/", suffix: "/summary")
             return await putSummaryResponse(shotIDStr: shotIDStr, request: request)
+        case _ where method == "GET" && path.hasPrefix("/api/scenes/") && path.contains("/storyboard/"):
+            guard let scoped = parseSceneScopedStoryboardPath(path) else {
+                return .badRequest("Malformed scene storyboard path")
+            }
+            return getStoryboardResponse(
+                sceneIDStr: scoped.sceneID,
+                shotIDStr: scoped.shotID,
+                frameStr: scoped.frame
+            )
+        case _ where method == "PUT" && path.hasPrefix("/api/scenes/") && path.contains("/storyboard/"):
+            guard let scoped = parseSceneScopedStoryboardPath(path) else {
+                return .badRequest("Malformed scene storyboard path")
+            }
+            return await putStoryboardResponse(
+                sceneIDStr: scoped.sceneID,
+                shotIDStr: scoped.shotID,
+                frameStr: scoped.frame,
+                request: request
+            )
         case _ where method == "GET" && path.hasPrefix("/api/storyboard/"):
             let parts = path.dropFirst("/api/storyboard/".count).split(separator: "/", maxSplits: 1)
             guard parts.count == 2 else { return .badRequest("Malformed storyboard path") }
@@ -75,6 +96,8 @@ final class StoryboardRouter {
         case _ where method == "PUT" && path.hasPrefix("/api/landmarks/") && path.hasSuffix("/sketch"):
             let landmarkIDStr = extractPathComponent(from: path, prefix: "/api/landmarks/", suffix: "/sketch")
             return await putLandmarkSketchResponse(landmarkIDStr: landmarkIDStr, request: request)
+        case _ where method == "GET" && path.hasPrefix("/api/scaffolds/"):
+            return scaffoldAssetResponse(path: path)
         case ("OPTIONS", _):
             return SBHTTPResponse(status: 204, contentType: "text/plain", body: Data())
         default:
@@ -93,9 +116,13 @@ final class StoryboardRouter {
         return .okJSON(["name": projectName, "id": projectID])
     }
 
-    private func shotsResponse() -> SBHTTPResponse {
+    private func shotsResponse() async -> SBHTTPResponse {
         guard let ws = workspace, let root = projectRoot(ws) else {
             return .serviceUnavailable("no project open")
+        }
+        let audit = ShotCardProjectionAuditService(store: ws.store).audit(projectRoot: root)
+        if audit.issues.contains(where: { $0.blocker.code == .blockedStaleShotProjection }) {
+            _ = await ws.store.syncShotProjectionsFromActiveCameraCards()
         }
         var payload = shotEntries(projectRoot: root, scenes: ws.store.scenes)
         payload.sort {
@@ -119,6 +146,45 @@ final class StoryboardRouter {
             return .serviceUnavailable("no project open")
         }
         return .okJSONArray(ws.store.storyboardLandmarkEntries())
+    }
+
+    private func scaffoldsResponse() -> SBHTTPResponse {
+        guard let ws = workspace, let root = projectRoot(ws) else {
+            return .serviceUnavailable("no project open")
+        }
+        let entries = storyboardScaffolds(projectRoot: root).map { scaffold in
+            let source = scaffold.json["source"] as? [String: Any] ?? [:]
+            let exports = scaffold.json["exports"] as? [String: Any] ?? [:]
+            let colorExists = exportedAssetURL(
+                projectRoot: root,
+                scaffoldJSONURL: scaffold.url,
+                assetName: exports["colorPng"] as? String
+            ).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+            let bwExists = exportedAssetURL(
+                projectRoot: root,
+                scaffoldJSONURL: scaffold.url,
+                assetName: exports["bwPng"] as? String
+            ).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+
+            return [
+                "id": scaffold.id,
+                "name": (scaffold.json["name"] as? String) ?? scaffold.id,
+                "updatedAt": scaffold.json["updatedAt"] as? String ?? "",
+                "songPath": source["songPath"] as? String ?? "",
+                "shotID": source["shotID"] as? String ?? "",
+                "hasColor": colorExists,
+                "hasBW": bwExists,
+                "colorURL": "/api/scaffolds/\(urlPathEscape(scaffold.id))/color.png",
+                "bwURL": "/api/scaffolds/\(urlPathEscape(scaffold.id))/bw.png",
+                "jsonURL": "/api/scaffolds/\(urlPathEscape(scaffold.id))/source.json"
+            ] as [String: Any]
+        }
+        .sorted {
+            let left = ($0["name"] as? String) ?? ""
+            let right = ($1["name"] as? String) ?? ""
+            return left.localizedStandardCompare(right) == .orderedAscending
+        }
+        return .okJSONArray(entries)
     }
 
     private func postShotResponse(sceneIDStr: String?, request: SBHTTPRequest) async -> SBHTTPResponse {
@@ -374,18 +440,80 @@ final class StoryboardRouter {
         return SBHTTPResponse(status: 204, contentType: "application/json", body: Data())
     }
 
-    private func getStoryboardResponse(shotIDStr: String, frameStr: String) -> SBHTTPResponse {
+    private func scaffoldAssetResponse(path: String) -> SBHTTPResponse {
+        guard let ws = workspace, let root = projectRoot(ws) else {
+            return .serviceUnavailable("no project open")
+        }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard parts.count == 4,
+              parts[0] == "api",
+              parts[1] == "scaffolds",
+              let scaffoldID = parts[2].removingPercentEncoding else {
+            return .badRequest("Malformed scaffold path")
+        }
+        let asset = parts[3]
+        guard let scaffold = storyboardScaffolds(projectRoot: root).first(where: { $0.id == scaffoldID }) else {
+            return .notFound("Scaffold not found: \(scaffoldID)")
+        }
+        if asset == "source.json" {
+            guard let data = try? Data(contentsOf: scaffold.url) else {
+                return .notFound("Scaffold source missing: \(scaffoldID)")
+            }
+            return SBHTTPResponse(status: 200, contentType: "application/json; charset=utf-8", body: data)
+        }
+
+        let exports = scaffold.json["exports"] as? [String: Any] ?? [:]
+        let assetName: String?
+        let contentType: String
+        switch asset {
+        case "color.png":
+            assetName = exports["colorPng"] as? String
+            contentType = "image/png"
+        case "bw.png":
+            assetName = exports["bwPng"] as? String
+            contentType = "image/png"
+        case "color.svg":
+            assetName = exports["colorSvg"] as? String
+            contentType = "image/svg+xml; charset=utf-8"
+        case "bw.svg":
+            assetName = exports["bwSvg"] as? String
+            contentType = "image/svg+xml; charset=utf-8"
+        default:
+            return .notFound("Unknown scaffold asset: \(asset)")
+        }
+
+        guard let url = exportedAssetURL(projectRoot: root, scaffoldJSONURL: scaffold.url, assetName: assetName),
+              let data = try? Data(contentsOf: url) else {
+            return .notFound("Scaffold asset missing: \(asset)")
+        }
+        return SBHTTPResponse(status: 200, contentType: contentType, body: data)
+    }
+
+    private func getStoryboardResponse(
+        sceneIDStr: String? = nil,
+        shotIDStr: String,
+        frameStr: String
+    ) -> SBHTTPResponse {
         guard let frame = StoryboardFrame(rawValue: frameStr) else {
             return .badRequest("Invalid frame: \(frameStr). Must be begin, middle, or end.")
+        }
+        guard let shotID = UUID(uuidString: shotIDStr) else {
+            return .badRequest("Invalid shotId")
+        }
+        let requestedSceneID: UUID?
+        if let sceneIDStr {
+            guard let parsed = UUID(uuidString: sceneIDStr) else {
+                return .badRequest("Invalid sceneId")
+            }
+            requestedSceneID = parsed
+        } else {
+            requestedSceneID = nil
         }
         guard let ws = workspace, let root = projectRoot(ws) else {
             return .serviceUnavailable("no project open")
         }
-        guard let (sceneID, _) = ws.store.findShot(by: UUID(uuidString: shotIDStr)) else {
+        guard let (sceneID, _) = findStoryboardShot(in: ws.store, sceneID: requestedSceneID, shotID: shotID) else {
             return .notFound("Shot not found: \(shotIDStr)")
-        }
-        guard let shotID = UUID(uuidString: shotIDStr) else {
-            return .badRequest("Invalid shotId")
         }
         guard let data = diskStore.read(projectRoot: root, sceneID: sceneID, shotID: shotID, frame: frame) else {
             return .notFound("No \(frameStr) frame for shot \(shotIDStr)")
@@ -393,17 +521,31 @@ final class StoryboardRouter {
         return SBHTTPResponse(status: 200, contentType: "image/png", body: data)
     }
 
-    private func putStoryboardResponse(shotIDStr: String, frameStr: String, request: SBHTTPRequest) async -> SBHTTPResponse {
+    private func putStoryboardResponse(
+        sceneIDStr: String? = nil,
+        shotIDStr: String,
+        frameStr: String,
+        request: SBHTTPRequest
+    ) async -> SBHTTPResponse {
         guard let frame = StoryboardFrame(rawValue: frameStr) else {
             return .badRequest("Invalid frame: \(frameStr). Must be begin, middle, or end.")
         }
         guard let shotID = UUID(uuidString: shotIDStr) else {
             return .badRequest("Invalid shotId")
         }
+        let requestedSceneID: UUID?
+        if let sceneIDStr {
+            guard let parsed = UUID(uuidString: sceneIDStr) else {
+                return .badRequest("Invalid sceneId")
+            }
+            requestedSceneID = parsed
+        } else {
+            requestedSceneID = nil
+        }
         guard let ws = workspace, let root = projectRoot(ws) else {
             return .serviceUnavailable("no project open")
         }
-        guard let (sceneID, shot) = ws.store.findShot(by: shotID) else {
+        guard let (sceneID, shot) = findStoryboardShot(in: ws.store, sceneID: requestedSceneID, shotID: shotID) else {
             return .notFound("Shot not found: \(shotIDStr)")
         }
         guard let body = request.body, !body.isEmpty else {
@@ -436,6 +578,46 @@ final class StoryboardRouter {
     private func projectRoot(_ ws: AnimateWorkspaceController) -> URL? {
         guard let path = ws.activeProjectPath else { return nil }
         return URL(fileURLWithPath: path)
+    }
+
+    private func scaffoldDirectory(projectRoot root: URL) -> URL {
+        root.appendingPathComponent("Animate/scaffolds", isDirectory: true)
+    }
+
+    private func storyboardScaffolds(projectRoot root: URL) -> [(id: String, url: URL, json: [String: Any])] {
+        let dir = scaffoldDirectory(projectRoot: root)
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: dir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return urls
+            .filter { $0.lastPathComponent.hasSuffix(".storyboard.json") }
+            .compactMap { url in
+                guard let data = try? Data(contentsOf: url),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let id = json["id"] as? String,
+                      !id.isEmpty else {
+                    return nil
+                }
+                return (id: id, url: url, json: json)
+            }
+    }
+
+    private func exportedAssetURL(projectRoot root: URL, scaffoldJSONURL: URL, assetName: String?) -> URL? {
+        guard let assetName, !assetName.isEmpty, !assetName.contains(".."), !assetName.contains("/") else {
+            return nil
+        }
+        let dir = scaffoldDirectory(projectRoot: root).standardizedFileURL
+        let url = scaffoldJSONURL.deletingLastPathComponent().appendingPathComponent(assetName).standardizedFileURL
+        guard url.path.hasPrefix(dir.path + "/") else { return nil }
+        return url
+    }
+
+    private func urlPathEscape(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? value
     }
 
     private func registerSavedStoryboardFrame(
@@ -610,6 +792,33 @@ final class StoryboardRouter {
         let end = path.index(path.endIndex, offsetBy: -suffix.count)
         guard start <= end else { return nil }
         return String(path[start..<end])
+    }
+
+    private func parseSceneScopedStoryboardPath(_ path: String) -> (sceneID: String, shotID: String, frame: String)? {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard parts.count == 7,
+              parts[0] == "api",
+              parts[1] == "scenes",
+              parts[3] == "shots",
+              parts[5] == "storyboard" else {
+            return nil
+        }
+        return (sceneID: parts[2], shotID: parts[4], frame: parts[6])
+    }
+
+    private func findStoryboardShot(
+        in store: AnimateStore,
+        sceneID: UUID?,
+        shotID: UUID
+    ) -> (sceneID: UUID, shot: AnimationSceneShot)? {
+        if let sceneID {
+            guard let scene = store.scenes.first(where: { $0.id == sceneID }),
+                  let shot = scene.shots.first(where: { $0.id == shotID }) else {
+                return nil
+            }
+            return (scene.id, shot)
+        }
+        return store.findShot(by: shotID)
     }
 }
 

@@ -65,7 +65,7 @@ enum ScriptCardImporter {
             )
             switch parsed.tag {
             case "camera", "cinematography":
-                shotCards.append(makeShotCard(parsed: parsed, raw: raw, anchor: lyricAnchor))
+                shotCards.append(ScriptShotMarkup.makeShotCard(parsed: parsed, raw: raw, anchor: lyricAnchor))
             case "action":
                 actionCardsFromDSL.append(
                     ActionCard(
@@ -128,39 +128,6 @@ enum ScriptCardImporter {
     }
 
     // MARK: Card construction
-
-    private static func makeShotCard(
-        parsed: BracketDSL,
-        raw: String,
-        anchor: LyricAnchor?
-    ) -> ScriptShotCard {
-        let timing = timingSpecFrom(parameters: parsed.parameters)
-        let camera = CameraSpec(
-            shotSize: parsed.parameters["size"]
-                ?? parsed.parameters["to"]
-                ?? parsed.parameters["from"],
-            movement: parsed.primary.isEmpty ? nil : parsed.primary,
-            focus: parsed.parameters["focus"] ?? parsed.parameters["subject"],
-            intent: parsed.parameters["intent"],
-            label: parsed.parameters["label"],
-            notes: parsed.parameters["notes"]
-        )
-        let tags = tagSetFrom(parameters: parsed.parameters)
-        return ScriptShotCard(
-            label: parsed.parameters["label"],
-            direction: parsed.parameters["intent"] ?? "",
-            action: "",
-            camera: camera,
-            tags: tags,
-            timing: timing,
-            lyricAnchor: anchor,
-            status: .importedLegacy,
-            provenance: CardProvenance(
-                source: .importedLegacy,
-                originalRawMarkup: raw
-            )
-        )
-    }
 
     private static func timingSpecFrom(parameters: [String: String]) -> TimingSpec {
         var spec = TimingSpec()

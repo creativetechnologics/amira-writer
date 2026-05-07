@@ -1641,10 +1641,10 @@ private struct AllProjectImagesWorkspaceContent: View {
     @Bindable var store: AnimateStore
     @Bindable var state: AllProjectImagesState
 
-    @AppStorage("novotro.allImages.sidebarVisible") private var sidebarVisible = true
-    @AppStorage("novotro.allImages.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
-    @AppStorage("novotro.allImages.showInspector") private var inspectorVisible = true
-    @AppStorage("novotro.allImages.inspector.width") private var inspectorWidth: Double = 340
+    @AppStorage("amira.allImages.sidebarVisible") private var sidebarVisible = true
+    @AppStorage("amira.allImages.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("amira.allImages.showInspector") private var inspectorVisible = true
+    @AppStorage("amira.allImages.inspector.width") private var inspectorWidth: Double = 340
 
     var body: some View {
         Group {
@@ -2884,6 +2884,9 @@ func persistReviewUpdate(
         store.updateInspirationNotes(notes, path: path, for: characterID)
     case .place(let placeID, let path):
         store.setPlaceImageRating(path: path, rating: rating ?? 0, placeID: placeID)
+        if isRejected {
+            store.setImageLibraryRejected(true, for: path)
+        }
     case .generic:
         if record.isRejected != isRejected {
             store.setImageLibraryRejected(isRejected, for: record.path)

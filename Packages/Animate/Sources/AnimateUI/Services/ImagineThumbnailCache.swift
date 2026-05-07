@@ -6,12 +6,13 @@ import CryptoKit
 
 /// Two-tier thumbnail cache shared across all Amira Writer grids.
 ///
-/// - Memory: `NSCache<NSString, NSImage>` keyed by `path + maxPixelSize` (no
-///   mtime). `cached(for:)` is a pure memory lookup — **no FileManager
+/// - Memory: `NSCache<NSString, NSImage>` keyed by canonical path + bucketed
+///   pixel size. `cached(for:)` is a pure memory lookup — **no FileManager
 ///   syscalls** on the synchronous hot path, so SwiftUI bodies stay cheap.
 /// - Disk: PNGs in `~/Library/Caches/com.amira.writer/thumbs/`, keyed by
-///   SHA256(path + mtime + size). Mtime goes in the disk key so edited files
-///   naturally miss. Stats happen only on memory miss, off the main thread.
+///   SHA256(canonical path + mtime + file size + bucketed size). Mtime and
+///   size naturally invalidate edited files, while symlink-resolved paths and
+///   size buckets prevent the app from rebuilding near-identical thumbnails.
 ///
 /// Class is **nonisolated**. `NSCache` is documented thread-safe; the key
 /// registry is guarded by a lock. `shared` is callable from any actor.
@@ -29,8 +30,11 @@ final class ImagineThumbnailCache: @unchecked Sendable {
 
     private let registryLock = NSLock()
     private var keysByPath: [String: Set<String>] = [:]
+    private var canonicalPathByRawPath: [String: String] = [:]
     private let inflightLock = NSLock()
-    private var inflightLoads: [String: Task<NSImage?, Never>] = [:]
+    private var inflightLoads: [String: Task<(NSImage, ThumbnailLoadSource)?, Never>] = [:]
+    private let statsLock = NSLock()
+    private var stats = ThumbnailCacheStats()
 
     private var memoryPressureSource: DispatchSourceMemoryPressure?
 
@@ -80,7 +84,7 @@ final class ImagineThumbnailCache: @unchecked Sendable {
     // MARK: - Keys
 
     private func memKey(path: String, maxPixelSize: Int) -> String {
-        "\(path)#\(maxPixelSize)"
+        "\(canonicalPath(for: path))#\(bucketedPixelSize(maxPixelSize))"
     }
 
     private static func diskFileURL(
@@ -98,10 +102,104 @@ final class ImagineThumbnailCache: @unchecked Sendable {
         return base.appendingPathComponent("\(hash).png")
     }
 
+    private static let sizeBuckets = [64, 128, 256, 320, 512, 768, 1024, 1600, 2400]
+
+    private struct ThumbnailCacheStats {
+        var memoryHits = 0
+        var diskExactHits = 0
+        var diskNearestHits = 0
+        var originalDecodes = 0
+        var misses = 0
+    }
+
+    private enum ThumbnailLoadSource {
+        case diskExact
+        case diskNearest
+        case originalDecode
+    }
+
+    private func canonicalPath(for path: String) -> String {
+        registryLock.lock()
+        if let cached = canonicalPathByRawPath[path] {
+            registryLock.unlock()
+            return cached
+        }
+        registryLock.unlock()
+
+        let canonical = Self.canonicalPath(for: path)
+
+        registryLock.lock()
+        canonicalPathByRawPath[path] = canonical
+        registryLock.unlock()
+        return canonical
+    }
+
+    private static func canonicalPath(for path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return path }
+        guard trimmed.hasPrefix("/") else { return trimmed }
+
+        let url = URL(fileURLWithPath: trimmed)
+        if FileManager.default.fileExists(atPath: trimmed) {
+            return url.resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        return url.standardizedFileURL.path
+    }
+
+    private func bucketedPixelSize(_ requested: Int) -> Int {
+        Self.bucketedPixelSize(requested)
+    }
+
+    private static func bucketedPixelSize(_ requested: Int) -> Int {
+        let clamped = max(1, requested)
+        return sizeBuckets.first(where: { $0 >= clamped }) ?? clamped
+    }
+
+    private static func candidatePixelSizes(for requested: Int) -> [Int] {
+        let bucket = bucketedPixelSize(requested)
+        var sizes = sizeBuckets.filter { $0 >= bucket }
+        if !sizes.contains(bucket) {
+            sizes.insert(bucket, at: 0)
+        }
+        return sizes
+    }
+
+    private static func legacyIdentityPaths(rawPath: String, canonicalPath: String) -> [String] {
+        var out: [String] = []
+        func append(_ path: String) {
+            guard !path.isEmpty, !out.contains(path) else { return }
+            out.append(path)
+        }
+
+        append(canonicalPath)
+        append(rawPath)
+
+        let storageUsersPrefix = "/Volumes/Storage VIII/Users/gary/"
+        if canonicalPath.hasPrefix(storageUsersPrefix) {
+            append("/Users/gary/" + canonicalPath.dropFirst(storageUsersPrefix.count))
+        }
+
+        return out
+    }
+
+    private func recordStat(_ update: (inout ThumbnailCacheStats) -> Void) {
+        statsLock.lock()
+        update(&stats)
+        let snapshot = stats
+        statsLock.unlock()
+
+        let meaningfulEvents = snapshot.diskExactHits + snapshot.diskNearestHits + snapshot.originalDecodes + snapshot.misses
+        guard meaningfulEvents > 0, meaningfulEvents % 50 == 0 else { return }
+        AppLog.log(
+            "THUMB_CACHE",
+            "memory=\(snapshot.memoryHits) diskExact=\(snapshot.diskExactHits) diskNearest=\(snapshot.diskNearestHits) originalDecode=\(snapshot.originalDecodes) miss=\(snapshot.misses)"
+        )
+    }
+
     private func inflightLoadOrCreate(
         for key: String,
-        create: () -> Task<NSImage?, Never>
-    ) -> Task<NSImage?, Never> {
+        create: () -> Task<(NSImage, ThumbnailLoadSource)?, Never>
+    ) -> Task<(NSImage, ThumbnailLoadSource)?, Never> {
         inflightLock.lock()
         if let existing = inflightLoads[key] {
             inflightLock.unlock()
@@ -128,44 +226,58 @@ final class ImagineThumbnailCache: @unchecked Sendable {
 
     private static func loadThumbnail(
         path: String,
-        maxPixelSize: Int,
+        canonicalPath: String,
+        requestedPixelSize: Int,
+        bucketedPixelSize: Int,
         diskCacheDir: URL
-    ) -> NSImage? {
+    ) -> (image: NSImage, source: ThumbnailLoadSource)? {
         let fm = FileManager.default
-        let attrs = try? fm.attributesOfItem(atPath: path)
+        let attrs = try? fm.attributesOfItem(atPath: canonicalPath)
         let mtime = (attrs?[.modificationDate] as? Date)?
             .timeIntervalSince1970 ?? 0
         let fileSize = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        let diskURL = Self.diskFileURL(
-            base: diskCacheDir,
-            path: path,
-            mtime: mtime,
-            fileSize: fileSize,
-            maxPixelSize: maxPixelSize
-        )
 
-        if fm.fileExists(atPath: diskURL.path),
-           let diskImage = Self.decodeDownsampled(
-            url: diskURL,
-            maxPixelSize: maxPixelSize
-           ) {
-            return diskImage
+        for identityPath in Self.legacyIdentityPaths(rawPath: path, canonicalPath: canonicalPath) {
+            for candidateSize in Self.candidatePixelSizes(for: requestedPixelSize) {
+                let diskURL = Self.diskFileURL(
+                    base: diskCacheDir,
+                    path: identityPath,
+                    mtime: mtime,
+                    fileSize: fileSize,
+                    maxPixelSize: candidateSize
+                )
+
+                if fm.fileExists(atPath: diskURL.path),
+                   let diskImage = Self.decodeDownsampled(
+                    url: diskURL,
+                    maxPixelSize: candidateSize
+                   ) {
+                    return (diskImage, candidateSize == bucketedPixelSize ? .diskExact : .diskNearest)
+                }
+            }
         }
 
         guard let image = Self.decodeThumbnail(
-            path: path,
-            maxPixelSize: maxPixelSize
+            path: canonicalPath,
+            maxPixelSize: bucketedPixelSize
         ) else {
             return nil
         }
 
+        let diskURL = Self.diskFileURL(
+            base: diskCacheDir,
+            path: canonicalPath,
+            mtime: mtime,
+            fileSize: fileSize,
+            maxPixelSize: bucketedPixelSize
+        )
         if let tiff = image.tiffRepresentation,
            let rep = NSBitmapImageRep(data: tiff),
            let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: diskURL, options: .atomic)
         }
 
-        return image
+        return (image, .originalDecode)
     }
 
     private func registerKey(_ key: String, forPath path: String) {
@@ -187,38 +299,65 @@ final class ImagineThumbnailCache: @unchecked Sendable {
         maxPixelSize: Int,
         priority: TaskPriority = .userInitiated
     ) async -> NSImage? {
-        let key = memKey(path: path, maxPixelSize: maxPixelSize)
+        let canonicalPath = canonicalPath(for: path)
+        let bucketedPixelSize = bucketedPixelSize(maxPixelSize)
+        let key = "\(canonicalPath)#\(bucketedPixelSize)"
         let nsKey = key as NSString
 
         if let hit = memCache.object(forKey: nsKey) {
+            recordStat { $0.memoryHits += 1 }
             return hit
         }
 
         let diskCacheDir = diskCacheDir
         let task = inflightLoadOrCreate(for: key) {
-            Task.detached(priority: priority) { () -> NSImage? in
+            Task.detached(priority: priority) { () -> (NSImage, ThumbnailLoadSource)? in
                 guard !Task.isCancelled else { return nil }
-                return Self.loadThumbnail(
+                guard let result = Self.loadThumbnail(
                     path: path,
-                    maxPixelSize: maxPixelSize,
+                    canonicalPath: canonicalPath,
+                    requestedPixelSize: maxPixelSize,
+                    bucketedPixelSize: bucketedPixelSize,
                     diskCacheDir: diskCacheDir
-                )
+                ) else { return nil }
+                return (result.image, result.source)
             }
         }
 
-        let image = await task.value
+        let result = await task.value
         clearInflightLoad(for: key)
-        if let image {
-            cacheLoadedImage(image, key: key, path: path)
+        if let (image, source) = result {
+            switch source {
+            case .diskExact:
+                recordStat { $0.diskExactHits += 1 }
+            case .diskNearest:
+                recordStat { $0.diskNearestHits += 1 }
+            case .originalDecode:
+                recordStat { $0.originalDecodes += 1 }
+            }
+            cacheLoadedImage(image, key: key, path: canonicalPath)
+            return image
+        } else {
+            recordStat { $0.misses += 1 }
+            return nil
         }
-        return image
     }
 
     /// Synchronous memory-only lookup. Safe to call from SwiftUI bodies —
     /// never touches disk, never stats files.
     func cached(for path: String, maxPixelSize: Int) -> NSImage? {
         let key = memKey(path: path, maxPixelSize: maxPixelSize) as NSString
-        return memCache.object(forKey: key)
+        let hit = memCache.object(forKey: key)
+        if hit != nil {
+            recordStat { $0.memoryHits += 1 }
+        }
+        return hit
+    }
+
+    func store(_ image: NSImage, for path: String, maxPixelSize: Int) {
+        let canonicalPath = canonicalPath(for: path)
+        let key = "\(canonicalPath)#\(bucketedPixelSize(maxPixelSize))"
+        cacheLoadedImage(image, key: key, path: canonicalPath)
     }
 
     /// Memory-only lookup that returns the best already-decoded image for a
@@ -226,8 +365,9 @@ final class ImagineThumbnailCache: @unchecked Sendable {
     /// larger previews render immediately from an existing grid thumbnail
     /// while a sharper decode is loaded in the background.
     func bestCached(for path: String, minimumPixelSize: Int = 1) -> NSImage? {
+        let canonicalPath = canonicalPath(for: path)
         registryLock.lock()
-        let keys = Array(keysByPath[path] ?? [])
+        let keys = Array(keysByPath[canonicalPath] ?? [])
         registryLock.unlock()
 
         var smallestAdequate: (pixelSize: Int, image: NSImage)?
@@ -252,11 +392,11 @@ final class ImagineThumbnailCache: @unchecked Sendable {
 
         if !staleKeys.isEmpty {
             registryLock.lock()
-            if var registeredKeys = keysByPath[path] {
+            if var registeredKeys = keysByPath[canonicalPath] {
                 for key in staleKeys {
                     registeredKeys.remove(key)
                 }
-                keysByPath[path] = registeredKeys.isEmpty ? nil : registeredKeys
+                keysByPath[canonicalPath] = registeredKeys.isEmpty ? nil : registeredKeys
             }
             registryLock.unlock()
         }
@@ -312,12 +452,21 @@ final class ImagineThumbnailCache: @unchecked Sendable {
     /// After overwriting a file, drop its memory entries across all sizes.
     /// Disk entries self-invalidate via mtime change.
     func invalidate(path: String) {
+        let canonicalPath = canonicalPath(for: path)
         registryLock.lock()
-        let keys = keysByPath.removeValue(forKey: path) ?? []
+        let keys = keysByPath.removeValue(forKey: canonicalPath) ?? []
         registryLock.unlock()
         for k in keys {
             memCache.removeObject(forKey: k as NSString)
         }
+    }
+
+    func clearMemory() {
+        memCache.removeAllObjects()
+        registryLock.lock()
+        keysByPath.removeAll()
+        canonicalPathByRawPath.removeAll()
+        registryLock.unlock()
     }
 
     // MARK: - Decoder

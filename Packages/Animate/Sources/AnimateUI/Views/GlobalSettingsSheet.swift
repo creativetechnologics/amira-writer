@@ -20,10 +20,8 @@ struct GlobalSettingsSheet: View {
 
     @State private var selectedTab: Tab = .general
     @State private var showAPISettings = false
-    @State private var vertexCreditRemainingDraft = ""
     @State private var storyboardPortDraft = ""
     @State private var storyboardURLCopied = false
-    @FocusState private var vertexCreditFieldFocused: Bool
     @FocusState private var storyboardPortFieldFocused: Bool
 
     enum Tab: String, CaseIterable {
@@ -72,13 +70,8 @@ struct GlobalSettingsSheet: View {
         .padding(20)
         .frame(width: 680, height: 640)
         .onAppear {
-            syncVertexCreditRemainingDraft()
             syncStoryboardPortDraft()
             masterAnimatedLookPrompt = AnimatedLookPromptSettings.loadMasterPrompt()
-        }
-        .onChange(of: store.vertexCreditRemainingUSD) { _, _ in
-            guard !vertexCreditFieldFocused else { return }
-            syncVertexCreditRemainingDraft()
         }
         .onChange(of: storyboardStatus.port) { _, _ in
             guard !storyboardPortFieldFocused else { return }
@@ -135,8 +128,8 @@ struct GlobalSettingsSheet: View {
             }
 
             sectionCard(
-                title: "Current Gemini activity",
-                subtitle: "Matches the status badge in the title bar."
+                title: "Current AI generation activity",
+                subtitle: "Matches the universal AI generation status badge in the title bar."
             ) {
                 HStack {
                     Label("\(store.geminiActivityActiveCount) running / queued",
@@ -159,11 +152,12 @@ struct GlobalSettingsSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionCard(
                 title: "API Keys",
-                subtitle: "Stored in the project folder (synced by Syncthing). Covers Gemini, MiniMax, Vidu, RunPod, and the Vertex AI backend."
+                subtitle: "Stored in the project folder (synced by Syncthing). Covers Gemini, OpenAI, the supplemental LLM, Vidu, RunPod, and the Vertex AI backend."
             ) {
                 VStack(alignment: .leading, spacing: 6) {
                     apiKeyStatusRow("Gemini", configured: store.hasGeminiImageGenerationConfiguration)
-                    apiKeyStatusRow("MiniMax", configured: !store.miniMaxAPIKey.isEmpty)
+                    apiKeyStatusRow("OpenAI", configured: !store.openAIAPIKey.isEmpty)
+                    apiKeyStatusRow("Supplemental LLM", configured: !store.supplementalLLMConfiguration().apiKey.isEmpty)
                     apiKeyStatusRow("RunPod", configured: !store.runPodAPIKey.isEmpty)
 
                     Button("Open API Settings…") {
@@ -216,7 +210,6 @@ struct GlobalSettingsSheet: View {
                 }
             }
 
-            vertexCreditCard
         }
         .sheet(isPresented: $showAPISettings) {
             GeminiSettingsSheet(
@@ -224,86 +217,6 @@ struct GlobalSettingsSheet: View {
                 onDismiss: { showAPISettings = false }
             )
         }
-    }
-
-    private var vertexCreditCard: some View {
-        let used = store.vertexCreditUsedUSD
-        let budget = store.vertexCreditBudgetUSD
-        let remaining = store.vertexCreditRemainingUSD
-        let pct = budget > 0 ? min(max(used / budget, 0), 1) : 0
-        return sectionCard(
-            title: "Vertex AI free-trial credit",
-            subtitle: "Google doesn't expose a live credit endpoint, so this is a local running estimate: $\(String(format: "%.2f", budget)) minus the model-estimated cost of each Gemini image the app has generated. Reset if you top up or switch accounts."
-        ) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("$\(String(format: "%.2f", used)) used")
-                        .font(.callout.weight(.semibold).monospacedDigit())
-                    Spacer()
-                    Text("$\(String(format: "%.2f", remaining)) remaining")
-                        .font(.callout.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(remaining > 10 ? .green : (remaining > 1 ? .orange : .red))
-                }
-                ProgressView(value: pct)
-                    .progressViewStyle(.linear)
-                    .tint(remaining > 10 ? .green : (remaining > 1 ? .orange : .red))
-                Text("Budget: $\(String(format: "%.2f", budget))")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Divider()
-                    .padding(.vertical, 2)
-                Text("If this local estimate drifts from the real Google Cloud Console balance, type the current remaining amount here and save it.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(alignment: .center, spacing: 8) {
-                    Text("Current remaining")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    TextField("0.00", text: $vertexCreditRemainingDraft)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.caption.monospacedDigit())
-                        .frame(width: 110)
-                        .focused($vertexCreditFieldFocused)
-                    Button("Save") {
-                        saveVertexCreditRemainingDraft()
-                    }
-                    .controlSize(.small)
-                    .disabled(!canSaveVertexCreditRemainingDraft)
-                    Spacer()
-                    Button("Reset to $300") {
-                        store.resetVertexCreditTracking()
-                        syncVertexCreditRemainingDraft()
-                    }
-                    .controlSize(.small)
-                }
-            }
-        }
-    }
-
-    private var parsedVertexCreditRemainingDraft: Double? {
-        let cleaned = vertexCreditRemainingDraft
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "$", with: "")
-            .replacingOccurrences(of: ",", with: "")
-        guard !cleaned.isEmpty, let value = Double(cleaned), value >= 0 else { return nil }
-        return value
-    }
-
-    private var canSaveVertexCreditRemainingDraft: Bool {
-        guard let parsedVertexCreditRemainingDraft else { return false }
-        return abs(parsedVertexCreditRemainingDraft - store.vertexCreditRemainingUSD) > 0.000_1
-    }
-
-    private func syncVertexCreditRemainingDraft() {
-        vertexCreditRemainingDraft = String(format: "%.2f", store.vertexCreditRemainingUSD)
-    }
-
-    private func saveVertexCreditRemainingDraft() {
-        guard let parsedVertexCreditRemainingDraft else { return }
-        store.setVertexCreditRemainingUSD(parsedVertexCreditRemainingDraft)
-        vertexCreditFieldFocused = false
-        syncVertexCreditRemainingDraft()
     }
 
     private var storyboardServerCard: some View {
@@ -437,7 +350,7 @@ struct GlobalSettingsSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             sectionCard(
                 title: "Places World Context",
-                subtitle: "These context lines are pre-filled into every 3D Map camera capture draft. Delete anything you don't want before submitting the Gemini sheet. One line per idea — blank lines separate the three blocks in the final prompt."
+                subtitle: "These context lines can feed shot generation, image prompts, and 3D Map camera capture drafts. Delete anything you do not want generated. One line per idea."
             ) {
                 VStack(alignment: .leading, spacing: 14) {
                     worldContextEditor(

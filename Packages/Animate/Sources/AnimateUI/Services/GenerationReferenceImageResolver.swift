@@ -21,14 +21,19 @@ enum GenerationReferenceImageResolver {
         var items: [GenerationReferenceImageItem] = []
         var seen = Set<String>()
 
-        for url in sidecars {
-            guard let object = jsonObject(at: url) else { continue }
-            let extracted = referenceItems(in: object, imageURL: imageURL, projectRoot: projectRoot)
+        func appendUnique(_ extracted: [GenerationReferenceImageItem]) {
             for item in extracted {
                 guard seen.insert(item.resolvedPath).inserted else { continue }
                 items.append(item)
             }
         }
+
+        for url in sidecars {
+            guard let object = jsonObject(at: url) else { continue }
+            appendUnique(referenceItems(in: object, imageURL: imageURL, projectRoot: projectRoot))
+        }
+
+        appendUnique(manifestReferenceItems(for: imageURL, projectRoot: projectRoot))
 
         return items
     }
@@ -68,6 +73,88 @@ enum GenerationReferenceImageResolver {
             }
         }
         return nil
+    }
+
+    private static func manifestReferenceItems(
+        for imageURL: URL,
+        projectRoot: URL?
+    ) -> [GenerationReferenceImageItem] {
+        guard let projectRoot else { return [] }
+        var items: [GenerationReferenceImageItem] = []
+        for manifestURL in manifestCandidateURLs(for: imageURL, projectRoot: projectRoot) {
+            guard let object = jsonObject(at: manifestURL) else { continue }
+            for output in matchingOutputDictionaries(in: object, imageURL: imageURL, projectRoot: projectRoot) {
+                items.append(contentsOf: referenceItems(in: output, imageURL: imageURL, projectRoot: projectRoot))
+            }
+        }
+        return items
+    }
+
+    private static func manifestCandidateURLs(for imageURL: URL, projectRoot: URL) -> [URL] {
+        var candidates: [URL] = [
+            imageURL.deletingLastPathComponent().appendingPathComponent("manifest.json")
+        ]
+
+        let components = imageURL.standardizedFileURL.pathComponents
+        if let studiesIndex = components.firstIndex(of: "costume-studies"),
+           components.indices.contains(studiesIndex + 1) {
+            let runID = components[studiesIndex + 1]
+            candidates.append(
+                projectRoot
+                    .appendingPathComponent("Metadata", isDirectory: true)
+                    .appendingPathComponent("automation", isDirectory: true)
+                    .appendingPathComponent("vertex-character-costumes", isDirectory: true)
+                    .appendingPathComponent(runID, isDirectory: true)
+                    .appendingPathComponent("manifest.json")
+            )
+        }
+
+        var seen = Set<String>()
+        return candidates.filter { candidate in
+            seen.insert(candidate.standardizedFileURL.path).inserted
+        }
+    }
+
+    private static func matchingOutputDictionaries(
+        in object: [String: Any],
+        imageURL: URL,
+        projectRoot: URL
+    ) -> [[String: Any]] {
+        guard let outputs = object["outputs"] as? [[String: Any]] else {
+            return manifestOutputMatches(object, imageURL: imageURL, projectRoot: projectRoot) ? [object] : []
+        }
+        return outputs.filter { manifestOutputMatches($0, imageURL: imageURL, projectRoot: projectRoot) }
+    }
+
+    private static func manifestOutputMatches(
+        _ output: [String: Any],
+        imageURL: URL,
+        projectRoot: URL
+    ) -> Bool {
+        let imagePath = imageURL.standardizedFileURL.path
+        let projectRootPath = projectRoot.standardizedFileURL.path
+        let relativePath: String? = imagePath.hasPrefix(projectRootPath + "/")
+            ? String(imagePath.dropFirst(projectRootPath.count + 1))
+            : nil
+        let filename = imageURL.lastPathComponent
+        let pathKeys = ["path", "imagePath", "image_path", "outputPath", "output_path", "absolutePath", "absolute_path"]
+
+        for key in pathKeys {
+            guard let rawPath = stringValue(output[key]) else { continue }
+            let slashNormalized = rawPath.replacingOccurrences(of: "\\", with: "/")
+            if rawPath.hasPrefix("/"),
+               URL(fileURLWithPath: rawPath).standardizedFileURL.path == imagePath {
+                return true
+            }
+            if let relativePath, slashNormalized == relativePath {
+                return true
+            }
+            if slashNormalized.hasSuffix("/\(filename)") {
+                return true
+            }
+        }
+
+        return false
     }
 
     private static func jsonObject(at url: URL) -> [String: Any]? {

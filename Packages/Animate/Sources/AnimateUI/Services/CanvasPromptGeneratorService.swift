@@ -6,7 +6,7 @@ struct CanvasPromptGeneratorResult: Sendable, Hashable {
     var prompt: String
     var referencePaths: [String]
     var referenceSummaries: [String]
-    var usedMiniMax: Bool
+    var usedProvider: String
     var warning: String?
 }
 
@@ -18,8 +18,10 @@ struct CanvasPromptGeneratorService: Sendable {
         var worldContext: PlacesWorldContextBlocks
         var animatedLookPrompt: String
         var records: [ProjectImageRecord]
+        var masterMapPath: String?
         var apiKey: String
-        var model: String = "MiniMax-M2.7"
+        var provider: SupplementalLLMProvider = .deepSeek
+        var model: String = SupplementalLLMProvider.deepSeek.defaultModel
         var maxReferences: Int = 8
     }
 
@@ -59,6 +61,7 @@ struct CanvasPromptGeneratorService: Sendable {
             roles: roles,
             records: request.records,
             projectRoot: request.projectRoot,
+            explicitMasterMapPath: request.masterMapPath,
             maxReferences: request.maxReferences
         )
         let candidateByID = Dictionary(uniqueKeysWithValues: deterministicCandidates.map { ($0.id, $0) })
@@ -67,9 +70,12 @@ struct CanvasPromptGeneratorService: Sendable {
             roles: roles,
             projectRoot: request.projectRoot
         )
-        let raw = try await CanvasMiniMaxTextClient(
-            apiKey: request.apiKey,
-            model: request.model
+        let raw = try await SupplementalLLMClient(
+            configuration: SupplementalLLMConfiguration(
+                provider: request.provider,
+                apiKey: request.apiKey,
+                model: request.model
+            )
         ).complete(
             systemPrompt: Self.systemPrompt(),
             userPrompt: Self.userPrompt(
@@ -85,9 +91,9 @@ struct CanvasPromptGeneratorService: Sendable {
         guard !prompt.isEmpty else { throw CanvasPromptGeneratorError.invalidResponse }
 
         let requestedIDs = decoded.reference_ids ?? decoded.referenceIDs ?? []
-        let selectedFromMiniMax = requestedIDs.compactMap { candidateByID[$0] }
+        let selectedFromProvider = requestedIDs.compactMap { candidateByID[$0] }
         let selected = Self.finalReferenceSelection(
-            selectedFromMiniMax: selectedFromMiniMax,
+            selectedFromProvider: selectedFromProvider,
             deterministicCandidates: deterministicCandidates,
             maxReferences: request.maxReferences
         )
@@ -95,8 +101,8 @@ struct CanvasPromptGeneratorService: Sendable {
             prompt: prompt,
             referencePaths: selected.map(\.path),
             referenceSummaries: selected.map(Self.referenceSummary),
-            usedMiniMax: true,
-            warning: selectedFromMiniMax.count < requestedIDs.count ? "Some MiniMax reference IDs were unavailable and were ignored." : nil
+            usedProvider: request.provider.displayName,
+            warning: selectedFromProvider.count < requestedIDs.count ? "Some \(request.provider.displayName) reference IDs were unavailable and were ignored." : nil
         )
     }
 
@@ -107,17 +113,21 @@ struct CanvasPromptGeneratorService: Sendable {
             .filter { $0.semanticRole == .character || $0.source == .characters || $0.source == .costumes }
             .map { $0.groupLabel.lowercased() }
             .filter { !$0.isEmpty }
-        let mentionsCharacterName = characterNames.contains { lower.contains($0) }
+        let briefTerms = Set(terms(from: lower))
+        let mentionsCharacterName = characterNames.contains { name in
+            let nameTerms = Set(terms(from: name))
+            return !nameTerms.isEmpty && nameTerms.isSubset(of: briefTerms)
+        }
         let characterTerms = [
-            "character", "person", "people", "man", "woman", "boy", "girl", "soldier", "uniform", "costume", "face", "portrait", "body", "pose", "johnny", "amira", "mario", "rachel"
+            "character", "person", "people", "man", "woman", "boy", "girl", "soldier", "uniform", "costume", "face", "portrait", "body", "pose", "johnny", "mario", "rachel"
         ]
         let placeTerms = [
             "place", "town", "village", "city", "landscape", "terrain", "river", "bridge", "map", "valley", "ravine", "hill", "road", "street", "building", "architecture", "mountain", "background", "location", "sky", "exterior", "interior"
         ]
-        if mentionsCharacterName || characterTerms.contains(where: { lower.contains($0) }) {
+        if mentionsCharacterName || characterTerms.contains(where: { briefTerms.contains($0) }) {
             roles.append(.character)
         }
-        if roles.isEmpty || placeTerms.contains(where: { lower.contains($0) }) {
+        if roles.isEmpty || placeTerms.contains(where: { briefTerms.contains($0) }) {
             roles.append(.place)
         }
         return roles
@@ -128,6 +138,7 @@ struct CanvasPromptGeneratorService: Sendable {
         roles: [ImageLibrarySemanticRole],
         records: [ProjectImageRecord],
         projectRoot: URL,
+        explicitMasterMapPath: String?,
         maxReferences: Int
     ) -> [ReferenceCandidate] {
         let wantsPlace = roles.contains(.place)
@@ -138,7 +149,7 @@ struct CanvasPromptGeneratorService: Sendable {
         var candidates: [ReferenceCandidate] = []
 
         if needsMasterMap,
-           let masterMap = canonicalMasterMapPath(projectRoot: projectRoot),
+           let masterMap = resolvedMasterMapPath(projectRoot: projectRoot, explicitPath: explicitMasterMapPath),
            FileManager.default.fileExists(atPath: masterMap),
            !isRejectedImagePath(masterMap) {
             candidates.append(ReferenceCandidate(
@@ -151,8 +162,8 @@ struct CanvasPromptGeneratorService: Sendable {
                 rating: nil,
                 isLiked: false,
                 updatedAt: ImagePreferenceProfileService.referenceUpdatedAt(forImagePath: masterMap),
-                notes: "Strict geography anchor for river direction, north-bank settlement, bridge/ravine placement, road relationships, and terrain.",
-                searchText: "master map valley river bridge ravine town road terrain topography geography",
+                notes: "Strict geography anchor: bridge crosses only the ravine/river to a bare landing, then the road climbs before the hillside town begins.",
+                searchText: "master map valley river bridge ravine bare landing uphill road hillside town terrain topography geography",
                 isMasterMap: true,
                 baseScore: 100
             ))
@@ -164,12 +175,13 @@ struct CanvasPromptGeneratorService: Sendable {
                   FileManager.default.fileExists(atPath: path),
                   !record.isRejected,
                   !isRejectedImagePath(path),
+                  isPickedImagePath(path, fallbackRecordPicked: record.isLiked),
                   let preferenceScore = ImagePreferenceProfileService.referencePreferenceScore(forImagePath: path) ?? recordPreferenceScore(record) else {
                 continue
             }
             let role = record.semanticRole ?? inferredRole(for: record.source)
             guard let role else { continue }
-            guard (role == .place && wantsPlace) || (role == .character && wantsCharacter) else { continue }
+            guard (role == .place && wantsPlace) || (role == .character && wantsCharacter && !wantsPlace) else { continue }
 
             let haystack = [record.searchHaystack, record.originLabel, record.groupLabel, record.notes, record.source.displayName]
                 .joined(separator: "\n")
@@ -207,7 +219,7 @@ struct CanvasPromptGeneratorService: Sendable {
             .sorted(by: rankCandidates)
             .prefix(wantsPlace ? 4 : maxReferences)
 
-        var selected = Array(masterMaps) + Array(rankedCharacters) + Array(rankedPlaces)
+        var selected = Array(masterMaps) + Array(rankedPlaces) + Array(rankedCharacters)
         selected = dedupedByPath(selected)
         if selected.count > maxReferences {
             let pinned = selected.filter(\.isMasterMap)
@@ -223,22 +235,22 @@ struct CanvasPromptGeneratorService: Sendable {
 
     private static func recordPreferenceScore(_ record: ProjectImageRecord) -> Double? {
         guard !record.isRejected else { return nil }
+        guard record.isLiked else { return nil }
         let rating = record.rating.map { Double(min(max($0, 1), 5)) }
-        if record.isLiked { return max(5.5, (rating ?? 0) + 0.75) }
-        return rating
+        return max(5.5, (rating ?? 0) + 0.75)
     }
 
     private static func finalReferenceSelection(
-        selectedFromMiniMax: [ReferenceCandidate],
+        selectedFromProvider: [ReferenceCandidate],
         deterministicCandidates: [ReferenceCandidate],
         maxReferences: Int
     ) -> [ReferenceCandidate] {
         let mustKeep = deterministicCandidates.filter(\.isMasterMap)
-        let minimax = dedupedByPath(selectedFromMiniMax)
+        let providerSelected = dedupedByPath(selectedFromProvider)
         let fallback = deterministicCandidates.filter { candidate in
             !mustKeep.contains(where: { $0.path == candidate.path })
         }
-        let selected = dedupedByPath(mustKeep + minimax + fallback)
+        let selected = dedupedByPath(mustKeep + providerSelected + fallback)
         return Array(selected.prefix(maxReferences))
     }
 
@@ -318,7 +330,7 @@ struct CanvasPromptGeneratorService: Sendable {
 
     private static func systemPrompt() -> String {
         """
-        You are MiniMax M2.7 acting as a precise prompt generator for Amira Writer's Canvas.
+        You are a precise prompt generator for Amira Writer's Canvas.
 
         Output JSON only, with this schema:
         {"prompt":"final Gemini image prompt","reference_ids":["ref_1"]}
@@ -458,6 +470,13 @@ struct CanvasPromptGeneratorService: Sendable {
         ImageLibraryMetadataSidecarService.load(forImagePath: path)?.isRejected == true
     }
 
+    private static func isPickedImagePath(_ path: String, fallbackRecordPicked: Bool) -> Bool {
+        if let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path) {
+            return metadata.isRejected == false && metadata.isLiked
+        }
+        return fallbackRecordPicked
+    }
+
     private static func runtimePath(_ rawPath: String?, projectRoot: URL) -> String? {
         guard let rawPath = rawPath?.trimmingCharacters(in: .whitespacesAndNewlines), !rawPath.isEmpty else {
             return nil
@@ -479,7 +498,21 @@ struct CanvasPromptGeneratorService: Sendable {
         return rawPath
     }
 
-    private static func canonicalMasterMapPath(projectRoot: URL) -> String? {
+    private static func resolvedMasterMapPath(projectRoot: URL, explicitPath: String?) -> String? {
+        if let explicit = runtimePath(explicitPath, projectRoot: projectRoot),
+           FileManager.default.fileExists(atPath: explicit) {
+            return explicit
+        }
+
+        let directCandidates = [
+            "Animate/backgrounds/chosen-references/map/05-master_valley_topdown_map_2026-04-22.png",
+            "Animate/backgrounds/chosen-references/map/01-master_valley_topdown_map_4k_v5.png"
+        ]
+            .map { projectRoot.appendingPathComponent($0).path }
+        if let direct = directCandidates.first(where: { FileManager.default.fileExists(atPath: $0) }) {
+            return direct
+        }
+
         let registryURL = ProjectPaths(root: projectRoot).animate.appendingPathComponent("reference-registry.json")
         guard let data = try? Data(contentsOf: registryURL),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -577,11 +610,11 @@ enum CanvasPromptGeneratorError: LocalizedError {
         case .emptyBrief:
             return "Enter a plain-English prompt generator request first."
         case .noAPIKey:
-            return "MiniMax API key is not configured. Add it in Settings before using Prompt Generator."
+            return "Supplemental LLM API key is not configured. Add it in Settings before using Prompt Generator."
         case .invalidResponse:
-            return "MiniMax returned an invalid prompt-generator response."
+            return "Supplemental LLM returned an invalid prompt-generator response."
         case .requestFailed(let statusCode, let body):
-            return "MiniMax request failed (HTTP \(statusCode)): \(body.prefix(300))"
+            return "Supplemental LLM request failed (HTTP \(statusCode)): \(body.prefix(300))"
         }
     }
 }

@@ -55,6 +55,13 @@ struct SunoDownloadResult: Sendable {
     let message: String
 }
 
+struct SunoUploadResult: Sendable {
+    let sourcePath: String
+    let songID: String?
+    let workspace: String?
+    let message: String
+}
+
 // MARK: - Runner
 
 @available(macOS 26.0, *)
@@ -231,6 +238,25 @@ final class SunoCLIRunner {
         let timeout: TimeInterval = wait ? 1800 : 300
         let json = try await runJSON(args, timeoutSeconds: timeout)
         return try parseGenerateResult(from: json)
+    }
+
+    func uploadAudio(
+        filePath: String,
+        headless: Bool = true,
+        workspace: String = "Amira"
+    ) async throws -> SunoUploadResult {
+        let args: [String] = ["upload", "audio", "--file", filePath, "--workspace", workspace, headless ? "--headless" : "--visible"]
+        let json = try await runJSON(args, timeoutSeconds: 900)
+        let sourcePath = (json["source"] as? String) ?? filePath
+        let songID = (json["song_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspaceName = (json["workspace"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = (json["message"] as? String) ?? "Uploaded"
+        return SunoUploadResult(
+            sourcePath: sourcePath,
+            songID: songID?.isEmpty == true ? nil : songID,
+            workspace: workspaceName?.isEmpty == true ? nil : workspaceName,
+            message: message
+        )
     }
 
     func downloadSong(
@@ -431,6 +457,7 @@ final class SunoCLIRunner {
             let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
             let currentPath = env["PATH"] ?? "/usr/bin:/bin"
             env["PATH"] = (extraPaths + [currentPath]).joined(separator: ":")
+            env["AMIRA_SCORE"] = "1"
             env["NOVOTRO_SCORE"] = "1"
             // Point Playwright at the bundled browser cache first, then at the
             // available mounted SunoSkill cache, so the synced app copy works

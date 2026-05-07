@@ -31,6 +31,41 @@ struct ImagineScenesPageView: View {
         var id: String { rawValue }
     }
 
+    private enum SceneImageGenerator: String, CaseIterable, Identifiable {
+        case openAI = "openai"
+        case nanoBanana2 = "nano_banana_2"
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .openAI: "GPT Image 2"
+            case .nanoBanana2: "Nano Banana 2"
+            }
+        }
+    }
+
+    private struct AutomaticReferenceAttachment: Identifiable, Hashable {
+        var id: String { path }
+        var path: String
+        var role: ReferenceRole
+        var label: String
+        var source: String
+        var guidance: String?
+
+        var debugSummary: String {
+            [
+                role.rawValue,
+                label,
+                source,
+                guidance
+            ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " • ")
+        }
+    }
+
     @Bindable var store: AnimateStore
     @State private var selectedMoment: ImagineShotMoment = .beginning
     @State private var previewImagePath: String?
@@ -38,23 +73,19 @@ struct ImagineScenesPageView: View {
     @State private var isGeneratingPrompt: Bool = false
     @State private var isGenerating: Bool = false
     @State private var generationError: String?
-    @State private var generationPromptHeight: CGFloat = 110
-    @State private var generationPromptDragStartHeight: CGFloat?
     @State private var geminiReferenceImages: [GeminiImageService.ReferenceImage] = []
     /// Source-of-truth for manual reference images on this page. The
     /// `geminiReferenceImages` array (which holds base64-encoded payloads)
     /// is derived from this whenever the URLs change, and again right before
     /// generation.
     @State private var manualReferenceURLs: [URL] = []
+    @State private var automaticReferenceAttachments: [AutomaticReferenceAttachment] = []
     @State private var automaticReferenceImagePaths: [String] = []
     @State private var automaticReferenceStatus: String?
     @State private var cachedGenerationPlanPreview: ShotFrameGenerationPlan?
     @State private var activeReferencePicker: ReferencePickerMode?
-
-    // Gemini is the only generator on this page now; keep this as a constant
-    // so existing branches (refresh keys, plan preview, generate) keep
-    // compiling without ripping the whole flow apart.
-    private let useGemini: Bool = true
+    @AppStorage("animate.scenes.imageGenerator") private var selectedGeneratorRaw: String = SceneImageGenerator.openAI.rawValue
+    @AppStorage("animate.scenes.openAIImageQuality") private var openAIImageQualityRaw: String = OpenAIImageQuality.low.rawValue
     @State private var isDryRunningShotPipeline: Bool = false
     @State private var bulkProgressMessage: String?
     @State private var dryRunSummaryMessage: String?
@@ -71,11 +102,7 @@ struct ImagineScenesPageView: View {
     @State private var scenePreflightDrafts: [GeminiGenerationDraft] = []
     @State private var scenePendingPreflight: GeminiGenerationDraft? = nil
 
-    @AppStorage("animate.scenes.middlePane.bottomHeight") private var middlePaneBottomHeight: Double = 280
-    /// Persisted height for the storyboard strip inside the bottom region.
-    /// The composer fills whatever's left after this and the mid-divider.
-    @AppStorage("animate.scenes.middlePane.storyboardStripHeight") private var storyboardStripHeight: Double = 150
-    private let splitHandleHeight: CGFloat = 8
+    @AppStorage("animate.scenes.storyboardDrawingsCollapsed") private var storyboardDrawingsCollapsed: Bool = true
 
     private var selectedScene: AnimationScene? { store.selectedScene }
     private var shots: [AnimationSceneShot] { selectedScene?.shots ?? [] }
@@ -94,6 +121,35 @@ struct ImagineScenesPageView: View {
               let idx = store.imagineSelectedShotIndex,
               idx >= 0, idx < scene.shots.count else { return nil }
         return scene.shots[idx]
+    }
+
+    private var selectedGeneratorBinding: Binding<SceneImageGenerator> {
+        Binding(
+            get: { SceneImageGenerator(rawValue: selectedGeneratorRaw) ?? .openAI },
+            set: { selectedGeneratorRaw = $0.rawValue }
+        )
+    }
+
+    private var selectedGenerator: SceneImageGenerator {
+        SceneImageGenerator(rawValue: selectedGeneratorRaw) ?? .openAI
+    }
+
+    private var selectedGeneratorActivityKind: AnimateStore.GeminiActivityEntry.Kind {
+        switch selectedGenerator {
+        case .openAI: return .openAIImage
+        case .nanoBanana2: return .geminiImage
+        }
+    }
+
+    private var openAIImageQualityBinding: Binding<OpenAIImageQuality> {
+        Binding(
+            get: { OpenAIImageQuality(rawValue: openAIImageQualityRaw) ?? .low },
+            set: { openAIImageQualityRaw = $0.rawValue }
+        )
+    }
+
+    private var selectedOpenAIImageQuality: OpenAIImageQuality {
+        OpenAIImageQuality(rawValue: openAIImageQualityRaw) ?? .low
     }
 
     private var featuredFramePath: String? {
@@ -134,36 +190,17 @@ struct ImagineScenesPageView: View {
         }
     }
 
-    private func clampedBottomHeight(totalHeight: CGFloat) -> CGFloat {
-        let lower: CGFloat = 120
-        let upper = Swift.max(lower, totalHeight - 200 - splitHandleHeight)
-        return Swift.min(Swift.max(CGFloat(middlePaneBottomHeight), lower), upper)
-    }
-
-    private func resizeMiddleBottomPane(_ delta: CGFloat, totalHeight: CGFloat) {
-        let lower: CGFloat = 120
-        let upper = Swift.max(lower, totalHeight - 200 - splitHandleHeight)
-        let newVal = Swift.min(Swift.max(CGFloat(middlePaneBottomHeight) - delta, lower), upper)
-        middlePaneBottomHeight = Double(newVal)
-    }
-
-    private func clampedStoryboardStripHeight(bottomRegionHeight: CGFloat) -> CGFloat {
-        // Always leave at least a usable composer height (180pt) below the
-        // mid-divider, and never collapse the strip below 60pt.
-        let lower: CGFloat = 60
-        let upper = Swift.max(lower, bottomRegionHeight - 180 - splitHandleHeight)
-        return Swift.min(Swift.max(CGFloat(storyboardStripHeight), lower), upper)
-    }
-
-    private func resizeStoryboardStrip(_ delta: CGFloat, bottomRegionHeight: CGFloat) {
-        let lower: CGFloat = 60
-        let upper = Swift.max(lower, bottomRegionHeight - 180 - splitHandleHeight)
-        let newVal = Swift.min(Swift.max(CGFloat(storyboardStripHeight) + delta, lower), upper)
-        storyboardStripHeight = Double(newVal)
-    }
-
     private var filteredMomentPathsKey: String {
-        "\(currentMomentPaths.count)|\(gallerySortMode.rawValue)|\(galleryMinimumRating ?? 0)|\(galleryFlagFilter.rawValue)|\(galleryMetadataRevision)"
+        [
+            selectedScene?.id.uuidString ?? "none",
+            currentShot?.id.uuidString ?? "none",
+            selectedMoment.directoryName,
+            currentMomentPaths.joined(separator: ","),
+            gallerySortMode.rawValue,
+            "\(galleryMinimumRating ?? 0)",
+            galleryFlagFilter.rawValue,
+            "\(galleryMetadataRevision)"
+        ].joined(separator: "|")
     }
 
     private var usesReferenceDrivenPromptStyle: Bool {
@@ -185,16 +222,15 @@ struct ImagineScenesPageView: View {
               let shotIndex = store.imagineSelectedShotIndex,
               shotIndex >= 0,
               shotIndex < scene.shots.count else {
-            return "none|\(useGemini)"
+            return "none|\(selectedGeneratorRaw)"
         }
         let shot = scene.shots[shotIndex]
         let characterIDs = resolvedCharacterIDs(for: scene, shot: shot).joined(separator: ",")
         return [
-            useGemini ? "gemini" : "off",
+            selectedGeneratorRaw,
             scene.id.uuidString,
             shot.id.uuidString,
             selectedMoment.directoryName,
-            "\(generationPrompt.hashValue)",
             scene.backgroundID?.uuidString ?? "no-place",
             characterIDs
         ].joined(separator: "|")
@@ -246,7 +282,11 @@ struct ImagineScenesPageView: View {
                 // across scenes while still preserving intentional work.
                 syncGenerationStateFromCurrentContext()
             }
+            .onChange(of: store.selectedShotID) { _, shotID in
+                syncImagineSelectionFromSidebarShotID(shotID)
+            }
             .onChange(of: store.imagineSelectedShotIndex) { _, _ in
+                syncSidebarShotIDFromImagineSelection()
                 syncGenerationStateFromCurrentContext()
             }
             .onChange(of: selectedMoment) { _, _ in
@@ -256,6 +296,7 @@ struct ImagineScenesPageView: View {
                 if store.imagineSelectedShotIndex == nil && !shots.isEmpty {
                     store.imagineSelectedShotIndex = 0
                 }
+                syncImagineSelectionFromSidebarShotID(store.selectedShotID)
                 scheduleSelectedScenePreparation()
                 syncGenerationStateFromCurrentContext()
             }
@@ -326,10 +367,8 @@ struct ImagineScenesPageView: View {
                 }
             }
             .task(id: automaticReferenceRefreshKey) {
-                if useGemini {
-                    try? await Task.sleep(for: .milliseconds(250))
-                    guard !Task.isCancelled else { return }
-                }
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
                 await refreshAutomaticReferenceImages()
             }
             .task(id: generationPlanPreviewRefreshKey) {
@@ -526,69 +565,22 @@ struct ImagineScenesPageView: View {
             }
     }
 
-    // MARK: - Middle Pane Split
+    // MARK: - Middle Pane
 
     @ViewBuilder
     private func middlePaneSplit(scene: AnimationScene) -> some View {
-        GeometryReader { proxy in
-            let totalHeight = proxy.size.height
-            let bottomHeight = clampedBottomHeight(totalHeight: totalHeight)
-            let topHeight = max(180, totalHeight - bottomHeight - splitHandleHeight)
-
-            // The featured frame is the first thing that should give up its
-            // height when the split handle is dragged down. Without an
-            // explicit cap, .aspectRatio(.fit) keeps it proportionally large
-            // and pushes the gallery off-screen.
-            let featuredFrameMaxHeight = max(120, min(440, topHeight * 0.5))
-
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            momentTabBar
-                            galleryFilterBar
-                            galleryGrid
-                        }
-                        .padding()
-                    }
-
-                    Divider()
-
-                    inspectorPane
-                }
-                .frame(height: topHeight)
-
-                // Top divider: adjusts the gallery vs the storyboard+composer block.
-                OperaChromeSplitHandle(axis: .vertical, thickness: splitHandleHeight) { delta in
-                    resizeMiddleBottomPane(delta, totalHeight: totalHeight)
-                }
-
-                // Bottom region — storyboard strip + draggable mid-divider +
-                // shared Gemini composer. The mid-divider lets the user choose
-                // how much room to give the strip vs the prompt box.
-                let stripHeight = clampedStoryboardStripHeight(bottomRegionHeight: bottomHeight)
-                VStack(spacing: 0) {
-                    SceneStoryboardDrawingsStrip(
-                        projectRoot: store.fileOWPURL,
-                        sceneID: scene.id,
-                        shot: currentShot
-                    )
-                    .frame(height: stripHeight, alignment: .top)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 4)
-
-                    OperaChromeSplitHandle(axis: .vertical, thickness: splitHandleHeight) { delta in
-                        resizeStoryboardStrip(delta, bottomRegionHeight: bottomHeight)
-                    }
-
-                    generationControls
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 10)
-                }
-                .frame(height: bottomHeight)
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 18) {
+                momentTabBar
+                galleryFilterBar
+                galleryGrid
+                storyboardDrawingsSection(scene: scene)
+                generationControls
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     // MARK: - Inspector Pane
@@ -735,14 +727,15 @@ struct ImagineScenesPageView: View {
                         .frame(maxWidth: .infinity, minHeight: 80)
                 }
             } else {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: galleryThumbnailSize), spacing: 10)],
-                    spacing: 10
-                ) {
-                    ForEach(filteredMomentPaths, id: \.self) { path in
-                        galleryThumbnail(path: path)
+                ScrollView(.horizontal, showsIndicators: true) {
+                    LazyHStack(alignment: .top, spacing: 10) {
+                        ForEach(filteredMomentPaths, id: \.self) { path in
+                            galleryThumbnail(path: path)
+                        }
                     }
+                    .padding(.bottom, 4)
                 }
+                .frame(minHeight: galleryThumbnailSize + 34, alignment: .topLeading)
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
@@ -767,6 +760,43 @@ struct ImagineScenesPageView: View {
         } message: {
             Text("This image will be moved to the Trash and removed from the project.")
         }
+    }
+
+    private func storyboardDrawingsSection(scene: AnimationScene) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    storyboardDrawingsCollapsed.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: storyboardDrawingsCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 14)
+                    Text("STORYBOARD DRAWINGS")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1.1)
+                        .foregroundStyle(.tertiary)
+                    Spacer(minLength: 12)
+                    Text(storyboardDrawingsCollapsed ? "Show" : "Hide")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if !storyboardDrawingsCollapsed {
+                SceneStoryboardDrawingsStrip(
+                    projectRoot: store.fileOWPURL,
+                    sceneID: scene.id,
+                    shot: currentShot
+                )
+                .frame(height: 150, alignment: .top)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.top, 2)
     }
 
     @ViewBuilder
@@ -911,13 +941,30 @@ struct ImagineScenesPageView: View {
     private var generationControls: some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
-                Picker("Model", selection: $store.selectedGeminiModel) {
-                    ForEach(GeminiModel.allCases, id: \.self) { model in
-                        Text(model.displayName).tag(model)
+                Picker("Model", selection: selectedGeneratorBinding) {
+                    ForEach(SceneImageGenerator.allCases) { generator in
+                        Text(generator.displayName).tag(generator)
                     }
                 }
-                .frame(maxWidth: 220)
-                .disabled(!store.geminiMasterSwitch)
+                .frame(maxWidth: 180)
+
+                if selectedGenerator == .openAI {
+                    Picker("Quality", selection: openAIImageQualityBinding) {
+                        ForEach(OpenAIImageQuality.allCases) { quality in
+                            Text(quality.displayName).tag(quality)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 220)
+                } else {
+                    Picker("Gemini Model", selection: $store.selectedGeminiModel) {
+                        ForEach(GeminiModel.allCases, id: \.self) { model in
+                            Text(model.displayName).tag(model)
+                        }
+                    }
+                    .frame(maxWidth: 190)
+                    .disabled(!store.geminiMasterSwitch)
+                }
 
                 Spacer()
 
@@ -942,7 +989,7 @@ struct ImagineScenesPageView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
-                .disabled(generationPrompt.isEmpty || isGenerating || isGeneratingPrompt || !store.geminiMasterSwitch)
+                .disabled(!canSubmitGeneration)
             }
 
             // Shared composer: same prompt-editor + references drop-target box
@@ -955,6 +1002,8 @@ struct ImagineScenesPageView: View {
                 promptPlaceholder: "Describe this shot frame…",
                 maxReferenceCount: 5
             )
+
+            automaticReferenceStrip
 
             if let plan = currentGenerationPlanPreview {
                 generationPlanSummary(plan)
@@ -970,7 +1019,7 @@ struct ImagineScenesPageView: View {
             if isGeneratingPrompt {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
-                    Text("Generating prompt via GPT 5.4…").font(.caption).foregroundStyle(.secondary)
+                    Text("Generating scene-aware prompt via GPT…").font(.caption).foregroundStyle(.secondary)
                 }
             }
             if let error = generationError {
@@ -979,7 +1028,7 @@ struct ImagineScenesPageView: View {
             if isGenerating {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text("Generating image…").font(.caption).foregroundStyle(.secondary)
+                    Text("Generating \(selectedGenerator.displayName) image…").font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
@@ -988,33 +1037,62 @@ struct ImagineScenesPageView: View {
         .background(.bar)
     }
 
-    private var promptResizeHandle: some View {
-        ZStack {
-            Rectangle()
-                .fill(.quaternary.opacity(0.18))
-                .frame(height: 1)
-
-            Capsule()
-                .fill(.secondary.opacity(0.5))
-                .frame(width: 72, height: 5)
+    private var canSubmitGeneration: Bool {
+        guard !generationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !isGenerating,
+              !isGeneratingPrompt else { return false }
+        switch selectedGenerator {
+        case .openAI:
+            return !store.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .nanoBanana2:
+            return store.geminiMasterSwitch && store.hasGeminiImageGenerationConfiguration
         }
-        .frame(maxWidth: .infinity)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    let start = generationPromptDragStartHeight ?? generationPromptHeight
-                    if generationPromptDragStartHeight == nil {
-                        generationPromptDragStartHeight = generationPromptHeight
+    }
+
+    @ViewBuilder
+    private var automaticReferenceStrip: some View {
+        if !automaticReferenceAttachments.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Label("Automatic References", systemImage: "photo.on.rectangle.angled")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text("\(automaticReferenceAttachments.count)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(automaticReferenceAttachments) { attachment in
+                            AsyncStoreThumbnailImage<AnyView>.rounded(
+                                store: store,
+                                path: attachment.path,
+                                maxSize: 256,
+                                width: 92,
+                                height: 58,
+                                contentMode: .fill,
+                                cornerRadius: 6,
+                                placeholderOpacity: 0.18
+                            )
+                            .overlay(alignment: .bottomLeading) {
+                                Text(URL(fileURLWithPath: attachment.path).deletingPathExtension().lastPathComponent)
+                                    .font(.system(size: 8))
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 4))
+                                    .foregroundStyle(.white.opacity(0.9))
+                                    .padding(4)
+                            }
+                            .help(attachment.debugSummary)
+                        }
                     }
-                    generationPromptHeight = min(340, max(72, start - value.translation.height))
+                    .padding(.vertical, 1)
                 }
-                .onEnded { _ in
-                    generationPromptDragStartHeight = nil
-                }
-        )
-        .accessibilityLabel("Resize prompt area")
-        .help("Drag to resize the prompt editor.")
+            }
+        }
     }
 
     // MARK: - Actions
@@ -1028,9 +1106,31 @@ struct ImagineScenesPageView: View {
         generationPrompt = currentStoredPrompt
         generationError = nil
         previewImagePath = nil
+        store.imaginePreviewImagePath = nil
+        filteredMomentPaths = []
+        automaticReferenceAttachments = []
         automaticReferenceImagePaths = []
         automaticReferenceStatus = nil
         cachedGenerationPlanPreview = nil
+    }
+
+    private func syncImagineSelectionFromSidebarShotID(_ shotID: UUID?) {
+        guard let scene = selectedScene else { return }
+        guard let shotID else { return }
+        guard let index = scene.shots.firstIndex(where: { $0.id == shotID }),
+              store.imagineSelectedShotIndex != index else { return }
+        store.imagineSelectedShotIndex = index
+    }
+
+    private func syncSidebarShotIDFromImagineSelection() {
+        guard let scene = selectedScene,
+              let index = store.imagineSelectedShotIndex,
+              index >= 0,
+              index < scene.shots.count else { return }
+        let shotID = scene.shots[index].id
+        if store.selectedShotID != shotID {
+            store.selectedShotID = shotID
+        }
     }
 
     private func persistCurrentPrompt(debounced: Bool) {
@@ -1061,12 +1161,17 @@ struct ImagineScenesPageView: View {
             subjectStyle: .neutralSubjects
         )
         persistCurrentPrompt(debounced: false)
-        Task { await refreshAutomaticReferenceImages() }
     }
 
     private func autoGeneratePrompt() {
         guard let scene = selectedScene, let shotIndex = store.imagineSelectedShotIndex, shotIndex < scene.shots.count else { return }
         isGeneratingPrompt = true
+        let activityID = store.registerGeminiActivity(
+            kind: .openAIText,
+            title: "Auto prompt S\(shotIndex + 1) \(selectedMoment.rawValue)",
+            source: "Scenes • \(scene.name)",
+            initialStatus: .running
+        )
         Task {
             defer { isGeneratingPrompt = false }
             do {
@@ -1078,9 +1183,10 @@ struct ImagineScenesPageView: View {
                     subjectStyle: .neutralSubjects
                 )
                 persistCurrentPrompt(debounced: false)
-                await refreshAutomaticReferenceImages()
+                store.updateGeminiActivity(activityID, status: .completed)
             } catch {
                 generationError = error.localizedDescription
+                store.updateGeminiActivity(activityID, status: .failed, errorMessage: error.localizedDescription)
             }
         }
     }
@@ -1102,44 +1208,83 @@ struct ImagineScenesPageView: View {
             }
             do {
                 let service = ImagineGenerationService()
-                if useGemini {
+                let automaticResult = await resolveAutomaticReferences(
+                    scene: scene,
+                    shotIndex: shotIndex,
+                    moment: selectedMoment
+                )
+                let automaticReferences = automaticResult.attachments.map(\.path)
+                automaticReferenceAttachments = automaticResult.attachments
+                automaticReferenceImagePaths = automaticReferences
+                automaticReferenceStatus = automaticResult.status
+                let plan = makeShotFrameGenerationPlan(
+                    scene: scene,
+                    owpURL: owpURL,
+                    shotIndex: shotIndex,
+                    moment: selectedMoment,
+                    prompt: generationPrompt,
+                    automaticReferenceImagePaths: automaticReferences
+                )
+                cachedGenerationPlanPreview = plan
+
+                let activityID = store.registerGeminiActivity(
+                    kind: selectedGeneratorActivityKind,
+                    title: "\(selectedMoment.rawValue) frame S\(shotIndex + 1)",
+                    source: "Scenes • \(scene.name)",
+                    initialStatus: .running
+                )
+                switch selectedGenerator {
+                case .nanoBanana2:
                     guard store.isGeminiAllowed() else {
                         generationError = "Gemini API calls are blocked. Enable in Inspector > Tools."
+                        store.updateGeminiActivity(activityID, status: .failed, errorMessage: generationError)
                         return
                     }
-                    let automaticReferences = await resolveAutomaticReferenceImagePaths(
-                        scene: scene,
-                        shotIndex: shotIndex,
-                        moment: selectedMoment,
-                        prompt: generationPrompt
-                    )
-                    automaticReferenceImagePaths = automaticReferences
-                    automaticReferenceStatus = automaticReferences.isEmpty
-                        ? nil
-                        : "Image Intelligence attached \(automaticReferences.count) automatic reference\(automaticReferences.count == 1 ? "" : "s")."
-                    let plan = makeShotFrameGenerationPlan(
-                        scene: scene,
-                        owpURL: owpURL,
-                        shotIndex: shotIndex,
-                        moment: selectedMoment,
-                        prompt: generationPrompt,
-                        automaticReferenceImagePaths: automaticReferences
-                    )
-                    cachedGenerationPlanPreview = plan
-                    let savedURL = try await service.generateWithGemini(
-                        plan: plan,
-                        manualReferenceImages: geminiReferenceImages,
-                        model: store.selectedGeminiModel, apiKey: store.geminiAPIKey,
-                        owpURL: owpURL, sceneSlug: sceneSlug, shotIndex: shotIndex, moment: selectedMoment
-                    )
-                    registerGeneratedShotImage(
-                        savedURL,
-                        scene: scene,
-                        shotIndex: shotIndex,
-                        moment: selectedMoment,
-                        generator: "gemini",
-                        mode: plan.mode.rawValue
-                    )
+                    do {
+                        let savedURL = try await service.generateWithGemini(
+                            plan: plan,
+                            manualReferenceImages: geminiReferenceImages,
+                            model: store.selectedGeminiModel, apiKey: store.geminiAPIKey,
+                            owpURL: owpURL, sceneSlug: sceneSlug, shotIndex: shotIndex, moment: selectedMoment
+                        )
+                        registerGeneratedShotImage(
+                            savedURL,
+                            scene: scene,
+                            shotIndex: shotIndex,
+                            moment: selectedMoment,
+                            generator: "gemini",
+                            mode: plan.mode.rawValue
+                        )
+                        store.updateGeminiActivity(activityID, status: .completed, outputFilename: savedURL.lastPathComponent)
+                    } catch {
+                        store.updateGeminiActivity(activityID, status: .failed, errorMessage: error.localizedDescription)
+                        throw error
+                    }
+                case .openAI:
+                    do {
+                        let savedURL = try await service.generateWithOpenAI(
+                            plan: plan,
+                            manualReferenceURLs: manualReferenceURLs,
+                            apiKey: store.openAIAPIKey,
+                            quality: selectedOpenAIImageQuality,
+                            owpURL: owpURL,
+                            sceneSlug: sceneSlug,
+                            shotIndex: shotIndex,
+                            moment: selectedMoment
+                        )
+                        registerGeneratedShotImage(
+                            savedURL,
+                            scene: scene,
+                            shotIndex: shotIndex,
+                            moment: selectedMoment,
+                            generator: "openai",
+                            mode: "\(plan.mode.rawValue):\(selectedOpenAIImageQuality.rawValue)"
+                        )
+                        store.updateGeminiActivity(activityID, status: .completed, outputFilename: savedURL.lastPathComponent)
+                    } catch {
+                        store.updateGeminiActivity(activityID, status: .failed, errorMessage: error.localizedDescription)
+                        throw error
+                    }
                 }
             } catch {
                 generationError = error.localizedDescription
@@ -1325,8 +1470,7 @@ struct ImagineScenesPageView: View {
     }
 
     private func refreshGenerationPlanPreview() {
-        guard useGemini,
-              let scene = selectedScene,
+        guard let scene = selectedScene,
               let owpURL = store.fileOWPURL,
               let shotIndex = store.imagineSelectedShotIndex,
               shotIndex >= 0,
@@ -1339,7 +1483,8 @@ struct ImagineScenesPageView: View {
             owpURL: owpURL,
             shotIndex: shotIndex,
             moment: selectedMoment,
-            prompt: generationPrompt
+            prompt: generationPrompt,
+            automaticReferenceImagePaths: automaticReferenceImagePaths
         )
     }
 
@@ -1357,70 +1502,103 @@ struct ImagineScenesPageView: View {
 
     private func refreshAutomaticReferenceImages() async {
         let refreshKey = automaticReferenceRefreshKey
-        guard useGemini else {
-            automaticReferenceImagePaths = []
-            automaticReferenceStatus = nil
-            return
-        }
         guard let scene = selectedScene,
               let shotIndex = store.imagineSelectedShotIndex,
               shotIndex >= 0,
               shotIndex < scene.shots.count else {
+            automaticReferenceAttachments = []
             automaticReferenceImagePaths = []
             automaticReferenceStatus = nil
             return
         }
 
-        let paths = await resolveAutomaticReferenceImagePaths(
+        let result = await resolveAutomaticReferences(
             scene: scene,
             shotIndex: shotIndex,
-            moment: selectedMoment,
-            prompt: generationPrompt
+            moment: selectedMoment
         )
         guard refreshKey == automaticReferenceRefreshKey else { return }
+        let paths = result.attachments.map(\.path)
+        automaticReferenceAttachments = result.attachments
         automaticReferenceImagePaths = paths
-        automaticReferenceStatus = paths.isEmpty
-            ? "Image Intelligence has no automatic references for this shot yet."
-            : "Image Intelligence attached \(paths.count) automatic reference\(paths.count == 1 ? "" : "s")."
+        automaticReferenceStatus = result.status
         refreshGenerationPlanPreview()
     }
 
-    private func resolveAutomaticReferenceImagePaths(
+    private func resolveAutomaticReferences(
         scene: AnimationScene,
         shotIndex: Int,
-        moment: ImagineShotMoment,
-        prompt: String
-    ) async -> [String] {
-        guard useGemini,
-              shotIndex >= 0,
+        moment: ImagineShotMoment
+    ) async -> (attachments: [AutomaticReferenceAttachment], status: String?) {
+        guard shotIndex >= 0,
               shotIndex < scene.shots.count,
-              let searchService = store.imageIntelligenceSearchService() else {
-            return []
+              let owpURL = store.fileOWPURL else {
+            return ([], nil)
         }
-
-        let shot = scene.shots[shotIndex]
-        let input = ImageSearchService.SelectorInput(
-            sceneID: scene.id.uuidString,
-            shotID: shot.id.uuidString,
-            moment: moment.directoryName,
-            characterIDs: resolvedCharacterIDs(for: scene, shot: shot),
-            placeID: scene.backgroundID?.uuidString,
-            queryText: automaticReferenceQueryText(scene: scene, shot: shot, prompt: prompt)
-        )
 
         do {
-            let selections = try await searchService.selectForShot(input: input, maxImages: 5)
-            var seen = Set<String>()
-            return selections.compactMap { selection in
-                let path = URL(fileURLWithPath: selection.resolvedPath).standardizedFileURL.path
-                guard FileManager.default.fileExists(atPath: path),
-                      seen.insert(path).inserted else { return nil }
-                return path
+            let spec = EffectiveShotSpecBuilder(store: store).build(
+                scene: scene,
+                shotIndex: shotIndex,
+                projectRoot: owpURL
+            )
+            guard hasCanonicalShotCardMapping(spec) else {
+                return (
+                    [],
+                    "Image Intelligence stopped: this UI shot is not mapped to the active .ows camera card, so no automatic references were attached."
+                )
             }
+            let resolved = try ReferenceContractResolver(store: store).resolve(
+                spec: spec,
+                projectRoot: owpURL,
+                write: false
+            )
+            var seen = Set<String>()
+            let attachments = resolved.contract.usableReferences.compactMap { item -> AutomaticReferenceAttachment? in
+                let path = URL(fileURLWithPath: item.path).standardizedFileURL.path
+                guard FileManager.default.fileExists(atPath: path),
+                      isAutomaticReferenceImagePath(path),
+                      seen.insert(path).inserted else { return nil }
+                return AutomaticReferenceAttachment(
+                    path: path,
+                    role: item.role,
+                    label: item.label,
+                    source: item.source,
+                    guidance: item.guidance
+                )
+            }
+            .prefix(5)
+
+            let status: String
+            if attachments.isEmpty {
+                let blocker = resolved.contract.blockers.first?.message
+                status = blocker ?? "Image Intelligence has no automatic references for this shot yet."
+            } else {
+                let debug = attachments
+                    .map { "\($0.role.rawValue): \($0.source)" }
+                    .joined(separator: " • ")
+                status = "Image Intelligence attached \(attachments.count) contract reference\(attachments.count == 1 ? "" : "s"). \(debug)"
+            }
+            _ = moment
+            return (Array(attachments), status)
         } catch {
-            automaticReferenceStatus = "Image Intelligence reference selection failed: \(error.localizedDescription)"
-            return []
+            return ([], "Image Intelligence reference selection failed: \(error.localizedDescription)")
         }
+    }
+
+    private func hasCanonicalShotCardMapping(_ spec: EffectiveShotSpec) -> Bool {
+        if spec.shotCardLabel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return true }
+        if spec.shotCardFocus?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return true }
+        if spec.shotCardNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return true }
+        if spec.shotCardContinuityNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false { return true }
+        if spec.shotCardPlaces?.isEmpty == false { return true }
+        if spec.shotCardProps?.isEmpty == false { return true }
+        if spec.shotCardLandmarks?.isEmpty == false { return true }
+        return false
+    }
+
+    private func isAutomaticReferenceImagePath(_ path: String) -> Bool {
+        ["png", "jpg", "jpeg", "webp"].contains(URL(fileURLWithPath: path).pathExtension.lowercased())
     }
 
     private func resolvedCharacterIDs(
@@ -1453,16 +1631,14 @@ struct ImagineScenesPageView: View {
 
     private func automaticReferenceQueryText(
         scene: AnimationScene,
-        shot: AnimationSceneShot,
-        prompt: String
+        shot: AnimationSceneShot
     ) -> String {
         [
             scene.name,
             scene.directionTemplate?.notes,
             shot.name,
             shot.notes,
-            shot.sourceLyricExcerpt,
-            prompt
+            shot.sourceLyricExcerpt
         ]
         .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty }
@@ -1510,6 +1686,7 @@ struct ImagineScenesPageView: View {
         automaticReferenceImagePaths: [String]? = nil
     ) -> ShotFrameGenerationPlan {
         let shot = scene.shots[shotIndex]
+        let shotSettings = ShotGenerationSettingsStore.load(projectRoot: owpURL)
         return ShotFrameGenerationPlanResolver.resolve(
             input: ShotFrameGenerationPlanResolver.Input(
                 projectRoot: owpURL,
@@ -1525,7 +1702,11 @@ struct ImagineScenesPageView: View {
                 automaticReferenceImagePaths: automaticReferenceImagePaths ?? self.automaticReferenceImagePaths,
                 manualReferenceCount: geminiReferenceImages.count,
                 cameraShot: resolvedCameraShot(for: scene, shot: shot),
-                cameraMovement: resolvedCameraMovement(for: shot)
+                cameraMovement: resolvedCameraMovement(for: shot),
+                generatedAspectRatio: shotSettings.generatedAspectRatio,
+                generatedImageSize: shotSettings.generatedImageSize,
+                extractionTargetAspectRatio: shotSettings.extractionTargetAspectRatio,
+                finalDeliveryAspectRatio: shotSettings.finalDeliveryAspectRatio
             )
         )
     }
@@ -1630,16 +1811,17 @@ struct ImagineScenesPageView: View {
                 bulkProgressMessage = nil
             }
             let planner = ShotFrameGenerationDryRunPlanner(store: store)
+            let shotSettings = ShotGenerationSettingsStore.load(projectRoot: owpURL)
             let report = await planner.buildReport(
                 scenes: store.scenes,
                 projectRoot: owpURL,
                 sceneFilter: [scene.id],
                 model: store.selectedGeminiModel,
-                imageSize: ShotFrameOpenMattePlan.defaultGeneratedImageSize
+                imageSize: shotSettings.generatedImageSize
             )
             do {
                 let reportURL = try await planner.writeReportAsync(report, projectRoot: owpURL)
-                dryRunSummaryMessage = "Dry run: \(report.totalFrames) frames, \(report.generateFrames) generate / \(report.editFrames) edit, \(report.openMatteFrames) open-matte, \(report.automaticReferenceCount) auto refs, est. Vertex $\(String(format: "%.2f", report.estimatedVertexCostUSD)) — \(reportURL.lastPathComponent)"
+                dryRunSummaryMessage = "Dry run: \(report.totalFrames) frames, \(report.generateFrames) generate / \(report.editFrames) edit, \(report.openMatteFrames) open-matte, \(report.automaticReferenceCount) auto refs, est. image cost $\(String(format: "%.2f", report.estimatedVertexCostUSD)) — \(reportURL.lastPathComponent)"
             } catch {
                 generationError = "Dry run failed to save report: \(error.localizedDescription)"
             }

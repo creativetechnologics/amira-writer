@@ -9,14 +9,14 @@ struct MixWorkspaceContentView: View {
     var loadStatusMessage: String = "Loading Mix workspace from disk..."
     var isInteractionLocked: Bool = false
 
-    @AppStorage("novotro.mix.sidebarVisible") private var showSidebar = true
-    @AppStorage("novotro.mix.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
-    @AppStorage("novotro.mix.inspector.visible") private var inspectorVisible = true
-    @AppStorage("novotro.mix.inspector.width") private var inspectorWidth: Double = 360
-    @AppStorage("novotro.mix.mixer.visible") private var showMixerDock = true
+    @AppStorage("amira.mix.sidebarVisible") private var showSidebar = true
+    @AppStorage("amira.mix.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("amira.mix.inspector.visible") private var inspectorVisible = true
+    @AppStorage("amira.mix.inspector.width") private var inspectorWidth: Double = 360
+    @AppStorage("amira.mix.mixer.visible") private var showMixerDock = true
     // pixelsPerSecond is driven by AppStorage so the slider position is immediately
     // correct on first render — no 1-frame flicker from a mismatched @State initial value.
-    @AppStorage("novotro.mix.timeline.pixelsPerSecond") private var pixelsPerSecond: Double = 26
+    @AppStorage("amira.mix.timeline.pixelsPerSecond") private var pixelsPerSecond: Double = 26
 
     var body: some View {
         Group {

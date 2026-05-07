@@ -426,6 +426,26 @@ public actor ImageIntelligenceStore {
         ])
     }
 
+    /// Remove a domain-object link for an asset. This intentionally leaves the
+    /// asset and its analysis rows intact so stale rig links can be repaired
+    /// without losing visual metadata history.
+    public func unlinkAsset(
+        assetID: String,
+        kind: ImageAssetLinkKind,
+        ownerID: String? = nil
+    ) throws -> Int {
+        try exec("""
+            DELETE FROM image_asset_links
+            WHERE image_asset_id = ?
+              AND link_kind = ?
+              AND (
+                (? IS NULL AND owner_id IS NULL)
+                OR owner_id = ?
+              )
+        """, [assetID, kind.rawValue, ownerID, ownerID])
+        return changes()
+    }
+
     /// Mark assets as missing if they haven't been seen since the given timestamp.
     public func markMissingAssets(notSeenSince: TimeInterval) throws -> Int {
         try exec("""
@@ -730,6 +750,7 @@ public enum ImageAssetLinkKind: String, CaseIterable, Sendable {
     case characterProfile = "character_profile"
     case characterInspiration = "character_inspiration"
     case characterReference = "character_reference"
+    case characterShotReference = "character_shot_reference"
     case characterAnimated = "character_animated"
     case characterMasterSource = "character_master_source"
     case characterMasterSheetVariant = "character_master_sheet_variant"

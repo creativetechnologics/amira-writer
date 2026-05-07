@@ -6,6 +6,8 @@ struct MixTimelineRulerView: View {
     let pixelsPerSecond: CGFloat
     let height: CGFloat
     var playheadSeconds: Double = 0
+    var viewportOffsetX: CGFloat = 0
+    var viewportWidth: CGFloat = 1600
     var onSeek: ((Double) -> Void)? = nil
 
     var body: some View {
@@ -17,6 +19,13 @@ struct MixTimelineRulerView: View {
         // Limit canvas grid steps to avoid thousands of draw calls.  At 48 px/s the
         // maximum useful step count is ~1600; the canvas skips invisible steps anyway.
         let halfSecondSteps = max(0, min(Int(ceil(clampedDuration * 2)), 200_000))
+
+        // Viewport culling: only draw grid lines visible in the current scroll region.
+        // This eliminates 70K+ draw calls when zoomed out on long timelines.
+        let visibleStartSeconds = max(0, viewportOffsetX / pixelsPerSecond)
+        let visibleEndSeconds = min(clampedDuration, (viewportOffsetX + viewportWidth) / pixelsPerSecond)
+        let gridStartStep = max(0, Int(floor(visibleStartSeconds * 2)))
+        let gridEndStep = min(halfSecondSteps, Int(ceil(visibleEndSeconds * 2)))
 
         ZStack(alignment: .topLeading) {
             Rectangle()
@@ -33,8 +42,8 @@ struct MixTimelineRulerView: View {
                 let drawSubdivisions = halfSecondPixels >= 4
                 let drawMinorGrid = pixelsPerSecond >= 8
 
-                guard halfSecondSteps > 0 else { return }
-                for step in 0...halfSecondSteps {
+                guard gridEndStep > gridStartStep else { return }
+                for step in gridStartStep...gridEndStep {
                     let seconds = Double(step) / 2
                     // Odd steps represent half-second marks (0.5s, 1.5s, 2.5s …)
                     let isHalfSecond = !step.isMultiple(of: 2)
@@ -65,8 +74,10 @@ struct MixTimelineRulerView: View {
                 }
                 return iv
             }()
-            let labelCount = min(max(Int(ceil(clampedDuration / Double(resolvedInterval))), 0), 500)
-            ForEach(0...max(labelCount, 0), id: \.self) { mark in
+            // Viewport-cull labels: only show labels in the visible scroll region.
+            let labelStart = max(0, Int(floor(visibleStartSeconds / Double(resolvedInterval))))
+            let labelEnd = min(max(Int(ceil(visibleEndSeconds / Double(resolvedInterval))), 0), 500)
+            ForEach(labelStart...labelEnd, id: \.self) { mark in
                 let seconds = Double(mark * resolvedInterval)
                 Text(timeLabel(for: Int(seconds)))
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))

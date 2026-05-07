@@ -3,7 +3,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 enum WriteAppSignals {
-    static let openProject = Notification.Name("novotro.write.openProject")
+    static let openProject = Notification.Name("amira.write.openProject")
 }
 
 @available(macOS 26.0, *)

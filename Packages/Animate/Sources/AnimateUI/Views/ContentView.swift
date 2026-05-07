@@ -6,13 +6,13 @@ struct ContentView: View {
     @Bindable var store: AnimateStore
     var appName: String = "Animate"
 
-    @AppStorage("novotro.animate.showInspector") private var showInspector: Bool = true
-    @AppStorage("novotro.animate.sidebarVisible") private var sidebarVisible: Bool = true
-    @AppStorage("novotro.animate.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
-    @AppStorage("novotro.animate.selectedPage") private var selectedPage: AnimatePage = .animate
+    @AppStorage("amira.animate.showInspector") private var showInspector: Bool = true
+    @AppStorage("amira.animate.sidebarVisible") private var sidebarVisible: Bool = true
+    @AppStorage("amira.animate.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("amira.animate.selectedPage") private var selectedPage: AnimatePage = .animate
 
-    @AppStorage("novotro.animate.inspector.width") private var inspectorWidth: Double = 320
-    @AppStorage("novotro.places.viewMode.v1") private var placesViewModeRaw: String = PlacesViewMode.grid.rawValue
+    @AppStorage("amira.animate.inspector.width") private var inspectorWidth: Double = 320
+    @AppStorage("amira.places.viewMode.v1") private var placesViewModeRaw: String = PlacesViewMode.grid.rawValue
     @State private var showAPISettings: Bool = false
     @State private var animateWorkspaceState = AnimateWorkspaceState()
 

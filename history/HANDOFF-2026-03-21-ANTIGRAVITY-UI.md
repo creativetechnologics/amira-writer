@@ -18,7 +18,7 @@ The next agent should treat this as a polish and cleanup pass, not a ground-up r
 ## Canonical Root
 
 - Canonical workspace: `/Volumes/Storage VIII/Programming/Novotro Opera`
-- App target: `NovotroOpera`
+- App target: `Opera`
 - App bundle: `/Volumes/Storage VIII/Users/gary/Applications/Novotro Opera.app`
 - Laptop deploy target: `gary@Garys-Laptop.local:~/Applications/Novotro Opera.app`
 
@@ -65,7 +65,7 @@ As of March 21, 2026:
 
 ### Loading Overlay / Shell
 
-- `Sources/NovotroOpera/OperaShellView.swift`
+- `Sources/Opera/OperaShellView.swift`
 
 ## Collaboration Sync Behavior Already Added
 
@@ -122,7 +122,7 @@ Focus on cleanup and UI/UX optimization in this order:
 
 ## Good Next Audit Targets
 
-- `Sources/NovotroOpera/OperaShellView.swift`
+- `Sources/Opera/OperaShellView.swift`
   - there is still a 0.5s shell-level polling path worth auditing for performance impact
 - `Sources/NovotroWrite/Views/ScriptCenterView.swift`
   - verify large-libretto rendering remains smooth after the lazy-stack conversion

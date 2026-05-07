@@ -24,6 +24,7 @@ public actor ImageSearchService {
         public let shotID: String?
         public let moment: String?
         public let characterIDs: [String]
+        public let characterWardrobes: [String: String]
         public let placeID: String?
         public let queryText: String?
 
@@ -32,6 +33,7 @@ public actor ImageSearchService {
             shotID: String? = nil,
             moment: String? = nil,
             characterIDs: [String] = [],
+            characterWardrobes: [String: String] = [:],
             placeID: String? = nil,
             queryText: String? = nil
         ) {
@@ -39,6 +41,7 @@ public actor ImageSearchService {
             self.shotID = shotID
             self.moment = moment
             self.characterIDs = characterIDs
+            self.characterWardrobes = characterWardrobes
             self.placeID = placeID
             self.queryText = queryText
         }
@@ -198,7 +201,7 @@ public actor ImageSearchService {
         // Filter by place
         if let placeID = input.placeID {
             conditions.append("""
-                (l.owner_id = ? AND l.link_kind IN (
+                ((l.owner_id = ? OR l.owner_parent_id = ?) AND l.link_kind IN (
                     'place_generated',
                     'place_reference',
                     'place_landmark_reference',
@@ -207,7 +210,7 @@ public actor ImageSearchService {
                     'map3d_capture'
                 ))
                 """)
-            params.append(placeID)
+            params.append(contentsOf: [placeID, placeID])
         }
 
         // Filter by character
@@ -232,20 +235,6 @@ public actor ImageSearchService {
             params.append(shotID)
         }
 
-        if let sceneID = input.sceneID {
-            conditions.append("(l.owner_parent_id = ? AND l.link_kind IN ('scene_shot_image', 'storyboard_frame'))")
-            params.append(sceneID)
-        }
-
-        let queryFilterTokens = Self.referenceQueryFilterTokens(from: queryTokens, limit: 10)
-        if !queryFilterTokens.isEmpty {
-            conditions.append(Self.queryFilterSQL(tokenCount: queryFilterTokens.count))
-            for token in queryFilterTokens {
-                let pattern = "%\(token)%"
-                params.append(contentsOf: Array(repeating: pattern, count: 8))
-            }
-        }
-
         guard !conditions.isEmpty else { return [] }
 
         let whereClause = conditions.isEmpty ? "" : "AND (" + conditions.joined(separator: " OR ") + ")"
@@ -260,6 +249,7 @@ public actor ImageSearchService {
                 l.owner_parent_id,
                 l.moment,
                 l.workflow,
+                l.context_json,
                 (
                     SELECT vm.summary
                     FROM image_visual_metadata vm
@@ -344,6 +334,7 @@ public actor ImageSearchService {
                         ownerID: ownerID,
                         ownerParentID: ownerParentID,
                         moment: moment,
+                        contextJSON: row["context_json"] as? String,
                         input: input
                     )
                 )
@@ -486,6 +477,7 @@ public actor ImageSearchService {
         ownerID: String?,
         ownerParentID: String?,
         moment: String?,
+        contextJSON: String?,
         input: SelectorInput
     ) -> ScoredShotReferenceMatch? {
         let normalizedMoment = moment?.lowercased()
@@ -513,38 +505,26 @@ public actor ImageSearchService {
             )
         }
 
-        if linkKind == "scene_shot_image",
-           ownerParentID == input.sceneID {
-            return ScoredShotReferenceMatch(
-                role: "shot_reference",
-                score: 0.20,
-                reason: "Generated frame from the same scene"
-            )
-        }
-
         if let ownerID,
            input.characterIDs.contains(ownerID),
            linkKind.hasPrefix("character_") {
-            let preferredCharacterKinds: Set<String> = [
-                "character_animated",
-                "character_master_source",
-                "character_master_sheet_variant",
-                "character_head_sheet_variant",
-                "character_head_turn_variant",
-                "character_costume_fullbody_variant",
-                "character_costume_reference"
-            ]
+            guard linkKind == "character_shot_reference" else { return nil }
+            let context = Self.decodedContext(contextJSON)
+            if let requiredWardrobe = input.characterWardrobes[ownerID]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+               !requiredWardrobe.isEmpty {
+                guard context["wardrobe"]?.lowercased() == requiredWardrobe else {
+                    return nil
+                }
+            }
             return ScoredShotReferenceMatch(
                 role: "character_reference",
-                score: preferredCharacterKinds.contains(linkKind) ? 0.40 : 0.30,
-                reason: preferredCharacterKinds.contains(linkKind)
-                    ? "Character production reference"
-                    : "Character reference"
+                score: 0.46,
+                reason: context["wardrobe"].map { "Curated character shot reference (\($0) wardrobe)" } ?? "Curated character shot reference"
             )
         }
 
         if let placeID = input.placeID,
-           ownerID == placeID {
+           ownerID == placeID || ownerParentID == placeID {
             switch linkKind {
             case "place_landmark_reference":
                 return ScoredShotReferenceMatch(
@@ -576,6 +556,7 @@ public actor ImageSearchService {
         regionText: String?,
         input: SelectorInput
     ) -> ScoredShotReferenceMatch? {
+        guard input.characterWardrobes.isEmpty else { return nil }
         guard let regionText,
               !regionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         let haystack = regionText.lowercased()
@@ -590,6 +571,17 @@ public actor ImageSearchService {
                 ? "Manual spatial character tag"
                 : "Manual spatial character tags for \(matchedCount) shot characters"
         )
+    }
+
+    private static func decodedContext(_ base64: String?) -> [String: String] {
+        guard let base64,
+              let data = Data(base64Encoded: base64),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        return object.reduce(into: [:]) { result, pair in
+            result[pair.key] = String(describing: pair.value)
+        }
     }
 
     private static func momentAliases(for rawMoment: String) -> Set<String> {
@@ -751,7 +743,7 @@ public actor ImageSearchService {
         if links.contains(where: { $0.linkKind == .sceneShotImage }) {
             return "shot_reference"
         }
-        if links.contains(where: { $0.linkKind.rawValue.hasPrefix("character_") }) {
+        if links.contains(where: { $0.linkKind == .characterShotReference }) {
             return "character_reference"
         }
         if links.contains(where: {

@@ -29,6 +29,8 @@ const LS_SHOT_KEY = 'storyboard_shotId';
 const LS_FRAME_KEY = 'storyboard_frame';
 const LS_MODE_KEY = 'storyboard_sidebar_mode';
 const LS_PLACE_TARGET_KEY = 'storyboard_place_target';
+const LS_SCAFFOLD_ID_KEY = 'storyboard_scaffold_id';
+const LS_SCAFFOLD_MODE_KEY = 'storyboard_scaffold_mode';
 const LS_PENCIL_SIZE_KEY = 'storyboard_brush_size_pencil';
 const LS_ERASER_SIZE_KEY = 'storyboard_brush_size_eraser';
 const DEFAULT_PENCIL_BRUSH_SIZE = 6;
@@ -43,11 +45,14 @@ const BRUSH_LIMITS = {
 let shots = [];                // flat array from /api/shots
 let places = [];
 let landmarks = [];
+let scaffolds = [];
 let sidebarMode = 'scenes';    // 'scenes' | 'places'
 let currentPlaceTarget = null; // { type: 'place'|'landmark', id }
 let currentShotId = null;
 let currentFrame = 'middle';   // 'begin' | 'middle' | 'end'
 let currentTool = 'pencil';
+let currentScaffoldId = null;
+let currentScaffoldMode = 'bw';
 let isDirty = false;
 let isSidebarOpen = true;
 let isToolbarOpen = true;
@@ -98,6 +103,12 @@ const brushDecBtn = document.getElementById('brush-decrement');
 const brushIncBtn = document.getElementById('brush-increment');
 const copyBtn = document.getElementById('copy-btn');
 const pasteBtn = document.getElementById('paste-btn');
+const scaffoldGroup = document.getElementById('scaffold-group');
+const scaffoldSelect = document.getElementById('scaffold-select');
+const scaffoldModeColorBtn = document.getElementById('scaffold-mode-color');
+const scaffoldModeBWBtn = document.getElementById('scaffold-mode-bw');
+const scaffoldRefreshBtn = document.getElementById('scaffold-refresh-btn');
+const scaffoldImportBtn = document.getElementById('scaffold-import-btn');
 
 // In-memory clipboard for copy/paste of canvas (latest only, cleared on reload)
 let copiedFrameDataURL = null;
@@ -133,6 +144,7 @@ async function boot() {
   // Load shots
   await refreshShots();
   await refreshPlaces();
+  await refreshScaffolds();
 
   // Restore last position from localStorage
   const savedMode = localStorage.getItem(LS_MODE_KEY);
@@ -304,6 +316,19 @@ async function refreshPlaces() {
       shotListEl.innerHTML = '<div class="shot-list-loading">Failed to load places.</div>';
     }
   }
+}
+
+async function refreshScaffolds() {
+  if (scaffoldRefreshBtn) scaffoldRefreshBtn.disabled = true;
+  try {
+    const list = await apiFetch('/api/scaffolds');
+    scaffolds = Array.isArray(list) ? list : [];
+  } catch (err) {
+    scaffolds = [];
+  } finally {
+    if (scaffoldRefreshBtn) scaffoldRefreshBtn.disabled = false;
+  }
+  renderScaffoldControls();
 }
 
 function renderSidebar() {
@@ -623,6 +648,79 @@ function updateShotBME(shotId, frame, filled) {
   }
 }
 
+// ─── Deterministic scaffolds ──────────────────────────────────────────────
+
+function renderScaffoldControls() {
+  if (!scaffoldGroup || !scaffoldSelect) return;
+  const usable = scaffolds.filter((item) => item.hasColor || item.hasBW);
+  scaffoldGroup.hidden = usable.length === 0;
+  if (scaffoldRefreshBtn) scaffoldRefreshBtn.disabled = false;
+  scaffoldImportBtn.disabled = usable.length === 0;
+  scaffoldSelect.innerHTML = '';
+  if (usable.length === 0) return;
+
+  const storedID = localStorage.getItem(LS_SCAFFOLD_ID_KEY);
+  const storedMode = localStorage.getItem(LS_SCAFFOLD_MODE_KEY);
+  if (storedMode === 'color' || storedMode === 'bw') currentScaffoldMode = storedMode;
+
+  let selected = usable.find((item) => item.id === storedID) || usable[0];
+  currentScaffoldId = selected.id;
+  localStorage.setItem(LS_SCAFFOLD_ID_KEY, currentScaffoldId);
+
+  for (const scaffold of usable) {
+    const option = document.createElement('option');
+    option.value = scaffold.id;
+    option.textContent = scaffold.name || scaffold.id;
+    option.selected = scaffold.id === currentScaffoldId;
+    scaffoldSelect.appendChild(option);
+  }
+  syncScaffoldModeUI();
+}
+
+function selectedScaffold() {
+  return scaffolds.find((item) => item.id === currentScaffoldId) || null;
+}
+
+function syncScaffoldModeUI() {
+  const scaffold = selectedScaffold();
+  const colorAvailable = Boolean(scaffold?.hasColor);
+  const bwAvailable = Boolean(scaffold?.hasBW);
+  if (currentScaffoldMode === 'color' && !colorAvailable && bwAvailable) {
+    currentScaffoldMode = 'bw';
+  }
+  if (currentScaffoldMode === 'bw' && !bwAvailable && colorAvailable) {
+    currentScaffoldMode = 'color';
+  }
+
+  scaffoldModeColorBtn?.classList.toggle('mode-chip--active', currentScaffoldMode === 'color');
+  scaffoldModeBWBtn?.classList.toggle('mode-chip--active', currentScaffoldMode === 'bw');
+  if (scaffoldModeColorBtn) scaffoldModeColorBtn.disabled = !colorAvailable;
+  if (scaffoldModeBWBtn) scaffoldModeBWBtn.disabled = !bwAvailable;
+  if (scaffoldImportBtn) scaffoldImportBtn.disabled = !scaffold || (!colorAvailable && !bwAvailable);
+  localStorage.setItem(LS_SCAFFOLD_MODE_KEY, currentScaffoldMode);
+}
+
+function scaffoldAssetURL(scaffold) {
+  if (!scaffold) return null;
+  if (currentScaffoldMode === 'color' && scaffold.colorURL) return scaffold.colorURL;
+  if (currentScaffoldMode === 'bw' && scaffold.bwURL) return scaffold.bwURL;
+  return scaffold.bwURL || scaffold.colorURL || null;
+}
+
+async function importSelectedScaffold() {
+  const scaffold = selectedScaffold();
+  const url = scaffoldAssetURL(scaffold);
+  if (!scaffold || !url) return;
+  if (isDirty && !confirm('Replace this unsaved frame with the selected scaffold?')) return;
+  try {
+    await pasteImageURL(url);
+    markDirty();
+  } catch (err) {
+    console.error('Scaffold import failed:', err);
+    setAppStatus('Failed to place scaffold.', 'error');
+  }
+}
+
 function currentSceneName() {
   return shots.find((s) => s.shotId === currentShotId)?.sceneName
     || shots[0]?.sceneName
@@ -784,7 +882,7 @@ async function navigateTo(shotId, frame, save) {
 
   // Load canvas image
   resetUndoStacks();
-  await loadImageURL(`/api/storyboard/${shotId}/${frame}`);
+  await loadImageURL(storyboardEndpoint(shotId, frame));
   clearDirty();
 }
 
@@ -826,6 +924,14 @@ function placeSketchEndpoint(type, id) {
     : `/api/places/${id}/sketch`;
 }
 
+function storyboardEndpoint(shotId, frame) {
+  const shot = shots.find((s) => s.shotId === shotId);
+  if (shot?.sceneId) {
+    return `/api/scenes/${encodeURIComponent(shot.sceneId)}/shots/${encodeURIComponent(shotId)}/storyboard/${encodeURIComponent(frame)}`;
+  }
+  return `/api/storyboard/${encodeURIComponent(shotId)}/${encodeURIComponent(frame)}`;
+}
+
 async function navigateFrame(frame) {
   if (sidebarMode === 'places') return;
   if (frame === currentFrame) return;
@@ -834,7 +940,7 @@ async function navigateFrame(frame) {
   localStorage.setItem(LS_FRAME_KEY, frame);
   updateFramePickerUI();
   resetUndoStacks();
-  await loadImageURL(`/api/storyboard/${currentShotId}/${frame}`);
+  await loadImageURL(storyboardEndpoint(currentShotId, frame));
   clearDirty();
 }
 
@@ -864,7 +970,7 @@ async function navigateStep(direction) {
 
   updateFramePickerUI();
   resetUndoStacks();
-  await loadImageURL(`/api/storyboard/${shotId}/${frame}`);
+  await loadImageURL(storyboardEndpoint(shotId, frame));
   clearDirty();
 }
 
@@ -941,7 +1047,7 @@ async function performSave({ keepalive = false } = {}) {
     const blob = await exportPNG();
     const endpoint = sidebarSnapshot === 'places'
       ? placeSketchEndpoint(placeSnapshot.type, placeSnapshot.id)
-      : `/api/storyboard/${shotSnapshot}/${frameSnapshot}`;
+      : storyboardEndpoint(shotSnapshot, frameSnapshot);
     // keepalive bodies are capped at ~64 KB. PNG blobs of real drawings are
     // always larger, so only set keepalive when the document is genuinely
     // being torn down AND the blob is small enough to actually go out.
@@ -1195,6 +1301,30 @@ function setupToolbar() {
     }
   });
 
+  scaffoldSelect?.addEventListener('change', () => {
+    currentScaffoldId = scaffoldSelect.value;
+    localStorage.setItem(LS_SCAFFOLD_ID_KEY, currentScaffoldId);
+    syncScaffoldModeUI();
+  });
+
+  scaffoldModeColorBtn?.addEventListener('click', () => {
+    currentScaffoldMode = 'color';
+    syncScaffoldModeUI();
+  });
+
+  scaffoldModeBWBtn?.addEventListener('click', () => {
+    currentScaffoldMode = 'bw';
+    syncScaffoldModeUI();
+  });
+
+  scaffoldRefreshBtn?.addEventListener('click', () => {
+    refreshScaffolds();
+  });
+
+  scaffoldImportBtn?.addEventListener('click', () => {
+    importSelectedScaffold();
+  });
+
   // Undo / redo
   undoBtn.addEventListener('click', () => { undo(); });
   redoBtn.addEventListener('click', () => { redo(); });
@@ -1246,7 +1376,7 @@ function setupSidebar() {
     updateSummaryEditor();
     if (currentShotId) {
       resetUndoStacks();
-      await loadImageURL(`/api/storyboard/${currentShotId}/${currentFrame}`);
+      await loadImageURL(storyboardEndpoint(currentShotId, currentFrame));
       clearDirty();
     }
   });

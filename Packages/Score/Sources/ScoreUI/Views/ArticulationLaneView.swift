@@ -1,5 +1,6 @@
 #if canImport(AppKit)
 import AppKit
+import ProjectKit
 import SwiftUI
 
 // MARK: - Articulation Lane View

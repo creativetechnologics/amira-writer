@@ -1,3 +1,4 @@
+import ProjectKit
 import SwiftUI
 
 /// A SwiftUI view for editing expression maps (articulation keyswitches and CC assignments).

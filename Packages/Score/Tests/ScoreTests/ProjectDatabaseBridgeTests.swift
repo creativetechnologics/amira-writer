@@ -95,8 +95,8 @@ struct ProjectDatabaseBridgeTests {
 
         let loadedMetadata = try #require(loadedMetadataFile).jsonData
         let loadedMappings = try #require(loadedMappingsFile).jsonData
-        let decodedMetadata = try ProjectDatabaseBridge.configuredDecoder().decode(ProjectMetadata.self, from: loadedMetadata)
-        let decodedMappings = try ProjectDatabaseBridge.configuredDecoder().decode([String: InstrumentMapping].self, from: loadedMappings)
+        let decodedMetadata = try JSONCoders.makeDecoder().decode(ProjectMetadata.self, from: loadedMetadata)
+        let decodedMappings = try JSONCoders.makeDecoder().decode([String: InstrumentMapping].self, from: loadedMappings)
 
         #expect(decodedMetadata.name == "Synced Name")
         #expect(decodedMetadata.notes == "Synced Notes")

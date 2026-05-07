@@ -32,11 +32,11 @@ final class CanvasFormState {
         didSet { refreshPromptDraftMetrics() }
     }
     var selectedModel: GeminiModel = .flash
-    var selectedAspectRatio: String = UserDefaults.standard.string(forKey: "novotro.canvas.aspectRatio") ?? "3:4" {
-        didSet { UserDefaults.standard.set(selectedAspectRatio, forKey: "novotro.canvas.aspectRatio") }
+    var selectedAspectRatio: String = UserDefaults.standard.string(forKey: "amira.canvas.aspectRatio") ?? "3:4" {
+        didSet { UserDefaults.standard.set(selectedAspectRatio, forKey: "amira.canvas.aspectRatio") }
     }
-    var selectedImageSize: String = UserDefaults.standard.string(forKey: "novotro.canvas.imageSize") ?? "2K" {
-        didSet { UserDefaults.standard.set(selectedImageSize, forKey: "novotro.canvas.imageSize") }
+    var selectedImageSize: String = UserDefaults.standard.string(forKey: "amira.canvas.imageSize") ?? "2K" {
+        didSet { UserDefaults.standard.set(selectedImageSize, forKey: "amira.canvas.imageSize") }
     }
     var referenceImages: [CanvasReferenceImage] = []
     var activeGenerationJobCount = 0
@@ -413,6 +413,14 @@ struct ImagineCanvasPageView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+
+                Button(action: addWorldMapReference) {
+                    Label("Add World Map", systemImage: "map")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(store.effectivePlacesMasterMapPath() == nil)
             }
 
             if canvasState.referenceImages.isEmpty {
@@ -438,13 +446,6 @@ struct ImagineCanvasPageView: View {
                     .padding(4)
             }
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            let resolvedURLs = ImageMultiSelectionDragContext.resolveDroppedURLs(urls)
-            appendReferenceURLs(resolvedURLs)
-            return !resolvedURLs.isEmpty
-        } isTargeted: { isTargeted in
-            isReferenceDropTarget = isTargeted
-        }
     }
 
     private var dropZoneView: some View {
@@ -461,6 +462,11 @@ struct ImagineCanvasPageView: View {
                         .foregroundStyle(OperaChromeTheme.textTertiary)
                 }
             )
+            .dropDestination(for: URL.self) { urls, _ in
+                handleReferenceDrop(urls)
+            } isTargeted: { isTargeted in
+                isReferenceDropTarget = isTargeted
+            }
     }
 
     private var dropZoneChip: some View {
@@ -472,6 +478,13 @@ struct ImagineCanvasPageView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(OperaChromeTheme.textTertiary)
             )
+            .contentShape(Rectangle())
+            .onTapGesture { addReferenceImages() }
+            .dropDestination(for: URL.self) { urls, _ in
+                handleReferenceDrop(urls)
+            } isTargeted: { isTargeted in
+                isReferenceDropTarget = isTargeted
+            }
     }
 
     @ViewBuilder
@@ -482,18 +495,29 @@ struct ImagineCanvasPageView: View {
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 72, height: 72)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                .allowsHitTesting(false)
 
             Button {
-                canvasState.referenceImages.removeAll { $0.id == ref.id }
+                removeReferenceImage(ref)
             } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white)
-                    .shadow(radius: 2)
+                ZStack {
+                    Circle()
+                        .fill(Color.black.opacity(0.65))
+                        .frame(width: 22, height: 22)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .contentShape(Circle())
             }
-            .buttonStyle(.plain)
-            .padding(3)
+            .buttonStyle(.borderless)
+            .help("Remove reference image")
+            .padding(4)
+            .zIndex(2)
         }
+        .frame(width: 72, height: 72)
+        .contentShape(Rectangle())
+        .help(ref.url.lastPathComponent)
     }
 
     private var promptGeneratorSection: some View {
@@ -503,7 +527,7 @@ struct ImagineCanvasPageView: View {
                     Label("Prompt Generator", systemImage: "wand.and.stars")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(OperaChromeTheme.textSecondary)
-                    Text("Plain English in; MiniMax writes the Canvas prompt and attaches eligible rated references.")
+                    Text("Plain English in; the supplemental LLM writes the Canvas prompt and attaches eligible rated references.")
                         .font(.system(size: 10))
                         .foregroundStyle(OperaChromeTheme.textTertiary)
                 }
@@ -517,7 +541,7 @@ struct ImagineCanvasPageView: View {
                 }
 
                 Button {
-                    generatePromptWithMiniMax()
+                    generatePromptWithSupplementalLLM()
                 } label: {
                     Label("Generate Prompt", systemImage: "sparkles")
                         .font(.system(size: 11))
@@ -881,7 +905,7 @@ struct ImagineCanvasPageView: View {
         return (remainder, nil)
     }
 
-    private func generatePromptWithMiniMax() {
+    private func generatePromptWithSupplementalLLM() {
         let brief = canvasState.promptGeneratorText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !brief.isEmpty else {
             canvasState.promptGeneratorErrorMessage = "Enter what you want first."
@@ -894,9 +918,10 @@ struct ImagineCanvasPageView: View {
 
         canvasState.isGeneratingPrompt = true
         canvasState.promptGeneratorErrorMessage = nil
-        canvasState.promptGeneratorStatusMessage = "MiniMax is building a prompt and choosing references…"
+        let supplementalConfig = store.supplementalLLMConfiguration()
+        canvasState.promptGeneratorStatusMessage = "\(supplementalConfig.providerName) is building a prompt and choosing references…"
         canvasState.promptGeneratorReferenceSummaries = []
-        store.statusMessage = "MiniMax Prompt Generator is working…"
+        store.statusMessage = "\(supplementalConfig.providerName) Prompt Generator is working…"
 
         let request = CanvasPromptGeneratorService.Request(
             userBrief: brief,
@@ -904,7 +929,10 @@ struct ImagineCanvasPageView: View {
             worldContext: store.placesWorldContextBlocks,
             animatedLookPrompt: AnimatedLookPromptSettings.loadMasterPrompt(),
             records: libraryState.cachedAllRecords,
-            apiKey: store.miniMaxAPIKey,
+            masterMapPath: store.effectivePlacesMasterMapPath(),
+            apiKey: supplementalConfig.apiKey,
+            provider: supplementalConfig.provider,
+            model: supplementalConfig.model,
             maxReferences: 8
         )
 
@@ -935,11 +963,11 @@ struct ImagineCanvasPageView: View {
                 let refSummary = result.referencePaths.isEmpty ? "No eligible rated references were found." : "Attached \(result.referencePaths.count) reference\(result.referencePaths.count == 1 ? "" : "s")."
                 canvasState.promptGeneratorStatusMessage = "\(refSummary) Prompt filled in Prompt \(targetIndex + 1)."
                 canvasState.promptGeneratorErrorMessage = result.warning
-                store.statusMessage = "MiniMax filled a Canvas prompt"
+                store.statusMessage = "\(result.usedProvider) filled a Canvas prompt"
             } catch {
                 canvasState.promptGeneratorStatusMessage = nil
                 canvasState.promptGeneratorErrorMessage = error.localizedDescription
-                store.statusMessage = "MiniMax Prompt Generator failed"
+                store.statusMessage = "\(supplementalConfig.providerName) Prompt Generator failed"
             }
         }
     }
@@ -1128,6 +1156,32 @@ struct ImagineCanvasPageView: View {
         panel.title = "Choose Reference Images"
         guard panel.runModal() == .OK else { return }
         appendReferenceURLs(panel.urls)
+    }
+
+    private func addWorldMapReference() {
+        guard let path = store.effectivePlacesMasterMapPath(),
+              let url = store.resolvedCharacterAssetURL(for: path) ?? (path.hasPrefix("/") ? URL(fileURLWithPath: path) : nil) else {
+            canvasState.promptGeneratorErrorMessage = "No master world map is configured."
+            return
+        }
+        appendReferenceURLs([url])
+    }
+
+    private func removeReferenceImage(_ reference: CanvasReferenceImage) {
+        let targetPath = reference.url.standardizedFileURL.path
+        let before = canvasState.referenceImages.count
+        canvasState.referenceImages.removeAll { item in
+            item.id == reference.id || item.url.standardizedFileURL.path == targetPath
+        }
+        if canvasState.referenceImages.count < before {
+            store.statusMessage = "Removed reference image"
+        }
+    }
+
+    private func handleReferenceDrop(_ urls: [URL]) -> Bool {
+        let resolvedURLs = ImageMultiSelectionDragContext.resolveDroppedURLs(urls)
+        appendReferenceURLs(resolvedURLs)
+        return !resolvedURLs.isEmpty
     }
 
     private func appendReferenceURLs(_ urls: [URL]) {

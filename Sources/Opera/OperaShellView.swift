@@ -92,10 +92,10 @@ enum OperaMode: String, CaseIterable, Identifiable {
 }
 
 enum OperaShellSignals {
-    static let openProjectFromDisk = Notification.Name("novotro.opera.openProjectFromDisk")
-    static let openProjectFromURL = Notification.Name("novotro.opera.openProjectFromURL")
-    static let openRecentProjects = Notification.Name("novotro.opera.openRecentProjects")
-    static let saveProject = Notification.Name("novotro.opera.saveProject")
+    static let openProjectFromDisk = Notification.Name("amira.opera.openProjectFromDisk")
+    static let openProjectFromURL = Notification.Name("amira.opera.openProjectFromURL")
+    static let openRecentProjects = Notification.Name("amira.opera.openRecentProjects")
+    static let saveProject = Notification.Name("amira.opera.saveProject")
 
     /// Called by OperaShellView to register a closure the AppDelegate uses to check dirty state.
     @MainActor static var hasUnsavedChanges: (() -> Bool)?
@@ -104,7 +104,7 @@ enum OperaShellSignals {
 }
 
 private enum OperaRecentProjectsStore {
-    private static let storageKey = "novotro.opera.recentProjectPaths"
+    private static let storageKey = "amira.opera.recentProjectPaths"
     private static let legacyStorageKeys = [
         "recentProjectPaths"
     ]
@@ -256,26 +256,26 @@ struct OperaShellView: View {
     @State private var mountedCharacterImageModes: Set<OperaMode> = []
 
     // Sidebar visibility (per-mode, shared with each mode's ContentView via same AppStorage key)
-    @AppStorage("novotro.write.sidebarVisible") private var writeSidebarVisible: Bool = true
-    @AppStorage("novotro.score.sidebarVisible") private var scoreSidebarVisible: Bool = true
-    @AppStorage("novotro.animate.sidebarVisible") private var animateSidebarVisible: Bool = true
-    @AppStorage("novotro.characters.sidebarVisible") private var charactersSidebarVisible: Bool = true
-    @AppStorage("novotro.places.sidebarVisible") private var placesSidebarVisible: Bool = true
-    @AppStorage("novotro.mix.sidebarVisible") private var mixSidebarVisible: Bool = true
-    @AppStorage("novotro.imagine.sidebarVisible") private var imagineSidebarVisible: Bool = true
-    @AppStorage("novotro.allImages.sidebarVisible") private var allImagesSidebarVisible: Bool = true
-    @AppStorage("novotro.canvas.sidebarVisible") private var canvasSidebarVisible: Bool = true
+    @AppStorage("amira.write.sidebarVisible") private var writeSidebarVisible: Bool = true
+    @AppStorage("amira.score.sidebarVisible") private var scoreSidebarVisible: Bool = true
+    @AppStorage("amira.animate.sidebarVisible") private var animateSidebarVisible: Bool = true
+    @AppStorage("amira.characters.sidebarVisible") private var charactersSidebarVisible: Bool = true
+    @AppStorage("amira.places.sidebarVisible") private var placesSidebarVisible: Bool = true
+    @AppStorage("amira.mix.sidebarVisible") private var mixSidebarVisible: Bool = true
+    @AppStorage("amira.imagine.sidebarVisible") private var imagineSidebarVisible: Bool = true
+    @AppStorage("amira.allImages.sidebarVisible") private var allImagesSidebarVisible: Bool = true
+    @AppStorage("amira.canvas.sidebarVisible") private var canvasSidebarVisible: Bool = true
 
     // Inspector visibility (per-mode, shared with each mode's ContentView via same AppStorage key)
-    @AppStorage("novotro.write.showInspector") private var writeInspectorVisible: Bool = true
-    @AppStorage("novotro.score.showInspector") private var scoreInspectorVisible: Bool = true
-    @AppStorage("novotro.animate.showInspector") private var animateInspectorVisible: Bool = true
-    @AppStorage("novotro.characters.showInspector") private var charactersInspectorVisible: Bool = true
-    @AppStorage("novotro.places.showInspector") private var placesInspectorVisible: Bool = true
-    @AppStorage("novotro.mix.inspector.visible") private var mixInspectorVisible: Bool = true
-    @AppStorage("novotro.imagine.showInspector") private var imagineInspectorVisible: Bool = true
-    @AppStorage("novotro.allImages.showInspector") private var allImagesInspectorVisible: Bool = true
-    @AppStorage("novotro.canvas.showInspector") private var canvasInspectorVisible: Bool = true
+    @AppStorage("amira.write.showInspector") private var writeInspectorVisible: Bool = true
+    @AppStorage("amira.score.showInspector") private var scoreInspectorVisible: Bool = true
+    @AppStorage("amira.animate.showInspector") private var animateInspectorVisible: Bool = true
+    @AppStorage("amira.characters.showInspector") private var charactersInspectorVisible: Bool = true
+    @AppStorage("amira.places.showInspector") private var placesInspectorVisible: Bool = true
+    @AppStorage("amira.mix.inspector.visible") private var mixInspectorVisible: Bool = true
+    @AppStorage("amira.imagine.showInspector") private var imagineInspectorVisible: Bool = true
+    @AppStorage("amira.allImages.showInspector") private var allImagesInspectorVisible: Bool = true
+    @AppStorage("amira.canvas.showInspector") private var canvasInspectorVisible: Bool = true
     private static let controlFileCandidates = [
         "Metadata/project.json",
         "project.json"
@@ -636,11 +636,8 @@ struct OperaShellView: View {
                 Spacer(minLength: compact ? 2 : 4)
 
                 HStack(spacing: compact ? 4 : 6) {
-                    if !compact {
-                        animateController.vertexCreditTitleBarView()
-                    }
                     if !ultraCompact {
-                        animateController.geminiStatusBadgeView()
+                        animateController.aiGenerationStatusBadgeView()
                     }
 
                     OperaChromeActionButton(

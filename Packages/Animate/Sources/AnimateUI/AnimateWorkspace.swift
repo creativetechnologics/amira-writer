@@ -98,16 +98,11 @@ public final class AnimateWorkspaceController: ObservableObject {
         store.save()
     }
 
-    /// Returns the title-bar Gemini activity badge bound to this workspace's store.
+    /// Returns the title-bar AI generation activity badge bound to this workspace's store.
     /// Exposed here so the top-level Opera shell can host it without needing
     /// direct access to the internal AnimateStore type.
-    public func geminiStatusBadgeView() -> some View {
+    public func aiGenerationStatusBadgeView() -> some View {
         GeminiStatusBadge(store: store)
-    }
-
-    /// Returns the faint Vertex remaining-credit text for the title bar.
-    public func vertexCreditTitleBarView() -> some View {
-        VertexCreditTitleBarLabel(store: store)
     }
 
     /// Returns the global-settings gear button bound to this workspace's store.
@@ -244,9 +239,10 @@ public final class AnimateWorkspaceController: ObservableObject {
         }
 
         let model = resolvedGeminiModel(from: modelName)
+        let shotSettings = ShotGenerationSettingsStore.load(projectRoot: projectRoot)
         let resolvedImageSize = imageSize?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
             ? imageSize!.trimmingCharacters(in: .whitespacesAndNewlines)
-            : ShotFrameOpenMattePlan.defaultGeneratedImageSize
+            : shotSettings.generatedImageSize
         let sceneFilterSet = try resolvedSceneFilter(sceneFilter)
         let planner = ShotFrameGenerationDryRunPlanner(store: store)
         let report = await planner.buildReport(
@@ -267,6 +263,231 @@ public final class AnimateWorkspaceController: ObservableObject {
             "estimatedVertexCostUSD": String(format: "%.4f", report.estimatedVertexCostUSD),
             "model": report.model.rawValue,
             "imageSize": report.imageSize
+        ]
+    }
+
+    /// CLI/debug entrypoint that mirrors the API's `/automation/frame-plans/dry-run`
+    /// endpoint, writing the exact effective specs, reference contracts, and
+    /// beginning/middle/end frame plans to disk.
+    public func runAutomationFramePlansDryRun(
+        sceneFilter: String?,
+        shotID: String?,
+        modelName: String?,
+        imageSize: String?,
+        maxCostUSD: Double?,
+        writeSidecars: Bool
+    ) async throws -> [String: String] {
+        guard let projectRoot = store.fileOWPURL else {
+            throw cliError("No project is loaded.")
+        }
+
+        let model = resolvedGeminiModel(from: modelName)
+        let shotSettings = ShotGenerationSettingsStore.load(projectRoot: projectRoot)
+        let resolvedImageSize = imageSize?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? imageSize!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : shotSettings.generatedImageSize
+        let sceneFilterSet = try resolvedSceneFilter(sceneFilter)
+        let shotFilter: UUID? = {
+            guard let raw = shotID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty else {
+                return nil
+            }
+            return UUID(uuidString: raw)
+        }()
+        if shotID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false, shotFilter == nil {
+            throw cliError("Invalid shot ID '\(shotID ?? "")'.")
+        }
+
+        let summary = AutomationSourceResolver.projectSummary(store: store, projectRoot: projectRoot)
+        let specBuilder = EffectiveShotSpecBuilder(store: store)
+        let referenceResolver = ReferenceContractResolver(store: store)
+        let planBuilder = ShotFramePlanBuilder(store: store)
+        var results: [AutomationDryRunShotResult] = []
+        var allBlockers: [AutomationBlocker] = []
+
+        for scene in store.scenes where sceneFilterSet?.contains(scene.id) ?? true {
+            for index in scene.shots.indices {
+                let shot = scene.shots[index]
+                if let shotFilter, shot.id != shotFilter { continue }
+                let spec = specBuilder.build(scene: scene, shotIndex: index, projectRoot: projectRoot)
+                let specURL = writeSidecars ? try specBuilder.write(spec, projectRoot: projectRoot) : nil
+                let resolved = try referenceResolver.resolve(spec: spec, projectRoot: projectRoot, write: writeSidecars)
+                let planSet = planBuilder.buildPlans(spec: spec, contract: resolved.contract, projectRoot: projectRoot, imageSize: resolvedImageSize)
+                let planURL = writeSidecars ? try planBuilder.write(planSet, projectRoot: projectRoot) : nil
+                let shotCost = planSet.plans.reduce(0) { subtotal, plan in
+                    subtotal + model.estimatedCost(for: plan.openMattePlan?.generatedImageSize ?? resolvedImageSize)
+                }
+                let blockers = spec.blockers + resolved.contract.blockers + planSet.plans.compactMap { plan -> AutomationBlocker? in
+                    plan.canExecute ? nil : .init(
+                        code: .blockedMissingEditSource,
+                        message: "\(plan.moment.rawValue) plan requires an edit source image that is not readable.",
+                        field: "shotFrameGenerationPlan.\(plan.moment.rawValue)"
+                    )
+                }
+                allBlockers.append(contentsOf: blockers)
+                results.append(
+                    AutomationDryRunShotResult(
+                        effectiveShotSpec: spec,
+                        effectiveShotSpecPath: specURL?.path,
+                        referenceContract: resolved.contract,
+                        referenceContractPath: resolved.url?.path,
+                        shotFrameGenerationPlanSet: planSet,
+                        shotFrameGenerationPlanPath: planURL?.path,
+                        estimatedVertexCostUSD: shotCost,
+                        blockers: blockers
+                    )
+                )
+                await Task.yield()
+            }
+        }
+
+        let totalCost = results.reduce(0) { $0 + $1.estimatedVertexCostUSD }
+        if let maxCostUSD, totalCost > maxCostUSD {
+            allBlockers.append(
+                .init(
+                    code: .blockedCostCap,
+                    message: "Estimated Vertex cost $\(String(format: "%.4f", totalCost)) exceeds cap $\(String(format: "%.2f", maxCostUSD)).",
+                    field: "maxCostUSD"
+                )
+            )
+        }
+
+        let report = AutomationDryRunReport(
+            model: model.rawValue,
+            imageSize: resolvedImageSize,
+            projectSummary: summary,
+            shots: results,
+            estimatedVertexCostUSD: totalCost,
+            blockers: allBlockers
+        )
+        let directory = AutomationSourceResolver.automationDirectory(projectRoot: projectRoot, component: "shot-frame-plans")
+            .appendingPathComponent("DryRuns", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let reportURL = directory.appendingPathComponent("automation-frame-plans-latest.json")
+        try writeCodable(report, to: reportURL)
+        try writeShotReferenceTodoList(report: report, projectRoot: projectRoot)
+
+        let totalFrames = results.reduce(0) { $0 + $1.shotFrameGenerationPlanSet.plans.count }
+        return [
+            "reportURL": reportURL.path,
+            "totalShots": "\(results.count)",
+            "totalFrames": "\(totalFrames)",
+            "estimatedVertexCostUSD": String(format: "%.4f", totalCost),
+            "model": model.rawValue,
+            "imageSize": resolvedImageSize,
+            "blockerCount": "\(allBlockers.count)"
+        ]
+    }
+
+    /// CLI/debug entrypoint for `/automation/frames/generate`, with optional
+    /// force-Vertex execution scoped to this run.
+    public func runAutomationFramesGenerate(
+        sceneFilter: String?,
+        shotID: String?,
+        momentsRaw: String?,
+        modelName: String?,
+        imageSize: String?,
+        mode: String,
+        maxCostUSD: Double?,
+        maxFrames: Int?,
+        forceVertex: Bool,
+        vertexProjectID providedProjectID: String?,
+        vertexRegion providedRegion: String?
+    ) async throws -> [String: String] {
+        guard let projectRoot = store.fileOWPURL else {
+            throw cliError("No project is loaded.")
+        }
+
+        let normalizedMode = mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedMode == "preflight" || normalizedMode == "execute" else {
+            throw cliError("Invalid mode: \(mode). Use preflight or execute.")
+        }
+
+        let model = resolvedGeminiModel(from: modelName)
+        let shotSettings = ShotGenerationSettingsStore.load(projectRoot: projectRoot)
+        let resolvedImageSize = imageSize?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? imageSize!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : shotSettings.generatedImageSize
+        let sceneFilterSet = try resolvedSceneFilter(sceneFilter)
+        let shotFilter: UUID? = {
+            guard let raw = shotID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty else {
+                return nil
+            }
+            return UUID(uuidString: raw)
+        }()
+        if shotID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false, shotFilter == nil {
+            throw cliError("Invalid shot ID '\(shotID ?? "")'.")
+        }
+
+        let moments = try resolvedMoments(momentsRaw)
+
+        var previousBackend: ImageGenBackend?
+        var previousVertexSettings: VertexSettings?
+        if forceVertex || (providedProjectID?.isEmpty == false) || (providedRegion?.isEmpty == false) {
+            let projectID = firstNonEmpty(
+                providedProjectID,
+                ProjectCredentialStore.shared.vertexProjectID(),
+                ImageGenBackendStore.currentVertexSettings().projectID
+            )
+            let region = firstNonEmpty(
+                providedRegion,
+                ProjectCredentialStore.shared.vertexRegion(),
+                ImageGenBackendStore.currentVertexSettings().region,
+                "global"
+            )
+            guard let projectID, !projectID.isEmpty else {
+                throw cliError("Missing Vertex project ID. Set it in API Settings or pass --vertex-project <id>.")
+            }
+            previousBackend = ImageGenBackendStore.currentBackend()
+            previousVertexSettings = ImageGenBackendStore.currentVertexSettings()
+            ImageGenBackendStore.setBackend(.vertex)
+            ImageGenBackendStore.setVertexSettings(VertexSettings(projectID: projectID, region: region ?? "global"))
+        }
+        defer {
+            if let previousBackend, let previousVertexSettings {
+                ImageGenBackendStore.setBackend(previousBackend)
+                ImageGenBackendStore.setVertexSettings(previousVertexSettings)
+            }
+        }
+
+        let response = await AutomationFrameGenerationService(store: store).run(
+            projectRoot: projectRoot,
+            sceneFilter: sceneFilterSet,
+            shotFilter: shotFilter,
+            moments: moments,
+            model: model,
+            imageSize: resolvedImageSize,
+            mode: normalizedMode,
+            maxCostUSD: maxCostUSD,
+            maxFrames: maxFrames
+        )
+
+        let outputDirectory = AutomationSourceResolver.automationDirectory(projectRoot: projectRoot, component: "generated-frames")
+            .appendingPathComponent("DryRuns", isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+        let reportURL = outputDirectory.appendingPathComponent("automation-frames-generate-latest.json")
+        try writeCodable(response, to: reportURL)
+
+        let completedCount = response.records.filter { $0.status == "completed" }.count
+        let plannedCount = response.records.filter { $0.status == "planned" }.count
+        let blockedCount = response.records.filter { $0.status == "blocked" }.count
+        let failedCount = response.records.filter { $0.status.hasPrefix("failed") }.count
+        return [
+            "responseURL": reportURL.path,
+            "ok": response.ok ? "true" : "false",
+            "mode": response.mode,
+            "isDryRun": response.isDryRun ? "true" : "false",
+            "model": response.model,
+            "imageSize": response.imageSize,
+            "estimatedCostUSD": String(format: "%.4f", response.estimatedCostUSD),
+            "maxCostUSD": response.maxCostUSD.map { String(format: "%.2f", $0) } ?? "",
+            "recordCount": "\(response.records.count)",
+            "completedCount": "\(completedCount)",
+            "plannedCount": "\(plannedCount)",
+            "blockedCount": "\(blockedCount)",
+            "failedCount": "\(failedCount)",
+            "blockerCount": "\(response.blockers.count)"
         ]
     }
 
@@ -614,6 +835,39 @@ public final class AnimateWorkspaceController: ObservableObject {
         throw cliError("No scene matched '\(raw)'.")
     }
 
+    private func resolvedMoments(_ raw: String?) throws -> [ImagineShotMoment] {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return [.beginning]
+        }
+        if raw.lowercased() == "all" {
+            return ImagineShotMoment.allCases
+        }
+
+        let tokens = raw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        guard !tokens.isEmpty else { return [.beginning] }
+
+        var moments: [ImagineShotMoment] = []
+        for token in tokens {
+            switch token {
+            case "beginning", "start", "first":
+                moments.append(.beginning)
+            case "middle", "mid", "center", "centre":
+                moments.append(.middle)
+            case "end", "final", "last":
+                moments.append(.end)
+            default:
+                throw cliError("Invalid moment token '\(token)'. Use beginning,middle,end or all.")
+            }
+        }
+
+        var seen = Set<ImagineShotMoment>()
+        return moments.filter { seen.insert($0).inserted }
+    }
+
     private func firstNonEmpty(_ values: String?...) -> String? {
         values
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -628,6 +882,67 @@ public final class AnimateWorkspaceController: ObservableObject {
             try? await Task.sleep(for: .milliseconds(100))
         }
         throw cliError("Image Intelligence SQLite store did not become ready within 6 seconds.")
+    }
+
+    private func writeShotReferenceTodoList(
+        report: AutomationDryRunReport,
+        projectRoot: URL
+    ) throws {
+        struct TodoEntry: Codable, Sendable {
+            var sceneID: UUID
+            var sceneName: String
+            var shotID: UUID
+            var shotIndex: Int
+            var shotName: String
+            var missingRequirements: [String]
+            var blockerCodes: [String]
+            var note: String
+        }
+
+        struct TodoFile: Codable, Sendable {
+            var schemaVersion: Int = 1
+            var generatedAt: Date = Date()
+            var model: String
+            var imageSize: String
+            var totalOpenTodos: Int
+            var entries: [TodoEntry]
+        }
+
+        var entries: [TodoEntry] = []
+        for shot in report.shots {
+            let blockerCodes = shot.blockers.map(\.code.rawValue)
+            let missingReferenceFields = shot.blockers
+                .filter { $0.code == .blockedMissingReferenceRole }
+                .compactMap(\.field)
+            guard !missingReferenceFields.isEmpty || blockerCodes.contains(AutomationBlockerCode.blockedMissingEditSource.rawValue) else {
+                continue
+            }
+            let spec = shot.effectiveShotSpec
+            entries.append(
+                .init(
+                    sceneID: spec.sceneID,
+                    sceneName: spec.sceneName,
+                    shotID: spec.shotID,
+                    shotIndex: spec.shotIndex,
+                    shotName: spec.shotName,
+                    missingRequirements: Array(Set(missingReferenceFields)).sorted(),
+                    blockerCodes: Array(Set(blockerCodes)).sorted(),
+                    note: "Add liked/picked references for missing roles before execute mode. Generation should remain blocked until resolved."
+                )
+            )
+        }
+
+        let todo = TodoFile(
+            model: report.model,
+            imageSize: report.imageSize,
+            totalOpenTodos: entries.count,
+            entries: entries
+        )
+        let directory = AutomationSourceResolver.automationDirectory(projectRoot: projectRoot, component: "shot-frame-plans")
+            .appendingPathComponent("DryRuns", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let todoURL = directory.appendingPathComponent("shot-reference-todos-latest.json")
+        try writeCodable(todo, to: todoURL)
     }
 
     private func resolvedImageIntelligenceSmokeImage(
@@ -737,10 +1052,10 @@ private struct AnimateWorkspaceContent: View {
     @State private var selectedShotIndex: Int?
     @StateObject private var waveformCache = AnimateAudioWaveformCache()
 
-    @AppStorage("novotro.animate.sidebarVisible") private var sidebarVisible = true
-    @AppStorage("novotro.animate.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
-    @AppStorage("novotro.animate.showInspector") private var inspectorVisible = true
-    @AppStorage("novotro.animate.inspector.width") private var inspectorWidth: Double = 320
+    @AppStorage("amira.animate.sidebarVisible") private var sidebarVisible = true
+    @AppStorage("amira.animate.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("amira.animate.showInspector") private var inspectorVisible = true
+    @AppStorage("amira.animate.inspector.width") private var inspectorWidth: Double = 320
 
     private var projectTitle: String {
         store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"

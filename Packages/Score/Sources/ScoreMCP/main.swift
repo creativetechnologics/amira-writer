@@ -1,11 +1,11 @@
 import Foundation
 
-// MARK: - Novotro Score MCP Bridge
+// MARK: - Amira Score MCP Bridge
 //
 // A JSON-RPC 2.0 stdio bridge that translates MCP protocol messages
-// into HTTP calls against the Novotro Score embedded API server.
+// into HTTP calls against the Amira Score embedded API server.
 //
-// Usage: novotro-score-mcp [--port 19847]
+// Usage: amira-score-mcp [--port 19847]
 
 // MARK: - Configuration
 
@@ -688,7 +688,7 @@ func handleMCPRequest(_ request: JSONRPCRequest) -> JSONRPCResponse {
                     "tools": .object([:])
                 ]),
                 "serverInfo": .object([
-                    "name": .string("novotro-score"),
+                    "name": .string("amira-score"),
                     "version": .string("1.0.0"),
                 ]),
             ])

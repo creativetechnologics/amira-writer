@@ -311,13 +311,3 @@ final class ProjectOneShotContinuation<T: Sendable>: @unchecked Sendable {
         continuation.resume(throwing: error)
     }
 }
-
-public typealias NovotroProjectServiceInfo = ProjectServiceInfo
-public typealias NovotroProjectServiceMCPCapability = ProjectServiceMCPCapability
-public typealias NovotroProjectServiceOperation = ProjectServiceOperation
-public typealias NovotroProjectServiceRequest = ProjectServiceRequest
-public typealias NovotroProjectServiceResponse = ProjectServiceResponse
-typealias NovotroProjectServiceEnvelope = ProjectServiceEnvelope
-typealias NovotroProjectTransportSecurity = ProjectTransportSecurity
-public typealias NovotroProjectConnectionMode = ProjectServiceConnectionMode
-typealias NovotroProjectOneShotContinuation<T: Sendable> = ProjectOneShotContinuation<T>

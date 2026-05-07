@@ -174,5 +174,4 @@ public final class ProjectOpenProgressCenter: ObservableObject {
     }
 }
 
-public typealias NovotroProjectOpenProgressCenter = ProjectOpenProgressCenter
 public typealias NPProjectAssetSummary = ProjectAssetSummary

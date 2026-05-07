@@ -176,7 +176,7 @@ struct ActionImagesPane: View {
 
     private func generateAllPrompts() {
         isGeneratingPrompts = true
-        let apiKey = store.miniMaxAPIKey
+        let configuration = store.supplementalLLMConfiguration()
         Task {
             defer { isGeneratingPrompts = false }
             for i in poses.indices where poses[i].prompt.isEmpty {
@@ -184,7 +184,7 @@ struct ActionImagesPane: View {
                     poses[i].prompt = try await ActionImageService.generatePrompt(
                         for: poses[i],
                         character: character,
-                        apiKey: apiKey
+                        configuration: configuration
                     )
                 } catch {
                     // Continue with next pose

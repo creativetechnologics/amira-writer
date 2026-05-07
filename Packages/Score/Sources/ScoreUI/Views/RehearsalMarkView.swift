@@ -1,3 +1,4 @@
+import ProjectKit
 import SwiftUI
 
 /// A SwiftUI overlay that shows named section markers (rehearsal marks) above the ruler.

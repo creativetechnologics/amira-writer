@@ -48,7 +48,7 @@ actor ProjectMirrorSession {
         self.workingProjectURL = workingProjectURL.resolvingSymlinksInPath().standardizedFileURL
         self.remoteClient = remoteClient
         self.clientID = ProjectClientIdentity.sharedClientID()
-        self.legacySyncActorID = ProjectClientIdentity.actorID(for: "novotro-sync")
+        self.legacySyncActorID = ProjectClientIdentity.actorID(for: "amira-sync")
         self.syncActorID = ProjectClientIdentity.actorID(for: "sync")
         self.database = ProjectDatabase(
             projectURL: self.workingProjectURL,
@@ -165,7 +165,7 @@ actor ProjectMirrorSession {
         try FileManager.default.createDirectory(at: workingProjectURL, withIntermediateDirectories: true)
 
         let localAssets = try scanLocalAssets()
-        
+
         await reportProgress(
             phaseTitle: "Sizing First Sync",
             detail: "Asking the server how large this project is before downloading it."
@@ -434,10 +434,10 @@ actor ProjectMirrorSession {
                 totalBytes: totalToDownload,
                 currentItemPath: relativePath
             )
-            
+
             guard let data = try await remoteClient.downloadProjectAsset(path: relativePath) else { continue }
             try writeLocalFile(relativePath: relativePath, data: data)
-            
+
             completedFiles += 1
             completedBytes += remoteAssets[relativePath]?.fileSize ?? Int64(data.count)
         }
@@ -500,7 +500,7 @@ actor ProjectMirrorSession {
         while let fileURL = enumerator?.nextObject() as? URL {
             guard fileURL.hasDirectoryPath == false else { continue }
             let relativePath = relativePath(for: fileURL)
-            guard relativePath.hasPrefix(".novotro/") == false else { continue }
+            guard relativePath.hasPrefix(".amira/") == false else { continue }
 
             let values = try fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
             let modifiedAt = values.contentModificationDate ?? .distantPast
@@ -646,5 +646,3 @@ actor ProjectMirrorSession {
         return false
     }
 }
-
-typealias NovotroProjectMirrorSession = ProjectMirrorSession

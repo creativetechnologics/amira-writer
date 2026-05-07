@@ -27,5 +27,3 @@ enum ProjectAsyncTimeout {
         }
     }
 }
-
-typealias NovotroProjectAsyncTimeout = ProjectAsyncTimeout

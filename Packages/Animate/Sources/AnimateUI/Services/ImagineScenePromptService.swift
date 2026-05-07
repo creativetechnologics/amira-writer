@@ -1,6 +1,7 @@
 import Foundation
 
-/// Generates image-generation prompts for scene shots via GPT 5.4 xhigh (codex CLI).
+/// Generates image-generation prompts for scene shots via OpenAI Responses API,
+/// falling back to GPT 5.4 xhigh (codex CLI) when no OpenAI key is configured.
 ///
 /// Archived: MiniMax M2.7 implementation removed 2026-04-05 — replaced with GPT 5.4 xhigh
 /// via `codex exec` for higher quality scene-aware prompts.
@@ -35,12 +36,17 @@ final class ImagineScenePromptService {
             moment: moment,
             subjectStyle: subjectStyle
         )
-        let workflowMode = "for the Scenes imagine begin/middle/end triplet workflow with neutral subject labels"
-        let goodStyleExample = "\"subject_1 screen-left pauses in the clinic doorway while subject_2 screen-right keeps eyes down at the table, medium-wide documentary frame, same clinic interior and warm battery-lamp light, photoreal still.\""
+        let workflowMode = "for the Scenes imagine begin/middle/end triplet workflow"
+        let styleExamplesBlock = successfulPromptExamples()
         let existingTripletBlock = buildExistingTripletPromptBlock(sceneID: scene.id, shotIndex: shotIndex)
 
         let instruction = """
-        You are writing production prompts for FLUX.2 [klein] in Draw Things \(workflowMode).
+        You are writing production image prompts for GPT Image / Nano Banana shot-frame generation \(workflowMode).
+
+        TARGET QUALITY:
+        - Match the caliber and specificity of the approved prompts Gary liked from the May 2 Overture image pass.
+        - These are not captions. They are full image-generation prompts with enough cinematic, geographic, lighting, object, and style detail to make a strong first frame without further project memory.
+        - The final prompt should feel authored by a film production designer and cinematographer, not summarized by a metadata parser.
 
         WORKFLOW MODEL:
         - Each shot belongs to a prompt triplet: Beginning, Middle, End.
@@ -50,34 +56,44 @@ final class ImagineScenePromptService {
 
         OUTPUT FORMAT:
         - Return ONLY the final prompt text.
-        - Use 2 to 4 short natural-language clauses or sentences.
-        - 35 to 95 words total.
+        - Use one polished image-generation prompt, usually one compact paragraph.
+        - 110 to 240 words total unless the shot is a very simple insert.
         - No bullets, no labels, no markdown, no JSON.
 
+        PROMPT RECIPE:
+        1. Start with "Create..." plus the scene/shot/moment and the target look.
+        2. State aspect/framing and camera placement or movement.
+        3. Lock continuity from the surrounding shot sequence.
+        4. Describe the visible geography, room, vehicle, props, or characters in concrete detail.
+        5. Describe light, atmosphere, palette, and physical materials.
+        6. End with a compact "No..." guardrail list that blocks the most likely wrong additions.
+
         STYLE RULES:
-        - Start with subject token + visible action beat + exact screen blocking.
-        - Then add the shot size / framing, setting, lighting, and only the most important visible details.
-        - Keep it short, literal, and visual.
+        - Start with the exact camera/framing and the main visible geography or action.
+        - Then add the setting, screen direction, light, atmosphere, wardrobe/vehicle/prop details only when they are actually in this shot.
+        - Keep it literal, visual, and production-ready.
         - Front-load the most important visual information.
         - Use plain descriptive language, not screenplay language.
         - Use positive framing only.
 
         ABSOLUTE RULES:
         1. The STAGE DIRECTIONS field is the highest priority. Follow it literally.
-        2. Use ONLY the character identifier tokens provided in the context. NEVER write human names.
+        2. Do not output placeholder labels such as subject_1, subject_2, person_1, or character names unless the context provides an actual visible named character for this shot.
         3. This prompt must stay inside the SAME SHOT as the companion moments. Do NOT invent a new angle, reverse angle, lens change, location change, time-of-day change, or subject swap.
         4. If the stage directions imply screen-left, screen-right, foreground, background, facing left, or facing right, keep those directions explicit in the prompt.
         5. Give each visible character one distinct physical action clause.
         6. Use only visible expression words such as frown, neutral face, looking away, eyes down, jaw tense. Do NOT write motivations, longing, symbolism, metaphor, subtext, or backstory.
         7. LYRIC/DIALOGUE may inform only visible expression or posture. Never depict singing, microphones, stage performance, or rendered text.
         8. Keep civilians and soldiers visually distinct using the wardrobe/world notes.
-        9. Style must stay photorealistic documentary cinema with grounded, period-accurate detail.
+        9. Style must stay as a mature, clean, animated cinematic production frame with grounded, period-accurate Afghanistan detail. Avoid cartoonish, cute, chibi, glossy 3D, and generic Hollywood war-zone styling.
         10. Beginning = opening readable state. Middle = peak readable state. End = resolved readable state.
         11. If companion prompts already exist, stay compatible with them and only advance the beat for the selected moment.
         12. Never write the words "emotion", "motivation", "charged", "poetic", "dangerous openness", "barrier", or "bond".
+        13. Never introduce a bridge, clinic, doorway, city street, Humvee interior, character, or vehicle unless the current shot context explicitly says it is visible.
+        14. If the context contains a LEARNED VISUAL CANON block, treat it as Gary-approved override guidance when old shot data disagrees with it.
 
-        GOOD STYLE EXAMPLE:
-        \(goodStyleExample)
+        APPROVED STYLE EXAMPLES:
+        \(styleExamplesBlock)
 
         Write the prompt for this exact scene moment:
 
@@ -85,10 +101,16 @@ final class ImagineScenePromptService {
 
         \(existingTripletBlock)
 
-        The most important thing is to preserve the authored blocking, same-camera continuity, and who-does-what for shot \(shotIndex + 1), \(moment.rawValue.lowercased()).
+        The most important thing is to preserve the authored shot description and the exact scene geography for shot \(shotIndex + 1), \(moment.rawValue.lowercased()).
         """
 
-        return try await runCodexExec(instruction: instruction)
+        return try await generateAndRepairPromptIfNeeded(
+            instruction: instruction,
+            scene: scene,
+            shot: shot,
+            shotIndex: shotIndex,
+            moment: moment
+        )
     }
 
     /// Diagnostic: generates a prompt with a fixed test instruction. Used to verify
@@ -97,6 +119,146 @@ final class ImagineScenePromptService {
         try await Self.runCodexExecStatic(instruction:
             "Write a one-sentence photorealistic image prompt describing a soldier at dawn. No explanation, just the prompt."
         )
+    }
+
+    private func generateAndRepairPromptIfNeeded(
+        instruction: String,
+        scene: AnimationScene,
+        shot: AnimationSceneShot,
+        shotIndex: Int,
+        moment: ImagineShotMoment
+    ) async throws -> String {
+        let first = try await completePromptInstruction(instruction)
+        let cleanedFirst = cleanedLLMPromptOutput(first)
+        let failures = promptQualityFailures(
+            cleanedFirst,
+            scene: scene,
+            shot: shot,
+            shotIndex: shotIndex
+        )
+        guard !failures.isEmpty else { return cleanedFirst }
+
+        let repairInstruction = """
+        \(instruction)
+
+        The previous output failed these quality checks:
+        \(failures.map { "- \($0)" }.joined(separator: "\n"))
+
+        Previous output:
+        \(cleanedFirst)
+
+        Rewrite it now. Return ONLY the final prompt. Make it as specific and cinematic as the approved style examples. Do not mention these checks.
+        """
+        let repaired = try await completePromptInstruction(repairInstruction)
+        let cleanedRepaired = cleanedLLMPromptOutput(repaired)
+        return cleanedRepaired.isEmpty ? cleanedFirst : cleanedRepaired
+    }
+
+    private func completePromptInstruction(_ instruction: String) async throws -> String {
+        let openAIKey = store.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !openAIKey.isEmpty {
+            return try await OpenAITextGenerationService().generateText(
+                instruction: instruction,
+                apiKey: openAIKey
+            )
+        }
+
+        return try await runCodexExec(instruction: instruction)
+    }
+
+    private func promptQualityFailures(
+        _ prompt: String,
+        scene: AnimationScene,
+        shot: AnimationSceneShot,
+        shotIndex: Int
+    ) -> [String] {
+        let lower = prompt.lowercased()
+        var failures: [String] = []
+
+        if promptWordCount(prompt) < 85 {
+            failures.append("The prompt is too short and lacks production-design detail.")
+        }
+        if lower.range(of: #"\b(subject|person|character)_\d+\b"#, options: .regularExpression) != nil {
+            failures.append("The prompt still contains placeholder subject tokens.")
+        }
+        if !contextAllowsClinic(scene: scene, shot: shot), lower.contains("clinic") {
+            failures.append("The prompt invents a clinic or clinic street not present in this shot.")
+        }
+        if !contextAllowsHumveeInterior(shot: shot),
+           (
+            lower.contains("humvee interior") ||
+            lower.contains("inside a dusty early-2000s humvee") ||
+            lower.contains("inside the same dusty")
+           ) {
+            failures.append("The prompt invents a Humvee interior not present in this shot.")
+        }
+        if isOvertureOpeningBeforeBridge(scene: scene, shot: shot, shotIndex: shotIndex),
+           lower.contains("bridge"),
+           !lower.contains("no bridge") {
+            failures.append("The prompt shows the bridge too early in the Overture.")
+        }
+        if !lower.contains("animated") && !lower.contains("2d") && !lower.contains("anime") {
+            failures.append("The prompt does not lock the approved animated production-design style.")
+        }
+
+        return failures
+    }
+
+    private func promptWordCount(_ text: String) -> Int {
+        text.split { $0.isWhitespace || $0.isNewline }.count
+    }
+
+    private func cleanedLLMPromptOutput(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("```") {
+            text = text
+                .replacingOccurrences(of: "```text", with: "")
+                .replacingOccurrences(of: "```markdown", with: "")
+                .replacingOccurrences(of: "```", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let forbiddenPrefixes = ["Prompt:", "Final prompt:", "Image prompt:"]
+        for prefix in forbiddenPrefixes where text.range(of: prefix, options: [.caseInsensitive, .anchored]) != nil {
+            text = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text
+    }
+
+    private func contextAllowsClinic(scene: AnimationScene, shot: AnimationSceneShot) -> Bool {
+        let context = [
+            scene.name,
+            sceneDisplayName(scene),
+            shot.name,
+            shot.notes,
+            shot.sourceLyricExcerpt ?? "",
+            scene.directionTemplate?.notes ?? ""
+        ].joined(separator: "\n").lowercased()
+        return context.contains("clinic")
+    }
+
+    private func contextAllowsHumveeInterior(shot: AnimationSceneShot) -> Bool {
+        let context = [
+            shot.name,
+            shot.notes,
+            shot.sourceLyricExcerpt ?? "",
+            shot.shotFrameGeneration?.animationStyleNotes ?? ""
+        ].joined(separator: "\n").lowercased()
+        return context.contains("humvee") || context.contains("cabin") || context.contains("driver") || context.contains("passenger seat") || context.contains("back row")
+    }
+
+    private func isOvertureOpeningBeforeBridge(
+        scene: AnimationScene,
+        shot: AnimationSceneShot,
+        shotIndex: Int
+    ) -> Bool {
+        guard sceneDisplayName(scene).localizedCaseInsensitiveContains("Overture") ||
+                scene.name.localizedCaseInsensitiveContains("Overture") else {
+            return false
+        }
+        if shot.name.localizedCaseInsensitiveContains("bridge") {
+            return false
+        }
+        return shotIndex < 6
     }
 
     // MARK: - Codex CLI (GPT 5.4 xhigh)
@@ -331,8 +493,12 @@ final class ImagineScenePromptService {
         var parts: [String] = []
 
         // === WORLD CONTEXT ===
-        parts.append("WORLD: \(CharacterPromptWorldContext.settingSummary)")
-        parts.append("LOCATION: \(CharacterPromptWorldContext.cityClinicEnvironment)")
+        parts.append("WORLD: \(CharacterPromptWorldContext.amiraWorldAnchor)")
+        parts.append("SCENE NAME: \(sceneDisplayName(scene))")
+        parts.append("LOCATION / PLACE CONTEXT: \(locationContext(scene: scene, shot: shot))")
+        if let canon = learnedVisualCanon(scene: scene, shot: shot, shotIndex: shotIndex) {
+            parts.append("LEARNED VISUAL CANON (GARY-APPROVED OVERRIDE): \(canon)")
+        }
 
         let sceneCharacters = orderedSceneCharacters(
             for: scene,
@@ -422,9 +588,55 @@ final class ImagineScenePromptService {
         }
 
         // === STYLE ===
-        parts.append("STYLE TARGET: Photorealistic cinematic documentary photography with grounded, period-accurate Afghanistan detail, natural skin texture, clean unmarked surfaces, realistic wardrobe, and continuity-locked shot framing.")
+        parts.append("STYLE TARGET: mature animated feature-film still, cinematic painterly realism, grounded early-2000s Afghanistan detail, clean unmarked surfaces, realistic wardrobe/vehicles/architecture when present, continuity-locked shot framing.")
 
         return parts.joined(separator: "\n")
+    }
+
+    private func successfulPromptExamples() -> String {
+        """
+        Example A — empty opening geography:
+        Create a cinematic opening-establishing shot for an animated opera in a grounded premium 2D animated production-design style. Wide 16:9 landscape. Same geography as the previous shot, but the camera is much farther away, higher in the sky like a quiet drone, and slightly farther back. Viewpoint faces west, away from the sunrise; the unseen sunrise is behind the viewer, giving the valley ahead low early dawn back-wash, pale rim light, and long soft shadows stretching westward. A vast dry mountain valley fills the frame, with a cold river cutting through the valley floor below. No bridge is visible anywhere. A narrow dusty gravel and compacted-earth road climbs along the valley side, but there are no vehicles yet and no people anywhere. The road should be readable as the future route into the valley: dusty ruts, eroded shoulders, scrub brush, exposed stones, and pale dawn dust. No vehicles, no trucks, no Humvees, no bridge, no modern city, no asphalt highway, no futuristic technology, no tanks, no heroic action-poster composition, no foreground people, no readable text, no logos, no 3D render, no photorealism.
+
+        Example B — exterior convoy geography:
+        Create a cinematic opening shot for an animated opera in a grounded premium 2D animated production-design style. Wide 16:9 landscape. Viewpoint faces west, away from the sunrise; the unseen sunrise is behind the viewer, so the valley ahead is lit by low early dawn back-wash and long soft shadows moving westward. A vast dry mountain valley stretches into the distance, with a cold river cutting through the valley floor below. No bridge is visible anywhere. A narrow dusty gravel and compacted-earth road climbs along the valley side, and three practical early-2000s dusty Humvees/trucks are coming up the road toward the ridge, small in the composition but clearly readable. The world feels fictional early-2000s highland war zone: scrub brush, exposed stones, tire ruts, eroded shoulders, dust hanging low, muted dawn palette, documentary restraint. No modern city, no asphalt highway, no steel bridge, no stone bridge, no futuristic military tech, no tanks, no heroic action-poster composition, no people in foreground, no readable text, no logos, no 3D render, no photorealism.
+
+        Example C — Humvee interior:
+        Create Overture first frame for an animated opera in a grounded premium 2D animated production-design style. Wide 16:9 cinematic frame. Cut inside a dusty early-2000s Humvee climbing the mountain valley road before dawn. Medium shot of a tired young military medic/passenger writing in a notebook against the dirty narrow Humvee window. The cabin is cramped, worn, brown and utilitarian: scratched metal, canvas straps, analog radio cable, paper map edges, scuffed seat fabric, dust on every surface. Outside the window only blurred dawn valley slope and road dust are visible, no bridge. Light comes from cold pre-dawn haze and faint vehicle/headlight glow, with muted blue-gold rim light. Serious documentary restraint, hand-painted animated background quality, not photorealistic. No touchscreen, no modern SUV, no luxury interior, no logos, no readable text, no action-poster drama, no 3D render.
+        """
+    }
+
+    private func learnedVisualCanon(
+        scene: AnimationScene,
+        shot: AnimationSceneShot,
+        shotIndex: Int
+    ) -> String? {
+        guard sceneDisplayName(scene).localizedCaseInsensitiveContains("Overture") ||
+                scene.name.localizedCaseInsensitiveContains("Overture") else {
+            return nil
+        }
+
+        let lowerShotName = shot.name.lowercased()
+        var lines: [String] = [
+            "Overture opening visual language is grounded premium 2D animated production design, not photorealism.",
+            "The early valley/road/cabin sequence faces west away from the sunrise when outside; the unseen sunrise is behind the viewer, giving low dawn back-wash, pale rim light, muted dust, and long soft shadows.",
+            "Do not show the bridge until a shot explicitly asks for the bridge crossing motif or a later valley-overlook shot needs it. Early road and Humvee-cabin shots should say no bridge visible."
+        ]
+
+        if lowerShotName.contains("valley") && !lowerShotName.contains("convoy") {
+            lines.append("For the opening valley-establishing beat, prioritize a high-wide empty valley with river and road; no vehicles and no people unless the shot note explicitly says they have entered.")
+        }
+        if lowerShotName.contains("convoy") || lowerShotName.contains("road") {
+            lines.append("For convoy-road beats, show three practical early-2000s dusty Humvees/trucks as small, grounded vehicles on a narrow gravel and compacted-earth mountain road; avoid heroic action-poster framing.")
+        }
+        if contextAllowsHumveeInterior(shot: shot) {
+            lines.append("For Humvee-cabin beats, use a cramped dusty early-2000s military vehicle interior with analog radio gear, canvas straps, scuffed metal, dirty windows, paper maps or notebooks, and blurred dawn valley slope outside.")
+        }
+        if lowerShotName.contains("bridge") || shotIndex >= 6 {
+            lines.append("If this shot explicitly reaches the bridge motif, the bridge may appear as the required story geography; keep it old, stone, distant or grounded, never a modern steel bridge.")
+        }
+
+        return lines.joined(separator: " ")
     }
 
     private func buildExistingTripletPromptBlock(
@@ -536,7 +748,82 @@ final class ImagineScenePromptService {
         ordinal: Int,
         subjectStyle: SubjectStyle
     ) -> String {
-        return "subject_\(ordinal)"
+        switch subjectStyle {
+        case .neutralSubjects:
+            let trimmedName = character.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedName.isEmpty {
+                return trimmedName
+            }
+            return "visible person \(ordinal)"
+        }
+    }
+
+    private func sceneDisplayName(_ scene: AnimationScene) -> String {
+        let stem = URL(fileURLWithPath: scene.owpSongPath).deletingPathExtension().lastPathComponent
+        return stem.isEmpty ? scene.name : stem
+    }
+
+    private func locationContext(
+        scene: AnimationScene,
+        shot: AnimationSceneShot
+    ) -> String {
+        var fragments: [String] = []
+
+        if let backgroundID = scene.backgroundID,
+           let place = store.backgrounds.first(where: { $0.id == backgroundID }) {
+            let placeFields = [
+                place.name,
+                place.visualBrief,
+                place.coreIdentity,
+                place.geographicPlacement,
+                place.physicalLayoutAndTopography,
+                place.visualContinuityAnchors,
+                place.cameraFramingNotes,
+                place.imageGenerationGuardrails
+            ]
+            for field in placeFields {
+                let trimmed = field.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    fragments.append(trimmed)
+                }
+            }
+        }
+
+        let shotHints = [
+            shot.name,
+            shot.notes,
+            shot.sourceLyricExcerpt ?? "",
+            shot.shotFrameGeneration?.animationStyleNotes ?? ""
+        ]
+        for hint in shotHints {
+            let cleaned = hint
+                .replacingOccurrences(of: "Seeded from script line \\d+ · ", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleaned.isEmpty {
+                fragments.append(cleaned)
+            }
+        }
+
+        let deduped = dedupePromptFragments(fragments)
+        if deduped.isEmpty {
+            return CharacterPromptWorldContext.settingSummary
+        }
+        return deduped.prefix(8).joined(separator: " | ")
+    }
+
+    private func dedupePromptFragments(_ fragments: [String]) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for fragment in fragments {
+            let collapsed = fragment
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            let key = collapsed.lowercased()
+            guard !collapsed.isEmpty, seen.insert(key).inserted else { continue }
+            result.append(collapsed)
+        }
+        return result
     }
 
 

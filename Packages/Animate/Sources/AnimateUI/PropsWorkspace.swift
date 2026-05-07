@@ -86,10 +86,10 @@ private struct PropsWorkspaceContent: View {
     @State private var scannedProps: [PropItem] = []
     @State private var isScanningProps = false
 
-    @AppStorage("novotro.props.sidebarVisible") private var sidebarVisible = true
-    @AppStorage("novotro.props.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
-    @AppStorage("novotro.props.inspector.visible") private var inspectorVisible = true
-    @AppStorage("novotro.props.inspector.width") private var inspectorWidth: Double = 320
+    @AppStorage("amira.props.sidebarVisible") private var sidebarVisible = true
+    @AppStorage("amira.props.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
+    @AppStorage("amira.props.inspector.visible") private var inspectorVisible = true
+    @AppStorage("amira.props.inspector.width") private var inspectorWidth: Double = 320
 
     var body: some View {
         Group {

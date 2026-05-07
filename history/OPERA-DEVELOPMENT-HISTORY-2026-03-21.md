@@ -27,8 +27,8 @@
 
 ## Best Files To Read First
 
-- `Sources/NovotroOpera/OperaShellView.swift`
-- `Sources/NovotroOpera/NovotroOperaApp.swift`
+- `Sources/Opera/OperaShellView.swift`
+- `Sources/Opera/OperaApp.swift`
 - `Packages/NovotroProjectKit/Sources/NovotroProjectKit/OperaChrome.swift`
 - `Packages/NovotroProjectKit/Sources/NovotroProjectKit/NovotroProjectMirrorSync.swift`
 - `Sources/NovotroWrite/ScriptStore.swift`

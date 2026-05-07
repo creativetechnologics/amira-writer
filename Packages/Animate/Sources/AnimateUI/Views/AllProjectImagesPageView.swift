@@ -193,7 +193,7 @@ struct AllProjectImagesPageView: View {
     @Bindable var store: AnimateStore
     @Bindable var state: AllProjectImagesState
     let layout: AllProjectImagesPageLayout
-    @AppStorage("novotro.allImages.displayMode") private var displayModeRaw = AllProjectImagesDisplayMode.grid.rawValue
+    @AppStorage("amira.allImages.displayMode") private var displayModeRaw = AllProjectImagesDisplayMode.grid.rawValue
     @FocusState private var filmstripKeyboardFocused: Bool
     @State private var isImportDropTarget = false
     @State private var gridColumnCount: Int = 1
@@ -335,12 +335,12 @@ struct AllProjectImagesPageView: View {
 
             ratingFilterCapsule()
 
+            thumbnailSizeControl
+
             TextField("Filter by filename, source, path, or note", text: $searchTextInput)
                 .textFieldStyle(.roundedBorder)
 
             Spacer()
-
-            thumbnailSizeControl
 
             if hasActiveFilters {
                 Button("Clear") {
@@ -386,11 +386,11 @@ struct AllProjectImagesPageView: View {
                         .labelsHidden()
                 }
 
-                Spacer(minLength: 0)
-
                 compactControlBlock(title: "Rating") {
                     ratingFilterCapsule(compact: true)
                 }
+
+                Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -404,13 +404,13 @@ struct AllProjectImagesPageView: View {
                     flagFilterCapsule(compact: true)
                 }
 
-                Spacer(minLength: 0)
-
                 compactControlBlock(title: "Thumbs") {
                     thumbnailSizeControl
                         .controlSize(.small)
                         .frame(width: 68, alignment: .leading)
                 }
+
+                Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }

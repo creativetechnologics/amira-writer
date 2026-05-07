@@ -57,10 +57,10 @@ private struct CanvasWorkspaceContent: View {
     @Bindable var canvasFormState: CanvasFormState
     @State private var selectedGenerationID: UUID? = nil
 
-    @AppStorage("novotro.canvas.sidebarVisible") private var sidebarVisible = true
-    @AppStorage("novotro.canvas.sidebar.width") private var sidebarWidth: Double = 420
-    @AppStorage("novotro.canvas.showInspector") private var inspectorVisible = true
-    @AppStorage("novotro.canvas.inspector.width") private var inspectorWidth: Double = 340
+    @AppStorage("amira.canvas.sidebarVisible") private var sidebarVisible = true
+    @AppStorage("amira.canvas.sidebar.width") private var sidebarWidth: Double = 420
+    @AppStorage("amira.canvas.showInspector") private var inspectorVisible = true
+    @AppStorage("amira.canvas.inspector.width") private var inspectorWidth: Double = 340
 
     private var projectTitle: String {
         store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"

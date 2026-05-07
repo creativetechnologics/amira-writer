@@ -41,7 +41,7 @@ enum AppleNotesService {
     static func exportScenes(_ scenes: [SceneNote]) async throws -> Int {
         guard !scenes.isEmpty else { return 0 }
 
-        // Ensure the folder exists
+        // Ensure the folder exists (1 AppleScript call)
         let ensureFolder = """
         tell application "Notes"
             if not (exists folder "\(folderName)") then
@@ -51,25 +51,27 @@ enum AppleNotesService {
         """
         try runAppleScript(ensureFolder)
 
-        // Export each scene
+        // Batch all scenes into a SINGLE AppleScript call instead of N calls,
+        // eliminating N-1 inter-process roundtrips.
+        var scriptLines: [String] = [
+            "tell application \"Notes\"",
+            "    tell folder \"\(folderName)\""
+        ]
         for scene in scenes {
             let escapedTitle = escapeForAppleScript(scene.title)
             let htmlBody = plainTextToNotesHTML(scene.body)
             let escapedBody = escapeForAppleScript(htmlBody)
-
-            let script = """
-            tell application "Notes"
-                tell folder "\(folderName)"
-                    if exists note "\(escapedTitle)" then
-                        set body of note "\(escapedTitle)" to "\(escapedBody)"
-                    else
-                        make new note with properties {name:"\(escapedTitle)", body:"\(escapedBody)"}
-                    end if
-                end tell
-            end tell
-            """
-            try runAppleScript(script)
+            scriptLines.append("""
+                if exists note "\(escapedTitle)" then
+                    set body of note "\(escapedTitle)" to "\(escapedBody)"
+                else
+                    make new note with properties {name:"\(escapedTitle)", body:"\(escapedBody)"}
+                end if
+            """.replacingOccurrences(of: "\n", with: "\n    "))
         }
+        scriptLines.append("    end tell")
+        scriptLines.append("end tell")
+        try runAppleScript(scriptLines.joined(separator: "\n"))
 
         return scenes.count
     }
@@ -79,45 +81,62 @@ enum AppleNotesService {
     /// Reads all notes from the "Amira" folder in Apple Notes.
     /// Returns an array of (title, plainTextBody) pairs.
     static func importNotes() async throws -> [SceneNote] {
-        // Get note count first
-        let countScript = """
+        // Batch all titles and bodies into just 2 AppleScript calls instead of 2N,
+        // reducing inter-process roundtrips from ~80 to ~2 for 40 scenes.
+        // Use the Unicode Record Separator (U+001E) as delimiter — guaranteed
+        // not to appear in Apple Notes plain text content. AppleScript uses
+        // `character id 30` to embed this control character.
+
+        let separator = "\u{001E}"
+        let separatorLit = "(character id 30)"
+
+        let titleScript = """
         tell application "Notes"
             if not (exists folder "\(folderName)") then
-                return "0"
+                return ""
             end if
-            return (count of notes of folder "\(folderName)") as text
+            set allTitles to ""
+            set noteCount to count of notes of folder "\(folderName)"
+            repeat with i from 1 to noteCount
+                set noteTitle to name of note i of folder "\(folderName)"
+                if i > 1 then set allTitles to allTitles & \(separatorLit)
+                set allTitles to allTitles & noteTitle
+            end repeat
+            return allTitles
         end tell
         """
-        guard let countStr = try runAppleScript(countScript),
-              let count = Int(countStr), count > 0 else {
+
+        let bodyScript = """
+        tell application "Notes"
+            if not (exists folder "\(folderName)") then
+                return ""
+            end if
+            set allBodies to ""
+            set noteCount to count of notes of folder "\(folderName)"
+            repeat with i from 1 to noteCount
+                set noteBody to plaintext of note i of folder "\(folderName)"
+                if i > 1 then set allBodies to allBodies & \(separatorLit)
+                set allBodies to allBodies & noteBody
+            end repeat
+            return allBodies
+        end tell
+        """
+
+        guard let titlesStr = try runAppleScript(titleScript), !titlesStr.isEmpty else {
             return []
         }
+        let bodiesStr = try runAppleScript(bodyScript) ?? ""
 
-        // Read each note individually to avoid AppleScript list serialization issues
+        let titleParts = titlesStr.components(separatedBy: separator)
+        let bodyParts = bodiesStr.components(separatedBy: separator)
+
         var results: [SceneNote] = []
-        for i in 1...count {
-            let titleScript = """
-            tell application "Notes"
-                tell folder "\(folderName)"
-                    return name of note \(i)
-                end tell
-            end tell
-            """
-            let bodyScript = """
-            tell application "Notes"
-                tell folder "\(folderName)"
-                    return plaintext of note \(i)
-                end tell
-            end tell
-            """
-
-            let title = (try? runAppleScript(titleScript)) ?? ""
-            let body = (try? runAppleScript(bodyScript)) ?? ""
-
+        for i in titleParts.indices {
+            let title = titleParts[i]
             guard !title.isEmpty else { continue }
+            let body = i < bodyParts.count ? bodyParts[i] : ""
             results.append(SceneNote(title: title, body: body))
         }
-
         return results
     }
 

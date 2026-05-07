@@ -12,13 +12,13 @@ The project has undergone a "Chrome Consolidation" pass. We removed redundant, p
 - **OperaChromeStatusBar**: Replaced local `StatusBar` implementations in Write and Score workspaces. It now provides a unified, theme-aware status bar for the bottom of workspace panes.
 - **OperaChromeSidebarRow**: Added `isExternallyUpdated` support. This encapsulates the "collaboration glow" (yellow border overlay) inside the shared component, removing several `.overlay` modifiers from the individual sidebar views.
 
-### 2. Shell Optimization (`NovotroOpera`)
-- **Removed Polling Timer**: In `Sources/NovotroOpera/OperaShellView.swift`, a 0.5s `Timer` that repeatedly called `applyConfiguration()` has been removed. 
+### 2. Shell Optimization (`Opera`)
+- **Removed Polling Timer**: In `Sources/Opera/OperaShellView.swift`, a 0.5s `Timer` that repeatedly called `applyConfiguration()` has been removed.
 - **Reasoning**: Window visual states (transparency, title visibility) are now correctly handled by native `NSWindow` notifications and initial setup. This reduces continuous idle CPU usage.
 
 ## Files to Review
 - `Packages/NovotroProjectKit/Sources/NovotroProjectKit/OperaChrome.swift`: See new `OperaChromePaneHeader` and `OperaChromeStatusBar`.
-- `Sources/NovotroOpera/OperaShellView.swift`: Observe the removal of the `timer` and `configureTimer()`.
+- `Sources/Opera/OperaShellView.swift`: Observe the removal of the `timer` and `configureTimer()`.
 - `Sources/NovotroWrite/Views/ContentView.swift` & `ScriptSidebarView.swift`: Examples of the simplified view code.
 
 ## Verification Result

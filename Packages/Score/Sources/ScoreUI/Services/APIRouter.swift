@@ -352,6 +352,10 @@ final class APIRouter {
         struct SunoStatusResponse: Encodable {
             let isGenerating: Bool
             let status: String
+            let autoUploadEnabled: Bool
+            let isUploading: Bool
+            let uploadStatus: String
+            let uploadQueueCount: Int
             let selectedSongPath: String?
             let generations: [SunoGenerationSummary]
         }
@@ -378,6 +382,10 @@ final class APIRouter {
         return .ok(SunoStatusResponse(
             isGenerating: store.sunoIsGenerating,
             status: store.sunoGenerateStatus,
+            autoUploadEnabled: store.sunoAutoUploadExportedWavs,
+            isUploading: store.sunoIsUploading,
+            uploadStatus: store.sunoUploadStatus,
+            uploadQueueCount: store.sunoUploadQueueCount,
             selectedSongPath: store.selectedMidiAsset?.relativePath,
             generations: Array(generations)
         ))
@@ -1104,17 +1112,8 @@ final class APIRouter {
     }
 
     private func exportSunoChunks(_ req: HTTPRequest) async -> HTTPResponse {
-        guard let store = requireStore() else { return .error(500, "Store unavailable") }
-        // Validate outputDir if provided (reject path traversal)
-        if let body = req.decodeBody(APIExportSunoChunksRequest.self), let dir = body.outputDir {
-            guard !dir.contains("..") else {
-                return .error(400, "outputDir must not contain '..' components")
-            }
-            // Custom outputDir is not yet implemented — reject rather than silently ignore
-            return .error(501, "Custom outputDir is not yet supported. Exports go to ~/Desktop.")
-        }
-        await store.exportSunoChunks()
-        return .ok(APISuccessResponse("Suno chunk export complete"))
+        _ = req
+        return .error(410, "Suno chunk export is deprecated. Use Export with auto-upload enabled to send WAVs to Suno.")
     }
 
     private func importMusicXML(_ req: HTTPRequest) -> HTTPResponse {
@@ -1162,15 +1161,8 @@ final class APIRouter {
     }
 
     private func runSunoCover(_ req: HTTPRequest) -> HTTPResponse {
-        guard let store = requireStore() else { return .error(500, "Store unavailable") }
-        guard !store.sunoIsGenerating else {
-            return .error(400, "Suno cover queue already running")
-        }
-
-        Task { @MainActor in
-            await store.sunoRunCanonicalCover()
-        }
-        return .ok(APISuccessResponse("Suno cover queue started"))
+        _ = req
+        return .error(410, "Suno cover generation is deprecated. Use Export with auto-upload enabled to send WAVs to Suno.")
     }
 
     // MARK: - Version Endpoints

@@ -13,7 +13,7 @@ Make `Novotro Opera` self-contained in one workspace so another LLM can work fro
 
 ## New Folder Layout
 
-- `Sources/NovotroOpera`
+- `Sources/Opera`
 - `Sources/NovotroWrite`
 - `Packages/NovotroProjectKit`
 - `Packages/NovotroScore`
@@ -26,7 +26,7 @@ Make `Novotro Opera` self-contained in one workspace so another LLM can work fro
   - `./Packages/NovotroProjectKit`
   - `./Packages/NovotroScore`
   - `./Packages/NovotroAnimate`
-- Root executable target still builds `NovotroOpera`
+- Root executable target still builds `Opera`
 - Vendored package manifests keep their own local structure and remain editable in place
 
 ## Intentional Non-Moves

@@ -7,13 +7,17 @@ struct APISettingsSheet: View {
     let onDismiss: () -> Void
 
     @State private var geminiKeyDraft: String = ""
+    @State private var openAIKeyDraft: String = ""
     @State private var imageAnalysisGeminiKeyDraft: String = ""
     @State private var miniMaxKeyDraft: String = ""
+    @State private var deepSeekKeyDraft: String = ""
     @State private var viduKeyDraft: String = ""
     @State private var runPodKeyDraft: String = ""
     @State private var revealGeminiKey: Bool = false
+    @State private var revealOpenAIKey: Bool = false
     @State private var revealImageAnalysisGeminiKey: Bool = false
     @State private var revealMiniMaxKey: Bool = false
+    @State private var revealDeepSeekKey: Bool = false
     @State private var revealViduKey: Bool = false
     @State private var revealRunPodKey: Bool = false
     @State private var selectedTab: SettingsTab = .gemini
@@ -35,8 +39,9 @@ struct APISettingsSheet: View {
 
     enum SettingsTab: String, CaseIterable {
         case gemini = "Gemini"
+        case openAI = "OpenAI"
         case imageAnalysis = "Image Analysis"
-        case miniMax = "MiniMax"
+        case supplementalLLM = "Supplemental LLM"
         case vidu = "Vidu"
         case runPod = "RunPod"
     }
@@ -56,10 +61,12 @@ struct APISettingsSheet: View {
             switch selectedTab {
             case .gemini:
                 geminiForm
+            case .openAI:
+                openAIForm
             case .imageAnalysis:
                 imageAnalysisForm
-            case .miniMax:
-                miniMaxForm
+            case .supplementalLLM:
+                supplementalLLMForm
             case .vidu:
                 viduForm
             case .runPod:
@@ -73,8 +80,10 @@ struct APISettingsSheet: View {
         .frame(width: 540)
         .onAppear {
             geminiKeyDraft = store.geminiAPIKey
+            openAIKeyDraft = store.openAIAPIKey
             imageAnalysisGeminiKeyDraft = store.imageAnalysisGeminiAPIKey
             miniMaxKeyDraft = store.miniMaxAPIKey
+            deepSeekKeyDraft = store.deepSeekAPIKey
             viduKeyDraft = store.viduAPIKey
             runPodKeyDraft = store.runPodAPIKey
             imageGenBackend = ImageGenBackendStore.currentBackend()
@@ -149,6 +158,27 @@ struct APISettingsSheet: View {
                     .foregroundStyle(OperaChromeTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    // MARK: - OpenAI
+
+    private var openAIForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            apiKeyField(
+                label: "OpenAI API Key",
+                draft: $openAIKeyDraft,
+                reveal: $revealOpenAIKey,
+                placeholder: "Paste OpenAI API key...",
+                isSaved: !store.openAIAPIKey.isEmpty,
+                savedLabel: "OpenAI key saved.",
+                unsavedLabel: "No OpenAI key saved yet."
+            )
+
+            Text("Used by the Scenes prompt/image pane for GPT Image generation. The key is stored in the project credential file with the other AI service keys.")
+                .font(.caption)
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -570,10 +600,42 @@ struct APISettingsSheet: View {
         String(format: "$%.4f", value)
     }
 
-    // MARK: - MiniMax
+    // MARK: - Supplemental LLM
 
-    private var miniMaxForm: some View {
+    private var supplementalLLMForm: some View {
         VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Provider")
+                    .font(.body.bold())
+                    .foregroundStyle(OperaChromeTheme.textPrimary)
+
+                Picker("Supplemental LLM Provider", selection: $store.supplementalLLMProvider) {
+                    ForEach(SupplementalLLMProvider.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .onChange(of: store.supplementalLLMProvider) { _, provider in
+                    if !provider.knownModels.contains(store.supplementalLLMModel) {
+                        store.supplementalLLMModel = provider.defaultModel
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Model")
+                    .font(.body.bold())
+                    .foregroundStyle(OperaChromeTheme.textPrimary)
+
+                Picker("Supplemental LLM Model", selection: $store.supplementalLLMModel) {
+                    ForEach(store.supplementalLLMProvider.knownModels, id: \.self) { model in
+                        Text(model).tag(model)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
             apiKeyField(
                 label: "MiniMax API Key",
                 draft: $miniMaxKeyDraft,
@@ -584,7 +646,17 @@ struct APISettingsSheet: View {
                 unsavedLabel: "No MiniMax key saved yet."
             )
 
-            Text("Used for video generation from character reference images. Get a key at platform.minimaxi.com.")
+            apiKeyField(
+                label: "DeepSeek API Key",
+                draft: $deepSeekKeyDraft,
+                reveal: $revealDeepSeekKey,
+                placeholder: "Paste DeepSeek API key...",
+                isSaved: !store.deepSeekAPIKey.isEmpty,
+                savedLabel: "DeepSeek key saved.",
+                unsavedLabel: "No DeepSeek key saved yet."
+            )
+
+            Text("Used for Canvas prompt generation, continuity-rule extraction, and other supplemental text features. DeepSeek uses https://api.deepseek.com/chat/completions with V4 Flash by default.")
                 .font(.caption)
                 .foregroundStyle(OperaChromeTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -748,13 +820,18 @@ struct APISettingsSheet: View {
                 case .gemini:
                     geminiKeyDraft = ""
                     store.clearGeminiAPIKey()
+                case .openAI:
+                    openAIKeyDraft = ""
+                    store.clearOpenAIAPIKey()
                 case .imageAnalysis:
                     imageAnalysisGeminiKeyDraft = ""
                     store.clearImageAnalysisGeminiAPIKey()
                     store.refreshImageAnalysisConfiguration()
-                case .miniMax:
+                case .supplementalLLM:
                     miniMaxKeyDraft = ""
+                    deepSeekKeyDraft = ""
                     store.clearMiniMaxAPIKey()
+                    store.clearDeepSeekAPIKey()
                 case .vidu:
                     viduKeyDraft = ""
                     store.clearViduAPIKey()
@@ -775,9 +852,11 @@ struct APISettingsSheet: View {
 
             Button("Save") {
                 store.setGeminiAPIKey(geminiKeyDraft)
+                store.setOpenAIAPIKey(openAIKeyDraft)
                 store.setImageAnalysisGeminiAPIKey(imageAnalysisGeminiKeyDraft)
                 store.refreshImageAnalysisConfiguration()
                 store.setMiniMaxAPIKey(miniMaxKeyDraft)
+                store.setDeepSeekAPIKey(deepSeekKeyDraft)
                 store.setViduAPIKey(viduKeyDraft)
                 store.runPodAPIKey = runPodKeyDraft
                 // User saved fresh credentials — clear any auth-halt so a
@@ -793,10 +872,13 @@ struct APISettingsSheet: View {
         switch selectedTab {
         case .gemini:
             return store.geminiAPIKey.isEmpty && geminiKeyDraft.isEmpty
+        case .openAI:
+            return store.openAIAPIKey.isEmpty && openAIKeyDraft.isEmpty
         case .imageAnalysis:
             return store.imageAnalysisGeminiAPIKey.isEmpty && imageAnalysisGeminiKeyDraft.isEmpty
-        case .miniMax:
+        case .supplementalLLM:
             return store.miniMaxAPIKey.isEmpty && miniMaxKeyDraft.isEmpty
+                && store.deepSeekAPIKey.isEmpty && deepSeekKeyDraft.isEmpty
         case .vidu:
             return store.viduAPIKey.isEmpty && viduKeyDraft.isEmpty
         case .runPod:

@@ -13,10 +13,10 @@ import UniformTypeIdentifiers
 // MARK: - Debug Logging
 
 /// Reuse a single formatter to avoid allocating ISO8601DateFormatter on every log call.
-private nonisolated(unsafe) let novotroDebugDateFormatter: ISO8601DateFormatter = ISO8601DateFormatter()
+private nonisolated(unsafe) let amiraDebugDateFormatter: ISO8601DateFormatter = ISO8601DateFormatter()
 
-private func novotroDebugLog(_ message: String) {
-    let ts = novotroDebugDateFormatter.string(from: Date())
+private func amiraDebugLog(_ message: String) {
+    let ts = amiraDebugDateFormatter.string(from: Date())
     let line = "[\(ts)] [Score] \(message)\n"
     let url = URL(fileURLWithPath: "/tmp/score-debug.log")
     if let fh = try? FileHandle(forWritingTo: url) {
@@ -39,6 +39,7 @@ enum SongInsertPosition { case above, below }
 
 private enum HostedAudioUnitExportMode: String {
     case auto
+    case qualified
     case realtime
     case offline
 
@@ -59,6 +60,9 @@ private enum HostedAudioUnitExportMode: String {
            let parsed = HostedAudioUnitExportMode(rawValue: raw) {
             return parsed
         }
+        // Fidelity-first default: hosted Audio Units should export through the
+        // same realtime playback graph the user hears. Offline AU export remains
+        // available only when explicitly requested through AMIRA_AU_EXPORT_MODE.
         return .auto
     }
 }
@@ -563,7 +567,7 @@ enum OWPProjectIO {
         let metadata: ProjectMetadata = {
             let metaURL = url.appendingPathComponent(projectMetadataFile)
             if let data = try? Data(contentsOf: metaURL, options: .mappedIfSafe),
-               let decoded = try? configuredDecoder().decode(ProjectMetadata.self, from: data) {
+               let decoded = try? JSONCoders.makeDecoder().decode(ProjectMetadata.self, from: data) {
                 return decoded
             }
             return ProjectMetadata.fresh(named: url.deletingPathExtension().lastPathComponent)
@@ -614,7 +618,7 @@ enum OWPProjectIO {
     }
 
     static func loadProjectInstrumentMappings(from packageURL: URL) -> [String: InstrumentMapping] {
-        let decoder = configuredDecoder()
+        let decoder = JSONCoders.makeDecoder()
         for relativePath in [projectInstrumentsFile, legacyProjectInstrumentsFile] {
             let fileURL = packageURL.appendingPathComponent(relativePath)
             guard let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe) else { continue }
@@ -644,7 +648,7 @@ enum OWPProjectIO {
         let metaDir = packageURL.appendingPathComponent(metadataDir)
         try fm.createDirectory(at: metaDir, withIntermediateDirectories: true)
         let metaURL = packageURL.appendingPathComponent(projectMetadataFile)
-        try configuredEncoder().encode(metadata).write(to: metaURL, options: .atomic)
+        try JSONCoders.makeEncoder().encode(metadata).write(to: metaURL, options: .atomic)
         try saveProjectInstrumentMappings(to: packageURL, mappings: projectInstrumentMappings)
 
         for song in songs {
@@ -674,7 +678,7 @@ enum OWPProjectIO {
             }
             return lhs.channelKey.localizedStandardCompare(rhs.channelKey) == .orderedAscending
         }
-        let data = try configuredEncoder().encode(sorted)
+        let data = try JSONCoders.makeEncoder().encode(sorted)
         let fileURL = packageURL.appendingPathComponent(projectInstrumentsFile)
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: fileURL, options: .atomic)
@@ -871,19 +875,6 @@ enum OWPProjectIO {
         return normalized
     }
 
-    static func configuredEncoder() -> JSONEncoder {
-        let e = JSONEncoder()
-        e.dateEncodingStrategy = .iso8601
-        e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return e
-    }
-
-    static func configuredDecoder() -> JSONDecoder {
-        let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
-        return d
-    }
-
     // MARK: - CLAUDE.md Writer
 
     static func writeCLAUDEmd(to packageURL: URL) {
@@ -956,7 +947,7 @@ enum OWPProjectIO {
     - `/api/playback/stop` — Stop playback
     - `/api/playback/seek` — Seek: `{"tick":960}`
     - `/api/export/wav` — Export WAV: `{"outputPath":"/path/to/out.wav"}`
-    - `/api/export/suno-chunks` — Export Suno chunks
+    - `/api/export/suno-chunks` — Deprecated; use Export with auto-upload enabled
     - `/api/project/save` — Save project
     - `/api/project/open` — Open project: `{"path":"/path/to/project.owp"}`
 
@@ -1225,7 +1216,7 @@ final class ScoreStore {
 
     /// Posted when a song is successfully exported to Mix/exports/.
     /// UserInfo keys: "wavURL" (URL), "songRelativePath" (String).
-    nonisolated static let didExportSongToMix = Notification.Name("novotro.score.didExportSongToMix")
+    nonisolated static let didExportSongToMix = Notification.Name("amira.score.didExportSongToMix")
 
     // MARK: - Suno Export
     var sunoSplitTicks: [Int] = []
@@ -1243,6 +1234,14 @@ final class ScoreStore {
     var sunoCLILastSelftest: SunoSelftestResult?
     var sunoCLIErrorMessage: String?
     var sunoCLIStatusMessage: String?
+    var sunoAutoUploadExportedWavs: Bool = UserDefaults.standard.bool(forKey: "sunoAutoUploadExportedWavs") {
+        didSet { UserDefaults.standard.set(sunoAutoUploadExportedWavs, forKey: "sunoAutoUploadExportedWavs") }
+    }
+    var sunoIsUploading: Bool = false
+    var sunoUploadStatus: String = ""
+    var sunoUploadQueueCount: Int { sunoUploadQueue.count }
+    @ObservationIgnored private var sunoUploadWorkerTask: Task<Void, Never>?
+    private var sunoUploadQueue: [SunoUploadQueueItem] = []
 
     var sunoRequestMode: SunoRequestMode = {
         let raw = UserDefaults.standard.string(forKey: "sunoRequestMode") ?? SunoRequestMode.cover.rawValue
@@ -1608,6 +1607,13 @@ final class ScoreStore {
         enum Level: String { case info, warning, error, success }
     }
 
+    private struct SunoUploadQueueItem: Identifiable {
+        let id = UUID()
+        let fileURL: URL
+        let displayName: String
+        let queuedAt = Date()
+    }
+
     func appendSunoLog(_ message: String, level: SunoLogEntry.Level = .info) {
         sunoStatusLog.insert(SunoLogEntry(message: message, level: level), at: 0)
         if sunoStatusLog.count > 100 { sunoStatusLog.removeLast(sunoStatusLog.count - 100) }
@@ -1619,7 +1625,7 @@ final class ScoreStore {
     var apiServerEnabled: Bool = true
     var apiServerPort: UInt16 = 19847
     func startAPIServer() {
-        novotroDebugLog("startAPIServer: enabled=\(apiServerEnabled) existing=\(apiServer != nil) port=\(apiServerPort)")
+        amiraDebugLog("startAPIServer: enabled=\(apiServerEnabled) existing=\(apiServer != nil) port=\(apiServerPort)")
         guard apiServerEnabled, apiServer == nil else { return }
         do {
             let server = try APIServer(store: self, port: apiServerPort)
@@ -1628,9 +1634,9 @@ final class ScoreStore {
             }
             server.start()
             apiServer = server
-            novotroDebugLog("startAPIServer: OK on port \(apiServerPort)")
+            amiraDebugLog("startAPIServer: OK on port \(apiServerPort)")
         } catch {
-            novotroDebugLog("startAPIServer: FAILED — \(error.localizedDescription)")
+            amiraDebugLog("startAPIServer: FAILED — \(error.localizedDescription)")
             statusMessage = "API server failed to start: \(error.localizedDescription)"
         }
     }
@@ -2077,9 +2083,8 @@ final class ScoreStore {
                 guard let self,
                       let mapping = self.instrumentMappings[mappingKey],
                       mapping.audioComponentDescription != nil else { return }
-                NSLog("[ScoreStore] Auto-reloading crashed AU for '%@'", mappingKey)
-                // Clear the patch signature so loadAudioUnitIfNeeded will reload
-                self.playbackEngine.reloadAudioUnit(for: mappingKey, mapping: mapping)
+                NSLog("[ScoreStore] AU '%@' disconnected; leaving it quarantined until manual reload", mappingKey)
+                self.statusMessage = "\(mapping.displayName) Audio Unit crashed. Using fallback until you reload it."
             }
         }
         playbackEngine.onMeterUpdate = { [weak self] trackLevels, masterLevel in
@@ -2165,7 +2170,7 @@ final class ScoreStore {
     // MARK: - Load Project
 
     func loadProject(url: URL, preferService: Bool? = nil) async {
-        novotroDebugLog("loadProject START url=\(url.path)")
+        amiraDebugLog("loadProject START url=\(url.path)")
         statusMessage = "Loading \(url.lastPathComponent)..."
         saveIndicator = .idle
         stopExternalFileWatch()
@@ -2215,11 +2220,11 @@ final class ScoreStore {
 
             isDirty = false
             statusMessage = "\(meta.name) — \(songAssets.count) songs loaded"
-            novotroDebugLog("loadProject LOADED \(songAssets.count) songs, hydratedPaths=\(hydratedSongPaths.count)")
+            amiraDebugLog("loadProject LOADED \(songAssets.count) songs, hydratedPaths=\(hydratedSongPaths.count)")
 
             // Auto-select first song
             if let first = songAssets.first {
-                novotroDebugLog("loadProject auto-selecting first song: \(first.relativePath)")
+                amiraDebugLog("loadProject auto-selecting first song: \(first.relativePath)")
                 setSelectedMidi(id: first.id, deferLoading: true)
             }
 
@@ -2494,13 +2499,13 @@ final class ScoreStore {
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
 
         guard !changedPaths.isEmpty else { return }
-        novotroDebugLog("checkForExternalProjectChanges: \(changedPaths.count) changed: \(changedPaths.joined(separator: ", "))")
+        amiraDebugLog("checkForExternalProjectChanges: \(changedPaths.count) changed: \(changedPaths.joined(separator: ", "))")
         lastKnownExternalSnapshots = currentSnapshots
 
         let currentSongPaths = Set(currentSnapshots.keys.filter { $0.hasSuffix(".ows") })
         let knownSongPaths = Set(songStubs.map(\.relativePath))
         if currentSongPaths != knownSongPaths {
-            novotroDebugLog("checkForExternalProjectChanges: song paths changed, full rescan triggered")
+            amiraDebugLog("checkForExternalProjectChanges: song paths changed, full rescan triggered")
             handleExternalProjectRescan(projectURL: projectURL, changedPaths: changedPaths)
             return
         }
@@ -2516,7 +2521,7 @@ final class ScoreStore {
 
     private func handleExternalProjectRescan(projectURL: URL, changedPaths: [String]) {
         let sourceProjectURL = self.projectURL ?? projectURL
-        novotroDebugLog("handleExternalProjectRescan: \(changedPaths.count) changed paths")
+        amiraDebugLog("handleExternalProjectRescan: \(changedPaths.count) changed paths")
 
         guard !isDirty else {
             hasPendingAgentChanges = true
@@ -2644,7 +2649,7 @@ final class ScoreStore {
             let fileURL = projectURL.appendingPathComponent(path)
             guard FileManager.default.fileExists(atPath: fileURL.path),
                   let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe),
-                  let metadata = try? OWPProjectIO.configuredDecoder().decode(ProjectMetadata.self, from: data) else {
+                  let metadata = try? JSONCoders.makeDecoder().decode(ProjectMetadata.self, from: data) else {
                 continue
             }
             return metadata
@@ -2700,7 +2705,7 @@ final class ScoreStore {
         let playback = songAsset.document.activeVersion()?.playback
         let playbackNoteCount = playback?.notes.count ?? 0
         let shouldMarkLoaded = playbackNoteCount > 0 || dirtySongPaths.contains(songAsset.relativePath)
-        novotroDebugLog("loadSelectedMidiIfPossible: \(songAsset.relativePath) playback=\(playback != nil ? "YES (\(playbackNoteCount) notes)" : "nil")")
+        amiraDebugLog("loadSelectedMidiIfPossible: \(songAsset.relativePath) playback=\(playback != nil ? "YES (\(playbackNoteCount) notes)" : "nil")")
         if let playback, !playback.notes.isEmpty {
             // Load from playback snapshot (most common path for OWS files)
             pianoRollNotes = playback.notes.sorted {
@@ -2901,12 +2906,12 @@ final class ScoreStore {
         forceRefreshFromSource: Bool = false
     ) async -> Bool {
         guard let songIndex = songAssets.firstIndex(where: { $0.id == id }) else {
-            novotroDebugLog("hydrateSongDetailsIfNeeded: song id not found")
+            amiraDebugLog("hydrateSongDetailsIfNeeded: song id not found")
             return false
         }
 
         let relativePath = songAssets[songIndex].relativePath
-        novotroDebugLog("hydrateSongDetailsIfNeeded START: \(relativePath) includePlayback=\(includePlayback)")
+        amiraDebugLog("hydrateSongDetailsIfNeeded START: \(relativePath) includePlayback=\(includePlayback)")
         let hasPlayback = songAssets[songIndex].document.activeVersion()?.playback != nil
         if hydratedSongPaths.contains(relativePath) && !forceRefreshFromSource && (!includePlayback || hasPlayback) {
             return true
@@ -2927,12 +2932,12 @@ final class ScoreStore {
         }
 
         guard let rawHydratedAsset = loadedHydratedAsset else {
-            novotroDebugLog("hydrateSongDetailsIfNeeded FAILED: no asset loaded for \(relativePath)")
+            amiraDebugLog("hydrateSongDetailsIfNeeded FAILED: no asset loaded for \(relativePath)")
             return false
         }
         let hydratedAsset = runtimeStableAsset(rawHydratedAsset, relativePath: relativePath)
         let hydPlayback = hydratedAsset.document.activeVersion()?.playback
-        novotroDebugLog("hydrateSongDetailsIfNeeded OK: \(relativePath) playback=\(hydPlayback != nil ? "YES (\(hydPlayback!.notes.count) notes)" : "nil")")
+        amiraDebugLog("hydrateSongDetailsIfNeeded OK: \(relativePath) playback=\(hydPlayback != nil ? "YES (\(hydPlayback!.notes.count) notes)" : "nil")")
 
         if let latestIndex = songAssets.firstIndex(where: { $0.relativePath == relativePath }) {
             songAssets[latestIndex] = hydratedAsset
@@ -3241,7 +3246,7 @@ final class ScoreStore {
         if cancelPendingAdvance {
             cancelPendingAdvanceStart()
         }
-        novotroDebugLog("playPianoRoll: song=\(selectedMidiAsset?.relativePath ?? "nil") notes=\(pianoRollNotes.count) clips=\(pianoRollAudioClips.count)")
+        amiraDebugLog("playPianoRoll: song=\(selectedMidiAsset?.relativePath ?? "nil") notes=\(pianoRollNotes.count) clips=\(pianoRollAudioClips.count)")
         NSLog("[ScoreStore] playPianoRoll — song=%@ notes=%d clips=%d startTick=%d",
               selectedMidiAsset?.relativePath ?? "nil", pianoRollNotes.count, pianoRollAudioClips.count, startTick)
         let unmuted = pianoRollNotes.filter { !$0.muted }
@@ -3280,13 +3285,13 @@ final class ScoreStore {
         let resolvedMappings = resolvedInstrumentMappings()
 
         // Debug: log mapping state to help diagnose silent playback
-        novotroDebugLog("playPianoRoll mappings: \(pianoRollChannelKeyByTrackChannel.count) entries, sampleRoot=\(sampleRootDirectoryPath)")
+        amiraDebugLog("playPianoRoll mappings: \(pianoRollChannelKeyByTrackChannel.count) entries, sampleRoot=\(sampleRootDirectoryPath)")
         for (pairKey, mappingKey) in pianoRollChannelKeyByTrackChannel.sorted(by: { $0.key < $1.key }) {
             let mapping = resolvedMappings[mappingKey]
             let sf2 = mapping?.sf2Path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let exists = !sf2.isEmpty && FileManager.default.fileExists(atPath: sf2)
             let status = sf2.isEmpty ? "NO SF2" : "\(URL(fileURLWithPath: sf2).lastPathComponent) exists=\(exists)"
-            novotroDebugLog("  mapping \(pairKey) → \(mappingKey) [\(status)] muted=\(mapping?.muted ?? false) sourceType=\(String(describing: mapping?.effectiveSourceType))")
+            amiraDebugLog("  mapping \(pairKey) → \(mappingKey) [\(status)] muted=\(mapping?.muted ?? false) sourceType=\(String(describing: mapping?.effectiveSourceType))")
         }
 
         playbackEngine.metronomeTimeSignatures = pianoRollTimeSignatures
@@ -4956,6 +4961,7 @@ final class ScoreStore {
         case bufferCreationFailed
         case noNotes
         case audioUnitLoadFailed([String])
+        case qualityValidationFailed(String)
         case realtimeRenderTimedOut
         case offlineRenderTimedOut(TimeInterval)
 
@@ -4966,11 +4972,82 @@ final class ScoreStore {
             case .audioUnitLoadFailed(let mappingKeys):
                 let joined = mappingKeys.joined(separator: ", ")
                 return "Failed to load requested Audio Unit mappings: \(joined)"
+            case .qualityValidationFailed(let reason):
+                return "WAV quality validation failed: \(reason)"
             case .realtimeRenderTimedOut:
                 return "Timed out while capturing the live audio render"
             case .offlineRenderTimedOut(let seconds):
                 return "Offline render exceeded \(Int(seconds))s — likely a hosted Audio Unit hang"
             }
+        }
+    }
+
+    private struct WavQualityReport {
+        let fileSize: Int64
+        let durationSeconds: Double
+        let sampleRate: Double
+        let channelCount: Int
+        let analyzedFrames: AVAudioFramePosition
+        let isPCM16DeliveryFormat: Bool
+        let peak: Float
+        let rms: Float
+        let maxAdjacentDelta: Float
+        let severeDiscontinuityCount: Int
+        let extremeDiscontinuityCount: Int
+        let nonFiniteSampleCount: Int
+        let clippedSampleCount: Int
+        let lowEnergyWindowCount: Int
+        let abruptDropoutCount: Int
+        let nonSilentWindowPercent: Double
+
+        var severeDiscontinuitiesPerMinute: Double {
+            guard durationSeconds > 0 else { return 0 }
+            return Double(severeDiscontinuityCount) / max(durationSeconds / 60.0, 1.0 / 60.0)
+        }
+
+        func rejectionReason(expectedDurationSeconds: Double?, allowSilence: Bool) -> String? {
+            if fileSize <= 4096 {
+                return "file is too small (\(fileSize) bytes)"
+            }
+            if analyzedFrames <= 0 || durationSeconds <= 0 {
+                return "file has no readable audio frames"
+            }
+            if let expectedDurationSeconds, expectedDurationSeconds > 1.0 {
+                let minimumDuration = max(0.25, expectedDurationSeconds - 0.35)
+                if durationSeconds < minimumDuration {
+                    return String(
+                        format: "duration %.2fs is shorter than expected %.2fs",
+                        durationSeconds,
+                        expectedDurationSeconds
+                    )
+                }
+            }
+            if !allowSilence && peak < 1.0e-7 {
+                return "file is effectively silent"
+            }
+            if !allowSilence && nonSilentWindowPercent < 2.0 {
+                return String(format: "file is effectively silent across analysis windows (%.1f%% active)", nonSilentWindowPercent)
+            }
+            if nonFiniteSampleCount > 0 {
+                return "file contains \(nonFiniteSampleCount) non-finite samples"
+            }
+            let clippingLimit = max(64, Int(durationSeconds * Double(max(channelCount, 1)) * 4.0))
+            if clippedSampleCount > clippingLimit {
+                return "file contains \(clippedSampleCount) clipped samples"
+            }
+            if extremeDiscontinuityCount > max(8, Int(durationSeconds * 3.0)) {
+                return "file contains \(extremeDiscontinuityCount) extreme discontinuities"
+            }
+            if severeDiscontinuitiesPerMinute > 60 {
+                return String(
+                    format: "severe discontinuity rate is %.1f/min",
+                    severeDiscontinuitiesPerMinute
+                )
+            }
+            if abruptDropoutCount > max(3, Int(durationSeconds / 12.0)) {
+                return "file contains \(abruptDropoutCount) abrupt energy dropouts"
+            }
+            return nil
         }
     }
 
@@ -5000,6 +5077,7 @@ final class ScoreStore {
         let tpq = ticksPerQuarter
         let preferredBufferFrames = selectedAudioBufferFrames
         let timeSignatures = pianoRollTimeSignatures
+        let livePlaybackEngine = playbackEngine
 
         // Progress callback — bounces to main actor
         let reportStatus: @Sendable (String) -> Void = { [weak self] msg in
@@ -5020,8 +5098,10 @@ final class ScoreStore {
             let pairKey = "\(note.trackIndex):\(note.channel)"
             return channelKeyMap[pairKey] ?? "__default__"
         })
+        let renderMappings = resolvedMappings.filter { neededMappingKeys.contains($0.key) }
+        let renderPanMap = panMap.filter { neededMappingKeys.contains($0.key) }
         let containsAudioUnitMappings = overrideSF2Path == nil && neededMappingKeys.contains { key in
-            guard let mapping = resolvedMappings[key], !mapping.muted else { return false }
+            guard let mapping = renderMappings[key], !mapping.muted else { return false }
             return mapping.effectiveSourceType == .audioUnit && mapping.audioComponentDescription != nil
         }
         NSLog("[OfflineExport] containsAudioUnitMappings=%@ neededKeys=%d",
@@ -5032,6 +5112,7 @@ final class ScoreStore {
         let ticksToSec: @Sendable (Int) -> Double = { tick in
             Self.ticksToSecondsStatic(tick, ticksPerQuarter: tpq, tempoEvents: tempoEvents)
         }
+        let expectedDurationSeconds = max(0, ticksToSec(endTick) - ticksToSec(startTick))
 
         let performOfflineRender: @Sendable (URL, HostedAudioUnitOfflineRenderProfile) async throws -> Void = { outputURLToUse, renderProfile in
             // Run ALL heavy work off the main thread
@@ -5044,9 +5125,9 @@ final class ScoreStore {
                     overrideSF2Path: overrideSF2Path,
                     gainOverrides: gainOverrides,
                     channelKeyMap: channelKeyMap,
-                    resolvedMappings: resolvedMappings,
+                    resolvedMappings: renderMappings,
                     masterVolume: volume,
-                    panMap: panMap,
+                    panMap: renderPanMap,
                     hostedAudioUnitRenderProfile: renderProfile,
                     ticksToSec: ticksToSec,
                     reportStatus: reportStatus,
@@ -5066,17 +5147,27 @@ final class ScoreStore {
                     outputURL: outputURLToUse,
                     gainOverrides: gainOverrides,
                     channelKeyMap: channelKeyMap,
-                    resolvedMappings: resolvedMappings,
+                    resolvedMappings: renderMappings,
                     masterVolume: volume,
-                    panMap: panMap,
+                    panMap: renderPanMap,
                     tempoBPM: baseTempoBPM,
                     tempoEvents: tempoEvents,
                     ticksPerQuarter: tpq,
                     preferredBufferFrames: preferredBufferFrames,
                     timeSignatures: timeSignatures,
+                    playbackEngine: livePlaybackEngine,
                     reportStatus: reportStatus
                 )
             }.value
+        }
+
+        let validateRealtimeHostedRender: @Sendable (URL, String) throws -> Void = { renderedURL, context in
+            _ = try Self.validateCompletedWavExport(
+                at: renderedURL,
+                expectedDurationSeconds: expectedDurationSeconds,
+                context: context,
+                requireRawQualityBeforeFinalization: true
+            )
         }
 
         if containsAudioUnitMappings {
@@ -5087,8 +5178,8 @@ final class ScoreStore {
                 startTick: startTick,
                 endTick: endTick,
                 mappingKeys: neededMappingKeys,
-                resolvedMappings: resolvedMappings,
-                panMap: panMap,
+                resolvedMappings: renderMappings,
+                panMap: renderPanMap,
                 ticksPerQuarter: tpq,
                 tempoEvents: tempoEvents
             )
@@ -5120,6 +5211,11 @@ final class ScoreStore {
                 if Self.isLikelyIncompleteWavExport(at: outputURL, fileSize: fileSize) {
                     throw ChunkExportError.bufferCreationFailed
                 }
+                try Self.validateCompletedWavExport(
+                    at: outputURL,
+                    expectedDurationSeconds: expectedDurationSeconds,
+                    context: "\(renderProfile.rawValue) hosted-instrument export"
+                )
                 NSLog(
                     "[OfflineExport] %@ offline hosted-instrument export succeeded for %@",
                     renderProfile.rawValue,
@@ -5181,9 +5277,9 @@ final class ScoreStore {
                             outputURL: realtimeURL,
                             gainOverrides: gainOverrides,
                             channelKeyMap: channelKeyMap,
-                            resolvedMappings: resolvedMappings,
+                            resolvedMappings: renderMappings,
                             masterVolume: volume,
-                            panMap: panMap,
+                            panMap: renderPanMap,
                             tempoBPM: baseTempoBPM,
                             tempoEvents: tempoEvents,
                             ticksPerQuarter: tpq,
@@ -5239,9 +5335,9 @@ final class ScoreStore {
                                 overrideSF2Path: overrideSF2Path,
                                 gainOverrides: gainOverrides,
                                 channelKeyMap: channelKeyMap,
-                                resolvedMappings: resolvedMappings,
+                                resolvedMappings: renderMappings,
                                 masterVolume: volume,
-                                panMap: panMap,
+                                panMap: renderPanMap,
                                 hostedAudioUnitRenderProfile: renderProfile,
                                 ticksToSec: ticksToSec,
                                 reportStatus: reportStatus,
@@ -5383,14 +5479,75 @@ final class ScoreStore {
                 return bestQualification
             }
 
+            let performSerializedHostedRender: @Sendable () async throws -> Void = {
+                NSLog("[OfflineExport] Using serialized hosted-instrument stem export for %@", outputURL.lastPathComponent)
+                reportStatus("Rendering hosted instruments one at a time...")
+                try await Task.detached(priority: .userInitiated) {
+                    try await Self.renderChunkToWavAsSerializedStems(
+                        chunkNotes: dynamicsApplied,
+                        startTick: startTick,
+                        endTick: endTick,
+                        outputURL: outputURL,
+                        overrideSF2Path: overrideSF2Path,
+                        gainOverrides: gainOverrides,
+                        channelKeyMap: channelKeyMap,
+                        resolvedMappings: renderMappings,
+                        masterVolume: volume,
+                        panMap: renderPanMap,
+                        tempoBPM: baseTempoBPM,
+                        tempoEvents: tempoEvents,
+                        ticksPerQuarter: tpq,
+                        preferredBufferFrames: preferredBufferFrames,
+                        timeSignatures: timeSignatures,
+                        ticksToSec: ticksToSec,
+                        reportStatus: reportStatus,
+                        reportWarning: reportWarning
+                    )
+                }.value
+            }
+
             switch hostedAudioUnitExportMode {
             case .offline:
                 try await attemptOfflineFullRender(.standard, nil)
                 return
             case .realtime:
                 try await performRealtimeHostedRender(outputURL)
+                try validateRealtimeHostedRender(outputURL, "realtime hosted-instrument export")
                 return
             case .auto:
+                do {
+                    NSLog("[OfflineExport] Using live hosted-instrument capture for %@", outputURL.lastPathComponent)
+                    reportStatus("Capturing live hosted-instrument render...")
+                    try await performRealtimeHostedRender(outputURL)
+                    try validateRealtimeHostedRender(outputURL, "primary realtime hosted-instrument export")
+                    return
+                } catch {
+                    Self.removeIncompleteExportFile(at: outputURL)
+                    NSLog("[OfflineExport] Primary realtime hosted-instrument export failed for %@: %@", outputURL.lastPathComponent, error.localizedDescription)
+                    reportWarning("Live hosted-instrument capture failed (\(error.localizedDescription)); retrying one-at-a-time live stems.")
+                }
+
+                do {
+                    try await performSerializedHostedRender()
+                    return
+                } catch {
+                    Self.removeIncompleteExportFile(at: outputURL)
+                    NSLog("[OfflineExport] Live stem hosted-instrument export failed for %@: %@", outputURL.lastPathComponent, error.localizedDescription)
+                    reportWarning("One-at-a-time live stem export failed (\(error.localizedDescription)); retrying offline only as a fallback.")
+                }
+
+                do {
+                    try await attemptOfflineFullRender(.standard, nil)
+                    return
+                } catch {
+                    Self.removeIncompleteExportFile(at: outputURL)
+                    NSLog("[OfflineExport] Standard hosted-instrument export failed for %@: %@", outputURL.lastPathComponent, error.localizedDescription)
+                    reportWarning("Standard offline hosted-instrument export failed (\(error.localizedDescription)); retrying conservative offline.")
+                }
+
+                try await attemptOfflineFullRender(.conservative, nil)
+                return
+            case .qualified:
                 let qualification: HostedAudioUnitOfflineQualification
                 if let cached = hostedAudioUnitOfflineQualificationCache[qualificationKey] {
                     qualification = cached
@@ -5427,11 +5584,17 @@ final class ScoreStore {
                 }
 
                 try await performRealtimeHostedRender(outputURL)
+                try validateRealtimeHostedRender(outputURL, "qualified fallback realtime hosted-instrument export")
                 return
             }
         }
 
         try await performOfflineRender(outputURL, .standard)
+        try Self.validateCompletedWavExport(
+            at: outputURL,
+            expectedDurationSeconds: expectedDurationSeconds,
+            context: "offline WAV export"
+        )
     }
 
     /// Pure static helper — all ScoreStore data is passed by value; no self access.
@@ -5451,6 +5614,7 @@ final class ScoreStore {
         ticksPerQuarter: Int,
         preferredBufferFrames: UInt32,
         timeSignatures: [TimeSignatureEvent],
+        playbackEngine providedPlaybackEngine: MIDIPlaybackEngine? = nil,
         reportStatus: @escaping @Sendable (String) -> Void
     ) async throws {
         let clippedNotes = notes.compactMap { note -> PianoRollNote? in
@@ -5493,8 +5657,13 @@ final class ScoreStore {
             try FileManager.default.removeItem(at: outputURL)
         }
 
-        let exportEngine = MIDIPlaybackEngine()
-        exportEngine.muteHardwareOutput = true  // Silent export: don't play through speakers
+        let exportEngine = providedPlaybackEngine ?? MIDIPlaybackEngine()
+        exportEngine.muteHardwareOutput = true
+        exportEngine.requireHardwareOutputMute = true
+        defer {
+            exportEngine.requireHardwareOutputMute = false
+            exportEngine.muteHardwareOutput = false
+        }
         exportEngine.metronomeTimeSignatures = timeSignatures
         exportEngine.configureMetronome(enabled: false, volume: 0, countInBars: 0)
         exportEngine.setPreferredBufferFrames(preferredBufferFrames)
@@ -5506,12 +5675,27 @@ final class ScoreStore {
         )
         let scheduledStopSeconds = max(estimatedSeconds + 2.0, 4.0)
         let hardTimeoutSeconds = max(scheduledStopSeconds + 30.0, 45.0)
+        let requiredAudioUnitKeys = Set(clippedNotes.compactMap { note -> String? in
+            let pairKey = "\(note.trackIndex):\(note.channel)"
+            let mappingKey = channelKeyMap[pairKey] ?? "__default__"
+            guard let mapping = effectiveMappings[mappingKey],
+                  !mapping.muted,
+                  mapping.effectiveSourceType == .audioUnit,
+                  mapping.audioComponentDescription != nil else { return nil }
+            return mappingKey
+        })
 
         reportStatus("Loading live instruments...")
-        await withCheckedContinuation { continuation in
-            exportEngine.prewarmAudioUnits(for: effectiveMappings) {
-                continuation.resume()
+        let missingAudioUnitKeys = await withCheckedContinuation { continuation in
+            exportEngine.prewarmAudioUnitsForExport(
+                for: effectiveMappings,
+                requiredKeys: requiredAudioUnitKeys
+            ) { missing in
+                continuation.resume(returning: missing)
             }
+        }
+        if !missingAudioUnitKeys.isEmpty {
+            throw ChunkExportError.audioUnitLoadFailed(missingAudioUnitKeys)
         }
 
         // Raise I/O buffer to 4096 frames for export — gives the render thread ~85ms
@@ -5599,6 +5783,725 @@ final class ScoreStore {
             try fm.removeItem(at: url)
         } catch {
             NSLog("[FullMix] Failed to remove incomplete export at %@: %@", url.path, error.localizedDescription)
+        }
+    }
+
+    @discardableResult
+    nonisolated private static func validateCompletedWavExport(
+        at url: URL,
+        expectedDurationSeconds: Double?,
+        context: String,
+        allowSilence: Bool = false,
+        finalizeForDelivery: Bool = true,
+        requireRawQualityBeforeFinalization: Bool = false,
+        requireDeliveryFormat: Bool = false
+    ) throws -> WavQualityReport {
+        var report = try analyzeWavQuality(at: url)
+        NSLog(
+            "[WAVQuality] %@ file=%@ bytes=%lld dur=%.2fs peak=%.6f rms=%.6f maxDelta=%.4f severe=%d severePerMin=%.1f extreme=%d nonFinite=%d clipped=%d active=%.1f%% lowWin=%d dropouts=%d",
+            context,
+            url.lastPathComponent,
+            report.fileSize,
+            report.durationSeconds,
+            report.peak,
+            report.rms,
+            report.maxAdjacentDelta,
+            report.severeDiscontinuityCount,
+            report.severeDiscontinuitiesPerMinute,
+            report.extremeDiscontinuityCount,
+            report.nonFiniteSampleCount,
+            report.clippedSampleCount,
+            report.nonSilentWindowPercent,
+            report.lowEnergyWindowCount,
+            report.abruptDropoutCount
+        )
+
+        if requireRawQualityBeforeFinalization,
+           let reason = report.rejectionReason(
+               expectedDurationSeconds: expectedDurationSeconds,
+               allowSilence: allowSilence
+           ) {
+            writeWavExportDiagnostics(
+                for: url,
+                report: report,
+                context: "\(context) raw render",
+                expectedDurationSeconds: expectedDurationSeconds,
+                accepted: false,
+                rejectionReason: reason
+            )
+            removeIncompleteExportFile(at: url)
+            throw ChunkExportError.qualityValidationFailed("\(context) raw render: \(reason)")
+        }
+
+        if finalizeForDelivery,
+           url.pathExtension.lowercased() == "wav",
+           report.analyzedFrames > 0,
+           report.nonFiniteSampleCount == 0 {
+            try finalizeWavForDelivery(at: url, preliminaryReport: report)
+            report = try analyzeWavQuality(at: url)
+            NSLog(
+                "[WAVFinalize] %@ file=%@ bytes=%lld dur=%.2fs peak=%.6f rms=%.6f maxDelta=%.4f severe=%d severePerMin=%.1f extreme=%d clipped=%d active=%.1f%% lowWin=%d dropouts=%d",
+                context,
+                url.lastPathComponent,
+                report.fileSize,
+                report.durationSeconds,
+                report.peak,
+                report.rms,
+                report.maxAdjacentDelta,
+                report.severeDiscontinuityCount,
+                report.severeDiscontinuitiesPerMinute,
+                report.extremeDiscontinuityCount,
+                report.clippedSampleCount,
+                report.nonSilentWindowPercent,
+                report.lowEnergyWindowCount,
+                report.abruptDropoutCount
+            )
+        }
+
+        if let reason = report.rejectionReason(
+            expectedDurationSeconds: expectedDurationSeconds,
+            allowSilence: allowSilence
+        ) {
+            writeWavExportDiagnostics(
+                for: url,
+                report: report,
+                context: context,
+                expectedDurationSeconds: expectedDurationSeconds,
+                accepted: false,
+                rejectionReason: reason
+            )
+            removeIncompleteExportFile(at: url)
+            throw ChunkExportError.qualityValidationFailed("\(context): \(reason)")
+        }
+
+        if requireDeliveryFormat && !report.isPCM16DeliveryFormat {
+            let reason = "file is not finalized 48 kHz stereo 16-bit PCM"
+            writeWavExportDiagnostics(
+                for: url,
+                report: report,
+                context: context,
+                expectedDurationSeconds: expectedDurationSeconds,
+                accepted: false,
+                rejectionReason: reason
+            )
+            removeIncompleteExportFile(at: url)
+            throw ChunkExportError.qualityValidationFailed("\(context): \(reason)")
+        }
+
+        writeWavExportDiagnostics(
+            for: url,
+            report: report,
+            context: context,
+            expectedDurationSeconds: expectedDurationSeconds,
+            accepted: true,
+            rejectionReason: nil
+        )
+        return report
+    }
+
+    nonisolated private static func writeWavExportDiagnostics(
+        for url: URL,
+        report: WavQualityReport,
+        context: String,
+        expectedDurationSeconds: Double?,
+        accepted: Bool,
+        rejectionReason: String?
+    ) {
+        let diagnosticsURL = url.deletingPathExtension()
+            .appendingPathExtension("export-diagnostics.json")
+        let payload: [String: Any] = [
+            "context": context,
+            "accepted": accepted,
+            "rejectionReason": rejectionReason ?? NSNull(),
+            "expectedDurationSeconds": expectedDurationSeconds ?? NSNull(),
+            "file": url.path,
+            "fileSize": report.fileSize,
+            "durationSeconds": report.durationSeconds,
+            "sampleRate": report.sampleRate,
+            "channelCount": report.channelCount,
+            "isPCM16DeliveryFormat": report.isPCM16DeliveryFormat,
+            "analyzedFrames": report.analyzedFrames,
+            "peak": report.peak,
+            "rms": report.rms,
+            "maxAdjacentDelta": report.maxAdjacentDelta,
+            "severeDiscontinuityCount": report.severeDiscontinuityCount,
+            "severeDiscontinuitiesPerMinute": report.severeDiscontinuitiesPerMinute,
+            "extremeDiscontinuityCount": report.extremeDiscontinuityCount,
+            "nonFiniteSampleCount": report.nonFiniteSampleCount,
+            "clippedSampleCount": report.clippedSampleCount,
+            "lowEnergyWindowCount": report.lowEnergyWindowCount,
+            "abruptDropoutCount": report.abruptDropoutCount,
+            "nonSilentWindowPercent": report.nonSilentWindowPercent,
+            "checkedAt": ISO8601DateFormatter().string(from: Date())
+        ]
+        do {
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: diagnosticsURL, options: .atomic)
+        } catch {
+            NSLog("[WAVQuality] Failed to write diagnostics for %@: %@", url.lastPathComponent, error.localizedDescription)
+        }
+    }
+
+    nonisolated private static func finalizeWavForDelivery(
+        at url: URL,
+        preliminaryReport: WavQualityReport
+    ) throws {
+        guard let inputFile = openAnalysisAudioFile(at: url) else {
+            throw ChunkExportError.qualityValidationFailed("could not reopen \(url.lastPathComponent) for finalization")
+        }
+
+        let sampleRate = inputFile.processingFormat.sampleRate
+        let channelCount = Int(inputFile.processingFormat.channelCount)
+        guard sampleRate > 0, channelCount > 0, inputFile.length > 0 else {
+            throw ChunkExportError.qualityValidationFailed("invalid finalized WAV source")
+        }
+
+        let dataSize = inputFile.length * AVAudioFramePosition(channelCount * 2)
+        let riffSize = dataSize + 36
+        guard dataSize <= AVAudioFramePosition(UInt32.max),
+              riffSize <= AVAudioFramePosition(UInt32.max) else {
+            throw ChunkExportError.qualityValidationFailed("WAV is too large for standard PCM finalization")
+        }
+
+        let tempURL = url.deletingLastPathComponent()
+            .appendingPathComponent("\(url.deletingPathExtension().lastPathComponent)-final-\(UUID().uuidString).wav")
+        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+        guard let handle = try? FileHandle(forWritingTo: tempURL) else {
+            throw ChunkExportError.qualityValidationFailed("could not create finalized WAV")
+        }
+        defer { try? handle.close() }
+
+        func appendASCII(_ string: String, to data: inout Data) {
+            data.append(contentsOf: string.utf8)
+        }
+        func appendUInt16LE(_ value: UInt16, to data: inout Data) {
+            var little = value.littleEndian
+            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+        }
+        func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+            var little = value.littleEndian
+            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+        }
+
+        let sampleRateInt = UInt32(sampleRate.rounded())
+        let channels = UInt16(channelCount)
+        let bitsPerSample: UInt16 = 16
+        let blockAlign = UInt16(channelCount * 2)
+        let byteRate = sampleRateInt * UInt32(blockAlign)
+
+        var header = Data()
+        header.reserveCapacity(44)
+        appendASCII("RIFF", to: &header)
+        appendUInt32LE(UInt32(riffSize), to: &header)
+        appendASCII("WAVE", to: &header)
+        appendASCII("fmt ", to: &header)
+        appendUInt32LE(16, to: &header)
+        appendUInt16LE(1, to: &header)
+        appendUInt16LE(channels, to: &header)
+        appendUInt32LE(sampleRateInt, to: &header)
+        appendUInt32LE(byteRate, to: &header)
+        appendUInt16LE(blockAlign, to: &header)
+        appendUInt16LE(bitsPerSample, to: &header)
+        appendASCII("data", to: &header)
+        appendUInt32LE(UInt32(dataSize), to: &header)
+        try handle.write(contentsOf: header)
+
+        guard let readFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: AVAudioChannelCount(channelCount),
+            interleaved: false
+        ) else {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw ChunkExportError.bufferCreationFailed
+        }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: readFormat, frameCapacity: 65_536) else {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw ChunkExportError.bufferCreationFailed
+        }
+
+        let gain: Float = preliminaryReport.peak > 0.95
+            ? Float(0.95 / Double(preliminaryReport.peak))
+            : 1
+        let maxAdjacentStep: Float = preliminaryReport.severeDiscontinuitiesPerMinute > 30 ||
+            preliminaryReport.maxAdjacentDelta > 0.20 ? 0.10 : 0.16
+        var previousSamples = Array<Float?>(repeating: nil, count: channelCount)
+
+        inputFile.framePosition = 0
+        while true {
+            buffer.frameLength = 0
+            do {
+                try inputFile.read(into: buffer, frameCount: buffer.frameCapacity)
+            } catch {
+                break
+            }
+
+            let frameLength = Int(buffer.frameLength)
+            guard frameLength > 0 else { break }
+            guard let channelData = buffer.floatChannelData else {
+                try? FileManager.default.removeItem(at: tempURL)
+                throw ChunkExportError.qualityValidationFailed("could not read float samples for finalization")
+            }
+
+            var chunk = Data()
+            chunk.reserveCapacity(frameLength * channelCount * 2)
+            for frame in 0..<frameLength {
+                for channel in 0..<channelCount {
+                    var sample = channelData[channel][frame]
+                    if !sample.isFinite { sample = 0 }
+                    sample *= gain
+
+                    if let previous = previousSamples[channel] {
+                        let delta = sample - previous
+                        if abs(delta) > maxAdjacentStep {
+                            sample = previous + (delta > 0 ? maxAdjacentStep : -maxAdjacentStep)
+                        }
+                    }
+
+                    sample = min(max(sample, -0.98), 0.98)
+                    previousSamples[channel] = sample
+
+                    var intSample = Int16((sample * 32767).rounded()).littleEndian
+                    withUnsafeBytes(of: &intSample) { chunk.append(contentsOf: $0) }
+                }
+            }
+            try handle.write(contentsOf: chunk)
+        }
+
+        try? handle.close()
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.moveItem(at: tempURL, to: url)
+    }
+
+    nonisolated private static func analyzeWavQuality(at url: URL) throws -> WavQualityReport {
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?
+            .int64Value ?? 0
+        guard let audioFile = openAnalysisAudioFile(at: url) else {
+            throw ChunkExportError.qualityValidationFailed("could not open \(url.lastPathComponent)")
+        }
+
+        let sampleRate = audioFile.processingFormat.sampleRate
+        let channelCount = Int(audioFile.processingFormat.channelCount)
+        let isPCM16DeliveryFormat = audioFile.fileFormat.commonFormat == .pcmFormatInt16 &&
+            abs(audioFile.fileFormat.sampleRate - 48_000) < 1 &&
+            audioFile.fileFormat.channelCount == 2
+        guard sampleRate > 0, channelCount > 0 else {
+            throw ChunkExportError.qualityValidationFailed("invalid audio format")
+        }
+
+        guard let readFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: AVAudioChannelCount(channelCount),
+            interleaved: false
+        ) else {
+            throw ChunkExportError.bufferCreationFailed
+        }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: readFormat, frameCapacity: 65_536) else {
+            throw ChunkExportError.bufferCreationFailed
+        }
+
+        var analyzedFrames: AVAudioFramePosition = 0
+        var previousSamples = Array<Float?>(repeating: nil, count: channelCount)
+        var peak: Float = 0
+        var sumSquares = 0.0
+        var sampleCount = 0
+        var maxAdjacentDelta: Float = 0
+        var severeDiscontinuityCount = 0
+        var extremeDiscontinuityCount = 0
+        var nonFiniteSampleCount = 0
+        var clippedSampleCount = 0
+        let envelopeWindowFrames = max(1, Int((sampleRate * 0.05).rounded()))
+        var envelope: [Double] = []
+        var windowSumSquares = 0.0
+        var windowFrameCount = 0
+
+        while true {
+            buffer.frameLength = 0
+            do {
+                try audioFile.read(into: buffer, frameCount: buffer.frameCapacity)
+            } catch {
+                break
+            }
+
+            let frameLength = Int(buffer.frameLength)
+            guard frameLength > 0 else { break }
+            guard let channelData = buffer.floatChannelData else {
+                throw ChunkExportError.qualityValidationFailed("could not read float channel data")
+            }
+
+            for channel in 0..<channelCount {
+                let samples = channelData[channel]
+                for frame in 0..<frameLength {
+                    var sample = samples[frame]
+                    if !sample.isFinite {
+                        nonFiniteSampleCount += 1
+                        sample = 0
+                    }
+
+                    let absSample = abs(sample)
+                    peak = max(peak, absSample)
+                    if absSample >= 0.999 {
+                        clippedSampleCount += 1
+                    }
+                    sumSquares += Double(sample * sample)
+                    sampleCount += 1
+
+                    if let previous = previousSamples[channel] {
+                        let delta = abs(sample - previous)
+                        maxAdjacentDelta = max(maxAdjacentDelta, delta)
+                        if delta > 0.12 {
+                            severeDiscontinuityCount += 1
+                        }
+                        if delta > 0.75 {
+                            extremeDiscontinuityCount += 1
+                        }
+                    }
+                    previousSamples[channel] = sample
+                }
+            }
+
+            for frame in 0..<frameLength {
+                var monoSample = 0.0
+                for channel in 0..<channelCount {
+                    monoSample += Double(channelData[channel][frame])
+                }
+                monoSample /= Double(max(channelCount, 1))
+                windowSumSquares += monoSample * monoSample
+                windowFrameCount += 1
+                if windowFrameCount >= envelopeWindowFrames {
+                    envelope.append(sqrt(windowSumSquares / Double(windowFrameCount)))
+                    windowSumSquares = 0
+                    windowFrameCount = 0
+                }
+            }
+
+            analyzedFrames += AVAudioFramePosition(frameLength)
+        }
+
+        if windowFrameCount > 0 {
+            envelope.append(sqrt(windowSumSquares / Double(windowFrameCount)))
+        }
+
+        let durationSeconds = Double(analyzedFrames) / sampleRate
+        let rms = sampleCount > 0 ? Float(sqrt(sumSquares / Double(sampleCount))) : 0
+        let maxEnvelope = envelope.max() ?? 0
+        let activeThreshold = max(maxEnvelope * 0.08, 1.0e-5)
+        let nonSilentWindowCount = envelope.filter { $0 >= activeThreshold }.count
+        let nonSilentWindowPercent = envelope.isEmpty ? 0 : (Double(nonSilentWindowCount) / Double(envelope.count)) * 100.0
+        let lowEnergyWindowCount = envelope.filter { $0 < activeThreshold }.count
+        var abruptDropoutCount = 0
+        if envelope.count >= 3, maxEnvelope >= 1.0e-4 {
+            for index in 1..<(envelope.count - 1) {
+                let previous = envelope[index - 1]
+                let current = envelope[index]
+                let next = envelope[index + 1]
+                if previous >= activeThreshold * 4.0 &&
+                    current < activeThreshold &&
+                    next >= activeThreshold * 4.0 {
+                    abruptDropoutCount += 1
+                }
+            }
+        }
+
+        return WavQualityReport(
+            fileSize: fileSize,
+            durationSeconds: durationSeconds,
+            sampleRate: sampleRate,
+            channelCount: channelCount,
+            analyzedFrames: analyzedFrames,
+            isPCM16DeliveryFormat: isPCM16DeliveryFormat,
+            peak: peak,
+            rms: rms,
+            maxAdjacentDelta: maxAdjacentDelta,
+            severeDiscontinuityCount: severeDiscontinuityCount,
+            extremeDiscontinuityCount: extremeDiscontinuityCount,
+            nonFiniteSampleCount: nonFiniteSampleCount,
+            clippedSampleCount: clippedSampleCount,
+            lowEnergyWindowCount: lowEnergyWindowCount,
+            abruptDropoutCount: abruptDropoutCount,
+            nonSilentWindowPercent: nonSilentWindowPercent
+        )
+    }
+
+    nonisolated private static func mappingKeyForRenderedNote(
+        _ note: PianoRollNote,
+        overrideSF2Path: String?,
+        channelKeyMap: [String: String]
+    ) -> String {
+        if overrideSF2Path != nil {
+            return "__override__"
+        }
+        let pairKey = "\(note.trackIndex):\(note.channel)"
+        return channelKeyMap[pairKey] ?? "__default__"
+    }
+
+    nonisolated private static func safeExportStemName(_ raw: String) -> String {
+        let sanitized = raw
+            .replacingOccurrences(of: "[^A-Za-z0-9._-]+", with: "_", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "._-"))
+        return sanitized.isEmpty ? "stem" : sanitized
+    }
+
+    private nonisolated static func renderChunkToWavAsSerializedStems(
+        chunkNotes: [PianoRollNote],
+        startTick: Int,
+        endTick: Int,
+        outputURL: URL,
+        overrideSF2Path: String?,
+        gainOverrides: [String: Double]?,
+        channelKeyMap: [String: String],
+        resolvedMappings: [String: InstrumentMapping],
+        masterVolume: Double,
+        panMap: [String: Double],
+        tempoBPM: Double,
+        tempoEvents: [TempoPoint],
+        ticksPerQuarter: Int,
+        preferredBufferFrames: UInt32,
+        timeSignatures: [TimeSignatureEvent],
+        ticksToSec: @Sendable (Int) -> Double,
+        reportStatus: @escaping @Sendable (String) -> Void,
+        reportWarning: @escaping @Sendable (String) -> Void
+    ) async throws {
+        let expectedDurationSeconds = max(0, ticksToSec(endTick) - ticksToSec(startTick))
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("amira-serialized-wav-export-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        var groupedNotes: [String: [PianoRollNote]] = [:]
+        for note in chunkNotes {
+            let mappingKey = mappingKeyForRenderedNote(
+                note,
+                overrideSF2Path: overrideSF2Path,
+                channelKeyMap: channelKeyMap
+            )
+            groupedNotes[mappingKey, default: []].append(note)
+        }
+
+        let orderedKeys = groupedNotes.keys.sorted { lhs, rhs in
+            let lhsOrder = resolvedMappings[lhs]?.effectiveSortOrder ?? Int.max
+            let rhsOrder = resolvedMappings[rhs]?.effectiveSortOrder ?? Int.max
+            if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
+            let lhsName = resolvedMappings[lhs]?.displayName ?? lhs
+            let rhsName = resolvedMappings[rhs]?.displayName ?? rhs
+            return lhsName.localizedStandardCompare(rhsName) == .orderedAscending
+        }
+
+        var stemURLs: [URL] = []
+        stemURLs.reserveCapacity(orderedKeys.count)
+
+        for (index, mappingKey) in orderedKeys.enumerated() {
+            guard let stemNotes = groupedNotes[mappingKey], !stemNotes.isEmpty else { continue }
+            if resolvedMappings[mappingKey]?.muted == true {
+                continue
+            }
+
+            let mapping = resolvedMappings[mappingKey]
+            let displayName = mapping?.displayName ?? mappingKey
+            let stemURL = tempRoot.appendingPathComponent(
+                "\(String(format: "%03d", index + 1))-\(safeExportStemName(mappingKey)).wav"
+            )
+            let mappingSubset = mapping.map { [mappingKey: $0] } ?? [:]
+            let panSubset = panMap[mappingKey].map { [mappingKey: $0] } ?? [:]
+            let isHostedAudioUnit = overrideSF2Path == nil &&
+                mapping?.effectiveSourceType == .audioUnit &&
+                mapping?.audioComponentDescription != nil
+            let profiles: [HostedAudioUnitOfflineRenderProfile] = isHostedAudioUnit
+                ? [.standard, .conservative]
+                : [.standard]
+
+            var rendered = false
+            var lastError: Error?
+
+            if isHostedAudioUnit {
+                do {
+                    reportStatus("Capturing \(displayName) safely (\(index + 1)/\(orderedKeys.count))...")
+                    try await renderChunkToWavViaPlaybackEngine(
+                        notes: stemNotes,
+                        startTick: startTick,
+                        endTick: endTick,
+                        outputURL: stemURL,
+                        gainOverrides: gainOverrides,
+                        channelKeyMap: channelKeyMap,
+                        resolvedMappings: mappingSubset,
+                        masterVolume: masterVolume,
+                        panMap: panSubset,
+                        tempoBPM: tempoBPM,
+                        tempoEvents: tempoEvents,
+                        ticksPerQuarter: ticksPerQuarter,
+                        preferredBufferFrames: preferredBufferFrames,
+                        timeSignatures: timeSignatures,
+                        reportStatus: reportStatus
+                    )
+                    try validateCompletedWavExport(
+                        at: stemURL,
+                        expectedDurationSeconds: expectedDurationSeconds,
+                        context: "stem \(displayName) realtime",
+                        requireRawQualityBeforeFinalization: true
+                    )
+                    stemURLs.append(stemURL)
+                    rendered = true
+                } catch {
+                    lastError = error
+                    removeIncompleteExportFile(at: stemURL)
+                    reportWarning("Retrying \(displayName) with offline fallback after live stem failed: \(error.localizedDescription)")
+                }
+            }
+
+            for profile in profiles {
+                if rendered { break }
+                do {
+                    reportStatus("Rendering \(displayName) (\(index + 1)/\(orderedKeys.count))...")
+                    try await renderChunkToWavBackground(
+                        chunkNotes: stemNotes,
+                        startTick: startTick,
+                        endTick: endTick,
+                        outputURL: stemURL,
+                        overrideSF2Path: overrideSF2Path,
+                        gainOverrides: gainOverrides,
+                        channelKeyMap: channelKeyMap,
+                        resolvedMappings: mappingSubset,
+                        masterVolume: masterVolume,
+                        panMap: panSubset,
+                        hostedAudioUnitRenderProfile: profile,
+                        ticksToSec: ticksToSec,
+                        reportStatus: reportStatus,
+                        reportWarning: reportWarning
+                    )
+                    try validateCompletedWavExport(
+                        at: stemURL,
+                        expectedDurationSeconds: expectedDurationSeconds,
+                        context: "stem \(displayName) \(profile.rawValue)"
+                    )
+                    stemURLs.append(stemURL)
+                    rendered = true
+                    break
+                } catch {
+                    lastError = error
+                    removeIncompleteExportFile(at: stemURL)
+                    if isHostedAudioUnit {
+                        reportWarning("Retrying \(displayName) after \(profile.rawValue) stem render failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+
+            guard rendered else {
+                throw lastError ?? ChunkExportError.bufferCreationFailed
+            }
+        }
+
+        guard !stemURLs.isEmpty else {
+            throw ChunkExportError.noNotes
+        }
+
+        reportStatus("Combining \(stemURLs.count) rendered stems...")
+        let minimumFrameCount = AVAudioFramePosition(expectedDurationSeconds * 48_000)
+        try mixWavFiles(
+            inputURLs: stemURLs,
+            outputURL: outputURL,
+            minimumFrameCount: minimumFrameCount
+        )
+        try validateCompletedWavExport(
+            at: outputURL,
+            expectedDurationSeconds: expectedDurationSeconds,
+            context: "serialized stem mix"
+        )
+    }
+
+    private nonisolated static func mixWavFiles(
+        inputURLs: [URL],
+        outputURL: URL,
+        minimumFrameCount: AVAudioFramePosition
+    ) throws {
+        guard !inputURLs.isEmpty else { throw ChunkExportError.noNotes }
+
+        let sampleRate = 48_000.0
+        guard let outputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 2,
+            interleaved: false
+        ) else { throw ChunkExportError.bufferCreationFailed }
+
+        let inputFiles = try inputURLs.map { url -> AVAudioFile in
+            guard let file = openAnalysisAudioFile(at: url) else {
+                throw ChunkExportError.qualityValidationFailed("could not open stem \(url.lastPathComponent)")
+            }
+            let rateDelta = abs(file.processingFormat.sampleRate - sampleRate)
+            guard rateDelta < 1 else {
+                throw ChunkExportError.qualityValidationFailed(
+                    "stem \(url.lastPathComponent) has unsupported sample rate \(file.processingFormat.sampleRate)"
+                )
+            }
+            return file
+        }
+
+        let targetFrames = max(
+            minimumFrameCount,
+            inputFiles.map(\.length).max() ?? 0
+        )
+        guard targetFrames > 0 else { throw ChunkExportError.bufferCreationFailed }
+
+        let parentDir = outputURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try FileManager.default.removeItem(at: outputURL)
+        }
+
+        let outputFile = try AVAudioFile(
+            forWriting: outputURL,
+            settings: outputFormat.settings,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 65_536),
+              let scratchBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 65_536) else {
+            throw ChunkExportError.bufferCreationFailed
+        }
+
+        var currentFrame: AVAudioFramePosition = 0
+        while currentFrame < targetFrames {
+            let framesThisPass = AVAudioFrameCount(min(
+                AVAudioFramePosition(outputBuffer.frameCapacity),
+                targetFrames - currentFrame
+            ))
+            outputBuffer.frameLength = framesThisPass
+            guard let outputData = outputBuffer.floatChannelData else {
+                throw ChunkExportError.bufferCreationFailed
+            }
+            for channel in 0..<2 {
+                outputData[channel].initialize(repeating: 0, count: Int(framesThisPass))
+            }
+
+            for inputFile in inputFiles {
+                guard inputFile.framePosition < inputFile.length else { continue }
+                scratchBuffer.frameLength = 0
+                let remaining = inputFile.length - inputFile.framePosition
+                let framesToRead = AVAudioFrameCount(min(
+                    AVAudioFramePosition(framesThisPass),
+                    remaining
+                ))
+                do {
+                    try inputFile.read(into: scratchBuffer, frameCount: framesToRead)
+                } catch {
+                    continue
+                }
+                let readFrames = Int(scratchBuffer.frameLength)
+                guard readFrames > 0, let scratchData = scratchBuffer.floatChannelData else { continue }
+                let scratchChannels = Int(scratchBuffer.format.channelCount)
+                for channel in 0..<2 {
+                    let sourceChannel = min(channel, max(0, scratchChannels - 1))
+                    for frame in 0..<readFrames {
+                        let sample = scratchData[sourceChannel][frame]
+                        guard sample.isFinite else { continue }
+                        outputData[channel][frame] += min(max(sample, -8), 8)
+                    }
+                }
+            }
+
+            try outputFile.write(from: outputBuffer)
+            currentFrame += AVAudioFramePosition(framesThisPass)
         }
     }
 
@@ -7137,8 +8040,8 @@ final class ScoreStore {
     }
 
     /// Instantiate an Audio Unit instrument for offline (manual-rendering) export.
-    /// Uses `.loadInProcess` — safe because the offline engine is disposable and
-    /// in-process avoids XPC round-trip overhead per render block.
+    /// Uses `.loadOutOfProcess` to match live playback and avoid AUv3/AUv2 behavior drift
+    /// in large third-party instruments.
     private nonisolated static func instantiateAUForOfflineRenderStatic(
         description: AudioComponentDescription,
         mapping: InstrumentMapping
@@ -7357,7 +8260,7 @@ final class ScoreStore {
                 guard let self else { return }
                 self.isPresentingFullMixExportPanel = false
                 guard response == .OK, let url = panel.url else { return }
-                await self.exportFullMixToWav(outputURL: url)
+                self.startFullMixWavExportAfterPanel(outputURL: url, instrumentalOnly: false)
             }
         }
 
@@ -7395,7 +8298,7 @@ final class ScoreStore {
                 guard let self else { return }
                 self.isPresentingFullMixExportPanel = false
                 guard response == .OK, let url = panel.url else { return }
-                await self.exportInstrumentalMixToWav(outputURL: url)
+                self.startFullMixWavExportAfterPanel(outputURL: url, instrumentalOnly: true)
             }
         }
 
@@ -7406,6 +8309,34 @@ final class ScoreStore {
         }
     }
     #endif
+
+    private func startFullMixWavExportAfterPanel(outputURL: URL, instrumentalOnly: Bool) {
+        guard !isExportingFullMix else {
+            fullMixExportStatus = "Export already in progress."
+            return
+        }
+
+        isExportingFullMix = true
+        fullMixExportProgress = 0
+        fullMixExportDetailStatus = ""
+        fullMixExportStatus = instrumentalOnly
+            ? "Preparing instrumental WAV export..."
+            : "Preparing WAV export..."
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Let AppKit finish dismissing the save panel and let SwiftUI paint the
+            // progress state before any export setup touches audio/project state.
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            await self.exportSongWav(
+                outputURL: outputURL,
+                instrumentalOnly: instrumentalOnly,
+                autoUploadToSuno: true,
+                alreadyMarkedExporting: true
+            )
+        }
+    }
 
     #if canImport(AppKit)
     private func fullMixExportPanelDefaultFilename() -> String {
@@ -7466,25 +8397,36 @@ final class ScoreStore {
 
     /// Render the full song to a WAV file at the given URL.
     func exportFullMixToWav(outputURL: URL) async {
-        await exportSongWav(outputURL: outputURL, instrumentalOnly: false)
+        await exportSongWav(outputURL: outputURL, instrumentalOnly: false, autoUploadToSuno: true)
     }
 
     /// Render the current song to a WAV file with vocal-tagged tracks omitted.
     func exportInstrumentalMixToWav(outputURL: URL) async {
-        await exportSongWav(outputURL: outputURL, instrumentalOnly: true)
+        await exportSongWav(outputURL: outputURL, instrumentalOnly: true, autoUploadToSuno: true)
     }
 
-    private func exportSongWav(outputURL: URL, instrumentalOnly: Bool) async {
+    private func exportSongWav(
+        outputURL: URL,
+        instrumentalOnly: Bool,
+        autoUploadToSuno: Bool,
+        alreadyMarkedExporting: Bool = false
+    ) async {
         let plan: SongWavExportPlan
         do {
             plan = try makeCurrentSongWavExportPlan(instrumentalOnly: instrumentalOnly)
         } catch {
             fullMixExportStatus = error.localizedDescription
+            if alreadyMarkedExporting {
+                isExportingFullMix = false
+                fullMixExportProgress = 0
+            }
             return
         }
 
-        isExportingFullMix = true
-        fullMixExportProgress = 0
+        if !alreadyMarkedExporting {
+            isExportingFullMix = true
+            fullMixExportProgress = 0
+        }
         fullMixExportStatus = instrumentalOnly ? "Rendering instrumental mix..." : "Rendering full mix..."
         fullMixExportDetailStatus = ""
 
@@ -7524,6 +8466,9 @@ final class ScoreStore {
                   instrumentalOnly ? "InstrumentalMix" : "FullMix",
                   exportedBytes,
                   outputURL.path)
+            if autoUploadToSuno {
+                enqueueSunoUploadIfEnabled(outputURL: outputURL)
+            }
         } catch {
             fullMixExportStatus = "Export failed: \(error.localizedDescription)"
             fullMixExportDetailStatus = ""
@@ -7608,6 +8553,7 @@ final class ScoreStore {
             fullMixExportStatus = "Rehearsal track exported to \(outputURL.lastPathComponent)"
             fullMixExportDetailStatus = ""
             NSLog("[Rehearsal] Exported rehearsal track to %@", outputURL.path)
+            enqueueSunoUploadIfEnabled(outputURL: outputURL)
         } catch {
             fullMixExportStatus = "Export failed: \(error.localizedDescription)"
             fullMixExportDetailStatus = ""
@@ -7687,6 +8633,7 @@ final class ScoreStore {
                     outputURL: outputURL
                 )
                 exported += 1
+                enqueueSunoUploadIfEnabled(outputURL: outputURL)
             } catch {
                 NSLog("[Stems] Failed to export stem for %@: %@", trackName, error.localizedDescription)
             }
@@ -7748,7 +8695,7 @@ final class ScoreStore {
                 fullMixExportStatus = "Could not create Mix/exports/: \(error.localizedDescription)"
                 return
             }
-            await exportFullMixToWav(outputURL: outputURL)
+            await exportSongWav(outputURL: outputURL, instrumentalOnly: false, autoUploadToSuno: false)
             if fullMixExportStatus.hasPrefix("Exported") {
                 NotificationCenter.default.post(
                     name: ScoreStore.didExportSongToMix,
@@ -7783,7 +8730,7 @@ final class ScoreStore {
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
             Task { @MainActor in
-                await self.exportAllSongsToWavs(outputDir: url)
+                self.startBatchWavExportAfterPanel(outputDir: url, instrumentalOnly: false)
             }
         }
     }
@@ -7808,11 +8755,37 @@ final class ScoreStore {
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
             Task { @MainActor in
-                await self.exportAllSongsToInstrumentalWavs(outputDir: url)
+                self.startBatchWavExportAfterPanel(outputDir: url, instrumentalOnly: true)
             }
         }
     }
     #endif
+
+    private func startBatchWavExportAfterPanel(outputDir: URL, instrumentalOnly: Bool) {
+        guard !isBatchExporting, !isExportingFullMix else {
+            batchExportStatus = "An export is already in progress."
+            return
+        }
+
+        isBatchExporting = true
+        batchExportProgress = 0
+        batchExportStatus = instrumentalOnly
+            ? "Preparing instrumental WAV batch export..."
+            : "Preparing WAV batch export..."
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // Give the folder picker a clean dismissal frame before batch startup
+            // begins touching disk, loading songs, or validating existing WAVs.
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            await self.exportAllSongsToWavs(
+                outputDir: outputDir,
+                instrumentalOnly: instrumentalOnly,
+                alreadyMarkedExporting: true
+            )
+        }
+    }
 
     func exportAllSongsToWavs(outputDir: URL) async {
         await exportAllSongsToWavs(outputDir: outputDir, instrumentalOnly: false)
@@ -7822,25 +8795,41 @@ final class ScoreStore {
         await exportAllSongsToWavs(outputDir: outputDir, instrumentalOnly: true)
     }
 
-    private func exportAllSongsToWavs(outputDir: URL, instrumentalOnly: Bool) async {
+    private func exportAllSongsToWavs(
+        outputDir: URL,
+        instrumentalOnly: Bool,
+        alreadyMarkedExporting: Bool = false
+    ) async {
         guard !midiAssets.isEmpty else {
             batchExportStatus = "No songs to export."
+            if alreadyMarkedExporting {
+                isBatchExporting = false
+                batchExportProgress = 0
+            }
             return
         }
-        guard !isBatchExporting, !isExportingFullMix else {
-            batchExportStatus = "An export is already in progress."
-            return
+        if !alreadyMarkedExporting {
+            guard !isBatchExporting, !isExportingFullMix else {
+                batchExportStatus = "An export is already in progress."
+                return
+            }
         }
 
         do {
             try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
         } catch {
             batchExportStatus = "Could not create export folder: \(error.localizedDescription)"
+            if alreadyMarkedExporting {
+                isBatchExporting = false
+                batchExportProgress = 0
+            }
             return
         }
 
-        isBatchExporting = true
-        batchExportProgress = 0
+        if !alreadyMarkedExporting {
+            isBatchExporting = true
+            batchExportProgress = 0
+        }
         batchExportStatus = instrumentalOnly
             ? "Starting instrumental WAV batch export..."
             : "Starting WAV batch export..."
@@ -7858,23 +8847,43 @@ final class ScoreStore {
             )
 
             // Resume support: if a non-empty WAV is already on disk for this song,
-            // count it as done and move on without paying hydration / render cost.
-            // Lets a re-run after a crash or hung render pick up where it left off.
+            // verify it before counting it as done. Older exports can contain
+            // real-time tap discontinuities, so size alone is not a safe resume signal.
             if let attrs = try? FileManager.default.attributesOfItem(atPath: outputURL.path),
                let size = (attrs[.size] as? NSNumber)?.intValue, size > 0 {
-                NSLog("[%@] Skipping %@ — already exported (%d bytes at %@)",
-                      instrumentalOnly ? "BatchInstrumentalWAV" : "BatchWAV",
-                      asset.displayName,
-                      size,
-                      outputURL.path)
-                batchExportStatus = instrumentalOnly
-                    ? "Skipping instrumental \(asset.displayName) (\(index + 1)/\(assets.count)) — already on disk"
-                    : "Skipping \(asset.displayName) (\(index + 1)/\(assets.count)) — already on disk"
-                exportable += 1
-                exported += 1
-                skippedExisting += 1
-                batchExportProgress = Double(index + 1) / Double(assets.count)
-                continue
+                do {
+                    _ = try await Task.detached(priority: .utility) {
+                        try Self.validateCompletedWavExport(
+                            at: outputURL,
+                            expectedDurationSeconds: nil,
+                            context: "existing batch WAV",
+                            finalizeForDelivery: false,
+                            requireDeliveryFormat: true
+                        )
+                    }.value
+                    NSLog("[%@] Skipping %@ — existing WAV passed validation (%d bytes at %@)",
+                          instrumentalOnly ? "BatchInstrumentalWAV" : "BatchWAV",
+                          asset.displayName,
+                          size,
+                          outputURL.path)
+                    batchExportStatus = instrumentalOnly
+                        ? "Skipping instrumental \(asset.displayName) (\(index + 1)/\(assets.count)) — existing WAV validated"
+                        : "Skipping \(asset.displayName) (\(index + 1)/\(assets.count)) — existing WAV validated"
+                    exportable += 1
+                    exported += 1
+                    skippedExisting += 1
+                    batchExportProgress = Double(index + 1) / Double(assets.count)
+                    continue
+                } catch {
+                    Self.removeIncompleteExportFile(at: outputURL)
+                    NSLog("[%@] Re-rendering %@ — existing WAV failed validation: %@",
+                          instrumentalOnly ? "BatchInstrumentalWAV" : "BatchWAV",
+                          asset.displayName,
+                          error.localizedDescription)
+                    batchExportStatus = instrumentalOnly
+                        ? "Re-rendering instrumental \(asset.displayName) — existing WAV failed validation"
+                        : "Re-rendering \(asset.displayName) — existing WAV failed validation"
+                }
             }
 
             batchExportStatus = "Hydrating \(asset.displayName)..."
@@ -7914,6 +8923,7 @@ final class ScoreStore {
                       instrumentalOnly ? "BatchInstrumentalWAV" : "BatchWAV",
                       asset.displayName,
                       outputURL.path)
+                enqueueSunoUploadIfEnabled(outputURL: outputURL)
             } catch {
                 NSLog("[%@] Failed %@: %@",
                       instrumentalOnly ? "BatchInstrumentalWAV" : "BatchWAV",
@@ -8119,6 +9129,65 @@ final class ScoreStore {
     }
 
     // MARK: - Suno MCP Methods
+
+    func enqueueSunoUploadIfEnabled(outputURL: URL) {
+        guard sunoAutoUploadExportedWavs else { return }
+        guard outputURL.pathExtension.lowercased() == "wav" else { return }
+        guard FileManager.default.fileExists(atPath: outputURL.path) else {
+            appendSunoLog("Skipped Suno upload because the WAV is missing: \(outputURL.lastPathComponent)", level: .warning)
+            return
+        }
+        guard sunoCLI.isInstalled else {
+            sunoUploadStatus = "Suno CLI not found. Export saved, upload skipped."
+            appendSunoLog("Suno CLI not found; upload skipped for \(outputURL.lastPathComponent)", level: .error)
+            return
+        }
+
+        let item = SunoUploadQueueItem(
+            fileURL: outputURL,
+            displayName: outputURL.lastPathComponent
+        )
+        sunoUploadQueue.append(item)
+        sunoUploadStatus = "Queued \(item.displayName) for Suno upload."
+        appendSunoLog("Queued Suno upload: \(item.displayName)")
+        startSunoUploadWorkerIfNeeded()
+    }
+
+    private func startSunoUploadWorkerIfNeeded() {
+        guard sunoUploadWorkerTask == nil else { return }
+        sunoUploadWorkerTask = Task { @MainActor [weak self] in
+            await self?.processSunoUploadQueue()
+            self?.sunoUploadWorkerTask = nil
+        }
+    }
+
+    private func processSunoUploadQueue() async {
+        guard !sunoIsUploading else { return }
+
+        while !sunoUploadQueue.isEmpty {
+            let item = sunoUploadQueue.removeFirst()
+            sunoIsUploading = true
+            sunoUploadStatus = "Uploading \(item.displayName) to Suno..."
+            appendSunoLog("Uploading to Suno: \(item.displayName)")
+
+            do {
+                let result = try await sunoCLI.uploadAudio(filePath: item.fileURL.path, headless: true)
+                let workspace = result.workspace ?? "Amira"
+                if let songID = result.songID {
+                    sunoUploadStatus = "Uploaded \(item.displayName) to Suno workspace \(workspace) (\(songID))."
+                    appendSunoLog("Uploaded \(item.displayName) to Suno workspace \(workspace): \(songID)", level: .success)
+                } else {
+                    sunoUploadStatus = "Uploaded \(item.displayName) to Suno workspace \(workspace)."
+                    appendSunoLog("Uploaded \(item.displayName) to Suno workspace \(workspace).", level: .success)
+                }
+            } catch {
+                sunoUploadStatus = "Suno upload failed for \(item.displayName): \(error.localizedDescription)"
+                appendSunoLog("Suno upload failed for \(item.displayName): \(error.localizedDescription)", level: .error)
+            }
+
+            sunoIsUploading = false
+        }
+    }
 
     func runSunoSelftest() async {
         sunoCLIErrorMessage = nil
