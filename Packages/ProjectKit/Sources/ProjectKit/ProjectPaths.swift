@@ -497,6 +497,11 @@ public struct ProjectPaths: Sendable {
         characterFolder(slug: slug).appendingPathComponent("animated", isDirectory: true)
     }
 
+    /// `<project>/Characters/<slug>/3d-models/`
+    public func character3DModelsDirectory(slug: String) -> URL {
+        characterFolder(slug: slug).appendingPathComponent("3d-models", isDirectory: true)
+    }
+
     /// `<project>/Characters/<slug>/inspiration-gallery-state.json`
     public func characterInspirationGalleryStateJSON(slug: String) -> URL {
         characterFolder(slug: slug).appendingPathComponent("inspiration-gallery-state.json")

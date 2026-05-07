@@ -27,6 +27,7 @@ final class ProjectCredentialStore: @unchecked Sendable {
         var supplementalLLMModel: String = SupplementalLLMProvider.deepSeek.defaultModel
         var viduAPIKey: String = ""
         var runPodAPIKey: String = ""
+        var meshyAPIKey: String = ""
         var vertexProjectID: String = ""
         var vertexRegion: String = ""
     }
@@ -92,6 +93,7 @@ final class ProjectCredentialStore: @unchecked Sendable {
     }
     func viduAPIKey() -> String { ioQueue.sync { cachedPayload.viduAPIKey } }
     func runPodAPIKey() -> String { ioQueue.sync { cachedPayload.runPodAPIKey } }
+    func meshyAPIKey() -> String { ioQueue.sync { cachedPayload.meshyAPIKey } }
     func vertexProjectID() -> String { ioQueue.sync { cachedPayload.vertexProjectID } }
     func vertexRegion() -> String { ioQueue.sync { cachedPayload.vertexRegion } }
 
@@ -112,6 +114,7 @@ final class ProjectCredentialStore: @unchecked Sendable {
     func setSupplementalLLMModel(_ value: String) { update { $0.supplementalLLMModel = value } }
     func setViduAPIKey(_ value: String) { update { $0.viduAPIKey = value } }
     func setRunPodAPIKey(_ value: String) { update { $0.runPodAPIKey = value } }
+    func setMeshyAPIKey(_ value: String) { update { $0.meshyAPIKey = value } }
     func setVertexProjectID(_ value: String) { update { $0.vertexProjectID = value } }
     func setVertexRegion(_ value: String) { update { $0.vertexRegion = value } }
 

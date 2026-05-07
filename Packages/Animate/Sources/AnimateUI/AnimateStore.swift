@@ -877,6 +877,15 @@ final class AnimateStore {
         }
     }
 
+    // MARK: - Meshy Settings
+
+    var meshyAPIKey: String = "" {
+        didSet {
+            guard !isHydratingMeshySettings else { return }
+            meshyCredentialStore.saveAPIKey(meshyAPIKey)
+        }
+    }
+
     @ObservationIgnored private var isHydratingRunPodSettings = false
     var runPodAPIKey: String = "" {
         didSet {
@@ -973,6 +982,7 @@ final class AnimateStore {
     @ObservationIgnored private var isHydratingOpenAISettings = false
     @ObservationIgnored private var isHydratingMiniMaxSettings = false
     @ObservationIgnored private var isHydratingViduSettings = false
+    @ObservationIgnored private var isHydratingMeshySettings = false
     @ObservationIgnored private var isHydratingPlacesWorkflowLibrary = false
 
     // MARK: - Track Resolution Cache
@@ -989,6 +999,7 @@ final class AnimateStore {
     private let geminiCredentialStore = GeminiCredentialStore()
     private let miniMaxCredentialStore = MiniMaxCredentialStore()
     private let viduCredentialStore = ViduCredentialStore()
+    private let meshyCredentialStore = MeshyCredentialStore()
     private let runPodCredentialStore = RunPodCredentialStore()
     private let runPodAccountService = RunPodAccountService()
     private let sceneAutomationPlanner = SceneAutomationPlanner()
@@ -2275,6 +2286,7 @@ final class AnimateStore {
         hydrateImageAnalysisSettings()
         hydrateMiniMaxSettings()
         hydrateViduSettings()
+        hydrateMeshySettings()
         hydrateRunPodSettings()
     }
 
@@ -2416,6 +2428,20 @@ final class AnimateStore {
 
     func clearViduAPIKey() {
         viduAPIKey = ""
+    }
+
+    private func hydrateMeshySettings() {
+        isHydratingMeshySettings = true
+        meshyAPIKey = meshyCredentialStore.loadAPIKey()
+        isHydratingMeshySettings = false
+    }
+
+    func setMeshyAPIKey(_ apiKey: String) {
+        meshyAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func clearMeshyAPIKey() {
+        meshyAPIKey = ""
     }
 
     func sceneRequirement(for sceneID: UUID?) -> PlacesScriptSceneRequirement? {
@@ -6826,6 +6852,7 @@ final class AnimateStore {
             hydrateImageAnalysisSettings()
             hydrateMiniMaxSettings()
             hydrateViduSettings()
+            hydrateMeshySettings()
             hydrateRunPodSettings()
             setupImageIntelligence()
 

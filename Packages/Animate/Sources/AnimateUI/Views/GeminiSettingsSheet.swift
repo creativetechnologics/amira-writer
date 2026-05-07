@@ -13,6 +13,7 @@ struct APISettingsSheet: View {
     @State private var deepSeekKeyDraft: String = ""
     @State private var viduKeyDraft: String = ""
     @State private var runPodKeyDraft: String = ""
+    @State private var meshyKeyDraft: String = ""
     @State private var revealGeminiKey: Bool = false
     @State private var revealOpenAIKey: Bool = false
     @State private var revealImageAnalysisGeminiKey: Bool = false
@@ -20,6 +21,7 @@ struct APISettingsSheet: View {
     @State private var revealDeepSeekKey: Bool = false
     @State private var revealViduKey: Bool = false
     @State private var revealRunPodKey: Bool = false
+    @State private var revealMeshyKey: Bool = false
     @State private var selectedTab: SettingsTab = .gemini
 
     // Vertex AI backend configuration (persisted in UserDefaults).
@@ -44,6 +46,7 @@ struct APISettingsSheet: View {
         case supplementalLLM = "Supplemental LLM"
         case vidu = "Vidu"
         case runPod = "RunPod"
+        case meshy = "Meshy"
     }
 
     var body: some View {
@@ -71,6 +74,8 @@ struct APISettingsSheet: View {
                 viduForm
             case .runPod:
                 runPodForm
+            case .meshy:
+                meshyForm
             }
 
             Divider()
@@ -86,6 +91,7 @@ struct APISettingsSheet: View {
             deepSeekKeyDraft = store.deepSeekAPIKey
             viduKeyDraft = store.viduAPIKey
             runPodKeyDraft = store.runPodAPIKey
+            meshyKeyDraft = store.meshyAPIKey
             imageGenBackend = ImageGenBackendStore.currentBackend()
             let vertex = ImageGenBackendStore.currentVertexSettings()
             vertexProjectDraft = vertex.projectID
@@ -766,6 +772,27 @@ struct APISettingsSheet: View {
         }
     }
 
+    // MARK: - Meshy
+
+    private var meshyForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            apiKeyField(
+                label: "Meshy API Key",
+                draft: $meshyKeyDraft,
+                reveal: $revealMeshyKey,
+                placeholder: "Paste Meshy API key...",
+                isSaved: !store.meshyAPIKey.isEmpty,
+                savedLabel: "Meshy key saved.",
+                unsavedLabel: "No Meshy key saved yet."
+            )
+
+            Text("Used for 3D character model generation. Get a key at meshy.ai.")
+                .font(.caption)
+                .foregroundStyle(OperaChromeTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: - Shared API Key Field
 
     private func apiKeyField(
@@ -838,6 +865,9 @@ struct APISettingsSheet: View {
                 case .runPod:
                     runPodKeyDraft = ""
                     store.runPodAPIKey = ""
+                case .meshy:
+                    meshyKeyDraft = ""
+                    store.clearMeshyAPIKey()
                 }
             }
             .buttonStyle(.bordered)
@@ -859,6 +889,7 @@ struct APISettingsSheet: View {
                 store.setDeepSeekAPIKey(deepSeekKeyDraft)
                 store.setViduAPIKey(viduKeyDraft)
                 store.runPodAPIKey = runPodKeyDraft
+                store.setMeshyAPIKey(meshyKeyDraft)
                 // User saved fresh credentials — clear any auth-halt so a
                 // subsequent call doesn't still refuse.
                 GeminiImageService.acknowledgeAuthFailureResolved()
@@ -883,6 +914,8 @@ struct APISettingsSheet: View {
             return store.viduAPIKey.isEmpty && viduKeyDraft.isEmpty
         case .runPod:
             return store.runPodAPIKey.isEmpty && runPodKeyDraft.isEmpty
+        case .meshy:
+            return store.meshyAPIKey.isEmpty && meshyKeyDraft.isEmpty
         }
     }
 

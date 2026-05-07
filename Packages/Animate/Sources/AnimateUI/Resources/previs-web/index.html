@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Amira Previs 3D</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app"></div>
+<div id="toolbar">
+  <div id="mode-buttons" class="toolbar-group">
+    <button class="mode-btn active" data-mode="select">Select</button>
+    <button class="mode-btn" data-mode="translate">Move</button>
+    <button class="mode-btn" data-mode="rotate">Rotate</button>
+    <button class="mode-btn" data-mode="scale">Scale</button>
+    <button class="mode-btn" data-mode="poseBone">Pose</button>
+  </div>
+  <div id="keyframe-buttons" class="toolbar-group">
+    <button class="kf-btn" data-kf="beginning">Beginning</button>
+    <button class="kf-btn active" data-kf="middle">Middle</button>
+    <button class="kf-btn" data-kf="end">End</button>
+    <button id="capture-btn">Capture</button>
+  </div>
+</div>
+<div id="info">Loading viewer...</div>
+<div id="status"></div>
+<script type="module" src="previs-core.js"></script>
+</body>
+</html>

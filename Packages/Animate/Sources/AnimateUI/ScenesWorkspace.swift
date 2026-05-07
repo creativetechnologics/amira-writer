@@ -40,6 +40,12 @@ private struct ScenesWorkspaceContent: View {
     @AppStorage("amira.imagine.inspector.width") private var inspectorWidth: Double = 320
 
     @State private var animateWorkspaceState = AnimateWorkspaceState()
+    @State private var activeTab: ScenesWorkspaceTab = .imagine
+
+    private enum ScenesWorkspaceTab: String, CaseIterable {
+        case imagine = "Imagine"
+        case previs3D = "Previs 3D"
+    }
 
     private var projectTitle: String {
         store.owpURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
@@ -119,8 +125,25 @@ private struct ScenesWorkspaceContent: View {
                         Spacer(minLength: 10)
                     }
                 } content: {
-                    ImagineScenesPageView(store: store)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 0) {
+                        Picker("", selection: $activeTab) {
+                            ForEach(ScenesWorkspaceTab.allCases, id: \.self) { tab in
+                                Text(tab.rawValue).tag(tab)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+
+                        switch activeTab {
+                        case .imagine:
+                            ImagineScenesPageView(store: store)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        case .previs3D:
+                            previsContent
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
@@ -195,5 +218,28 @@ private struct ScenesWorkspaceContent: View {
                 maxWidth
             )
         )
+    }
+
+    @ViewBuilder
+    private var previsContent: some View {
+        if let scene = store.selectedScene {
+            if let shotID = store.selectedShotID,
+               let shot = scene.shots.first(where: { $0.id == shotID }) {
+                Previs3DContainerView(store: store, scene: scene, shot: shot)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                OperaChromeEmptyState(
+                    systemImage: "cube",
+                    title: "Select a Shot",
+                    message: "Choose a shot from the sidebar to start pre-visualizing in 3D."
+                )
+            }
+        } else {
+            OperaChromeEmptyState(
+                systemImage: "film.stack",
+                title: "Select a Scene",
+                message: "Choose a scene from the sidebar to view its shots and pre-visualization."
+            )
+        }
     }
 }

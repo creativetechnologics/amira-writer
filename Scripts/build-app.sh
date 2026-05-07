@@ -177,6 +177,13 @@ if [[ -d "$PROJECT_DIR/Scripts/3d-map-pipeline/viewer" ]]; then
     echo "Embedded 3D map viewer: $RESOURCES_DIR/map3d-viewer"
 fi
 
+# Embed the 3D previs viewer
+if [[ -d "$PROJECT_DIR/Packages/Animate/Sources/AnimateUI/Resources/previs-web" ]]; then
+    rm -rf "$RESOURCES_DIR/previs-web"
+    cp -R "$PROJECT_DIR/Packages/Animate/Sources/AnimateUI/Resources/previs-web" "$RESOURCES_DIR/previs-web"
+    echo "Embedded 3D previs viewer: $RESOURCES_DIR/previs-web"
+fi
+
 # Embed the Suno CLI runtime so the synced app works on device-local machines
 # without depending on a server-only absolute path.
 SUNO_RUNTIME_ROOT="$(find_suno_runtime_root)" || {

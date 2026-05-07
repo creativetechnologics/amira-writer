@@ -141,22 +141,6 @@ public struct MeshyTaskError: Codable, Sendable {
 }
 
 @available(macOS 26.0, *)
-public final class MeshyCredentialStore: Sendable {
-    public init() {}
-    public func saveAPIKey(_ key: String) {}
-    public func loadAPIKey() -> String { "" }
-    public func clearAPIKey() {}
-}
-
-@available(macOS 26.0, *)
-public final class MeshyService: Sendable {
-    public init(apiKey: String) {}
-    public func buildCreateTaskRequest<T: Encodable>(endpoint: String, body: T) throws -> URLRequest { URLRequest(url: URL(string: "https://api.meshy.ai")!) }
-    public func buildGetTaskRequest(endpoint: String, taskID: String) -> URLRequest { URLRequest(url: URL(string: "https://api.meshy.ai")!) }
-    public func buildBalanceRequest() -> URLRequest { URLRequest(url: URL(string: "https://api.meshy.ai")!) }
-}
-
-@available(macOS 26.0, *)
 public struct MeshyBridgeService {
     public static func needsMeshyConversion(_ kind: String) -> Bool {
         kind == "bodyModel"

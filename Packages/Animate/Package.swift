@@ -32,7 +32,8 @@ let package = Package(
             resources: [
                 .copy("Resources/Models3D"),
                 .copy("Resources/gemini_inspiration_batch.py"),
-                .copy("Resources/storyboard-web")
+                .copy("Resources/storyboard-web"),
+                .copy("Resources/previs-web")
             ]
         ),
         .executableTarget(
