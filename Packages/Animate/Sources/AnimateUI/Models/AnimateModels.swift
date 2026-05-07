@@ -2385,9 +2385,10 @@ public struct PlacesWorldContextBlocks: Codable, Sendable, Equatable, Hashable {
     public static let defaultEnvironmental = """
     Exterior environment with open sky
     Persian-Afghan highland valley landscape
-    Settlement on the north bank of the main river only
+    Hillside settlement set back uphill from the main river
+    Old stone bridge crosses only to a bare landing; dirt road climbs from there before town begins
     Textured stone and mud-brick facades, weathered surfaces
-    Overhead power lines and irregular signage
+    Irregular hand-painted signage and practical repaired materials
     Dry dust haze characteristic of arid subtropical climate
     """
 

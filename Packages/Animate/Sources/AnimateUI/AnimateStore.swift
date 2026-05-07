@@ -8336,6 +8336,15 @@ final class AnimateStore {
         imageLibraryReviewMetadata(for: imagePath)?.isLiked ?? false
     }
 
+    func imageLibraryIsPickedReference(for imagePath: String) -> Bool {
+        guard !Self.isGeographyTaintedReferencePath(imagePath),
+              let metadata = imageLibraryReviewMetadata(for: imagePath),
+              metadata.isRejected == false else {
+            return false
+        }
+        return metadata.isLiked
+    }
+
     private func normalizedAssetPath(_ path: String?) -> String? {
         normalizedCharacterAssetPath(path)
     }
@@ -12034,13 +12043,14 @@ final class AnimateStore {
     func generatedBackgroundReferencePriority(for path: String) -> Int {
         guard let record = generatedBackgroundRecord(for: path) else { return 0 }
         if record.isRejected { return -100 }
+        if !imageLibraryIsPickedReference(for: path) { return -100 }
         return (record.rating ?? 0) * 10 + max(0, 5 - min(record.duplicatePaths.count, 5))
     }
 
     func preferredPlaceContinuityImagePath(for place: BackgroundPlate, workflow: PlaceWorkflowMode) -> String? {
         let nodeCanon = worldNodes(placeID: place.id)
             .compactMap { $0.approvedImagePath(for: workflow) }
-            .filter { !imageLibraryIsRejected(for: $0) }
+            .filter { imageLibraryIsPickedReference(for: $0) }
             .first
         if let nodeCanon {
             return nodeCanon
@@ -12049,7 +12059,7 @@ final class AnimateStore {
         let approved = place.approvedImagePath(for: workflow)
 
         if let approved,
-           !imageLibraryIsRejected(for: approved),
+           imageLibraryIsPickedReference(for: approved),
            generatedBackgroundReferencePriority(for: approved) >= 0 {
             return approved
         }
@@ -15102,6 +15112,7 @@ final class AnimateStore {
         var bestUpdatedAt = Date.distantPast
 
         for record in placesWorkflowLibrary.generatedImageRecords where !record.isRejected {
+            guard imageLibraryIsPickedReference(for: record.activePath) else { continue }
             let score = inferredPlacesMasterMapScore(record)
             guard score > 0 else { continue }
 
@@ -15625,6 +15636,7 @@ final class AnimateStore {
         placesWorkflowLibrary.generatedImageRecords.filter { record in
             !record.isRejected
                 && !imageLibraryIsRejected(for: record.activePath)
+                && imageLibraryIsPickedReference(for: record.activePath)
                 && landmarkKind(forRecord: record) == kind
         }
     }
@@ -15837,10 +15849,10 @@ final class AnimateStore {
     }
 
     enum APIReferenceMode: String {
-        /// Existing behavior — master map (if exterior) + continuity + up to 4 place.referenceImages.
+        /// Master map (if exterior) + picked continuity + picked local place references.
         case `default`
-        /// Gary's strict rule: master map (always) + only this place's 5★-rated images.
-        /// Nothing else. No unrated images, no external reference entries, no continuity.
+        /// Gary's strict rule: master map (always) + only this place's picked 5★-rated images.
+        /// Nothing else. No unpicked/unrated images, no external reference entries, no continuity.
         case curated
     }
 
@@ -15938,6 +15950,24 @@ final class AnimateStore {
         "plate carrier", "rifle", "sidearm", "military vehicle", "humvee", "mrap"
     ]
 
+    static let geographyTaintedReferencePathMarkers: [String] = [
+        "16-town-16-bridge-into-town",
+        "17-town-17-from-town-toward-bridge",
+        "town-16-bridge-into-town",
+        "town-17-from-town-toward-bridge",
+        "from-town-toward-bridge",
+        "town-wide-28-broad-town-and-bridge",
+        "town-wide-30-riverside-bend-full-town",
+        "town-wide-39-bridge-secondary-town-primary",
+        "lower-town-riverside",
+        "from-bridge-approach-whole-town"
+    ]
+
+    static func isGeographyTaintedReferencePath(_ path: String) -> Bool {
+        let normalized = path.lowercased()
+        return geographyTaintedReferencePathMarkers.contains { normalized.contains($0) }
+    }
+
     static func apiMilitaryClauseIfRelevant(for brief: String) -> String {
         let haystack = " " + brief.lowercased() + " "
         let hit = apiMilitaryTokens.contains { haystack.contains($0) }
@@ -16016,7 +16046,7 @@ final class AnimateStore {
         // (e.g. "courtyard" for an indoor hall).
         let exteriorCanon: String
         if place.isExteriorLike {
-            exteriorCanon = "The scene is outdoors, under open sky. If the river is visible, settlement appears only on the north bank per the master valley map, never on both sides."
+            exteriorCanon = "The scene is outdoors, under open sky. If the river or bridge is visible, preserve this geography: old stone bridge crosses only the ravine/river to a bare village-side landing; an exposed dirt road climbs from that landing before the hillside town begins. Never place market streets, storefronts, vendors, or dense town blocks at the river or bridge."
         } else {
             exteriorCanon = "The scene is indoors, fully enclosed inside a room with walls and a roof. Any windows reveal only a narrow framed slice of what the brief describes — never a panoramic view. The room reads as in active use, not abandoned or in total ruin."
         }
@@ -16042,17 +16072,23 @@ final class AnimateStore {
 
         // Build reference image bundle. Two modes:
         //
-        //  .default  — master map (if exterior) + photoreal continuity + up to 4 place.referenceImages.
-        //  .curated  — master map (always) + ONLY this place's 5★-rated images from its own galleries.
-        //              No continuity, no unrated images, no external reference entries.
+        //  .default  — master map (if exterior) + picked photoreal continuity + picked place.referenceImages.
+        //  .curated  — master map (always) + ONLY this place's picked 5★-rated images from its own galleries.
+        //              No continuity, no unpicked/unrated images, no external reference entries.
         var referenceURLs: [URL] = []
         var referencePaths: [String] = []
         var seenPaths: Set<String> = []
-        func appendRef(_ path: String?) {
+        func appendRef(_ path: String?, requirePicked: Bool = true) {
             guard let path,
                   !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !Self.isGeographyTaintedReferencePath(path),
                   !seenPaths.contains(path),
                   let url = resolvedCharacterAssetURL(for: path) else { return }
+            if requirePicked {
+                guard imageLibraryIsPickedReference(for: url.path) else { return }
+            } else {
+                guard !imageLibraryIsRejected(for: url.path) else { return }
+            }
             seenPaths.insert(path)
             referenceURLs.append(url)
             referencePaths.append(path)
@@ -16061,7 +16097,10 @@ final class AnimateStore {
         switch referenceMode {
         case .default:
             if place.isExteriorLike {
-                appendRef(effectivePlacesMasterMapPath())
+                // Canonical structural anchor: explicit master-map selection is allowed
+                // even before it has a thumbs-up sidecar. All other automatic refs
+                // must be picked/liked.
+                appendRef(effectivePlacesMasterMapPath(), requirePicked: false)
             }
             appendRef(preferredPlaceContinuityImagePath(for: place, workflow: .photorealistic))
             for ref in place.referenceImages {
@@ -16072,13 +16111,13 @@ final class AnimateStore {
         case .curated:
             // Always include the master map — it's Gary's canonical world anchor
             // and the "ONLY the map, or …" rule always permits it.
-            appendRef(effectivePlacesMasterMapPath())
+            appendRef(effectivePlacesMasterMapPath(), requirePicked: false)
 
-            // Pull every 5★-rated image from this place's photoreal + animated galleries.
+            // Pull every picked 5★-rated image from this place's photoreal + animated galleries.
             // `place.imageRatings` is keyed by path → star count (0–5).
             let rated: [(path: String, rating: Int)] = (place.imagePaths + place.animatedImagePaths)
                 .map { path in (path, place.imageRatings[path] ?? 0) }
-                .filter { $0.rating >= 5 }
+                .filter { $0.rating >= 5 && imageLibraryIsPickedReference(for: $0.path) }
                 // Sort higher-rated first then stable by path for determinism.
                 .sorted { lhs, rhs in
                     if lhs.rating != rhs.rating { return lhs.rating > rhs.rating }

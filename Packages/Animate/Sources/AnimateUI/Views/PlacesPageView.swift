@@ -3852,7 +3852,7 @@ struct PlacesPageView: View {
         // (e.g. "courtyard" inside an Interior-tagged place).
         let exteriorCanon: String
         if place.isExteriorLike {
-            exteriorCanon = "The scene is outdoors, under open sky. If the river is visible, settlement appears only on the north bank per the master valley map, never on both sides. The town reads as inhabited and maintained: worn stone, repaired mud-brick, textiles, awnings, and daily-life detail."
+            exteriorCanon = "The scene is outdoors, under open sky. If the river or bridge is visible, preserve this geography: old stone bridge crosses only the ravine/river to a bare village-side landing; an exposed dirt road climbs from that landing before the hillside town begins. Never place market streets, storefronts, vendors, or dense town blocks at the river or bridge. The town reads as inhabited and maintained: worn stone, repaired mud-brick, textiles, awnings, and daily-life detail."
         } else {
             exteriorCanon = "The scene is indoors, fully enclosed inside a room with walls and a roof. Any windows reveal only a narrow framed slice of what the brief describes — never a panoramic view. The room reads as in active use, not abandoned or in total ruin."
         }
@@ -3889,15 +3889,21 @@ struct PlacesPageView: View {
         var drafts: [GeminiGenerationReferenceDraft] = []
         var seen: Set<String> = []
 
-        func append(label: String, path: String?, included: Bool = true) {
+        func append(label: String, path: String?, included: Bool = true, requirePicked: Bool = true) {
             guard let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            guard !AnimateStore.isGeographyTaintedReferencePath(path) else { return }
+            if requirePicked {
+                guard store.imageLibraryIsPickedReference(for: path) else { return }
+            } else {
+                guard !store.imageLibraryIsRejected(for: path) else { return }
+            }
             guard !seen.contains(path) else { return }
             seen.insert(path)
             drafts.append(GeminiGenerationReferenceDraft(label: label, path: path, isIncluded: included))
         }
 
         if place.isExteriorLike {
-            append(label: "Master Map", path: store.effectivePlacesMasterMapPath(), included: true)
+            append(label: "Master Map", path: store.effectivePlacesMasterMapPath(), included: true, requirePicked: false)
         }
 
         switch workflow {

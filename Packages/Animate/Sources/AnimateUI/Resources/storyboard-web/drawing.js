@@ -548,7 +548,7 @@ export function pasteImageURL(url) {
   // Capture pre-paste state BEFORE touching the canvas
   const prePasteSnapshot = ctx.getImageData(0, 0, BACKING_W, BACKING_H);
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       clearToWhite();
@@ -561,14 +561,7 @@ export function pasteImageURL(url) {
       resolve();
     };
     img.onerror = () => {
-      // Mirror loadImageURL failure behaviour: clear to white
-      clearToWhite();
-      // Still record the pre-paste snapshot so undo works even on failure
-      undoStack.push(prePasteSnapshot);
-      if (undoStack.length > MAX_UNDO) undoStack.shift();
-      redoStack = [];
-      updateUndoRedoUI();
-      resolve();
+      reject(new Error(`Could not load image: ${url}`));
     };
     img.src = url;
   });

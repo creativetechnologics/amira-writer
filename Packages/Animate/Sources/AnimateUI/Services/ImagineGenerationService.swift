@@ -151,8 +151,16 @@ private extension ImagineGenerationService {
         var references: [GeminiImageService.ReferenceImage] = []
         var seen = Set<String>()
 
-        func appendReference(path: String, required: Bool) throws {
+        func appendReference(path: String, required: Bool, requirePicked: Bool = true) throws {
             guard references.count < maxCount else { return }
+            guard !AnimateStore.isGeographyTaintedReferencePath(path) else {
+                if required { throw unavailablePickedReferenceError(for: plan) }
+                return
+            }
+            guard !requirePicked || Self.isPickedReferencePath(path) else {
+                if required { throw unavailablePickedReferenceError(for: plan) }
+                return
+            }
             let url = URL(fileURLWithPath: path).standardizedFileURL
             guard seen.insert(url.path).inserted else { return }
             if required {
@@ -171,7 +179,8 @@ private extension ImagineGenerationService {
         }
 
         for path in plan.referenceImagePaths {
-            try appendReference(path: path, required: false)
+            let isStoryboard = plan.storyboardImagePath == path
+            try appendReference(path: path, required: false, requirePicked: !isStoryboard)
         }
 
         return references
@@ -185,8 +194,16 @@ private extension ImagineGenerationService {
         var urls: [URL] = []
         var seen = Set<String>()
 
-        func appendPath(_ path: String, required: Bool) throws {
+        func appendPath(_ path: String, required: Bool, requirePicked: Bool = true) throws {
             guard urls.count < maxCount else { return }
+            guard !AnimateStore.isGeographyTaintedReferencePath(path) else {
+                if required { throw unavailablePickedReferenceError(for: plan) }
+                return
+            }
+            guard !requirePicked || Self.isPickedReferencePath(path) else {
+                if required { throw unavailablePickedReferenceError(for: plan) }
+                return
+            }
             let url = URL(fileURLWithPath: path).standardizedFileURL
             guard seen.insert(url.path).inserted else { return }
             if FileManager.default.fileExists(atPath: url.path) {
@@ -207,18 +224,34 @@ private extension ImagineGenerationService {
         }
 
         for path in plan.referenceImagePaths {
-            try appendPath(path, required: false)
+            let isStoryboard = plan.storyboardImagePath == path
+            try appendPath(path, required: false, requirePicked: !isStoryboard)
         }
 
         for manualURL in manualReferenceURLs {
             guard urls.count < maxCount else { break }
             let url = manualURL.standardizedFileURL
+            guard !AnimateStore.isGeographyTaintedReferencePath(url.path) else { continue }
             guard seen.insert(url.path).inserted,
                   FileManager.default.fileExists(atPath: url.path) else { continue }
             urls.append(url)
         }
 
         return urls
+    }
+
+    static func isPickedReferencePath(_ path: String) -> Bool {
+        guard let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path),
+              metadata.isRejected == false else {
+            return false
+        }
+        return metadata.isLiked
+    }
+
+    func unavailablePickedReferenceError(for plan: ShotFrameGenerationPlan) -> GeminiImageService.ServiceError {
+        GeminiImageService.ServiceError.referenceImageUnavailable(
+            "Shot \(plan.shotIndex + 1) \(plan.moment.rawValue.lowercased()) requires a picked, non-rejected source image before execute mode."
+        )
     }
 
     func openAIImageSize(for plan: ShotFrameGenerationPlan) -> String {

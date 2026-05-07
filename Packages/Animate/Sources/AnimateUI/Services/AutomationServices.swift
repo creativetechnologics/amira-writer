@@ -1940,6 +1940,10 @@ struct ReferenceContractResolver {
         _ path: String,
         settings: ShotGenerationSettings
     ) -> Bool {
+        if AnimateStore.isGeographyTaintedReferencePath(path) {
+            return false
+        }
+
         if store.generatedBackgroundRecord(for: path)?.isRejected == true {
             return false
         }

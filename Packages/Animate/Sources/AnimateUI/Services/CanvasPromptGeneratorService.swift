@@ -162,8 +162,8 @@ struct CanvasPromptGeneratorService: Sendable {
                 rating: nil,
                 isLiked: false,
                 updatedAt: ImagePreferenceProfileService.referenceUpdatedAt(forImagePath: masterMap),
-                notes: "Strict geography anchor for river direction, north-bank settlement, bridge/ravine placement, road relationships, and terrain.",
-                searchText: "master map valley river bridge ravine town road terrain topography geography",
+                notes: "Strict geography anchor: bridge crosses only the ravine/river to a bare landing, then the road climbs before the hillside town begins.",
+                searchText: "master map valley river bridge ravine bare landing uphill road hillside town terrain topography geography",
                 isMasterMap: true,
                 baseScore: 100
             ))
@@ -175,6 +175,7 @@ struct CanvasPromptGeneratorService: Sendable {
                   FileManager.default.fileExists(atPath: path),
                   !record.isRejected,
                   !isRejectedImagePath(path),
+                  isPickedImagePath(path, fallbackRecordPicked: record.isLiked),
                   let preferenceScore = ImagePreferenceProfileService.referencePreferenceScore(forImagePath: path) ?? recordPreferenceScore(record) else {
                 continue
             }
@@ -234,9 +235,9 @@ struct CanvasPromptGeneratorService: Sendable {
 
     private static func recordPreferenceScore(_ record: ProjectImageRecord) -> Double? {
         guard !record.isRejected else { return nil }
+        guard record.isLiked else { return nil }
         let rating = record.rating.map { Double(min(max($0, 1), 5)) }
-        if record.isLiked { return max(5.5, (rating ?? 0) + 0.75) }
-        return rating
+        return max(5.5, (rating ?? 0) + 0.75)
     }
 
     private static func finalReferenceSelection(
@@ -467,6 +468,13 @@ struct CanvasPromptGeneratorService: Sendable {
 
     private static func isRejectedImagePath(_ path: String) -> Bool {
         ImageLibraryMetadataSidecarService.load(forImagePath: path)?.isRejected == true
+    }
+
+    private static func isPickedImagePath(_ path: String, fallbackRecordPicked: Bool) -> Bool {
+        if let metadata = ImageLibraryMetadataSidecarService.load(forImagePath: path) {
+            return metadata.isRejected == false && metadata.isLiked
+        }
+        return fallbackRecordPicked
     }
 
     private static func runtimePath(_ rawPath: String?, projectRoot: URL) -> String? {
