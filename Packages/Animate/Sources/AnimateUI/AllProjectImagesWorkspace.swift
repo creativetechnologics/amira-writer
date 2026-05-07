@@ -354,7 +354,7 @@ final class AllProjectImagesState {
                 PerfSignposts.event(.inspectorSelection, "id=\(selectedRecordID ?? "nil")")
             }
             if let selectedRecordID, !selectedRecordIDs.contains(selectedRecordID) {
-                selectedRecordIDs = [selectedRecordID]
+                selectedRecordIDs.insert(selectedRecordID)
                 lastSelectedRecordID = selectedRecordID
             }
         }
