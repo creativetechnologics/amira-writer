@@ -98,6 +98,13 @@ final class StoryboardRouter {
             return await putLandmarkSketchResponse(landmarkIDStr: landmarkIDStr, request: request)
         case _ where method == "GET" && path.hasPrefix("/api/scaffolds/"):
             return scaffoldAssetResponse(path: path)
+        case _ where method == "GET" && path.hasPrefix("/api/parts/character/") && !path.hasSuffix("/manifest"):
+            return serveCharacterPartImage(path: path)
+        case _ where method == "GET" && path.hasPrefix("/api/parts/character/") && path.hasSuffix("/manifest"):
+            let slug = extractCharacterSlugFromPartPath(path)
+            return characterPartsManifestResponse(slug: slug)
+        case ("GET", "/api/parts/characters"):
+            return characterPartsListResponse()
         case ("OPTIONS", _):
             return SBHTTPResponse(status: 204, contentType: "text/plain", body: Data())
         default:
@@ -579,6 +586,112 @@ final class StoryboardRouter {
         guard let path = ws.activeProjectPath else { return nil }
         return URL(fileURLWithPath: path)
     }
+
+    // MARK: - Character Parts Routes
+
+    private func extractCharacterSlugFromPartPath(_ path: String) -> String {
+        let prefix = "/api/parts/character/"
+        var remainder = String(path.dropFirst(prefix.count))
+        if remainder.hasSuffix("/manifest") {
+            remainder = String(remainder.dropLast("/manifest".count))
+        }
+        if let slashIdx = remainder.lastIndex(of: "/") {
+            remainder = String(remainder[..<slashIdx])
+        }
+        return remainder
+    }
+
+    private func serveCharacterPartImage(path: String) -> SBHTTPResponse {
+        guard let ws = workspace, let root = projectRoot(ws) else {
+            return .serviceUnavailable("no project open")
+        }
+        let prefix = "/api/parts/character/"
+        var remainder = String(path.dropFirst(prefix.count))
+        if remainder.hasSuffix("/manifest") {
+            remainder = String(remainder.dropLast("/manifest".count))
+        }
+
+        let slug = extractCharacterSlugFromPartPath(path)
+        let filename = remainder.contains("/") ? String(remainder.split(separator: "/").last!) : remainder
+
+        let dir = ProjectPaths(root: root)
+            .characterFolder(slug: slug)
+            .appendingPathComponent("parts-library")
+        let fileURL = dir.appendingPathComponent(filename)
+
+        guard FileManager.default.fileExists(atPath: fileURL.path),
+              let data = try? Data(contentsOf: fileURL) else {
+            return .notFound("part image not found: \(filename)")
+        }
+
+        let mime = fileURL.pathExtension.lowercased() == "png" ? "image/png" : "image/jpeg"
+        return SBHTTPResponse(status: 200, contentType: mime, body: data)
+    }
+
+    private func characterPartsManifestResponse(slug: String) -> SBHTTPResponse {
+        guard let ws = workspace, let root = projectRoot(ws) else {
+            return .serviceUnavailable("no project open")
+        }
+
+        let dir = ProjectPaths(root: root)
+            .characterFolder(slug: slug)
+            .appendingPathComponent("parts-library")
+        let manifestURL = dir.appendingPathComponent("manifest.json")
+
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(CharacterPartsManifest.self, from: data) else {
+            return .okJSON(["slug": slug, "parts": []])
+        }
+
+        let partsJSON = manifest.parts.map { part -> [String: Any] in
+            var dict: [String: Any] = [
+                "id": part.id.uuidString,
+                "characterSlug": part.characterSlug,
+                "costumeName": part.costumeName,
+                "partKind": part.partKind.rawValue,
+                "imagePath": part.imagePath,
+                "imageURL": "/api/parts/character/\(part.characterSlug)/\(part.imagePath)",
+            ]
+            if let em = part.emotion { dict["emotion"] = em }
+            if let bb = part.boundingBox {
+                dict["boundingBox"] = ["minX": bb.minX, "minY": bb.minY, "maxX": bb.maxX, "maxY": bb.maxY]
+            }
+            return dict
+        }
+
+        return .okJSON(["slug": slug, "parts": partsJSON])
+    }
+
+    private func characterPartsListResponse() -> SBHTTPResponse {
+        guard let ws = workspace, let root = projectRoot(ws) else {
+            return .serviceUnavailable("no project open")
+        }
+
+        let charactersDir = ProjectPaths(root: root).characters
+        var slugs: Set<String> = []
+        if let entries = try? FileManager.default.contentsOfDirectory(at: charactersDir, includingPropertiesForKeys: nil) {
+            for entry in entries where entry.hasDirectoryPath {
+                let manifestURL = entry.appendingPathComponent("parts-library/manifest.json")
+                if FileManager.default.fileExists(atPath: manifestURL.path) {
+                    slugs.insert(entry.lastPathComponent)
+                }
+            }
+        }
+
+        var result: [[String: Any]] = []
+        for slug in slugs.sorted() {
+            let name = ws.store.characters.first(where: { $0.owpSlug == slug })?.name ?? slug
+            result.append([
+                "slug": slug,
+                "name": name,
+                "manifestURL": "/api/parts/character/\(slug)/manifest"
+            ])
+        }
+
+        return .okJSON(["characters": result])
+    }
+
+    // MARK: - Helpers
 
     private func scaffoldDirectory(projectRoot root: URL) -> URL {
         root.appendingPathComponent("Animate/scaffolds", isDirectory: true)

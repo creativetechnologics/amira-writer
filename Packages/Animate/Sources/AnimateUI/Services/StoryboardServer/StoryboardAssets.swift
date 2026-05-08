@@ -28,6 +28,7 @@ enum StoryboardAssets {
             "style.css",
             "app.js",
             "drawing.js",
+            "parts-composer.js",
             "vendor/perfect-freehand.min.js",
             "manifest.webmanifest",
             "apple-touch-icon.png",

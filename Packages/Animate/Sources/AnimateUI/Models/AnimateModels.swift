@@ -205,7 +205,6 @@ struct AnimationSceneShot: Identifiable, Codable, Sendable, Hashable {
     var scriptSyncRunID: UUID?
     var shotFrameGeneration: ShotFrameGeneration? = nil
     var shotBackgroundPlate: ShotBackgroundPlate? = nil
-    var previs3DState: ShotPrevis3DState? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -226,7 +225,6 @@ struct AnimationSceneShot: Identifiable, Codable, Sendable, Hashable {
         case scriptSyncRunID
         case shotFrameGeneration
         case shotBackgroundPlate
-        case previs3DState
     }
 
     init(
@@ -285,7 +283,6 @@ struct AnimationSceneShot: Identifiable, Codable, Sendable, Hashable {
         scriptSyncRunID = try container.decodeIfPresent(UUID.self, forKey: .scriptSyncRunID)
         shotFrameGeneration = try container.decodeIfPresent(ShotFrameGeneration.self, forKey: .shotFrameGeneration)
         shotBackgroundPlate = try container.decodeIfPresent(ShotBackgroundPlate.self, forKey: .shotBackgroundPlate)
-        previs3DState = try container.decodeIfPresent(ShotPrevis3DState.self, forKey: .previs3DState)
     }
 
     var durationFrames: Int {

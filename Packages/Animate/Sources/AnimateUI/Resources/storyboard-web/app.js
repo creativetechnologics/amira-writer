@@ -19,7 +19,7 @@ import {
   resetUndoStacks,
 } from './drawing.js';
 
-// ─── Constants ────────────────────────────────────────────────────────────
+
 
 const AUTOSAVE_INTERVAL_MS = 5_000;
 const STROKE_END_SAVE_DEBOUNCE_MS = 400;
@@ -145,6 +145,13 @@ async function boot() {
   await refreshShots();
   await refreshPlaces();
   await refreshScaffolds();
+  await refreshCharacterParts();
+
+  // Init character parts layer
+  initPartsLayer('#canvas-area', () => {
+    markDirty();
+  });
+  loadCharacterParts();
 
   // Restore last position from localStorage
   const savedMode = localStorage.getItem(LS_MODE_KEY);
@@ -329,6 +336,12 @@ async function refreshScaffolds() {
     if (scaffoldRefreshBtn) scaffoldRefreshBtn.disabled = false;
   }
   renderScaffoldControls();
+}
+
+async function refreshCharacterParts() {
+  try {
+    loadCharacterParts();
+  } catch (_) {}
 }
 
 function renderSidebar() {

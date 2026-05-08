@@ -19,6 +19,7 @@ struct CharactersPageView: View {
     @AppStorage("charactersPage.showLookDevelopmentPane") private var showLookDevelopmentPane: Bool = true
     @AppStorage("charactersPage.showReferenceWorkflowPane") private var showReferenceWorkflowPane: Bool = true
     @AppStorage("charactersPage.showCostumesPane") private var showCostumesPane: Bool = true
+    @AppStorage("charactersPage.showCharacterPartsLibraryPane") private var showCharacterPartsLibraryPane: Bool = false
     // 3D Sidecars pane archived
     @AppStorage("charactersPage.showActionImagesPane") private var showActionImagesPane: Bool = false
     @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
@@ -495,6 +496,17 @@ struct CharactersPageView: View {
                     ) {
                         if showCostumesPane && canRenderHeavyDetails {
                             CostumesPane(store: store, characterID: character.id)
+                        }
+                    }
+
+                    collapsiblePane(
+                        title: "Character Parts Library",
+                        icon: "square.grid.3x2",
+                        counterText: nil,
+                        isExpanded: $showCharacterPartsLibraryPane
+                    ) {
+                        if showCharacterPartsLibraryPane && canRenderHeavyDetails {
+                            CharacterPartsLibraryPane(store: store, characterID: character.id)
                         }
                     }
 
