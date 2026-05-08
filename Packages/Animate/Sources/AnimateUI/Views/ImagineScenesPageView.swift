@@ -994,6 +994,13 @@ struct ImagineScenesPageView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
                 .disabled(!canSubmitGeneration)
+
+                Button { composeStoryboard() } label: {
+                    Label("Compose", systemImage: "perspective")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .disabled(!canComposeStoryboard)
             }
 
             // Shared composer: same prompt-editor + references drop-target box
@@ -1844,6 +1851,34 @@ struct ImagineScenesPageView: View {
 
     private func resolvedCameraMovement(for shot: AnimationSceneShot) -> CameraMovement? {
         shot.shotIntent?.recommendedCameraMovement
+    }
+
+    private var canComposeStoryboard: Bool {
+        selectedScene != nil && store.imagineSelectedShotIndex != nil
+    }
+
+    private func composeStoryboard() {
+        guard let scene = selectedScene,
+              let owpURL = store.fileOWPURL,
+              let shotIndex = store.imagineSelectedShotIndex,
+              shotIndex < scene.shots.count
+        else { return }
+        let shot = scene.shots[shotIndex]
+
+        Task {
+            store.statusMessage = "Composing storyboard..."
+            do {
+                let service = StoryboardComposerService(store: store)
+                let url = try await service.composeStoryboard(
+                    scene: scene,
+                    shot: shot,
+                    projectRoot: owpURL
+                )
+                store.statusMessage = "Storyboard composed: \(url.lastPathComponent)"
+            } catch {
+                store.statusMessage = "Compose failed: \(error.localizedDescription)"
+            }
+        }
     }
 }
 

@@ -839,9 +839,6 @@ struct APISettingsSheet: View {
                 case .runPod:
                     runPodKeyDraft = ""
                     store.runPodAPIKey = ""
-                case .meshy:
-                    meshyKeyDraft = ""
-                    store.clearMeshyAPIKey()
                 }
             }
             .buttonStyle(.bordered)

@@ -113,7 +113,7 @@ struct CharacterPartsLibraryPane: View {
                                 return FileManager.default.fileExists(atPath: url.path) ? url : nil
                             }
                             if index < previewURLs.count {
-                                QuickLookPreviewController.shared.show(urls: previewURLs, currentIndex: index)
+                                QuickLookPreviewController.shared.toggle(urls: previewURLs, startAt: index)
                             }
                         }
                         return .handled
@@ -183,7 +183,7 @@ struct CharacterPartsLibraryPane: View {
                         return FileManager.default.fileExists(atPath: url.path) ? url : nil
                     }
                     if let index = previewURLs.firstIndex(where: { $0.path == resolvedPath }) {
-                        QuickLookPreviewController.shared.show(urls: previewURLs, currentIndex: index)
+                        QuickLookPreviewController.shared.toggle(urls: previewURLs, startAt: index)
                     }
                 }
             }
