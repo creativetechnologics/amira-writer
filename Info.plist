@@ -24,10 +24,6 @@
     <string>Copyright 2026 Amira Writer. All rights reserved.</string>
     <key>NSCameraUsageDescription</key>
     <string>Amira Writer uses the camera for real-time motion capture to drive character animations.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Amira Writer uses the microphone for quick review-note dictation while rating and rejecting generated images.</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Amira Writer may use speech recognition to transcribe review notes into image feedback fields.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Amira Writer connects to Draw Things on your local network for AI image generation, and serves the Storyboard tool so you can sketch panels on your iPad.</string>
     <key>NSBonjourServices</key>
