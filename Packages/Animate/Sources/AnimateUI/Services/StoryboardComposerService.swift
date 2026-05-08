@@ -335,8 +335,8 @@ final class StoryboardComposerService {
     private func mannequinSize(intent: ShotIntent) -> CGFloat {
         switch intent {
         case .establishing: 18
-        case .extremeClose, .insert: 160
         case .close, .reaction, .emotional: 120
+        case .insert: 160
         case .mediumClose, .dialogue, .confrontation: 80
         case .medium, .handoff: 60
         case .wide, .movement, .transition: 40
