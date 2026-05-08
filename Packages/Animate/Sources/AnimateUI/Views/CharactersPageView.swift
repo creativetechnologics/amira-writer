@@ -23,7 +23,6 @@ struct CharactersPageView: View {
     // 3D Sidecars pane archived
     @AppStorage("charactersPage.showActionImagesPane") private var showActionImagesPane: Bool = false
     @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
-    @AppStorage("charactersPage.showMeshy3DGenerationPane") private var showMeshy3DGenerationPane: Bool = true
     @AppStorage("charactersSidebarWidth") private var sidebarWidth: Double = 260
     @State private var characterSearchText: String = ""
     @State private var filteredCharacters: [AnimationCharacter] = []
@@ -476,17 +475,6 @@ struct CharactersPageView: View {
                     }
 
                     // Character Packages archived 2026-04-05 — Vidu pipeline replaces SceneKit
-
-                    collapsiblePane(
-                        title: "3D Model Generation",
-                        icon: "cube",
-                        counterText: character.models3D.isEmpty ? "No 3D models" : "\(character.models3D.count) models",
-                        isExpanded: $showMeshy3DGenerationPane
-                    ) {
-                        if showMeshy3DGenerationPane && canRenderHeavyDetails {
-                            Meshy3DGenerationPane(store: store, characterID: character.id)
-                        }
-                    }
 
                     collapsiblePane(
                         title: "Costumes",

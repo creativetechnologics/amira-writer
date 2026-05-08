@@ -877,15 +877,6 @@ final class AnimateStore {
         }
     }
 
-    // MARK: - Meshy Settings
-
-    var meshyAPIKey: String = "" {
-        didSet {
-            guard !isHydratingMeshySettings else { return }
-            meshyCredentialStore.saveAPIKey(meshyAPIKey)
-        }
-    }
-
     @ObservationIgnored private var isHydratingRunPodSettings = false
     var runPodAPIKey: String = "" {
         didSet {
@@ -982,7 +973,6 @@ final class AnimateStore {
     @ObservationIgnored private var isHydratingOpenAISettings = false
     @ObservationIgnored private var isHydratingMiniMaxSettings = false
     @ObservationIgnored private var isHydratingViduSettings = false
-    @ObservationIgnored private var isHydratingMeshySettings = false
     @ObservationIgnored private var isHydratingPlacesWorkflowLibrary = false
 
     // MARK: - Track Resolution Cache
@@ -999,7 +989,6 @@ final class AnimateStore {
     private let geminiCredentialStore = GeminiCredentialStore()
     private let miniMaxCredentialStore = MiniMaxCredentialStore()
     private let viduCredentialStore = ViduCredentialStore()
-    private let meshyCredentialStore = MeshyCredentialStore()
     private let runPodCredentialStore = RunPodCredentialStore()
     private let runPodAccountService = RunPodAccountService()
     private let sceneAutomationPlanner = SceneAutomationPlanner()
@@ -2286,8 +2275,7 @@ final class AnimateStore {
         hydrateImageAnalysisSettings()
         hydrateMiniMaxSettings()
         hydrateViduSettings()
-        hydrateMeshySettings()
-        hydrateRunPodSettings()
+hydrateRunPodSettings()
     }
 
     func setGeminiAPIKey(_ apiKey: String) {
@@ -2428,20 +2416,6 @@ final class AnimateStore {
 
     func clearViduAPIKey() {
         viduAPIKey = ""
-    }
-
-    private func hydrateMeshySettings() {
-        isHydratingMeshySettings = true
-        meshyAPIKey = meshyCredentialStore.loadAPIKey()
-        isHydratingMeshySettings = false
-    }
-
-    func setMeshyAPIKey(_ apiKey: String) {
-        meshyAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    func clearMeshyAPIKey() {
-        meshyAPIKey = ""
     }
 
     func sceneRequirement(for sceneID: UUID?) -> PlacesScriptSceneRequirement? {
@@ -6852,8 +6826,7 @@ final class AnimateStore {
             hydrateImageAnalysisSettings()
             hydrateMiniMaxSettings()
             hydrateViduSettings()
-            hydrateMeshySettings()
-            hydrateRunPodSettings()
+hydrateRunPodSettings()
             setupImageIntelligence()
 
             // 2. Ensure Animate/ directory exists
@@ -14909,6 +14882,44 @@ final class AnimateStore {
 
         // Canvas generations
         canvasGenerations.removeAll { pathSet.contains($0.imagePath) }
+
+        // Scene shot frame generation paths
+        for sceneIndex in scenes.indices {
+            for shotIndex in scenes[sceneIndex].shots.indices {
+                guard var fg = scenes[sceneIndex].shots[shotIndex].shotFrameGeneration else { continue }
+                if let p = fg.firstFrameImagePath, pathSet.contains(p) { fg.firstFrameImagePath = nil }
+                if let p = fg.lastFrameImagePath, pathSet.contains(p) { fg.lastFrameImagePath = nil }
+                fg.firstFrameVariants.removeAll { pathSet.contains($0) }
+                fg.lastFrameVariants.removeAll { pathSet.contains($0) }
+                scenes[sceneIndex].shots[shotIndex].shotFrameGeneration = fg
+            }
+        }
+
+        // Imagine scene galleries (persisted separately in galleries.json)
+        var galleriesChanged = false
+        for (sceneID, var galleries) in imagineSceneGalleries {
+            for galleryIndex in galleries.indices {
+                galleries[galleryIndex].beginningImagePaths.removeAll { pathSet.contains($0) }
+                galleries[galleryIndex].middleImagePaths.removeAll { pathSet.contains($0) }
+                galleries[galleryIndex].endImagePaths.removeAll { pathSet.contains($0) }
+                if let p = galleries[galleryIndex].selectedBeginningPath, pathSet.contains(p) {
+                    galleries[galleryIndex].selectedBeginningPath = nil
+                }
+                if let p = galleries[galleryIndex].selectedMiddlePath, pathSet.contains(p) {
+                    galleries[galleryIndex].selectedMiddlePath = nil
+                }
+                if let p = galleries[galleryIndex].selectedEndPath, pathSet.contains(p) {
+                    galleries[galleryIndex].selectedEndPath = nil
+                }
+            }
+            imagineSceneGalleries[sceneID] = galleries
+            galleriesChanged = true
+        }
+
+        if galleriesChanged, let owpURL {
+            let allGalleries = imagineSceneGalleries.values.flatMap { $0 }
+            try? ImagineProjectStorage.saveGalleries(allGalleries, owpURL: owpURL)
+        }
 
         save()
 
