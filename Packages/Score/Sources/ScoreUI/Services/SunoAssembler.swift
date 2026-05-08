@@ -69,17 +69,19 @@ enum SunoAssembler {
                     var env = [Float](repeating: 1.0, count: framesToCopy)
                     // Fade-in: ramp 0→1 over crossfadeSamples
                     if crossfadeSamples > 0 {
-                        var fadeInEndpoints: [Float] = [0, 1]
-                        vDSP_vgen(&fadeInEndpoints, 1, &env, 1,
-                                  vDSP_Length(crossfadeSamples), 1, 1)
+                        var fadeInStart: Float = 0
+                        var fadeInStep = Float(1.0) / Float(max(1, crossfadeSamples - 1))
+                        vDSP_vgen(&fadeInStart, &fadeInStep, &env, 1,
+                                  vDSP_Length(crossfadeSamples))
                     }
                     // Fade-out: ramp 1→0 over last crossfadeSamples
                     let fadeOutPos = framesToCopy - crossfadeSamples
                     if fadeOutPos >= 0 {
-                        var fadeOutEndpoints: [Float] = [1, 0]
+                        var fadeOutStart: Float = 1
+                        var fadeOutStep = Float(-1.0) / Float(max(1, crossfadeSamples - 1))
                         var fadeOutEnv = [Float](repeating: 0, count: crossfadeSamples)
-                        vDSP_vgen(&fadeOutEndpoints, 1, &fadeOutEnv, 1,
-                                  vDSP_Length(crossfadeSamples), 1, 1)
+                        vDSP_vgen(&fadeOutStart, &fadeOutStep, &fadeOutEnv, 1,
+                                  vDSP_Length(crossfadeSamples))
                         for j in 0..<crossfadeSamples {
                             env[fadeOutPos + j] = fadeOutEnv[j]
                         }

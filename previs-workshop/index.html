@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Amira Previs 3D — Workshop Demo</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#1a1f27;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+#app{width:100%;height:100%}
+#app canvas{display:block}
+#info{position:absolute;top:12px;right:12px;color:#888;font-size:12px;font-family:monospace;pointer-events:none;z-index:10}
+#status{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#aaa;font-size:14px;font-family:monospace;pointer-events:none;z-index:10}
+#toolbar{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:8px;align-items:center;background:rgba(30,35,45,0.92);backdrop-filter:blur(12px);padding:10px 16px;border-radius:12px;border:1px solid rgba(255,255,255,0.10);z-index:20;pointer-events:auto;flex-wrap:wrap;justify-content:center}
+.toolbar-group{display:flex;gap:4px;align-items:center}
+.mode-btn,.kf-btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);color:#999;padding:6px 14px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;transition:all 0.15s;white-space:nowrap}
+.mode-btn:hover,.kf-btn:hover{background:rgba(255,255,255,0.14);color:#fff}
+.mode-btn.active,.kf-btn.active{background:#4a7dff;color:#fff;border-color:#4a7dff}
+#capture-btn{background:#4a7dff;border:none;color:#fff;padding:6px 14px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;transition:background 0.15s;margin-left:6px}
+#capture-btn:hover{background:#5a8dff}
+#layout-btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);color:#999;padding:6px 14px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;transition:all 0.15s;margin-left:6px}
+#layout-btn:hover{background:rgba(255,255,255,0.14);color:#fff}
+.divider{width:1px;height:24px;background:rgba(255,255,255,0.10);margin:0 4px}
+#preset-bar{position:absolute;top:16px;left:50%;transform:translateX(-50%);display:flex;gap:6px;align-items:center;background:rgba(30,35,45,0.85);backdrop-filter:blur(8px);padding:6px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);z-index:20}
+.preset-btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);color:#999;padding:4px 12px;border-radius:5px;font-size:10px;font-weight:500;cursor:pointer;transition:all 0.15s}
+.preset-btn:hover{background:rgba(255,255,255,0.14);color:#fff}
+.preset-btn.active{background:#4a7dff;color:#fff;border-color:#4a7dff}
+#help{position:absolute;bottom:100px;left:16px;color:#666;font-size:10px;font-family:monospace;z-index:10;pointer-events:none;line-height:1.6}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="info">Loading workshop viewer...</div>
+<div id="status"></div>
+<div id="preset-bar">
+  <button class="preset-btn active" data-preset="golden-hour">Golden Hour</button>
+  <button class="preset-btn" data-preset="noon">Noon</button>
+  <button class="preset-btn" data-preset="overcast">Overcast</button>
+  <button class="preset-btn" data-preset="night-interior">Night Interior</button>
+</div>
+<div id="toolbar">
+  <div class="toolbar-group">
+    <button class="mode-btn active" data-mode="select">Select</button>
+    <button class="mode-btn" data-mode="translate">Move</button>
+    <button class="mode-btn" data-mode="rotate">Rotate</button>
+    <button class="mode-btn" data-mode="scale">Scale</button>
+    <button class="mode-btn" data-mode="poseBone">Pose</button>
+  </div>
+  <div class="divider"></div>
+  <div class="toolbar-group">
+    <button class="kf-btn" data-kf="beginning">Beginning</button>
+    <button class="kf-btn active" data-kf="middle">Middle</button>
+    <button class="kf-btn" data-kf="end">End</button>
+  </div>
+  <button id="layout-btn">Generate Layout</button>
+  <button id="capture-btn">Capture</button>
+</div>
+<div id="help">
+Camera: drag=orbit, scroll=zoom, right-drag=pan<br>
+Mode: T=translate, R=rotate, E=scale, P=pose bones<br>
+Keyframe: click Beginning/Middle/End to save camera<br>
+Works on iPad — touch orbit, pencil for precision
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.168.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.168.0/examples/jsm/"}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+
+console.log('[workshop] THREE r' + (THREE.REVISION ?? '?'));
+
+const state = {
+  scene: null, camera: null, renderer: null, controls: null,
+  transformControls: null, currentMode: 'select', selectedObject: null,
+  activeKeyframe: 'middle', proxies: new Map(), sceneData: null,
+  ground: null, grid: null, currentPreset: 'golden-hour'
+};
+
+let sceneJSON = '{"keyframes":[{"label":"beginning","position":[2,1.6,3],"lookAt":[0,1.2,0],"fov":50},{"label":"middle","position":[2,1.6,3],"lookAt":[0,1.2,0],"fov":50},{"label":"end","position":[2,1.6,3],"lookAt":[0,1.2,0],"fov":50}],"characterPoses":{"amira":{"characterSlug":"amira","costumeName":"evening-gown","position":[0,0,0],"rotation":[0,0,0],"scale":1},"mark":{"characterSlug":"mark","costumeName":"military-medic","position":[0.9,0,0],"rotation":[0,-25,0],"scale":1,"boneRotations":{"head":[0,-15,0]}}},"objectTransforms":{},"environmentConfig":{"placeID":null,"groundType":"grid","backdropColor":"#1a1f27"},"lightingPreset":"golden-hour"}';
+
+const COLORS = {
+  amira: { body: 0x4a7dff, head: 0x6a9dff, accent: 0x2a5ddf },
+  mark: { body: 0x44aa44, head: 0x66cc66, accent: 0x228822 },
+  unknown: { body: 0x888888, head: 0xaaaaaa, accent: 0x666666 }
+};
+
+// ── Init ──────────────────────────────────────────
+const app = document.getElementById('app');
+state.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false });
+state.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+state.renderer.setSize(window.innerWidth, window.innerHeight);
+state.renderer.outputColorSpace = THREE.SRGBColorSpace;
+state.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+state.renderer.toneMappingExposure = 1.35;
+state.renderer.shadowMap.enabled = true;
+state.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+app.appendChild(state.renderer.domElement);
+
+state.scene = new THREE.Scene();
+state.scene.background = new THREE.Color(0x1a1f27);
+
+state.camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 500);
+state.camera.position.set(2, 1.6, 3);
+
+state.controls = new OrbitControls(state.camera, state.renderer.domElement);
+state.controls.enableDamping = true;
+state.controls.dampingFactor = 0.08;
+state.controls.minDistance = 0.3;
+state.controls.maxDistance = 50;
+state.controls.target.set(0, 1.2, 0);
+state.controls.update();
+
+state.transformControls = new TransformControls(state.camera, state.renderer.domElement);
+state.transformControls.setMode('translate');
+state.transformControls.setSize(0.6);
+state.transformControls.addEventListener('dragging-changed', e => { state.controls.enabled = !e.value; });
+state.scene.add(state.transformControls);
+
+// ── Lighting ─────────────────────────────────────
+const presetMap = {
+  'golden-hour':     {amb:0.25, sun:0xffc080, si:2.0, fill:0x8899cc, fi:0.35, rim:0.25},
+  'noon':            {amb:0.35, sun:0xffffff, si:2.2, fill:0xaabbcc, fi:0.45, rim:0.30},
+  'overcast':        {amb:0.55, sun:0xaabbcc, si:0.7, fill:0xaabbcc, fi:0.4,  rim:0.15},
+  'night-interior':  {amb:0.12, sun:0x4466cc, si:0.6, fill:0x333355, fi:0.15, rim:0.10}
+};
+
+let lights = [];
+function setLighting(preset) {
+  lights.forEach(l => state.scene.remove(l));
+  lights = [];
+  const c = presetMap[preset] || presetMap['golden-hour'];
+  const amb = new THREE.AmbientLight(0x888888, c.amb); lights.push(amb); state.scene.add(amb);
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.35); lights.push(hemi); state.scene.add(hemi);
+  const sun = new THREE.DirectionalLight(c.sun, c.si); sun.position.set(5,10,5);
+  sun.castShadow = true; sun.shadow.mapSize.set(1024,1024);
+  const d=10; sun.shadow.camera=new THREE.OrthographicCamera(-d,d,d,-d,1,20);
+  lights.push(sun); state.scene.add(sun);
+  const fill = new THREE.DirectionalLight(c.fill, c.fi); fill.position.set(-3,2,-4); lights.push(fill); state.scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xffffff, c.rim); rim.position.set(-2,1,5); lights.push(rim); state.scene.add(rim);
+  state.currentPreset = preset;
+}
+setLighting('golden-hour');
+
+// ── Environment ──────────────────────────────────
+const grid = new THREE.GridHelper(16, 16, 0x555555, 0x333333); state.scene.add(grid); state.grid = grid;
+const gGeo = new THREE.PlaneGeometry(16,16);
+const gMat = new THREE.ShadowMaterial({opacity:0.35});
+const ground = new THREE.Mesh(gGeo, gMat); ground.rotation.x = -Math.PI/2; ground.position.y = -0.01;
+ground.receiveShadow = true; state.scene.add(ground); state.ground = ground;
+
+// ── Character Proxies ────────────────────────────
+function createProxy(slug, colors) {
+  const group = new THREE.Group();
+  group.name = slug;
+
+  const bodyGeo = new THREE.CapsuleGeometry(0.2, 0.6, 4, 8);
+  const bodyMat = new THREE.MeshStandardMaterial({color:colors.body, roughness:0.6, metalness:0.05});
+  const body = new THREE.Mesh(bodyGeo, bodyMat); body.position.y = 0.5; body.castShadow = true; group.add(body);
+
+  const torsoGeo = new THREE.CapsuleGeometry(0.16, 0.3, 4, 8);
+  const torsoMat = new THREE.MeshStandardMaterial({color:colors.accent, roughness:0.5, metalness:0.1});
+  const torso = new THREE.Mesh(torsoGeo, torsoMat); torso.position.y = 0.95; torso.castShadow = true; group.add(torso);
+
+  const headGeo = new THREE.SphereGeometry(0.12, 12, 12);
+  const headMat = new THREE.MeshStandardMaterial({color:colors.head, roughness:0.4, metalness:0.05});
+  const head = new THREE.Mesh(headGeo, headMat); head.position.y = 1.35; head.castShadow = true;
+  head.name = slug + '_head'; group.add(head);
+
+  const eyesGeo = new THREE.SphereGeometry(0.025, 6, 6);
+  const eyesMat = new THREE.MeshBasicMaterial({color:0x111122});
+  const eyeL = new THREE.Mesh(eyesGeo, eyesMat); eyeL.position.set(-0.04,1.38,0.10); group.add(eyeL);
+  const eyeR = new THREE.Mesh(eyesGeo, eyesMat); eyeR.position.set(0.04,1.38,0.10); group.add(eyeR);
+
+  const armGeo = new THREE.CapsuleGeometry(0.05, 0.35, 4, 8);
+  const armMat = new THREE.MeshStandardMaterial({color:colors.body, roughness:0.5, metalness:0.05});
+  const armL = new THREE.Mesh(armGeo, armMat); armL.position.set(-0.28,0.95,0); armL.rotation.z = 0.2; armL.castShadow = true;
+  armL.name = slug + '_armL'; group.add(armL);
+  const armR = new THREE.Mesh(armGeo, armMat); armR.position.set(0.28,0.95,0); armR.rotation.z = -0.2; armR.castShadow = true;
+  armR.name = slug + '_armR'; group.add(armR);
+
+  group.userData.isProxy = true;
+  group.userData.slug = slug;
+  return group;
+}
+
+function loadProxiesFromSceneData() {
+  state.proxies.forEach(p => state.scene.remove(p));
+  state.proxies.clear();
+
+  try {
+    const data = JSON.parse(sceneJSON);
+    if (data.characterPoses) {
+      for (const [slug, pose] of Object.entries(data.characterPoses)) {
+        const colors = COLORS[slug] || COLORS.unknown;
+        const group = createProxy(slug, colors);
+        group.position.set(pose.position[0] || 0, pose.position[1] || 0, pose.position[2] || 0);
+        group.rotation.set(
+          THREE.MathUtils.degToRad(pose.rotation[0] || 0),
+          THREE.MathUtils.degToRad(pose.rotation[1] || 0),
+          THREE.MathUtils.degToRad(pose.rotation[2] || 0)
+        );
+        const s = pose.scale || 1; group.scale.set(s,s,s);
+        state.scene.add(group);
+        state.proxies.set(slug, group);
+      }
+    }
+    state.sceneData = data;
+    state.lightingPreset = data.lightingPreset || 'golden-hour';
+    setLighting(state.lightingPreset);
+    loadKeyframe('middle');
+  } catch(e) { console.error('[workshop] scene parse error:', e); }
+}
+
+loadProxiesFromSceneData();
+
+// ── Camera Keyframes ─────────────────────────────
+window.saveKeyframe = function() {
+  if (!state.sceneData) return;
+  const kf = { label: state.activeKeyframe, position: state.camera.position.toArray(), lookAt: state.controls.target.toArray(), fov: state.camera.fov };
+  state.sceneData.keyframes = state.sceneData.keyframes.filter(k=>k.label!==kf.label);
+  state.sceneData.keyframes.push(kf);
+  sceneJSON = JSON.stringify(state.sceneData);
+  document.getElementById('status').innerText = 'Saved ' + kf.label;
+  setTimeout(()=>document.getElementById('status').innerText='',1500);
+};
+
+function loadKeyframe(label) {
+  if(!state.sceneData)return;
+  const kf=state.sceneData.keyframes.find(k=>k.label===label);
+  if(!kf)return;
+  state.camera.position.fromArray(kf.position); state.controls.target.fromArray(kf.lookAt);
+  state.camera.fov=kf.fov; state.camera.updateProjectionMatrix(); state.controls.update();
+}
+
+// ── Toolbar ──────────────────────────────────────
+document.querySelectorAll('.mode-btn').forEach(btn=>{btn.addEventListener('click',()=>{
+  document.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  const m=btn.dataset.mode;
+  if(m==='select'){state.transformControls.detach();state.currentMode='select';}
+  else if(m==='poseBone'){state.transformControls.setMode('rotate');state.currentMode='poseBone';}
+  else{state.transformControls.setMode(m);state.currentMode=m;}
+})});
+
+document.querySelectorAll('.kf-btn').forEach(btn=>{btn.addEventListener('click',()=>{
+  document.querySelectorAll('.kf-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  state.activeKeyframe=btn.dataset.kf;
+  loadKeyframe(btn.dataset.kf);
+})});
+
+document.querySelectorAll('.preset-btn').forEach(btn=>{btn.addEventListener('click',()=>{
+  document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  const preset=btn.dataset.preset;
+  setLighting(preset);
+  if(state.sceneData){state.sceneData.lightingPreset=preset;sceneJSON=JSON.stringify(state.sceneData);}
+})});
+
+// ── Capture ──────────────────────────────────────
+document.getElementById('capture-btn').addEventListener('click',()=>{
+  state.renderer.preserveDrawingBuffer=true;
+  const origW=state.renderer.domElement.width, origH=state.renderer.domElement.height;
+  const origAspect=state.camera.aspect;
+  state.renderer.setSize(1280,720); state.camera.aspect=1280/720; state.camera.updateProjectionMatrix();
+  state.renderer.render(state.scene,state.camera);
+  const dataURL=state.renderer.domElement.toDataURL('image/jpeg',0.85);
+  state.renderer.setSize(origW,origH); state.camera.aspect=origAspect; state.camera.updateProjectionMatrix();
+  state.renderer.preserveDrawingBuffer=false;
+  const a=document.createElement('a');a.href=dataURL;a.download=`previs-${state.activeKeyframe}.jpg`;a.click();
+  document.getElementById('status').innerText='Captured 1280×720 JPEG';
+  setTimeout(()=>document.getElementById('status').innerText='',2000);
+});
+
+// ── Layout ───────────────────────────────────────
+document.getElementById('layout-btn').addEventListener('click',()=>{
+  const presets=[
+    // Scene 1: Dialogue — two facing
+    '{"keyframes":[{"label":"beginning","position":[1.2,1.55,2.2],"lookAt":[0.45,1.2,0],"fov":45},{"label":"middle","position":[1.2,1.55,2.2],"lookAt":[0.45,1.2,0],"fov":45},{"label":"end","position":[1.2,1.55,2.2],"lookAt":[0.45,1.2,0],"fov":45}],"characterPoses":{"amira":{"characterSlug":"amira","costumeName":"evening-gown","position":[0,0,0],"rotation":[0,-15,0],"scale":1},"mark":{"characterSlug":"mark","costumeName":"military-medic","position":[0.9,0,0],"rotation":[0,-25,0],"scale":1,"boneRotations":{"head":[0,-10,0]}}},"objectTransforms":{},"environmentConfig":{"placeID":null,"groundType":"grid","backdropColor":"#1a1f27"},"lightingPreset":"golden-hour"}',
+    // Scene 2: Action — wide establishing
+    '{"keyframes":[{"label":"beginning","position":[4,2.2,5],"lookAt":[0,1,0],"fov":55},{"label":"middle","position":[4,2.2,5],"lookAt":[0,1,0],"fov":55},{"label":"end","position":[4,2.2,5],"lookAt":[0,1,0],"fov":55}],"characterPoses":{"amira":{"characterSlug":"amira","costumeName":"civilian","position":[-1.5,0,1],"rotation":[0,35,0],"scale":1},"mark":{"characterSlug":"mark","costumeName":"military-medic","position":[1.5,0,-1.5],"rotation":[0,-30,0],"scale":1}},"objectTransforms":{},"environmentConfig":{"placeID":null,"groundType":"grid","backdropColor":"#1a1f27"},"lightingPreset":"noon"}',
+    // Scene 3: Close-up — intimate
+    '{"keyframes":[{"label":"beginning","position":[0,1.45,1],"lookAt":[0,1.35,0],"fov":35},{"label":"middle","position":[0,1.45,1],"lookAt":[0,1.35,0],"fov":35},{"label":"end","position":[0,1.45,1],"lookAt":[0,1.35,0],"fov":35}],"characterPoses":{"amira":{"characterSlug":"amira","costumeName":"evening-gown","position":[0,0,0],"rotation":[0,0,0],"scale":1.1,"boneRotations":{"head":[0,5,0]}}},"objectTransforms":{},"environmentConfig":{"placeID":null,"groundType":"grid","backdropColor":"#1a1f27"},"lightingPreset":"night-interior"}',
+    // Scene 4: Over-the-shoulder
+    '{"keyframes":[{"label":"beginning","position":[-1,1.6,1.8],"lookAt":[-0.3,1.2,0],"fov":42},{"label":"middle","position":[-1,1.6,1.8],"lookAt":[-0.3,1.2,0],"fov":42},{"label":"end","position":[-1,1.6,1.8],"lookAt":[-0.3,1.2,0],"fov":42}],"characterPoses":{"amira":{"characterSlug":"amira","costumeName":"evening-gown","position":[0,0,0],"rotation":[0,-10,0],"scale":1},"mark":{"characterSlug":"mark","costumeName":"military-medic","position":[0.8,0,-0.3],"rotation":[0,-20,0],"scale":1,"boneRotations":{"head":[0,-10,0],"spine":[0,5,0]}}},"objectTransforms":{},"environmentConfig":{"placeID":null,"groundType":"grid","backdropColor":"#1a1f27"},"lightingPreset":"overcast"}'
+  ];
+  const idx=Math.floor(Math.random()*presets.length);
+  sceneJSON=presets[idx];
+  loadProxiesFromSceneData();
+  document.getElementById('status').innerText='Layout #'+(idx+1)+'/4 generated';
+  setTimeout(()=>document.getElementById('status').innerText='',2000);
+});
+
+// ── Select proxie on click ───────────────────────
+state.renderer.domElement.addEventListener('click',e=>{
+  if(state.currentMode==='select')return;
+  const rect=state.renderer.domElement.getBoundingClientRect();
+  const mouse=new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1,-((e.clientY-rect.top)/rect.height)*2+1);
+  const raycaster=new THREE.Raycaster();raycaster.setFromCamera(mouse,state.camera);
+  const hits=raycaster.intersectObjects(state.scene.children,true);
+  const hit=hits.find(h=>{let o=h.object;while(o){if(o.userData?.isProxy)return true;o=o.parent;}return false;});
+  if(hit){let obj=hit.object;while(obj&&!obj.userData?.isProxy)obj=obj.parent;
+    if(obj)state.transformControls.attach(obj);
+  }else{state.transformControls.detach();}
+});
+
+// ── Resize & Animate ─────────────────────────────
+window.addEventListener('resize',()=>{
+  state.camera.aspect=window.innerWidth/window.innerHeight;state.camera.updateProjectionMatrix();
+  state.renderer.setSize(window.innerWidth,window.innerHeight);
+});
+
+function animate(){requestAnimationFrame(animate);state.controls.update();state.renderer.render(state.scene,state.camera);}
+animate();
+document.getElementById('info').innerText='Workshop ready — 4 demo layouts available';
+</script>
+</body>
+</html>

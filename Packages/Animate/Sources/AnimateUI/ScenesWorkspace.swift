@@ -224,8 +224,8 @@ private struct ScenesWorkspaceContent: View {
     private var previsContent: some View {
         if let scene = store.selectedScene {
             if let shotID = store.selectedShotID,
-               let shot = scene.shots.first(where: { $0.id == shotID }) {
-                Previs3DContainerView(store: store, scene: scene, shot: shot)
+               scene.shots.contains(where: { $0.id == shotID }) {
+                Previs3DContainerView(store: store, sceneID: scene.id, shotID: shotID)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 OperaChromeEmptyState(

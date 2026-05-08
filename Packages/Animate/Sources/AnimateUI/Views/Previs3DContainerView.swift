@@ -1,49 +1,34 @@
+import AppKit
+import Foundation
 import SwiftUI
 import ProjectKit
 
 @available(macOS 26.0, *)
 struct Previs3DContainerView: View {
     @Bindable var store: AnimateStore
-    let scene: AnimationScene
-    let shot: AnimationSceneShot
+    let sceneID: UUID
+    let shotID: UUID
 
     @State private var activeMode: PrevisMode = .select
     @State private var activeKeyframe: PrevisKeyframeLabel = .beginning
     @State private var isGeneratingLayout: Bool = false
     @State private var layoutError: String? = nil
+    @State private var cachedSceneJSON: String = ""
+    @State private var cachedGLBPaths: [(slug: String, path: String)] = []
 
-    private var sceneJSON: String {
-        guard let state = shot.previs3DState,
-              let data = try? JSONEncoder().encode(state)
-        else { return "" }
-        return String(data: data, encoding: .utf8) ?? ""
+    private var scene: AnimationScene? {
+        store.scenes.first(where: { $0.id == sceneID })
     }
 
-    private var characterGLBPaths: [(slug: String, path: String)] {
-        var slugs: Set<String> = []
-        if let focus = shot.focusCharacterSlug { slugs.insert(focus) }
-        for slug in scene.characterSlugs { slugs.insert(slug) }
-
-        var result: [(slug: String, path: String)] = []
-        for slug in slugs {
-            if let character = store.characters.first(where: { $0.owpSlug == slug }),
-               let glb = character.models3D.first(where: { $0.modelFormat == "glb" }),
-               let projectURL = store.owpURL {
-                let dir = ProjectPaths(root: projectURL).character3DModelsDirectory(slug: slug)
-                let path = dir.appendingPathComponent(glb.modelFileName).path
-                if FileManager.default.fileExists(atPath: path) {
-                    result.append((slug: slug, path: path))
-                }
-            }
-        }
-        return result
+    private var shot: AnimationSceneShot? {
+        scene?.shots.first(where: { $0.id == shotID })
     }
 
     var body: some View {
         ZStack {
             Previs3DView(
-                sceneJSON: sceneJSON,
-                characterGLBPaths: characterGLBPaths,
+                sceneJSON: cachedSceneJSON,
+                characterGLBPaths: cachedGLBPaths,
                 onCaptureResult: { label, data in
                     saveCapture(label: label, data: data)
                 },
@@ -89,13 +74,56 @@ struct Previs3DContainerView: View {
                 .padding(.bottom, 16)
             }
         }
+        .onAppear {
+            refreshCache()
+        }
+        .onChange(of: shotID) { _, _ in
+            refreshCache()
+        }
     }
 
-    private func triggerCapture() {
-        // The capture is handled by the JS bridge in Previs3DView
+    private func refreshCache() {
+        guard let shot = shot else {
+            cachedSceneJSON = ""
+            cachedGLBPaths = []
+            return
+        }
+
+        if let state = shot.previs3DState,
+           let data = try? JSONEncoder().encode(state) {
+            cachedSceneJSON = String(data: data, encoding: .utf8) ?? ""
+        } else {
+            cachedSceneJSON = ""
+        }
+
+        cachedGLBPaths = resolveCharacterGLBs(shot: shot)
     }
+
+    private func resolveCharacterGLBs(shot: AnimationSceneShot) -> [(slug: String, path: String)] {
+        guard let scene = scene, let projectURL = store.owpURL else { return [] }
+
+        var slugs: Set<String> = []
+        if let focus = shot.focusCharacterSlug { slugs.insert(focus) }
+        for slug in scene.characterSlugs { slugs.insert(slug) }
+
+        var result: [(slug: String, path: String)] = []
+        for slug in slugs {
+            if let character = store.characters.first(where: { $0.owpSlug == slug }),
+               let glb = character.models3D.first(where: { $0.modelFormat == "glb" }) {
+                let dir = ProjectPaths(root: projectURL).character3DModelsDirectory(slug: slug)
+                let path = dir.appendingPathComponent(glb.modelFileName).path
+                if FileManager.default.fileExists(atPath: path) {
+                    result.append((slug: slug, path: path))
+                }
+            }
+        }
+        return result
+    }
+
+    private func triggerCapture() {}
 
     private func generateLayout() async {
+        guard let scene = scene, let shot = shot else { return }
         isGeneratingLayout = true
         layoutError = nil
 
@@ -111,6 +139,7 @@ struct Previs3DContainerView: View {
                 }
             }
 
+            refreshCache()
             store.statusMessage = "Layout generated"
         } catch {
             layoutError = error.localizedDescription
@@ -122,18 +151,24 @@ struct Previs3DContainerView: View {
 
     private func saveCapture(label: String, data: Data) {
         guard let projectURL = store.owpURL,
-              let sceneID = store.selectedScene?.id
+              let sceneID = scene?.id,
+              let shot = shot
         else { return }
 
         let paths = ProjectPaths(root: projectURL)
         let shotDir = paths.shotStoryboardDir(sceneID: sceneID, shotID: shot.id)
-        let frameLabel = label == "beginning" ? "beginning" :
-                         label == "end" ? "end" : "middle"
+        let frameLabel = matchFrameLabel(label)
         let imageURL = shotDir.appendingPathComponent("\(frameLabel).jpg")
 
         try? FileManager.default.createDirectory(at: shotDir, withIntermediateDirectories: true)
         try? data.write(to: imageURL)
 
         store.statusMessage = "Captured \(label) frame"
+    }
+
+    private func matchFrameLabel(_ label: String) -> String {
+        if label == "beginning" { return "beginning" }
+        if label == "end" { return "end" }
+        return "middle"
     }
 }

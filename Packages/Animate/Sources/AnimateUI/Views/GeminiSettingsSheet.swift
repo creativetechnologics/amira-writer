@@ -82,7 +82,7 @@ struct APISettingsSheet: View {
             footer
         }
         .padding(20)
-        .frame(width: 540)
+        .frame(width: 680)
         .onAppear {
             geminiKeyDraft = store.geminiAPIKey
             openAIKeyDraft = store.openAIAPIKey

@@ -912,15 +912,19 @@ struct ImagineScenesPageView: View {
 
     private func trashSceneShotImage(_ path: String) {
         let url = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: path) else { return }
+        let fileExists = FileManager.default.fileExists(atPath: path)
 
-        do {
-            var resultingURL: NSURL? = nil
-            try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
-        } catch {
-            print("[ImagineScenesPageView] trashItem failed for \(path): \(error.localizedDescription)")
-            return
+        if fileExists {
+            do {
+                var resultingURL: NSURL? = nil
+                try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
+            } catch {
+                print("[ImagineScenesPageView] trashItem failed for \(path): \(error.localizedDescription)")
+                return
+            }
         }
+
+        store.moveAnyProjectImageToTrash(path: path, resolvedPath: path)
 
         // Refresh gallery from disk to pick up the deletion
         if let sceneID = selectedScene?.id {

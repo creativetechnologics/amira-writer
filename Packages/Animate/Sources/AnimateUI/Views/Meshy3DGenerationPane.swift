@@ -377,14 +377,15 @@ struct Meshy3DGenerationPane: View {
         generationProgress = 0
 
         do {
-            // Convert selected images to base64 data URIs
+            // Convert selected images to JPEG base64 (resized to manageable size)
             let imageDataURIs = try selectedImagePaths.map { path -> String in
                 let url = store.resolvedCharacterAssetURL(for: path)
                     ?? URL(fileURLWithPath: path)
-                let data = try Data(contentsOf: url)
+                let sourceImage = NSImage(contentsOf: url)
+                let data = sourceImage?.resizedJPEGData(maxDimension: 1024, quality: 0.85)
+                    ?? (try? Data(contentsOf: url)) ?? Data()
                 let base64 = data.base64EncodedString()
-                let mimeType = url.pathExtension.lowercased() == "png" ? "image/png" : "image/jpeg"
-                return "data:\(mimeType);base64,\(base64)"
+                return "data:image/jpeg;base64,\(base64)"
             }
 
             // Create the request
@@ -556,5 +557,41 @@ extension CharacterReferencePose {
         case .quarterLeft: return "3/4 Left"
         case .quarterRight: return "3/4 Right"
         }
+    }
+}
+
+private extension NSImage {
+    func resizedJPEGData(maxDimension: Int, quality: Float) -> Data? {
+        guard let tiff = tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        let currentW = rep.pixelsWide
+        let currentH = rep.pixelsHigh
+        var newW = currentW
+        var newH = currentH
+        if max(currentW, currentH) > maxDimension {
+            let ratio = Double(maxDimension) / Double(max(currentW, currentH))
+            newW = Int(Double(currentW) * ratio)
+            newH = Int(Double(currentH) * ratio)
+        }
+        guard let resized = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: max(1, newW),
+            pixelsHigh: max(1, newH),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .calibratedRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: resized)
+        draw(in: NSRect(x: 0, y: 0, width: newW, height: newH),
+             from: .zero,
+             operation: .copy,
+             fraction: 1.0)
+        NSGraphicsContext.restoreGraphicsState()
+        return resized.representation(using: .jpeg, properties: [.compressionFactor: quality])
     }
 }

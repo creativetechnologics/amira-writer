@@ -212,18 +212,20 @@ final class MixAudioFlattenService {
                 ? Array(UnsafeBufferPointer(start: channelData[1], count: srcFrames))
                 : resampledL
         } else {
-            // Vectorized linear resampling via vDSP_vgen
+            // Linear resampling via vDSP_vlint (vector linear interpolate)
             resampledL = [Float](repeating: 0, count: outFrameCount)
             resampledR = [Float](repeating: 0, count: outFrameCount)
-            let ratioF = Float(ratio)
-            vDSP_vgen(UnsafePointer(channelData[0]), 1, &resampledL, 1,
-                      vDSP_Length(outFrameCount), vDSP_Length(srcFrames), ratioF)
+            var invRatio = Float(1.0 / ratio)
+            var zero: Float = 0
+            var positions = [Float](repeating: 0, count: outFrameCount)
+            vDSP_vramp(&zero, &invRatio, &positions, 1, vDSP_Length(outFrameCount))
+            vDSP_vlint(channelData[0], &positions, 1, &resampledL, 1,
+                       vDSP_Length(outFrameCount), vDSP_Length(srcFrames))
             if srcChannels >= 2 {
-                vDSP_vgen(UnsafePointer(channelData[1]), 1, &resampledR, 1,
-                          vDSP_Length(outFrameCount), vDSP_Length(srcFrames), ratioF)
+                vDSP_vlint(channelData[1], &positions, 1, &resampledR, 1,
+                           vDSP_Length(outFrameCount), vDSP_Length(srcFrames))
             } else {
-                vDSP_vgen(UnsafePointer(channelData[0]), 1, &resampledR, 1,
-                          vDSP_Length(outFrameCount), vDSP_Length(srcFrames), ratioF)
+                resampledR = resampledL
             }
         }
 
@@ -250,9 +252,10 @@ final class MixAudioFlattenService {
                 if fadeEnd > fadeStart {
                     let rampLen = fadeEnd - fadeStart
                     var ramp = [Float](repeating: 0, count: rampLen)
-                    let startVal = Float(fadeStart) / Float(fadeInFrames)
+                    var startVal = Float(fadeStart) / Float(fadeInFrames)
                     let endVal = Float(fadeEnd) / Float(fadeInFrames)
-                    vDSP_vgen(&startVal, 1, &ramp, 1, vDSP_Length(rampLen), 1, 0)
+                    var stepVal = (endVal - startVal) / Float(max(1, rampLen - 1))
+                    vDSP_vgen(&startVal, &stepVal, &ramp, 1, vDSP_Length(rampLen))
                     for j in 0..<rampLen {
                         env[j] *= ramp[j]
                     }
