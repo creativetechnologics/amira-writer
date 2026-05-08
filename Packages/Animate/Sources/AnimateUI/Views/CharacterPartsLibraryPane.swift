@@ -11,7 +11,7 @@ struct CharacterPartsLibraryPane: View {
     @State private var generationStatus: String? = nil
     @State private var parts: [CharacterPart] = []
     @State private var selectedPartID: UUID? = nil
-    @State private var gridFocused = false
+    @FocusState private var gridFocused: Bool
 
     private let thumbnailSize: CGFloat = 120
 
