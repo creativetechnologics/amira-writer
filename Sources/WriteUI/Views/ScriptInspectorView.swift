@@ -833,6 +833,7 @@ struct VersionHistorySectionContent: View {
 @available(macOS 26.0, *)
 private struct SunoLyricsSectionContent: View {
     @Bindable var store: ScriptStore
+    @State private var justCopied = false
 
     private var activeAsset: OWSSongAsset? {
         guard let path = store.activeSongPath else { return nil }
@@ -875,9 +876,18 @@ private struct SunoLyricsSectionContent: View {
 
                         Button {
                             copyLyricsToPasteboard(formattedResult.formattedText)
+                            justCopied = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                justCopied = false
+                            }
                         } label: {
-                            Label("Copy", systemImage: "doc.on.doc")
+                            if justCopied {
+                                Label("Copied!", systemImage: "checkmark")
+                            } else {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
                         }
+                        .tint(justCopied ? .green : nil)
                         .font(.system(size: 11, weight: .medium))
                         .buttonStyle(.bordered)
                         .controlSize(.mini)

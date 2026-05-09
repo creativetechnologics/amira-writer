@@ -729,7 +729,8 @@ final class ScriptStore {
     var librettoFiles: [ProjectTextFile] = []
     var librettoContentRevisionByPath: [String: Int] = [:]
     var characters: [OPWCharacter] = []
-    var isDirty: Bool = false
+    var isDirty: Bool { hasUnsavedChanges }
+    var metadataDirty = false
     var statusMessage: String = "No project loaded"
     var presentedLoadError: String?
     var projectHistoryEntries: [ProjectHistoryEntry] = []
@@ -1094,7 +1095,7 @@ final class ScriptStore {
                 )
             }
 
-            isDirty = false
+            metadataDirty = false
             refreshSaveIndicator()
 
             statusMessage = "\(meta.name) - \(songAssets.count) songs loaded"
@@ -1183,9 +1184,6 @@ final class ScriptStore {
                         self.statusMessage = "Save failed: \(saveError.localizedDescription)"
                     }
                 } else {
-                    if self.dirtySongPaths.isEmpty {
-                        self.isDirty = false
-                    }
                     self.refreshSaveIndicator()
                     let historyPaths = isStandalone
                         ? Array(dirtyPaths)
@@ -1415,7 +1413,6 @@ final class ScriptStore {
 
         normalizeScratchpadFiles()
         normalizeLyricIterationFiles()
-        isDirty = hasUnsavedChanges
         refreshSaveIndicator()
         statusMessage = "Deleted scene"
     }
@@ -2180,7 +2177,6 @@ final class ScriptStore {
         normalizeScratchpadFiles()
         normalizeLyricIterationFiles()
         resetTrackedFileSnapshots()
-        isDirty = hasUnsavedChanges
         refreshSaveIndicator()
 
         for (stub, modDate) in changedExistingStubs {
@@ -2330,11 +2326,7 @@ final class ScriptStore {
 
         // External change wins for this file.
         dirtySongPaths.remove(path)
-        if dirtySongPaths.isEmpty {
-            isDirty = false
-        }
 
-        // Update mod date immediately to avoid re-triggering
         lastKnownModDates[path] = modDate
         if let snapshot = fileSnapshot(for: stub.fileURL) {
             lastKnownFileSnapshots[path] = snapshot
@@ -2443,7 +2435,6 @@ final class ScriptStore {
     }
 
     private func markDirty(path: String, status: String = "Unsaved changes") {
-        isDirty = true
         dirtySongPaths.insert(path)
         refreshSaveIndicator()
         if status != "Unsaved changes" {
@@ -2452,7 +2443,7 @@ final class ScriptStore {
     }
 
     var hasUnsavedChanges: Bool {
-        !dirtySongPaths.isEmpty || isScratchpadDirty
+        !dirtySongPaths.isEmpty || isScratchpadDirty || metadataDirty
     }
 
     var canSave: Bool {
@@ -2512,7 +2503,6 @@ final class ScriptStore {
             reloadExternallyChanged(stub: stub, modDate: snapshot.modificationDate)
         }
 
-        isDirty = !dirtySongPaths.isEmpty
         statusMessage = "Detected newer agent/disk changes. Reloaded them instead of saving."
     }
 
@@ -2768,7 +2758,6 @@ final class ScriptStore {
 
             if !wasDirty {
                 dirtySongPaths.remove(path)
-                isDirty = hasUnsavedChanges
                 refreshSaveIndicator()
             }
 

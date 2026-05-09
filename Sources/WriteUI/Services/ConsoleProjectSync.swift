@@ -196,7 +196,7 @@ final class ConsoleProjectSync {
 
         // Only mark dirty for direct metadata/character changes here.
         // Libretto changes are applied through ScriptStore, which marks them dirty itself.
-        if directChanges { store.isDirty = true }
+        if directChanges { store.metadataDirty = true }
         return anyChanges
     }
 
@@ -212,7 +212,7 @@ final class ConsoleProjectSync {
         store.metadata = snapshot.metadata
         store.librettoFiles = snapshot.librettoFiles
         store.characters = snapshot.characters
-        store.isDirty = true
+        store.metadataDirty = true
     }
 
     func cleanUp() {
