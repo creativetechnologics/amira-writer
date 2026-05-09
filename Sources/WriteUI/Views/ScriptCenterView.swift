@@ -100,13 +100,16 @@ struct ScriptScrollContent: View {
                 .onPreferenceChange(SectionVisibilityKey.self) { sections in
                     self.scheduleActiveSectionUpdate(from: sections)
                 }
-                .onChange(of: store.scrollTarget) { _, target in
-                    guard let target else { return }
+                .onChange(of: store.scrollTargetRequest?.version) { _, _ in
+                    guard let request = store.scrollTargetRequest else { return }
+                    let expectedVersion = request.version
                     withAnimation(.easeInOut(duration: 0.3)) {
-                        proxy.scrollTo(target, anchor: .top)
+                        proxy.scrollTo(request.path, anchor: .top)
                     }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        store.scrollTarget = nil
+                        if store.scrollTargetRequest?.version == expectedVersion {
+                            store.scrollTargetRequest = nil
+                        }
                     }
                 }
             }

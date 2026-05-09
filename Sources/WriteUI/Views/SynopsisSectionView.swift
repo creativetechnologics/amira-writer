@@ -74,7 +74,7 @@ struct SynopsisSectionView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(store.librettoFiles, id: \.relativePath) { file in
                         let isActive = file.relativePath == activeScenePath
                         let synopsis = SynopsisEmbedding.extract(from: file.content)
@@ -120,7 +120,7 @@ struct SynopsisSectionView: View {
             // Scene title - clickable to navigate
             HStack(spacing: 6) {
                 Button {
-                    store.scrollTarget = file.relativePath
+                    store.requestScrollTarget(file.relativePath)
                 } label: {
                     Text(file.displayName)
                         .font(.system(size: 11, weight: .semibold))

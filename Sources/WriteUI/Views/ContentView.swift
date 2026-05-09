@@ -96,9 +96,11 @@ struct ContentView: View {
                                     showSummaries.toggle()
                                 }
                             }
+                            .help("Show Summaries")
                             OperaChromeActionButton(systemImage: "plus") {
                                 store.addScene()
                             }
+                            .help("Add Scene")
                         }
                     }
                 } content: {
@@ -124,6 +126,7 @@ struct ContentView: View {
                                 store.isLibrettoEditMode.toggle()
                             }
                         }
+                        .help("Toggle Edit/View Mode")
                         ScriptSaveToolbarButton(
                             saveIndicator: store.saveIndicator,
                             canSave: store.canSave
@@ -181,6 +184,7 @@ struct ContentView: View {
                                 showLyricIterations.toggle()
                             }
                         }
+                        .help("Show Lyric Iterations")
                         OperaChromeActionButton(
                             systemImage: "square.and.pencil",
                             isSelected: showScratchpad
@@ -189,6 +193,7 @@ struct ContentView: View {
                                 showScratchpad.toggle()
                             }
                         }
+                        .help("Show Scratchpad")
                         OperaChromeActionButton(
                             systemImage: "rectangle.stack",
                             isSelected: showCards
@@ -212,6 +217,7 @@ struct ContentView: View {
                         OperaChromeActionButton(systemImage: "list.bullet.rectangle") {
                             openWindow(id: GlobalChangeLogWindowView.windowID)
                         }
+                        .help("Change Log")
                     }
                 }
             } content: {
@@ -250,6 +256,7 @@ struct ContentView: View {
                                 showInspector = false
                             }
                         }
+                        .help("Close Inspector")
                     }
                 } content: {
                     ScriptInspectorView(store: store)

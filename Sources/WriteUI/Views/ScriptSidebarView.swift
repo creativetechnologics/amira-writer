@@ -37,7 +37,7 @@ struct ScriptSidebarView: View {
 
     @ViewBuilder
     private func row(for asset: OWSSongAsset) -> some View {
-        let isSelected = store.activeSongPath == asset.relativePath || store.scrollTarget == asset.relativePath
+        let isSelected = store.activeSongPath == asset.relativePath || store.scrollTargetRequest?.path == asset.relativePath
         let visibleSummary = summary(for: asset)
 
         if renamingAssetID == asset.id {
@@ -51,7 +51,7 @@ struct ScriptSidebarView: View {
                 .onExitCommand { renamingAssetID = nil }
         } else {
             Button {
-                store.scrollTarget = asset.relativePath
+                store.requestScrollTarget(asset.relativePath)
                 store.ensureSceneHydrated(path: asset.relativePath)
             } label: {
                 OperaChromeSidebarRow(
@@ -84,6 +84,9 @@ struct ScriptSidebarView: View {
                 Button("Rename") {
                     renameText = asset.displayName
                     renamingAssetID = asset.id
+                }
+                Button("Delete Scene") {
+                    store.deleteScene(path: asset.relativePath)
                 }
             }
             .onAppear {

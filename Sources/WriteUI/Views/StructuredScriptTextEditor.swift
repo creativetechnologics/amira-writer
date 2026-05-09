@@ -3326,12 +3326,14 @@ private final class StructuredShotTimelineView: NSView {
 
     private func drawCardHeader(_ shot: StructuredShotSpan, in frame: NSRect) {
         let expanded = expandedShotIDs.contains(shot.id.uuidString)
-        drawText(
-            expanded ? "v" : ">",
-            at: NSPoint(x: frame.minX + 12, y: frame.minY + 18),
-            font: .systemFont(ofSize: 15, weight: .semibold),
-            color: NSColor.white.withAlphaComponent(0.62)
-        )
+        let symbolName = expanded ? "chevron.down" : "chevron.right"
+        if let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) {
+            let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+                .applying(.init(hierarchicalColor: NSColor.white.withAlphaComponent(0.62)))
+            let configured = symbol.withSymbolConfiguration(config)
+            configured?.draw(at: NSPoint(x: frame.minX + 12, y: frame.minY + 18),
+                            from: .zero, operation: .sourceOver, fraction: 1.0)
+        }
         drawText(
             "SHOT",
             at: NSPoint(x: frame.minX + 36, y: frame.minY + 9),

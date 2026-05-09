@@ -738,7 +738,13 @@ final class ScriptStore {
     // MARK: - Script UI State
 
     var selectedSongPath: String?
-    var scrollTarget: String?
+    var scrollTargetRequest: (path: String, version: UInt64)?
+    private var scrollTargetVersion: UInt64 = 0
+
+    func requestScrollTarget(_ path: String) {
+        scrollTargetVersion += 1
+        scrollTargetRequest = (path, scrollTargetVersion)
+    }
     var activeSongPath: String?
     var isLibrettoEditMode: Bool = UserDefaults.standard.object(forKey: "amira.write.librettoEditMode") as? Bool ?? false {
         didSet { UserDefaults.standard.set(isLibrettoEditMode, forKey: "amira.write.librettoEditMode") }
@@ -815,6 +821,15 @@ final class ScriptStore {
 
     var scriptBackgroundColor: Color {
         ScriptMarkupPalette.color(from: scriptBackgroundColorHex, fallback: ScriptMarkupPalette.defaultScriptBackgroundHex)
+    }
+
+    var isDarkBackground: Bool {
+        let hex = scriptBackgroundColorHex.hasPrefix("#") ? String(scriptBackgroundColorHex.dropFirst()) : scriptBackgroundColorHex
+        let r = CGFloat(Int(hex.prefix(2), radix: 16) ?? 0) / 255.0
+        let g = CGFloat(Int(hex.dropFirst(2).prefix(2), radix: 16) ?? 0) / 255.0
+        let b = CGFloat(Int(hex.suffix(2), radix: 16) ?? 0) / 255.0
+        let luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        return luminance < 0.5
     }
 
     var collaborationBadgeLabel: String? {
@@ -993,7 +1008,7 @@ final class ScriptStore {
 
             if isSwitchingProjects {
                 selectedSongPath = nil
-                scrollTarget = nil
+                scrollTargetRequest = nil
                 activeSongPath = nil
             }
 
@@ -1260,7 +1275,7 @@ final class ScriptStore {
         guard songAssets.contains(where: { $0.relativePath == relativePath }) else { return false }
         selectedSongPath = relativePath
         activeSongPath = relativePath
-        scrollTarget = relativePath
+        requestScrollTarget(relativePath)
         ensureSceneHydrated(path: relativePath)
         return true
     }
@@ -1346,8 +1361,63 @@ final class ScriptStore {
         bumpLibrettoRevision(for: relativePath)
         normalizeScratchpadFiles()
 
-        scrollTarget = relativePath
+        requestScrollTarget(relativePath)
         statusMessage = "Created \(filename)"
+    }
+
+    func deleteScene(path: String) {
+        guard let url = fileProjectURL else { return }
+        let isStandalone = url.pathExtension.lowercased() == "ows"
+        guard !isStandalone else { return }
+
+        guard songAssets.contains(where: { $0.relativePath == path }) else { return }
+
+        let fileURL = url.appendingPathComponent(path)
+        let lyricIterDir = fileURL
+            .deletingPathExtension()
+            .appendingPathExtension(Self.lyricIterationFolderSuffix)
+
+        do {
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                try FileManager.default.removeItem(at: fileURL)
+            }
+        } catch {
+            statusMessage = "Failed to delete scene file: \(error.localizedDescription)"
+        }
+
+        do {
+            if FileManager.default.fileExists(atPath: lyricIterDir.path) {
+                try FileManager.default.removeItem(at: lyricIterDir)
+            }
+        } catch {
+            statusMessage = "Failed to delete lyric iterations: \(error.localizedDescription)"
+        }
+
+        songAssets.removeAll { $0.relativePath == path }
+        songStubs.removeAll { $0.relativePath == path }
+        librettoFiles.removeAll { $0.relativePath == path }
+        librettoContentRevisionByPath.removeValue(forKey: path)
+        dirtySongPaths.remove(path)
+        hydratedScenePaths.remove(path)
+        hydratingScenePaths.remove(path)
+
+        lastKnownModDates.removeValue(forKey: path)
+        lastKnownFileSnapshots.removeValue(forKey: path)
+        for slot in Self.lyricIterationSlots {
+            let iterPath = Self.lyricIterationRelativePath(forSongPath: path, slot: slot)
+            lastKnownModDates.removeValue(forKey: iterPath)
+            lastKnownFileSnapshots.removeValue(forKey: iterPath)
+        }
+
+        if selectedSongPath == path { selectedSongPath = songAssets.first?.relativePath }
+        if activeSongPath == path { activeSongPath = songAssets.first?.relativePath }
+        if scrollTargetRequest?.path == path { scrollTargetRequest = nil }
+
+        normalizeScratchpadFiles()
+        normalizeLyricIterationFiles()
+        isDirty = hasUnsavedChanges
+        refreshSaveIndicator()
+        statusMessage = "Deleted scene"
     }
 
     // MARK: - Version History
@@ -2103,8 +2173,8 @@ final class ScriptStore {
         if let activeSongPath, !currentPathSet.contains(activeSongPath) {
             self.activeSongPath = songAssets.first?.relativePath
         }
-        if let scrollTarget, !currentPathSet.contains(scrollTarget) {
-            self.scrollTarget = nil
+        if let targetRequest = scrollTargetRequest, !currentPathSet.contains(targetRequest.path) {
+            self.scrollTargetRequest = nil
         }
 
         normalizeScratchpadFiles()

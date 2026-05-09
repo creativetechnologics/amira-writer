@@ -90,7 +90,7 @@ public final class WriteWorkspaceController: ObservableObject {
     }
 
     public func currentSelectionPath() -> String? {
-        store.scrollTarget ?? store.activeSongPath
+        store.scrollTargetRequest?.path ?? store.activeSongPath
     }
 
     private func observeSaveIndicator() {
