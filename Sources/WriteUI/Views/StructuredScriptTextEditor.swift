@@ -9,6 +9,7 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
     var isEditable: Bool = true
     var showInlineShotCards: Bool = true
     var showLyricCards: Bool = true
+    var textOnlyLyricView: Bool = false
     var characterNames: [String] = []
     var directionMarkupColorHex: String = ScriptMarkupPalette.defaultDirectionHex
     var storyboardingMarkupColorHex: String = ScriptMarkupPalette.defaultStoryboardingHex
@@ -286,6 +287,7 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
         func configureTimeline(in host: StructuredScriptTimelineHostView) {
             host.showsShotColumn = parent.showInlineShotCards
             host.showsLyricCards = parent.showLyricCards
+            host.textOnlyLyricMode = parent.textOnlyLyricView
         host.timelineView.document = currentDocument
         host.timelineView.showsShotColumn = parent.showInlineShotCards
         host.timelineView.expandedShotIDs = parent.expandedShotCardIDs.wrappedValue
@@ -314,6 +316,8 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             host.lyricSpeakerOverlayView.allowsEditing = parent.isEditable
                 && parent.allowsShotBoundaryEditing
         host.lyricSpeakerOverlayView.characterNames = parent.characterNames
+        host.textOnlyLyricOverlayView.document = currentDocument
+        host.textOnlyLyricOverlayView.characterNames = parent.characterNames
         host.lyricSpeakerOverlayView.directionAccentColor = StructuredScriptTextEditor.nsColor(
             from: parent.directionMarkupColorHex,
             fallback: ScriptMarkupPalette.defaultDirectionHex
@@ -323,9 +327,9 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             fallback: ScriptMarkupPalette.defaultStoryboardingHex
         )
         host.lyricSpeakerOverlayView.reloadCards()
-        host.textView.alphaValue = parent.showLyricCards ? 0.0 : 1.0
-        host.textView.isEditable = parent.showLyricCards ? false : parent.isEditable
-        host.textView.isSelectable = !parent.showLyricCards
+        host.textView.alphaValue = (parent.showLyricCards && !parent.textOnlyLyricView) ? 0.0 : 1.0
+        host.textView.isEditable = (parent.showLyricCards && !parent.textOnlyLyricView) ? false : parent.isEditable
+        host.textView.isSelectable = !(parent.showLyricCards && !parent.textOnlyLyricView)
         host.needsLayout = true
         host.needsDisplay = true
             host.timelineView.needsDisplay = true
@@ -498,10 +502,12 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
 final class StructuredScriptTimelineHostView: NSView {
     let textView = NSTextView()
     fileprivate let lyricSpeakerOverlayView = StructuredLyricSpeakerOverlayView()
+    fileprivate let textOnlyLyricOverlayView = StructuredTextOnlyLyricOverlayView()
     fileprivate let timelineView = StructuredShotTimelineView()
     private let connectorOverlayView = StructuredTimelineConnectorOverlayView()
     var showsShotColumn = true
     var showsLyricCards = true
+    var textOnlyLyricMode = false
     var onHeightChanged: ((CGFloat) -> Void)?
     var onAddLyricCard: ((Int) -> Void)?
     var onAddActionCard: ((Int) -> Void)?
@@ -518,6 +524,11 @@ final class StructuredScriptTimelineHostView: NSView {
         lyricSpeakerOverlayView.wantsLayer = true
         lyricSpeakerOverlayView.layer?.backgroundColor = NSColor.clear.cgColor
         addSubview(lyricSpeakerOverlayView)
+
+        textOnlyLyricOverlayView.wantsLayer = true
+        textOnlyLyricOverlayView.layer?.backgroundColor = NSColor.clear.cgColor
+        textOnlyLyricOverlayView.isHidden = true
+        addSubview(textOnlyLyricOverlayView)
 
         timelineView.wantsLayer = true
         timelineView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -548,14 +559,22 @@ final class StructuredScriptTimelineHostView: NSView {
     override func layout() {
         super.layout()
         let width = max(bounds.width, 1)
-        let timelineWidth = showsShotColumn ? timelineColumnWidth(for: width) : 0
-        let gap = showsShotColumn ? CGFloat(18) : 0
+        let timelineWidth = (showsShotColumn && !textOnlyLyricMode) ? timelineColumnWidth(for: width) : 0
+        let gap = timelineWidth > 0 ? CGFloat(18) : 0
         let textWidth = max(280, width - timelineWidth - gap)
 
         textView.frame = NSRect(x: 0, y: 0, width: min(textWidth, width), height: bounds.height)
-        lyricSpeakerOverlayView.frame = NSRect(x: 0, y: 0, width: width, height: bounds.height)
-        lyricSpeakerOverlayView.scriptColumnWidth = textView.frame.width
-        lyricSpeakerOverlayView.isHidden = !showsLyricCards
+
+        if textOnlyLyricMode {
+            lyricSpeakerOverlayView.isHidden = true
+            textOnlyLyricOverlayView.frame = NSRect(x: 0, y: 0, width: textWidth, height: bounds.height)
+            textOnlyLyricOverlayView.isHidden = false
+        } else {
+            lyricSpeakerOverlayView.frame = NSRect(x: 0, y: 0, width: width, height: bounds.height)
+            lyricSpeakerOverlayView.scriptColumnWidth = textView.frame.width
+            lyricSpeakerOverlayView.isHidden = !showsLyricCards
+            textOnlyLyricOverlayView.isHidden = true
+        }
         timelineView.frame = NSRect(x: textView.frame.maxX + gap, y: 0, width: timelineWidth, height: bounds.height)
         timelineView.isHidden = !showsShotColumn || timelineWidth < 80
         connectorOverlayView.frame = bounds
@@ -569,6 +588,12 @@ final class StructuredScriptTimelineHostView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
+        if textOnlyLyricMode && !textOnlyLyricOverlayView.isHidden {
+            let lyricPoint = textOnlyLyricOverlayView.convert(point, from: self)
+            if let hit = textOnlyLyricOverlayView.hitTest(lyricPoint) {
+                return hit
+            }
+        }
         if !timelineView.isHidden {
             let timelinePoint = timelineView.convert(point, from: self)
             if let hit = timelineView.hitTest(timelinePoint) {
@@ -592,8 +617,16 @@ final class StructuredScriptTimelineHostView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         let offset = insertionOffset(at: point)
         let menu = NSMenu()
-
-        if !timelineView.isHidden, point.x >= timelineView.frame.minX {
+        if textOnlyLyricMode {
+            let lyric = NSMenuItem(title: "Add Lyric Card", action: #selector(addLyricCardFromMenu(_:)), keyEquivalent: "")
+            lyric.target = self
+            lyric.representedObject = offset
+            menu.addItem(lyric)
+            let actionItem = NSMenuItem(title: "Add Action Card", action: #selector(addActionCardFromMenu(_:)), keyEquivalent: "")
+            actionItem.target = self
+            actionItem.representedObject = offset
+            menu.addItem(actionItem)
+        } else if !timelineView.isHidden, point.x >= timelineView.frame.minX {
             let item = NSMenuItem(
                 title: "Add Shot Card",
                 action: #selector(addShotCardFromMenu(_:)),
@@ -643,7 +676,7 @@ final class StructuredScriptTimelineHostView: NSView {
         layoutManager.ensureLayout(for: textContainer)
         let usedRect = layoutManager.usedRect(for: textContainer)
         let textHeight = ceil(usedRect.height + textView.textContainerInset.height * 2 + 8)
-        let lyricHeight = lyricSpeakerOverlayView.requiredHeight()
+        let lyricHeight = textOnlyLyricMode ? textOnlyLyricOverlayView.requiredHeight() : lyricSpeakerOverlayView.requiredHeight()
         let timelineHeight = timelineView.requiredHeight()
         let clamped = showsLyricCards
             ? max(40, lyricHeight, timelineHeight)
@@ -660,6 +693,14 @@ final class StructuredScriptTimelineHostView: NSView {
     }
 
     private func insertionOffset(at point: NSPoint) -> Int {
+        if textOnlyLyricMode {
+            let lyricPoint = textOnlyLyricOverlayView.convert(point, from: self)
+            let lineHeight: CGFloat = 19
+            let topPadding: CGFloat = 6
+            let estimatedLine = max(0, Int((lyricPoint.y - topPadding) / lineHeight))
+            let charsPerLine = max(40, Int(min(500, bounds.width > 0 ? bounds.width : 500) / 7.2))
+            return estimatedLine * charsPerLine
+        }
         if showsLyricCards {
             let lyricPoint = lyricSpeakerOverlayView.convert(point, from: self)
             if let offset = lyricSpeakerOverlayView.offsetForY(lyricPoint.y) {
@@ -1742,10 +1783,14 @@ private final class StructuredLyricBlockCardView: NSView, NSTextViewDelegate {
             seen.insert(key)
             options.append(trimmed)
         }
+        let defaults = ["SINGER", "NARRATOR", "CHORUS"]
         add(current)
-        characterNames.sorted {
-            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-        }.forEach(add)
+        for name in characterNames.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }) {
+            add(name)
+        }
+        for d in defaults where options.count < 4 || !seen.contains(d.lowercased()) {
+            add(d)
+        }
         if options.isEmpty {
             options.append("SINGER")
         }

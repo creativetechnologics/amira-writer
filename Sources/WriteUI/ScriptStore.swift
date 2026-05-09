@@ -743,6 +743,7 @@ final class ScriptStore {
     var isLibrettoEditMode: Bool = UserDefaults.standard.object(forKey: "amira.write.librettoEditMode") as? Bool ?? false {
         didSet { UserDefaults.standard.set(isLibrettoEditMode, forKey: "amira.write.librettoEditMode") }
     }
+    var textOnlyLyricView: Bool = false
     var showDirections: Bool = UserDefaults.standard.object(forKey: "showDirections") as? Bool ?? false {
         didSet { UserDefaults.standard.set(showDirections, forKey: "showDirections"); saveProjectSettings() }
     }

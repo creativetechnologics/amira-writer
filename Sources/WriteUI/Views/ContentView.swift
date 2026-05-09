@@ -198,6 +198,17 @@ struct ContentView: View {
                             }
                         }
                         .help("Show Script Cards")
+                        if showCards {
+                            OperaChromeActionButton(
+                                systemImage: "text.alignleft",
+                                isSelected: store.textOnlyLyricView
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    store.textOnlyLyricView.toggle()
+                                }
+                            }
+                            .help("Toggle Text-Only Lyric View")
+                        }
                         OperaChromeActionButton(systemImage: "list.bullet.rectangle") {
                             openWindow(id: GlobalChangeLogWindowView.windowID)
                         }
