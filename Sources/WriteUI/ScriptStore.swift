@@ -2065,7 +2065,8 @@ final class ScriptStore {
         guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
               let modDate = values.contentModificationDate,
               let fileSize = values.fileSize else { return nil }
-        return ProjectFileSnapshot(modificationDate: modDate, fileSize: Int64(fileSize))
+        let truncated = Date(timeIntervalSinceReferenceDate: modDate.timeIntervalSinceReferenceDate.rounded(.down))
+        return ProjectFileSnapshot(modificationDate: truncated, fileSize: Int64(fileSize))
     }
 
     /// Wait for a file's size to stop changing (SyncThing writes are not atomic).
