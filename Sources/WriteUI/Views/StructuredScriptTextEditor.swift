@@ -213,9 +213,44 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
         var lastShowLyricCards = false
         private var isApplyingProgrammaticText = false
         private var pendingEdit: VisibleEdit?
+        private var cachedFieldSuggestions: StructuredShotFieldSuggestions?
+        private var cachedSuggestionsHash: Int = 0
+        private var cachedDocumentSnapshot: Int = 0
 
         init(parent: StructuredScriptTextEditor) {
             self.parent = parent
+        }
+
+        private func documentStructureSnapshot() -> Int {
+            var hasher = Hasher()
+            hasher.combine(currentDocument.shots.count)
+            for shot in currentDocument.shots {
+                hasher.combine(shot.id)
+                hasher.combine(shot.card.id)
+            }
+            hasher.combine(currentDocument.hiddenMarkup.count)
+            for hm in currentDocument.hiddenMarkup {
+                hasher.combine(hm.id)
+            }
+            hasher.combine(currentDocument.lyricBlocks.count)
+            for lb in currentDocument.lyricBlocks {
+                hasher.combine(lb.id)
+            }
+            return hasher.finalize()
+        }
+
+        private func fieldSuggestions() -> StructuredShotFieldSuggestions {
+            let snapshot = documentStructureSnapshot()
+            if let cached = cachedFieldSuggestions, cachedSuggestionsHash == snapshot {
+                return cached
+            }
+            let suggestions = StructuredScriptTextEditor.shotFieldSuggestions(
+                document: currentDocument,
+                characterNames: parent.characterNames
+            )
+            cachedFieldSuggestions = suggestions
+            cachedSuggestionsHash = snapshot
+            return suggestions
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -293,10 +328,7 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
         host.timelineView.expandedShotIDs = parent.expandedShotCardIDs.wrappedValue
         host.timelineView.allowsEditing = parent.allowsShotBoundaryEditing
         host.timelineView.allowsCardEditing = parent.allowsShotCardEditing
-        host.timelineView.fieldSuggestions = StructuredScriptTextEditor.shotFieldSuggestions(
-            document: currentDocument,
-            characterNames: parent.characterNames
-        )
+        host.timelineView.fieldSuggestions = fieldSuggestions()
         host.timelineView.accentColor = StructuredScriptTextEditor.nsColor(
             from: parent.animateMarkupColorHex,
             fallback: ScriptMarkupPalette.defaultAnimateHex
