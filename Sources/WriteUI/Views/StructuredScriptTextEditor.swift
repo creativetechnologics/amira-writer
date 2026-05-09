@@ -215,7 +215,7 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
         private var pendingEdit: VisibleEdit?
         private var cachedFieldSuggestions: StructuredShotFieldSuggestions?
         private var cachedSuggestionsHash: Int = 0
-        private var cachedDocumentSnapshot: Int = 0
+        private var isInitialParseDone = false
 
         init(parent: StructuredScriptTextEditor) {
             self.parent = parent
@@ -297,19 +297,44 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             rawText: String,
             forceTextUpdate: Bool
         ) {
-            let document = StructuredScriptDocumentProjector.parse(
-                ScriptTextEditor.prepareEditableText(from: rawText),
-                hideLyricSpeakerCues: parent.showLyricCards
-            )
-            currentRawText = rawText
-            currentDocument = document
+            let preparedText = ScriptTextEditor.prepareEditableText(from: rawText)
+            let lyricCardModeChanged = lastShowLyricCards != parent.showLyricCards
+
+            if !isInitialParseDone || lyricCardModeChanged || forceTextUpdate {
+                let document = StructuredScriptDocumentProjector.parse(
+                    preparedText,
+                    hideLyricSpeakerCues: parent.showLyricCards
+                )
+                currentRawText = rawText
+                currentDocument = document
+                isInitialParseDone = true
+            } else if rawText != currentRawText {
+                let oldVisible = currentDocument.visibleText as NSString
+                let newVisible = preparedText as NSString
+                if let (range, replacement) = incrementalDiff(old: oldVisible, new: newVisible) {
+                    let updated = StructuredScriptDocumentProjector.applyingVisibleEdit(
+                        to: currentDocument,
+                        affectedRange: range,
+                        replacementString: replacement,
+                        resultingVisibleText: preparedText
+                    )
+                    currentDocument = updated
+                } else {
+                    let document = StructuredScriptDocumentProjector.parse(
+                        preparedText,
+                        hideLyricSpeakerCues: parent.showLyricCards
+                    )
+                    currentDocument = document
+                }
+                currentRawText = rawText
+            }
             lastShowLyricCards = parent.showLyricCards
 
             let textView = host.textView
-            if forceTextUpdate || textView.string != document.visibleText {
+            if forceTextUpdate || textView.string != currentDocument.visibleText {
                 let selection = textView.selectedRange()
                 isApplyingProgrammaticText = true
-                textView.string = document.visibleText
+                textView.string = currentDocument.visibleText
                 isApplyingProgrammaticText = false
                 let length = (textView.string as NSString).length
                 textView.setSelectedRange(NSRange(location: min(selection.location, length), length: 0))
@@ -317,6 +342,34 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
 
             configureTimeline(in: host)
             host.recalcHeight()
+        }
+
+        private func incrementalDiff(
+            old oldVisible: NSString,
+            new newVisible: NSString
+        ) -> (NSRange, String)? {
+            let oldLen = oldVisible.length
+            let newLen = newVisible.length
+            var prefix = 0
+            while prefix < oldLen && prefix < newLen
+                    && oldVisible.character(at: prefix) == newVisible.character(at: prefix) {
+                prefix += 1
+            }
+            var suffix = 0
+            while suffix < oldLen - prefix && suffix < newLen - prefix
+                    && oldVisible.character(at: oldLen - 1 - suffix) == newVisible.character(at: newLen - 1 - suffix) {
+                suffix += 1
+            }
+            let affectedLen = oldLen - prefix - suffix
+            guard affectedLen > 0 || prefix < oldLen || prefix < newLen else { return nil }
+
+            let range = NSRange(location: prefix, length: affectedLen)
+            let replacementLength = newLen - prefix - suffix
+            guard replacementLength >= 0 else { return nil }
+            let replacement = newVisible.substring(
+                with: NSRange(location: prefix, length: replacementLength)
+            )
+            return (range, replacement)
         }
 
         func configureTimeline(in host: StructuredScriptTimelineHostView) {
@@ -512,16 +565,15 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             _ document: StructuredScriptDocument,
             updateTextView: Bool
         ) {
-            let normalized = document.recomputingShotExtents()
-            let raw = StructuredScriptDocumentProjector.export(normalized)
-            currentDocument = normalized
+            let raw = StructuredScriptDocumentProjector.export(document)
+            currentDocument = document
             currentRawText = raw
             parent.text = raw
 
             guard let hostView else { return }
-            if updateTextView, hostView.textView.string != normalized.visibleText {
+            if updateTextView, hostView.textView.string != document.visibleText {
                 isApplyingProgrammaticText = true
-                hostView.textView.string = normalized.visibleText
+                hostView.textView.string = document.visibleText
                 isApplyingProgrammaticText = false
             }
             configureTimeline(in: hostView)
@@ -1280,52 +1332,7 @@ private final class StructuredLyricSpeakerOverlayView: NSView {
     }
 
     private func paragraphRanges(in text: String) -> [NSRange] {
-        let nsText = text as NSString
-        var ranges: [NSRange] = []
-        var cursor = 0
-        var paragraphStart: Int?
-        var paragraphEnd = 0
-
-        while cursor < nsText.length {
-            var lineEnd = cursor
-            while lineEnd < nsText.length {
-                let char = nsText.character(at: lineEnd)
-                if char == 0x000A || char == 0x000D { break }
-                lineEnd += 1
-            }
-
-            var nextCursor = lineEnd
-            if nextCursor < nsText.length {
-                let char = nsText.character(at: nextCursor)
-                nextCursor += 1
-                if char == 0x000D, nextCursor < nsText.length, nsText.character(at: nextCursor) == 0x000A {
-                    nextCursor += 1
-                }
-            }
-
-            let lineRange = NSRange(location: cursor, length: lineEnd - cursor)
-            let line = nsText.substring(with: lineRange)
-            let isBlank = line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-
-            if isBlank {
-                if let start = paragraphStart, paragraphEnd > start {
-                    ranges.append(NSRange(location: start, length: paragraphEnd - start))
-                }
-                paragraphStart = nil
-                paragraphEnd = 0
-            } else {
-                if paragraphStart == nil {
-                    paragraphStart = cursor
-                }
-                paragraphEnd = nextCursor
-            }
-            cursor = max(nextCursor, cursor + 1)
-        }
-
-        if let start = paragraphStart, paragraphEnd > start {
-            ranges.append(NSRange(location: start, length: paragraphEnd - start))
-        }
-        return ranges
+        StructuredScriptDocumentProjector.nonEmptyParagraphRanges(in: text)
     }
 }
 

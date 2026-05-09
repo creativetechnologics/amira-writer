@@ -232,6 +232,8 @@ struct ScriptSectionView: View {
     @State private var externalChangeRanges: [NSRange] = []
     @State private var externalChangeHighlightOpacity: Double = 0
     @State private var preChangeText: String = ""
+    @State private var externalHighlightExpiry: Date = .distantPast
+    @State private var fadeTimerCheck: Timer?
 
     private var isPreviewingThisSection: Bool {
         store.previewingSongPath == path && store.previewingVersionID != nil
@@ -458,7 +460,7 @@ struct ScriptSectionView: View {
                 scheduleWriteBack(newValue)
             }
             .onChange(of: store.librettoContentRevisionByPath[path] ?? 0) { _, _ in
-                guard hasLoaded, !hasPendingEdit else { return }
+                guard hasLoaded else { return }
                 let raw = currentStoredContent()
                 let incoming = editableText(from: raw)
                 guard incoming != localText else { return }
@@ -497,11 +499,7 @@ struct ScriptSectionView: View {
             .onChange(of: store.externalChangeTimes) { _, times in
                 guard times[path] != nil else { return }
 
-                // Store the text before the change for diff computation
                 let oldText = localText
-
-                // Reload text from librettoFiles — onChange(of: librettoFiles) can miss
-                // in-place element mutations with @Observable
                 let raw = store.librettoFiles
                     .first(where: { $0.relativePath == path })?.content ?? ""
                 let incoming = editableText(from: raw)
@@ -512,28 +510,17 @@ struct ScriptSectionView: View {
                     DispatchQueue.main.async {
                         suppressWriteBack = false
                     }
-                    
-                    // Compute specific changed ranges
+
                     externalChangeRanges = ScriptTextEditor.computeChangedCharacterRanges(original: oldText, modified: incoming)
-                    
-                    // Apply yellow highlighting immediately
+
                     withAnimation(.easeIn(duration: 0.3)) {
                         externalChangeHighlightOpacity = 1.0
                     }
-                    
-                    // Keep highlighting visible for 10 minutes (600 seconds)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 600) {
-                        withAnimation(.easeOut(duration: 1.0)) {
-                            externalChangeHighlightOpacity = 0.0
-                        }
-                        // Clear ranges after fade out
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            externalChangeRanges = []
-                        }
-                    }
+
+                    externalHighlightExpiry = Date().addingTimeInterval(600)
+                    startHighlightFadeTimer()
                 }
-                
-                // Clean up the timestamp after a while (keep longer than highlight)
+
                 DispatchQueue.main.asyncAfter(deadline: .now() + 630) {
                     store.externalChangeTimes.removeValue(forKey: path)
                 }
@@ -543,8 +530,27 @@ struct ScriptSectionView: View {
             store.ensureSceneHydrated(path: path)
         }
         .onDisappear {
+            fadeTimerCheck?.invalidate()
+            fadeTimerCheck = nil
             if pendingWriteBackWorkItem != nil {
                 flushPendingWriteBack()
+            }
+        }
+    }
+
+    private func startHighlightFadeTimer() {
+        fadeTimerCheck?.invalidate()
+        fadeTimerCheck = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            Task { @MainActor in
+                guard Date() >= externalHighlightExpiry, externalChangeHighlightOpacity > 0 else { return }
+                withAnimation(.easeOut(duration: 1.0)) {
+                    externalChangeHighlightOpacity = 0.0
+                }
+                fadeTimerCheck?.invalidate()
+                fadeTimerCheck = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    externalChangeRanges = []
+                }
             }
         }
     }

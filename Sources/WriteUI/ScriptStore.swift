@@ -1933,13 +1933,72 @@ final class ScriptStore {
             guard let self else { return }
             guard self.isFileWatchingActive,
                   self.fileWatchGeneration == generation else { return }
-            self.checkForExternalChanges()
+            Task.detached(priority: .background) { [weak self] in
+                guard let self else { return }
+                await self.checkForExternalChangesIfNeeded()
+            }
             guard self.isFileWatchingActive,
                   self.fileWatchGeneration == generation else { return }
             self.scheduleFileCheck(generation: generation)
         }
         fileWatchWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.externalWatchInterval, execute: item)
+    }
+
+    private func checkForExternalChangesIfNeeded() async {
+        guard let url = fileProjectURL, !isSaving, !isLoadingProject else { return }
+
+        let currentStubs = nonisolatedCurrentSongStubs(for: url)
+        let currentPaths = currentStubs.map(\.relativePath)
+        let existingPaths = songStubs.map(\.relativePath)
+
+        var changedStubs: [(SongStub, Date, ProjectFileSnapshot)] = []
+
+        if currentPaths != existingPaths {
+            for stub in currentStubs {
+                if let snapshot = await nonisolatedFileSnapshot(for: stub.fileURL) {
+                    let lastKnown = lastKnownFileSnapshots[stub.relativePath]
+                    if lastKnown == nil || snapshot != lastKnown! {
+                        changedStubs.append((stub, snapshot.modificationDate, snapshot))
+                    }
+                }
+            }
+        } else {
+            for stub in songStubs {
+                if let snapshot = await nonisolatedFileSnapshot(for: stub.fileURL) {
+                    let lastKnown = lastKnownFileSnapshots[stub.relativePath]
+                    if let lastKnown, snapshot != lastKnown {
+                        changedStubs.append((stub, snapshot.modificationDate, snapshot))
+                    }
+                }
+            }
+        }
+
+        guard !changedStubs.isEmpty || currentPaths != existingPaths else { return }
+
+        await MainActor.run { [weak self] in
+            guard let self else { return }
+            if currentPaths != songStubs.map(\.relativePath) {
+                self.reloadSongMembershipFromDisk(stubs: currentStubs, projectURL: url)
+            }
+            for (stub, modDate, snapshot) in changedStubs {
+                self.lastKnownModDates[stub.relativePath] = snapshot.modificationDate
+                self.lastKnownFileSnapshots[stub.relativePath] = snapshot
+                self.reloadExternallyChanged(stub: stub, modDate: modDate)
+            }
+        }
+    }
+
+    private nonisolated func nonisolatedCurrentSongStubs(for projectURL: URL) -> [SongStub] {
+        guard projectURL.pathExtension.lowercased() != "ows" else { return [] }
+        return OWPProjectIO.enumerateSongStubs(in: projectURL.appendingPathComponent(OWPProjectIO.songsDir))
+    }
+
+    private nonisolated func nonisolatedFileSnapshot(for url: URL) async -> ProjectFileSnapshot? {
+        guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+              let modDate = values.contentModificationDate,
+              let fileSize = values.fileSize else { return nil }
+        return ProjectFileSnapshot(modificationDate: modDate, fileSize: Int64(fileSize))
     }
 
     /// Wait for a file's size to stop changing (SyncThing writes are not atomic).

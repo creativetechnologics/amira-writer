@@ -212,47 +212,11 @@ final class StructuredTextOnlyLyricOverlayView: NSView {
     }
 
     private func paragraphRanges(in text: String) -> [NSRange] {
-        let nsText = text as NSString
-        var ranges: [NSRange] = []
-        var cursor = 0
-        var paragraphStart: Int?
-        var paragraphEnd = 0
+        StructuredScriptDocumentProjector.nonEmptyParagraphRanges(in: text)
+    }
 
-        while cursor < nsText.length {
-            var lineEnd = cursor
-            while lineEnd < nsText.length {
-                let char = nsText.character(at: lineEnd)
-                if char == 0x000A || char == 0x000D { break }
-                lineEnd += 1
-            }
-            var nextCursor = lineEnd
-            if nextCursor < nsText.length {
-                let char = nsText.character(at: nextCursor)
-                nextCursor += 1
-                if char == 0x000D, nextCursor < nsText.length, nsText.character(at: nextCursor) == 0x000A {
-                    nextCursor += 1
-                }
-            }
-            let lineRange = NSRange(location: cursor, length: lineEnd - cursor)
-            let line = nsText.substring(with: lineRange)
-            let isBlank = line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            if isBlank {
-                if let start = paragraphStart, paragraphEnd > start {
-                    ranges.append(NSRange(location: start, length: paragraphEnd - start))
-                }
-                paragraphStart = nil
-                paragraphEnd = 0
-            } else {
-                if paragraphStart == nil {
-                    paragraphStart = cursor
-                }
-                paragraphEnd = nextCursor
-            }
-            cursor = max(nextCursor, cursor + 1)
-        }
-        if let start = paragraphStart, paragraphEnd > start {
-            ranges.append(NSRange(location: start, length: paragraphEnd - start))
-        }
-        return ranges
+    private func clearCachedLayout() {
+        cachedLayout.removeAll()
+        needsDisplay = true
     }
 }

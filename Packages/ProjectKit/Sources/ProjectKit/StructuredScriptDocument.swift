@@ -1144,7 +1144,7 @@ public enum StructuredScriptDocumentProjector {
         return false
     }
 
-    private static func nonEmptyParagraphRanges(in text: String) -> [NSRange] {
+    public static func nonEmptyParagraphRanges(in text: String) -> [NSRange] {
         let nsText = text as NSString
         var ranges: [NSRange] = []
         var cursor = 0
