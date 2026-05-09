@@ -212,7 +212,12 @@ final class AnimateStore {
     /// sidebar; consumed by the Scenes/Animate middle panes to scroll/highlight.
     var selectedShotID: UUID?
     /// Raw OWP character data (images, colors) — read from characters.json.
-    var owpCharacters: [OPWCharacter] = []
+    var owpCharacters: [OPWCharacter] = [] {
+        didSet {
+            _owpBySlug = Dictionary(uniqueKeysWithValues: owpCharacters.map { ($0.directoryName, $0) })
+        }
+    }
+    @ObservationIgnored private var _owpBySlug: [String: OPWCharacter] = [:]
     var owpIndexFile: OWPIndexFile?
     var owpInstrumentMappings: [OWPInstrumentMapping] = []
     private(set) var allImagesContentRevision: Int = 0
@@ -271,8 +276,19 @@ final class AnimateStore {
 
     var characters: [AnimationCharacter] = [] {
         didSet {
+            _cachedSelectedCharacter = nil
+            _cachedSelectedCharacterID = nil
+            _characterByID = Dictionary(grouping: characters, by: \.id).compactMapValues(\.first)
+            if oldValue.map(\.id) != characters.map(\.id) {
+                characterListVersion &+= 1
+            }
             bumpAllImagesContentRevision()
         }
+    }
+    @ObservationIgnored private var _characterByID: [UUID: AnimationCharacter] = [:]
+    private(set) var characterListVersion: UInt64 = 0
+    func character(by id: UUID) -> AnimationCharacter? {
+        _characterByID[id]
     }
     var selectedCharacterID: UUID?
     var activePackageIDsByCharacterSlug: [String: UUID] = [:]
@@ -2618,8 +2634,14 @@ hydrateRunPodSettings()
         scenes.first { $0.id == selectedSceneID }
     }
 
+    @ObservationIgnored private var _cachedSelectedCharacter: AnimationCharacter?
+    @ObservationIgnored private var _cachedSelectedCharacterID: UUID?
     var selectedCharacter: AnimationCharacter? {
-        characters.first { $0.id == selectedCharacterID }
+        if selectedCharacterID != _cachedSelectedCharacterID {
+            _cachedSelectedCharacterID = selectedCharacterID
+            _cachedSelectedCharacter = characters.first { $0.id == selectedCharacterID }
+        }
+        return _cachedSelectedCharacter
     }
 
     func suggestedExportAudioURL(for scene: AnimationScene? = nil) -> URL? {
@@ -7402,7 +7424,7 @@ hydrateRunPodSettings()
 
     /// Find the OWP character data that corresponds to an AnimationCharacter.
     func owpCharacter(for animChar: AnimationCharacter) -> OPWCharacter? {
-        owpCharacters.first { $0.directoryName == animChar.owpSlug }
+        _owpBySlug[animChar.owpSlug]
     }
 
     // MARK: - Rig Editing

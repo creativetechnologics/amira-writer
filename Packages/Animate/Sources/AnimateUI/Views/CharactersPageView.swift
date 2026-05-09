@@ -25,9 +25,8 @@ struct CharactersPageView: View {
     @AppStorage("charactersPage.showExpressionLibraryPane") private var showExpressionLibraryPane: Bool = false
     @AppStorage("charactersSidebarWidth") private var sidebarWidth: Double = 260
     @State private var characterSearchText: String = ""
-    @State private var filteredCharacters: [AnimationCharacter] = []
-    @State private var filteredCharactersSignature: Int = 0
-    @State private var filteredCharactersSearchText: String = ""
+    @State private var filteredCharacterIDs: [UUID] = []
+    @State private var filteredCharacterIDsSearchText: String = ""
     @State private var heavyDetailReadyCharacterID: UUID?
     @State private var heavyDetailTask: Task<Void, Never>?
     @State private var heavyDetailRenderGeneration: UInt64 = 0
@@ -41,22 +40,20 @@ struct CharactersPageView: View {
     }
 
     private func updateFilteredCharacters() {
-        let signature = characterListSignature
         let search = characterSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard signature != filteredCharactersSignature || search != filteredCharactersSearchText else {
+        guard search != filteredCharacterIDsSearchText else {
             return
         }
 
-        filteredCharactersSignature = signature
-        filteredCharactersSearchText = search
+        filteredCharacterIDsSearchText = search
 
         if search.isEmpty {
-            filteredCharacters = store.characters
+            filteredCharacterIDs = store.characters.map(\.id)
         } else {
             let loweredSearch = search.lowercased()
-            filteredCharacters = store.characters.filter {
-                $0.name.lowercased().contains(loweredSearch)
-            }
+            filteredCharacterIDs = store.characters.lazy
+                .filter { $0.name.lowercased().contains(loweredSearch) }
+                .map(\.id)
         }
     }
 
@@ -81,7 +78,7 @@ struct CharactersPageView: View {
             .onChange(of: characterSearchText) { _, _ in
                 updateFilteredCharacters()
             }
-            .onChange(of: characterListSignature) { _, _ in
+            .onChange(of: store.characterListVersion) { _, _ in
                 updateFilteredCharacters()
             }
             .onAppear {
@@ -118,16 +115,6 @@ struct CharactersPageView: View {
             .sheet(isPresented: $showExpressionBatchSheet) {
                 expressionBatchSheet
             }
-    }
-
-    private var characterListSignature: Int {
-        var hasher = Hasher()
-        hasher.combine(store.characters.count)
-        for character in store.characters {
-            hasher.combine(character.id)
-            hasher.combine(character.name)
-        }
-        return hasher.finalize()
     }
 
     @ViewBuilder
@@ -340,30 +327,30 @@ struct CharactersPageView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: $store.selectedCharacterID) {
-                    ForEach(filteredCharacters) { character in
-                        characterRow(character)
-                            .tag(character.id)
-                            .draggable(character.id.uuidString)
-                            .moveDisabled(!characterSearchText.isEmpty)
-                            .contextMenu {
-                                Button("Edit Rig") {
-                                    store.selectedCharacterID = character.id
-                                    store.showRigEditor = true
-                                }
-                                if store.canGenerateGeminiImagesImmediately {
-                                    Button("Generate Assets...") {
+                    ForEach(filteredCharacterIDs, id: \.self) { characterID in
+                        if let character = store.character(by: characterID) {
+                            characterRow(character)
+                                .tag(character.id)
+                                .draggable(character.id.uuidString)
+                                .moveDisabled(!characterSearchText.isEmpty)
+                                .contextMenu {
+                                    Button("Edit Rig") {
                                         store.selectedCharacterID = character.id
-                                        store.showGenerationSheet = true
+                                        store.showRigEditor = true
+                                    }
+                                    if store.canGenerateGeminiImagesImmediately {
+                                        Button("Generate Assets...") {
+                                            store.selectedCharacterID = character.id
+                                            store.showGenerationSheet = true
+                                        }
+                                    }
+                                    Button("Save Rig") {
+                                        store.saveCharacterRig(character.id)
                                     }
                                 }
-                                Button("Save Rig") {
-                                    store.saveCharacterRig(character.id)
-                                }
-                            }
+                        }
                     }
                     .onMove { from, to in
-                        // Only allow reorder when search is inactive so indices
-                        // into filteredCharacters match store.characters.
                         guard characterSearchText.isEmpty else { return }
                         store.moveCharacter(from: from, to: to)
                     }
@@ -784,6 +771,7 @@ struct CharactersPageView: View {
 
         @State private var localText: String = ""
         @State private var hasAppeared = false
+        @State private var debounceTask: Task<Void, Never>?
 
         var body: some View {
             VStack(alignment: .leading, spacing: 8) {
@@ -800,7 +788,13 @@ struct CharactersPageView: View {
                         .background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
                         .onChange(of: localText) { _, newValue in
                             guard hasAppeared else { return }
-                            onChange(newValue)
+                            debounceTask?.cancel()
+                            let value = newValue
+                            debounceTask = Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(120))
+                                guard !Task.isCancelled else { return }
+                                onChange(value)
+                            }
                         }
 
                     if localText.isEmpty {
@@ -821,6 +815,10 @@ struct CharactersPageView: View {
                 if !hasAppeared || localText != newValue {
                     localText = newValue
                 }
+            }
+            .onDisappear {
+                debounceTask?.cancel()
+                debounceTask = nil
             }
         }
     }
