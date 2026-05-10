@@ -11,6 +11,11 @@
 ## Canonical Workspace
 
 - Treat `/Volumes/Storage VIII/Programming/Amira Writer` as the canonical home for the unified Opera app.
+- This directory is the Swift/native Amira Writer workspace only.
+- Do not add Electron, React, Node, Docker, Flynn web-conversion, or Amira Writer Web implementation files here.
+- The Electron/server conversion lives separately at `/Volumes/Storage VIII/Programming/Amira Writer Web`.
+- If a request is about the web/Electron/server conversion, switch to `/Volumes/Storage VIII/Programming/Amira Writer Web` instead of editing this Swift workspace.
+- The web project may read this Swift workspace as a parity reference, but this Swift workspace should not depend on or import anything from the web project.
 - Do not edit Opera features out of the legacy `Novotro Write`, `Novotro Score`, or `Novotro Animate` folders unless a migration task explicitly requires it.
 - The unified app shell lives at `Sources/Opera`.
 - The Write workspace lives at `Sources/WriteUI`.
