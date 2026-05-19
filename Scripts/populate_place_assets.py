@@ -6,8 +6,9 @@ from uuid import uuid4
 
 PROJECT_ROOT = Path('/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera')
 ANIMATE_DIR = PROJECT_ROOT / 'Animate'
-PLACES_PATH = ANIMATE_DIR / 'places.json'
-WORKFLOW_PATH = ANIMATE_DIR / 'places-workflow.json'
+PLACES_DIR = PROJECT_ROOT / 'Places'
+PLACES_PATH = PLACES_DIR / 'places.json'
+WORKFLOW_PATH = PLACES_DIR / 'places-workflow.json'
 DESKTOP = Path('/Volumes/Storage VIII/Users/gary/Desktop/Amira Background Generations')
 CHOSEN = ANIMATE_DIR / 'backgrounds' / 'chosen-references'
 

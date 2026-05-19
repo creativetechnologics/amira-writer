@@ -5652,6 +5652,7 @@ hydrateRunPodSettings()
             ProjectDatabaseBridge.animateMetadataPath,
             ProjectDatabaseBridge.animateScenesPath,
             ProjectDatabaseBridge.animatePlacesPath,
+            ProjectDatabaseBridge.animatePlacesWorkflowPath,
             ProjectDatabaseBridge.animatedLookPromptPath,
             ProjectDatabaseBridge.characterPackageSelectionsPath,
             ProjectDatabaseBridge.shotPresetsPath
@@ -5814,8 +5815,7 @@ hydrateRunPodSettings()
 
                     let selectedScene = self.selectedScene
                     if let animateDir = self.animateURL {
-                        let backgroundDir = ProjectPaths(root: animateDir.deletingLastPathComponent()).animateBackgrounds
-                        self.backgrounds = (try? self.loadPlaces(from: animateDir, backgroundDirectoryURL: backgroundDir)) ?? []
+                        self.backgrounds = self.loadPlacesPreservingCurrent(from: animateDir)
                         self.placesWorkflowLibrary = self.hydratedPlacesWorkflowLibrary(
                             self.loadPlacesWorkflowLibrary(from: animateDir)
                         )
@@ -5833,8 +5833,7 @@ hydrateRunPodSettings()
             case ProjectDatabaseBridge.animatePlacesPath, ProjectDatabaseBridge.animatePlacesWorkflowPath:
                 await MainActor.run {
                     guard let animateDir = self.animateURL else { return }
-                    let backgroundDir = ProjectPaths(root: animateDir.deletingLastPathComponent()).animateBackgrounds
-                    self.backgrounds = (try? self.loadPlaces(from: animateDir, backgroundDirectoryURL: backgroundDir)) ?? []
+                    self.backgrounds = self.loadPlacesPreservingCurrent(from: animateDir)
                     self.placesWorkflowLibrary = self.hydratedPlacesWorkflowLibrary(
                         self.loadPlacesWorkflowLibrary(from: animateDir)
                     )
@@ -6997,13 +6996,13 @@ hydrateRunPodSettings()
                 scenes[index].shots = normalizedSceneShots(scenes[index].shots)
             }
 
-            // 7. Load backgrounds from Animate/backgrounds/
-            let bgDir = ProjectPaths(root: animateDir.deletingLastPathComponent()).animateBackgrounds
-            if hasLocalMirror, fm.fileExists(atPath: bgDir.path) {
-                backgrounds = try loadPlaces(from: animateDir, backgroundDirectoryURL: bgDir)
-            } else {
-                backgrounds = []
-            }
+            // 7. Load canonical Places/places.json.
+            // Places are data records, not a directory listing of whatever
+            // happens to sit at Animate/backgrounds/. Older code synthesized
+            // the Places list from root background images when the manifest was
+            // missing or unreadable; that was exactly how a rich project could
+            // collapse back to a tiny 4-image stub list and then get saved.
+            backgrounds = hasLocalMirror ? try loadPlaces(from: animateDir) : []
             placesWorkflowLibrary = await hydratedPlacesWorkflowLibrary(
                 loadPlacesWorkflowLibraryAsync(from: animateDir)
             )
@@ -7283,9 +7282,9 @@ hydrateRunPodSettings()
             )
             try saveImageLibraryOrganizeItems(to: animateDir)
 
-            let effectiveProjectURL = workingOWPURL ?? owpURL ?? animateDir.deletingLastPathComponent()
             if writePlaces {
                 let placesData = try encoder.encode(backgrounds.map(persistedBackgroundPlate))
+                try validatePlacesManifestWrite(newData: placesData, to: savePaths.animatePlacesJSON)
                 try writeProtectedData(placesData, to: savePaths.animatePlacesJSON)
                 let placesWorkflowData = try encoder.encode(persistedPlacesWorkflowLibrary(placesWorkflowLibrary))
                 try writeProtectedData(placesWorkflowData, to: savePaths.animatePlacesWorkflowJSON)
@@ -11491,12 +11490,6 @@ hydrateRunPodSettings()
         _ requirements: [PlacesScriptSceneRequirement],
         persistChanges: Bool
     ) -> Bool {
-        let legacyPlaceholderKeys = Set(
-            BackgroundPlaceholderService.amiraLocations.map {
-                PlacesScriptIndexService.normalizedKey(for: $0.name)
-            }
-        )
-
         var didMutate = false
         let requiredLocations = requirements.flatMap(\.locations)
         let requiredKeys = Set(requiredLocations.map(\.normalizedKey))
@@ -11512,24 +11505,6 @@ hydrateRunPodSettings()
             Array(Set(values.map(\.1))).sorted {
                 $0.localizedStandardCompare($1) == .orderedAscending
             }
-        }
-
-        let removedLegacyIDs = Set(backgrounds.compactMap { place -> UUID? in
-            let key = PlacesScriptIndexService.normalizedKey(for: place.name)
-            guard legacyPlaceholderKeys.contains(key),
-                  !requiredKeys.contains(key),
-                  place.imagePaths.isEmpty,
-                  place.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return nil
-            }
-            return place.id
-        })
-        if !removedLegacyIDs.isEmpty {
-            backgrounds.removeAll { removedLegacyIDs.contains($0.id) }
-            for index in scenes.indices where scenes[index].backgroundID.map(removedLegacyIDs.contains) == true {
-                scenes[index].backgroundID = nil
-            }
-            didMutate = true
         }
 
         for index in backgrounds.indices {
@@ -16968,44 +16943,92 @@ hydrateRunPodSettings()
         }
     }
 
-    private func loadBackgrounds(from directoryURL: URL) throws -> [BackgroundPlate] {
+    private enum PlacesManifestLoadError: LocalizedError {
+        case unreadable(URL, Error)
+        case suspiciousTruncation(existingCount: Int, newCount: Int, url: URL)
+
+        var errorDescription: String? {
+            switch self {
+            case let .unreadable(url, error):
+                return "Refusing to replace Places because \(url.lastPathComponent) could not be decoded: \(error.localizedDescription)"
+            case let .suspiciousTruncation(existingCount, newCount, url):
+                return "Refusing to overwrite \(url.lastPathComponent): existing manifest has \(existingCount) places, attempted save has \(newCount). This protects against the old 4-place reset."
+            }
+        }
+    }
+
+    private func decodedPlacesManifest(at url: URL) throws -> [BackgroundPlate] {
+        let data = try Data(contentsOf: url)
+        return try JSONDecoder().decode([BackgroundPlate].self, from: data)
+    }
+
+    private func decodedPlacesManifestIfPresent(at url: URL) throws -> [BackgroundPlate]? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try decodedPlacesManifest(at: url)
+    }
+
+    private func backgroundImagePathByFilename(in directoryURL: URL) -> [String: String] {
         let fm = FileManager.default
         let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "tiff", "webp"]
-        let contents = try fm.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: nil)
-        var result: [BackgroundPlate] = []
+        guard let contents = try? fm.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: nil) else {
+            return [:]
+        }
 
-        for item in contents {
-            guard imageExtensions.contains(item.pathExtension.lowercased()) else { continue }
-            result.append(BackgroundPlate(
-                id: UUID(),
-                name: item.deletingPathExtension().lastPathComponent,
-                filename: item.lastPathComponent,
-                imagePaths: [projectRelativeCharacterAssetPath(from: item.path) ?? item.path],
-                sourceURL: item
-            ))
+        var result: [String: String] = [:]
+        for item in contents where imageExtensions.contains(item.pathExtension.lowercased()) {
+            result[item.lastPathComponent] = projectRelativeCharacterAssetPath(from: item.path) ?? item.path
         }
 
         return result
     }
 
-    private func loadPlaces(
-        from animateDir: URL,
-        backgroundDirectoryURL: URL
-    ) throws -> [BackgroundPlate] {
-        let synthesized = try loadBackgrounds(from: backgroundDirectoryURL)
-        let manifestURL = ProjectPaths(root: animateDir.deletingLastPathComponent()).animatePlacesJSON
-        guard FileManager.default.fileExists(atPath: manifestURL.path),
-              let data = try? Data(contentsOf: manifestURL),
-              let decoded = try? JSONDecoder().decode([BackgroundPlate].self, from: data) else {
-            return synthesized.map(hydratedBackgroundPlate)
+    private func loadPlaces(from animateDir: URL) throws -> [BackgroundPlate] {
+        let projectRoot = animateDir.deletingLastPathComponent()
+        let paths = ProjectPaths(root: projectRoot)
+        let manifestURL = paths.animatePlacesJSON
+        let backupURL = siblingPreviousJSONURL(for: manifestURL)
+
+        let decoded: [BackgroundPlate]
+        if FileManager.default.fileExists(atPath: manifestURL.path) {
+            do {
+                decoded = try decodedPlacesManifest(at: manifestURL)
+            } catch {
+                if let backup = try? decodedPlacesManifestIfPresent(at: backupURL) {
+                    AppLog.log("PLACES", "Recovered Places list from \(backupURL.path) after decode failure in \(manifestURL.path): \(error.localizedDescription)")
+                    return hydratedPlaces(backup, projectRoot: projectRoot)
+                }
+                throw PlacesManifestLoadError.unreadable(manifestURL, error)
+            }
+        } else if let backup = try? decodedPlacesManifestIfPresent(at: backupURL) {
+            AppLog.log("PLACES", "Recovered Places list from \(backupURL.path); canonical manifest is missing.")
+            return hydratedPlaces(backup, projectRoot: projectRoot)
+        } else {
+            return []
         }
 
-        let diskItemsByFilename = Dictionary(uniqueKeysWithValues: synthesized.map { ($0.filename, $0) })
+        return hydratedPlaces(decoded, projectRoot: projectRoot)
+    }
+
+    private func loadPlacesPreservingCurrent(from animateDir: URL) -> [BackgroundPlate] {
+        do {
+            return try loadPlaces(from: animateDir)
+        } catch {
+            AppLog.log("PLACES", "Keeping current in-memory Places after reload failure: \(error.localizedDescription)")
+            statusMessage = error.localizedDescription
+            return backgrounds
+        }
+    }
+
+    private func hydratedPlaces(_ decoded: [BackgroundPlate], projectRoot: URL) -> [BackgroundPlate] {
+        let diskImagePathByFilename = backgroundImagePathByFilename(
+            in: ProjectPaths(root: projectRoot).animateBackgrounds
+        )
+
         return decoded.map { place in
             var updated = place
             updated.imagePaths = normalizedCharacterAssetPaths(place.imagePaths)
             updated.approvedImagePath = normalizedCharacterAssetPath(place.approvedImagePath)
-            if updated.imagePaths.isEmpty, let fallback = diskItemsByFilename[place.filename]?.imagePaths.first {
+            if updated.imagePaths.isEmpty, let fallback = diskImagePathByFilename[place.filename] {
                 updated.imagePaths = [fallback]
             }
             if let approved = updated.approvedImagePath,
@@ -17018,6 +17041,30 @@ hydrateRunPodSettings()
                 updated.name = URL(fileURLWithPath: updated.filename).deletingPathExtension().lastPathComponent
             }
             return hydratedBackgroundPlate(updated)
+        }
+    }
+
+    private func validatePlacesManifestWrite(newData: Data, to url: URL) throws {
+        guard let replacement = try? JSONDecoder().decode([BackgroundPlate].self, from: newData) else {
+            return
+        }
+
+        let backupURL = siblingPreviousJSONURL(for: url)
+        let existing = (FileManager.default.fileExists(atPath: url.path) ? (try? decodedPlacesManifest(at: url)) : nil)
+            ?? (try? decodedPlacesManifestIfPresent(at: backupURL))
+            ?? []
+        let existingCount = existing.count
+        let newCount = replacement.count
+        guard existingCount >= 10 else { return }
+
+        let droppedTooFar = newCount <= 4 || newCount < max(4, existingCount / 2)
+        if droppedTooFar {
+            AppLog.log("PLACES", "Blocked suspicious Places truncation at \(url.path): \(existingCount) -> \(newCount)")
+            throw PlacesManifestLoadError.suspiciousTruncation(
+                existingCount: existingCount,
+                newCount: newCount,
+                url: url
+            )
         }
     }
 

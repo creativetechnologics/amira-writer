@@ -21,7 +21,7 @@ from typing import Any
 
 DEFAULT_PROJECT = Path('/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera')
 MASTER_MAP_FALLBACK = 'Animate/backgrounds/chosen-references/map/01-master_valley_topdown_map_4k_v5.png'
-LAYERS_FILE = 'Animate/places-master-map-layers.json'
+LAYERS_FILE = 'Places/places-master-map-layers.json'
 AUTO_ANCHOR_SOURCES = {'worldGraph.node', 'generatedRecord.confirmed'}
 AUTO_VECTOR_SOURCE_PREFIXES = ('draft.',)
 
@@ -39,11 +39,11 @@ def save_json(path: Path, payload: Any) -> None:
 
 
 def workflow_path(project: Path) -> Path:
-    return project / 'Animate' / 'places-workflow.json'
+    return project / 'Places' / 'places-workflow.json'
 
 
 def places_path(project: Path) -> Path:
-    return project / 'Animate' / 'places.json'
+    return project / 'Places' / 'places.json'
 
 
 def output_path(project: Path) -> Path:

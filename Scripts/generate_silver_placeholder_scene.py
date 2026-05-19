@@ -17,7 +17,7 @@ from PIL import Image
 PROJECT_ROOT = Path("/Volumes/Storage VIII/Users/gary/Amira - A Modern Opera")
 ANIMATE_DIR = PROJECT_ROOT / "Animate"
 SCENES_PATH = ANIMATE_DIR / "scenes.json"
-PLACES_PATH = ANIMATE_DIR / "places.json"
+PLACES_PATH = PROJECT_ROOT / "Places" / "places.json"
 SONG_PATH = PROJECT_ROOT / "Songs" / "1.05.0 - Silver.ows"
 BACKGROUND_DIR = ANIMATE_DIR / "backgrounds"
 OBJECT_DIR = ANIMATE_DIR / "objects" / "silver"

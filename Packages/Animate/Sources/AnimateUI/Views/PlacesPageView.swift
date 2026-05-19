@@ -931,7 +931,6 @@ struct PlacesPageView: View {
     @State private var worldMapPanelMode: PlacesWorldMapPanelMode = .map
     @State private var cachedWorldbuildingSnapshot: PlacesWorldbuildingSnapshot = .empty
     @State private var worldNodeDrafts: [String: PlacesWorldNodeDraft] = [:]
-    @State private var stagedGridPlaceCount: Int = 0
     @State private var renderGridThumbnails = false
     @State private var renderSidebarThumbnails = false
     @State private var renderOverviewDetails = false
@@ -983,12 +982,8 @@ struct PlacesPageView: View {
         cachedWorldbuildingSnapshot.applying(nodeDrafts: worldNodeDrafts)
     }
 
-    private var stagedGridPlaces: [BackgroundPlate] {
-        Array(store.backgrounds.prefix(stagedGridPlaceCount))
-    }
-
-    private var hasMoreStagedGridPlaces: Bool {
-        stagedGridPlaceCount < store.backgrounds.count
+    private var gridPlaces: [BackgroundPlate] {
+        store.backgrounds
     }
 
     private struct WorldbuildingSnapshotRefreshKey: Equatable {
@@ -1068,10 +1063,8 @@ struct PlacesPageView: View {
 
     private func schedulePlacesRenderStaging(reset: Bool = false) {
         placesRenderStagingTask?.cancel()
-        let totalPlaces = store.backgrounds.count
 
         if reset {
-            stagedGridPlaceCount = 0
             renderGridThumbnails = false
             renderSidebarThumbnails = false
             renderOverviewDetails = false
@@ -1080,19 +1073,14 @@ struct PlacesPageView: View {
         placesRenderStagingTask = Task { @MainActor in
             await Task.yield()
 
-            guard totalPlaces > 0 else {
+            guard !store.backgrounds.isEmpty else {
                 renderSidebarThumbnails = true
                 renderOverviewDetails = true
                 return
             }
 
-            try? await Task.sleep(for: .milliseconds(80))
-            guard !Task.isCancelled else { return }
-            stagedGridPlaceCount = min(totalPlaces, 4)
-
             try? await Task.sleep(for: .milliseconds(140))
             guard !Task.isCancelled else { return }
-            stagedGridPlaceCount = totalPlaces
             renderGridThumbnails = true
 
             try? await Task.sleep(for: .milliseconds(80))
@@ -1323,15 +1311,6 @@ struct PlacesPageView: View {
                 Spacer()
 
                 HStack(spacing: 8) {
-                    Button {
-                        generatePlaceholders()
-                    } label: {
-                        Label("Stubs", systemImage: "photo.badge.plus")
-                    }
-                    .buttonStyle(.plain)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
                     Button {
                         store.setMasterPlaceMapFromPicker()
                     } label: {
@@ -1753,17 +1732,8 @@ struct PlacesPageView: View {
                 .disabled(generateAllPlacesTask != nil)
             }
 
-            if hasMoreStagedGridPlaces {
-                HStack {
-                    Text("Loading places… showing \(stagedGridPlaces.count) of \(store.backgrounds.count)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-            }
-
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 16)], spacing: 16) {
-                ForEach(stagedGridPlaces) { place in
+                ForEach(gridPlaces) { place in
                     PlaceGridCard(
                         store: store,
                         place: place,
@@ -1776,17 +1746,6 @@ struct PlacesPageView: View {
                         store.selectedBackgroundID = place.id
                         viewMode = .detail
                     }
-                }
-            }
-
-            if hasMoreStagedGridPlaces {
-                HStack {
-                    Spacer()
-                    Button("Load Remaining Places") {
-                        stagedGridPlaceCount = store.backgrounds.count
-                        renderGridThumbnails = true
-                    }
-                    .buttonStyle(.bordered)
                 }
             }
         }
@@ -4713,23 +4672,6 @@ struct PlacesPageView: View {
             get: { placeGenerationErrorMessage != nil },
             set: { if !$0 { placeGenerationErrorMessage = nil } }
         )
-    }
-
-    private func generatePlaceholders() {
-        guard let projectURL = store.workingOWPURL ?? store.owpURL else { return }
-        let outputDirectory = ProjectPaths(root: projectURL).animateBackgrounds
-        let existingNames = Set(store.backgrounds.map { $0.filename })
-        BackgroundPlaceholderService.generatePlaceholders(
-            locations: BackgroundPlaceholderService.amiraLocations,
-            outputDirectory: outputDirectory
-        )
-        for location in BackgroundPlaceholderService.amiraLocations {
-            guard !existingNames.contains(location.fileName) else { continue }
-            let url = outputDirectory.appendingPathComponent(location.fileName)
-            if FileManager.default.fileExists(atPath: url.path) {
-                store.importBackground(from: url)
-            }
-        }
     }
 
     private func overviewPill(title: String, value: String, systemImage: String) -> some View {

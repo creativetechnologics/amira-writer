@@ -66,12 +66,12 @@ PROTO_BY_ID = {item[0]: item for item in PROTOTYPES}
 
 def project_paths(project: Path) -> tuple[Path, Path, Path]:
     animate = project / "Animate"
-    return animate, animate / "places-workflow.json", animate / "places.json"
+    places = project / "Places"
+    return animate, places / "places-workflow.json", places / "places.json"
 
 
 def world_map_canon_path(project: Path) -> Path:
-    animate, _, _ = project_paths(project)
-    return animate / "places-world-map-canon.json"
+    return project / "Places" / "places-world-map-canon.json"
 
 
 def path_relative_to_project(project: Path, raw_path: str | None) -> str | None:

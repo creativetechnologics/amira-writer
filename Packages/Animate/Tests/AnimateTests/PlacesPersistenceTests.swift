@@ -94,6 +94,58 @@ final class PlacesPersistenceTests: XCTestCase {
         XCTAssertEqual(workflow.masterMapImagePath, "Animate/backgrounds/master-map.png")
     }
 
+    func testExplicitPlaceSaveRefusesSuspiciousFourPlaceTruncation() throws {
+        let projectURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlacesPersistenceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        try FileManager.default.createDirectory(
+            at: projectURL.appendingPathComponent("Animate", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let placesDir = projectURL.appendingPathComponent("Places", isDirectory: true)
+        try FileManager.default.createDirectory(at: placesDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: projectURL.appendingPathComponent("Scenes", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+
+        let existingPlaces = (0..<12).map { index in
+            BackgroundPlate(
+                name: "Canonical Place \(index)",
+                filename: "canonical-place-\(index).png",
+                imagePaths: [],
+                approvedImagePath: nil
+            )
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(existingPlaces)
+            .write(to: placesDir.appendingPathComponent("places.json"))
+
+        let store = AnimateStore()
+        store.disableExternalFileWatch = true
+        store.owpURL = projectURL
+        store.backgrounds = (0..<4).map { index in
+            BackgroundPlate(
+                name: "Stub Place \(index)",
+                filename: "stub-place-\(index).png",
+                imagePaths: [],
+                approvedImagePath: nil
+            )
+        }
+
+        store.save(writePlaces: true)
+
+        let placesData = try Data(contentsOf: placesDir.appendingPathComponent("places.json"))
+        let decodedPlaces = try JSONDecoder().decode([BackgroundPlate].self, from: placesData)
+        XCTAssertEqual(decodedPlaces.count, 12)
+        XCTAssertTrue(
+            store.statusMessage.contains("Refusing to overwrite"),
+            "Expected truncation guard to explain why Places/places.json was not overwritten; got: \(store.statusMessage)"
+        )
+    }
+
     func testExplicitPlaceSavePersistsWorldbuildingWorkflowAndAngleMetadata() throws {
         let projectURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlacesPersistenceTests-\(UUID().uuidString)", isDirectory: true)
