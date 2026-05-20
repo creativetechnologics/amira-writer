@@ -5,6 +5,24 @@ import Observation
 import ProjectKit
 import QuartzCore
 
+private enum MixDateParser {
+    nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    nonisolated(unsafe) private static let basic: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    static func parse(_ value: String) -> Date? {
+        fractional.date(from: value) ?? basic.date(from: value)
+    }
+}
+
 @available(macOS 26.0, *)
 struct MixSceneSummary: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
@@ -816,7 +834,9 @@ final class MixStore {
     private static func discoverSongSummaries(in projectURL: URL) -> [NPSceneSummary] {
         let fm = FileManager.default
         let songsDir = ProjectPaths(root: projectURL).songs
-        guard fm.fileExists(atPath: songsDir.path) else { return [] }
+        if !fm.fileExists(atPath: songsDir.path) {
+            return discoverScenePackageSummaries(in: projectURL)
+        }
 
         let enumerator = fm.enumerator(
             at: songsDir,
@@ -853,10 +873,32 @@ final class MixStore {
         }
 
         let sorted = summaries.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
-        return sorted.enumerated().map { index, scene in
+        let legacySummaries = sorted.enumerated().map { index, scene in
             var s = scene
             s.orderIndex = index
             return s
+        }
+        guard !legacySummaries.isEmpty else {
+            return discoverScenePackageSummaries(in: projectURL)
+        }
+        return legacySummaries
+    }
+
+    private static func discoverScenePackageSummaries(in projectURL: URL) -> [NPSceneSummary] {
+        ScenePackageReader.discover(in: projectURL).enumerated().map { index, descriptor in
+            NPSceneSummary(
+                id: descriptor.id,
+                relativePath: descriptor.legacySongPath,
+                title: descriptor.title,
+                orderIndex: index,
+                updatedAt: descriptor.updatedAt.flatMap(MixDateParser.parse) ?? Date(),
+                activeVersionID: nil,
+                activeLyrics: "",
+                noteCount: 0,
+                lengthTicks: 0,
+                animateTrackCount: 0,
+                animateKeyframeCount: 0
+            )
         }
     }
 

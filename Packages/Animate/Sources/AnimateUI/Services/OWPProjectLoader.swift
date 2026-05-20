@@ -48,15 +48,24 @@ struct OWPProjectLoader: Sendable {
 
     /// Load full song data from an OWS file for lip sync and timing.
     func loadSongData(from owsURL: URL) async throws -> OWSSongData {
-        try await Task.detached(priority: .utility) { @Sendable in
-            let data = try Data(contentsOf: owsURL)
+        if ScenePackageReader.isScenePackageSceneJSON(owsURL) {
+            let data = try ScenePackageReader.makeLegacyOWSData(sceneJSONURL: owsURL)
+            let title = try? (ScenePackageReader.makeLegacyOWSObject(sceneJSONURL: owsURL)["title"] as? String)
+            return try await loadSongData(from: data, displayName: title ?? owsURL.deletingLastPathComponent().lastPathComponent)
+        }
+        let data = try Data(contentsOf: owsURL)
+        return try await loadSongData(from: data, displayName: owsURL.deletingPathExtension().lastPathComponent)
+    }
 
+    /// Load full song data from a legacy OWS-shaped JSON blob.
+    func loadSongData(from data: Data, displayName: String) async throws -> OWSSongData {
+        try await Task.detached(priority: .utility) { @Sendable in
             // OWS files are JSON with versioned payloads
             // Try to decode the relevant fields
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
 
             var songData = OWSSongData()
-            songData.title = owsURL.deletingPathExtension().lastPathComponent
+            songData.title = displayName
 
             // Extract from the latest version's playback snapshot
             if let versions = json?["versions"] as? [[String: Any]],
@@ -145,31 +154,42 @@ struct OWPProjectLoader: Sendable {
     private func discoverSongs(in projectURL: URL, fm: FileManager) throws -> [OWPSongStub] {
         var songs: [OWPSongStub] = []
         
-        // Only look in the Songs directory (same behavior as Score workspace)
+        // Look in legacy Songs/ and canonical Scenes/<slug>/ packages.
         let songsURL = ProjectPaths(root: projectURL).songs
-        guard fm.fileExists(atPath: songsURL.path) else { return [] }
-
-        let enumerator = fm.enumerator(
-            at: songsURL,
-            includingPropertiesForKeys: [.fileSizeKey],
-            options: [.skipsHiddenFiles]
-        )
-
-        while let fileURL = enumerator?.nextObject() as? URL {
-            guard fileURL.pathExtension.lowercased() == "ows" else { continue }
-            // Skip SyncThing conflict files — matches Score, Write, and Mix behavior
-            if fileURL.lastPathComponent.contains(".sync-conflict-") { continue }
-
-            let relativePath = "Songs/" + fileURL.path.replacingOccurrences(
-                of: songsURL.path + "/",
-                with: ""
+        if fm.fileExists(atPath: songsURL.path) {
+            let enumerator = fm.enumerator(
+                at: songsURL,
+                includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsHiddenFiles]
             )
 
-            let displayName = fileURL.deletingPathExtension().lastPathComponent
+            while let fileURL = enumerator?.nextObject() as? URL {
+                guard fileURL.pathExtension.lowercased() == "ows" else { continue }
+                // Skip SyncThing conflict files — matches Score, Write, and Mix behavior
+                if fileURL.lastPathComponent.contains(".sync-conflict-") { continue }
+
+                let relativePath = "Songs/" + fileURL.path.replacingOccurrences(
+                    of: songsURL.path + "/",
+                    with: ""
+                )
+
+                let displayName = fileURL.deletingPathExtension().lastPathComponent
+                songs.append(OWPSongStub(
+                    id: stableSongID(fileURL: fileURL, fallbackSeed: relativePath),
+                    title: displayName.toTitleCase(),
+                    owsPath: relativePath,
+                    durationTicks: nil
+                ))
+            }
+        }
+
+        let existingPaths = Set(songs.map(\.owsPath))
+        for descriptor in ScenePackageReader.discover(in: projectURL, fileManager: fm)
+            where !existingPaths.contains(descriptor.legacySongPath) {
             songs.append(OWPSongStub(
-                id: stableSongID(fileURL: fileURL, fallbackSeed: relativePath),
-                title: displayName.toTitleCase(),
-                owsPath: relativePath,
+                id: descriptor.id,
+                title: descriptor.title,
+                owsPath: descriptor.legacySongPath,
                 durationTicks: nil
             ))
         }

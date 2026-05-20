@@ -51,7 +51,7 @@ enum ProjectDatabaseBridge {
         return OWSSongAsset(
             relativePath: stub.relativePath,
             document: OWSSongDocument(
-                songID: UUID(),
+                songID: stub.id,
                 title: title,
                 canonicalTitle: title.lowercased(),
                 notes: "",
@@ -65,9 +65,8 @@ enum ProjectDatabaseBridge {
 
     static func hydratePlayback(projectURL: URL, relativePath: String) async -> OWSPlaybackSnapshot? {
         guard projectURL.pathExtension.lowercased() != "ows" else { return nil }
-        let songsRoot = projectURL.appendingPathComponent(OWPProjectIO.songsDir)
-        guard let stub = OWPProjectIO.enumerateSongStubs(in: songsRoot)
-                .first(where: { $0.relativePath == relativePath }) else {
+        guard let stub = OWPProjectIO.enumerateProjectSongStubs(in: projectURL)
+            .first(where: { $0.relativePath == relativePath }) else {
             return nil
         }
         guard let asset = try? await OWPProjectIO.loadSongAsync(stub: stub),

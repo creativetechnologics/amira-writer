@@ -41,6 +41,64 @@ final class OWPProjectLoaderTests: XCTestCase {
         XCTAssertEqual(firstLoad.songs.first?.id, secondLoad.songs.first?.id)
     }
 
+    func testScenePackagesLoadWhenLegacySongsFolderIsEmpty() async throws {
+        let projectURL = try makeProject()
+        defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
+        try FileManager.default.removeItem(at: projectURL.appendingPathComponent("Songs", isDirectory: true))
+
+        let sceneID = UUID(uuidString: "22023608-71f8-49B1-BCEE-C7698CC781D7")!
+        let versionID = UUID(uuidString: "CE057D8A-E511-4EA7-8CB1-A448AC9DB2AF")!
+        try writeScenePackage(
+            slug: "1-03-0-scene-luke-s-notebook",
+            sceneID: sceneID,
+            versionID: versionID,
+            legacySongPath: "Songs/1.03.0 - Scene - Luke's Notebook.ows",
+            title: "1.03.0 - Scene - Luke's Notebook",
+            manuscript: "Luke keeps writing between med crates.",
+            in: projectURL
+        )
+
+        let load = try await OWPProjectLoader().load(from: projectURL)
+        XCTAssertEqual(load.songs.map(\.id), [sceneID])
+        XCTAssertEqual(load.songs.map(\.owsPath), ["Songs/1.03.0 - Scene - Luke's Notebook.ows"])
+
+        let hydratedSongData = await ProjectDatabaseBridge.hydrateSongData(
+            projectURL: projectURL,
+            relativePath: "Songs/1.03.0 - Scene - Luke's Notebook.ows"
+        )
+        let songData = try XCTUnwrap(hydratedSongData)
+        XCTAssertEqual(songData.lyricsText, "Luke keeps writing between med crates.")
+        XCTAssertEqual(songData.notes.count, 1)
+        XCTAssertEqual(songData.lengthTicks, 96)
+    }
+
+    func testEmptyLegacyScenesJSONFallsBackToScenePackageShots() throws {
+        let projectURL = try makeProject()
+        defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
+        try FileManager.default.removeItem(at: projectURL.appendingPathComponent("Songs", isDirectory: true))
+
+        let sceneID = UUID(uuidString: "22023608-71f8-49B1-BCEE-C7698CC781D7")!
+        let versionID = UUID(uuidString: "CE057D8A-E511-4EA7-8CB1-A448AC9DB2AF")!
+        try writeScenePackage(
+            slug: "1-03-0-scene-luke-s-notebook",
+            sceneID: sceneID,
+            versionID: versionID,
+            legacySongPath: "Songs/1.03.0 - Scene - Luke's Notebook.ows",
+            title: "1.03.0 - Scene - Luke's Notebook",
+            manuscript: "Luke keeps writing between med crates.",
+            in: projectURL
+        )
+        let legacyScenesURL = projectURL.appendingPathComponent("Scenes/scenes.json")
+        try Data("[]".utf8).write(to: legacyScenesURL, options: .atomic)
+
+        let savedScenes = ProjectDatabaseBridge.loadSavedScenesFromDisk(projectURL: projectURL)
+        let scene = try XCTUnwrap(savedScenes["Songs/1.03.0 - Scene - Luke's Notebook.ows"])
+        XCTAssertEqual(scene.shots.count, 1)
+        XCTAssertEqual(scene.shots.first?.name, "Convoy unload after the prologue")
+        XCTAssertEqual(scene.shots.first?.cameraShot, .wide)
+        XCTAssertEqual(scene.shots.first?.shotIntent, .establishing)
+    }
+
     func testStoryboardSceneIDMigrationCopiesOldSceneFramesToStableSceneFolder() throws {
         guard #available(macOS 26.0, *) else {
             throw XCTSkip("Storyboard migration requires macOS 26 APIs")
@@ -120,6 +178,115 @@ final class OWPProjectLoaderTests: XCTestCase {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: .atomic)
+    }
+
+    private func writeScenePackage(
+        slug: String,
+        sceneID: UUID,
+        versionID: UUID,
+        legacySongPath: String,
+        title: String,
+        manuscript: String,
+        in projectURL: URL
+    ) throws {
+        let scenesURL = projectURL.appendingPathComponent("Scenes", isDirectory: true)
+        let sceneURL = scenesURL.appendingPathComponent(slug, isDirectory: true)
+        let versionURL = sceneURL
+            .appendingPathComponent("versions", isDirectory: true)
+            .appendingPathComponent(versionID.uuidString.lowercased(), isDirectory: true)
+        try FileManager.default.createDirectory(at: versionURL, withIntermediateDirectories: true)
+
+        let index: [String: Any] = [
+            "schemaVersion": 1,
+            "projectID": UUID().uuidString,
+            "updatedAt": "2026-05-01T00:00:00Z",
+            "scenes": [[
+                "id": sceneID.uuidString,
+                "slug": slug,
+                "title": title,
+                "legacySongPath": legacySongPath,
+                "order": 1030000,
+                "updatedAt": "2026-05-01T00:00:00Z",
+            ]],
+        ]
+        try writeJSON(index, to: scenesURL.appendingPathComponent("scene-index.json"))
+
+        let scene: [String: Any] = [
+            "schemaVersion": 1,
+            "id": sceneID.uuidString,
+            "songID": sceneID.uuidString,
+            "slug": slug,
+            "canonicalTitle": slug,
+            "title": title,
+            "notes": "Created during migration.",
+            "order": 1030000,
+            "activeVersionID": versionID.uuidString.lowercased(),
+            "updatedAt": "2026-05-01T00:00:00Z",
+            "legacy": ["owsPath": legacySongPath],
+            "versionOrder": [versionID.uuidString.lowercased()],
+            "versions": [[
+                "id": versionID.uuidString.lowercased(),
+                "label": "Current Draft",
+                "saveType": "imported",
+                "createdAt": "2026-05-01T00:00:00Z",
+                "updatedAt": "2026-05-01T00:00:00Z",
+                "isBookmarked": false,
+            ]],
+        ]
+        try writeJSON(scene, to: sceneURL.appendingPathComponent("scene.json"))
+        try Data(manuscript.utf8).write(to: versionURL.appendingPathComponent("manuscript.md"), options: .atomic)
+        try writeJSON([
+            "schemaVersion": 1,
+            "sceneID": sceneID.uuidString,
+            "versionID": versionID.uuidString.lowercased(),
+            "playback": [
+                "ticksPerQuarter": 96,
+                "tempoEvents": [["tick": 0, "bpm": 120]],
+                "notes": [[
+                    "id": UUID().uuidString,
+                    "startTick": 0,
+                    "duration": 96,
+                    "pitch": 60,
+                    "velocity": 80,
+                    "channel": 0,
+                    "trackIndex": 0,
+                    "muted": false,
+                ]],
+                "trackNames": ["0": "Luke"],
+                "lyrics": manuscript,
+            ],
+        ], to: versionURL.appendingPathComponent("score.playback.json"))
+        try writeJSON([
+            "schemaVersion": 1,
+            "sceneID": sceneID.uuidString,
+            "shots": [[
+                "id": UUID().uuidString,
+                "label": "Convoy unload after the prologue",
+                "notes": "Opening ridge shot.",
+                "camera": [
+                    "shotSize": "wide",
+                    "intent": "establishing",
+                    "label": "Convoy unload after the prologue",
+                    "notes": "Opening ridge shot.",
+                ],
+                "legacy": [
+                    "lyricAnchor": [
+                        "startLine": 3,
+                        "excerpt": "[camera: wide]",
+                    ],
+                ],
+                "timing": [
+                    "startFrame": 10,
+                    "endFrame": 42,
+                ],
+            ]],
+        ], to: versionURL.appendingPathComponent("shots.json"))
+    }
+
+    private func writeJSON(_ payload: [String: Any], to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: .atomic)
     }

@@ -5646,6 +5646,13 @@ hydrateRunPodSettings()
             snapshots[relativePath] = snapshot
         }
 
+        for descriptor in ScenePackageReader.discover(in: projectURL) {
+            if snapshots[descriptor.legacySongPath] == nil,
+               let snapshot = fileSnapshot(for: descriptor.sceneJSONURL) {
+                snapshots[descriptor.legacySongPath] = snapshot
+            }
+        }
+
         for path in [
             "index.json",
             "Characters/characters.json",

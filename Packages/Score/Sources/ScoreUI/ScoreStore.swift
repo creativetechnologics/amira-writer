@@ -560,7 +560,8 @@ enum OWPProjectIO {
         let isOWP = ext == "owp" || ext == "opw"
         let hasMetadata = fm.fileExists(atPath: url.appendingPathComponent(projectMetadataFile).path)
         let hasSongs = fm.fileExists(atPath: url.appendingPathComponent(songsDir).path)
-        guard isOWP || hasMetadata || hasSongs else {
+        let hasScenePackages = !ScenePackageReader.discover(in: url, fileManager: fm).isEmpty
+        guard isOWP || hasMetadata || hasSongs || hasScenePackages else {
             throw NSError(domain: "Score", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not a valid project: \(url.lastPathComponent)"])
         }
 
@@ -573,8 +574,31 @@ enum OWPProjectIO {
             return ProjectMetadata.fresh(named: url.deletingPathExtension().lastPathComponent)
         }()
 
-        let stubs = enumerateSongStubs(in: url.appendingPathComponent(songsDir))
+        let stubs = enumerateProjectSongStubs(in: url)
         return (metadata, stubs, false)
+    }
+
+    static func enumerateProjectSongStubs(in projectURL: URL) -> [SongStub] {
+        let songStubs = enumerateSongStubs(in: projectURL.appendingPathComponent(songsDir))
+        let scenePackageStubs = enumerateScenePackageStubs(in: projectURL)
+        guard !scenePackageStubs.isEmpty else { return songStubs }
+
+        var byPath = Dictionary(uniqueKeysWithValues: songStubs.map { ($0.relativePath, $0) })
+        for stub in scenePackageStubs where byPath[stub.relativePath] == nil {
+            byPath[stub.relativePath] = stub
+        }
+        return byPath.values.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+    }
+
+    static func enumerateScenePackageStubs(in projectURL: URL) -> [SongStub] {
+        ScenePackageReader.discover(in: projectURL).map { descriptor in
+            SongStub(
+                id: descriptor.id,
+                fileURL: descriptor.sceneJSONURL,
+                relativePath: descriptor.legacySongPath,
+                fileSize: descriptor.fileSize
+            )
+        }
     }
 
     static func enumerateSongStubs(in songsRoot: URL) -> [SongStub] {
@@ -612,7 +636,12 @@ enum OWPProjectIO {
     }
 
     nonisolated static func loadSongAsync(stub: SongStub) async throws -> OWSSongAsset {
-        let data = try Data(contentsOf: stub.fileURL, options: .mappedIfSafe)
+        let data: Data
+        if ScenePackageReader.isScenePackageSceneJSON(stub.fileURL) {
+            data = try ScenePackageReader.makeLegacyOWSData(sceneJSONURL: stub.fileURL)
+        } else {
+            data = try Data(contentsOf: stub.fileURL, options: .mappedIfSafe)
+        }
         let document = try OWSSongDocument.fromJSON(data: data)
         return OWSSongAsset(relativePath: stub.relativePath, document: document)
     }
@@ -653,12 +682,62 @@ enum OWPProjectIO {
 
         for song in songs {
             let destination = packageURL.appendingPathComponent(song.relativePath)
-            guard fm.fileExists(atPath: destination.path) else { continue }
             let playback = playbackByPath[song.relativePath]
-            try OWSSongDocument.patchFile(at: destination, with: song.document, playback: playback)
+            if fm.fileExists(atPath: destination.path) {
+                try OWSSongDocument.patchFile(at: destination, with: song.document, playback: playback)
+            } else if let sceneJSONURL = ScenePackageReader.sceneJSONURL(forLegacySongPath: song.relativePath, in: packageURL) {
+                try ScenePackageReader.patchScenePackageFromLegacyOWSObject(
+                    sceneJSONURL: sceneJSONURL,
+                    legacyRoot: legacyOWSObject(from: song.document, playback: playback)
+                )
+            }
         }
 
         writeCLAUDEmd(to: packageURL)
+    }
+
+    private static func legacyOWSObject(from document: OWSSongDocument, playback: OWSPlaybackSnapshot?) -> [String: Any] {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        let playbackObject: Any? = playback.flatMap { snapshot in
+            guard let data = try? encoder.encode(snapshot) else { return nil }
+            return try? JSONSerialization.jsonObject(with: data)
+        }
+
+        var root: [String: Any] = [
+            "songID": document.songID.uuidString,
+            "title": document.title,
+            "canonicalTitle": document.canonicalTitle,
+            "notes": document.notes,
+            "updatedAt": formatter.string(from: document.updatedAt),
+            "versions": document.versions.map { version in
+                var result: [String: Any] = [
+                    "id": version.id.uuidString,
+                    "label": version.label,
+                    "createdAt": formatter.string(from: version.createdAt),
+                    "updatedAt": formatter.string(from: version.updatedAt),
+                    "lyrics": version.lyrics,
+                    "saveType": version.saveType.rawValue,
+                    "isBookmarked": version.isBookmarked,
+                ]
+                if let userLabel = version.userLabel {
+                    result["userLabel"] = userLabel
+                }
+                let versionPlaybackObject = version.id == document.activeVersionID ? playbackObject : nil
+                if let versionPlaybackObject {
+                    result["playback"] = versionPlaybackObject
+                    result["playbackSnapshot"] = versionPlaybackObject
+                }
+                return result
+            },
+        ]
+        if let activeVersionID = document.activeVersionID?.uuidString {
+            root["activeVersionID"] = activeVersionID
+        }
+        return root
     }
 
     static func saveStandaloneSong(songURL: URL, song: OWSSongAsset, playback: OWSPlaybackSnapshot?) throws {
@@ -2446,8 +2525,7 @@ final class ScoreStore {
             return snapshots
         }
 
-        let songsRoot = projectURL.appendingPathComponent(OWPProjectIO.songsDir)
-        for stub in OWPProjectIO.enumerateSongStubs(in: songsRoot) {
+        for stub in OWPProjectIO.enumerateProjectSongStubs(in: projectURL) {
             if let snapshot = Self.fileSnapshot(for: stub.fileURL) {
                 snapshots[stub.relativePath] = snapshot
             }
@@ -2547,8 +2625,7 @@ final class ScoreStore {
         } else if let existing = songStubs.first(where: { $0.relativePath == relativePath }) {
             stub = existing
         } else {
-            let songsRoot = projectURL.appendingPathComponent(OWPProjectIO.songsDir)
-            stub = OWPProjectIO.enumerateSongStubs(in: songsRoot).first(where: { $0.relativePath == relativePath })
+            stub = OWPProjectIO.enumerateProjectSongStubs(in: projectURL).first(where: { $0.relativePath == relativePath })
         }
 
         guard let stub else {
@@ -2866,8 +2943,7 @@ final class ScoreStore {
             return nil
         }
 
-        let songsRoot = projectURL.appendingPathComponent(OWPProjectIO.songsDir)
-        return OWPProjectIO.enumerateSongStubs(in: songsRoot).first(where: { $0.relativePath == relativePath })
+        return OWPProjectIO.enumerateProjectSongStubs(in: projectURL).first(where: { $0.relativePath == relativePath })
     }
 
     private func loadHydratedAsset(
