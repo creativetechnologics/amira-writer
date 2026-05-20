@@ -146,6 +146,82 @@ final class PlacesPersistenceTests: XCTestCase {
         )
     }
 
+    func testBackgroundPlateDecodesLegacyImageRatingMetadataObjects() throws {
+        let payload = """
+        [
+          {
+            "id": "11111111-2222-3333-4444-555555555555",
+            "name": "Mountain Valley Approach Road",
+            "filename": "",
+            "notes": "",
+            "imagePaths": [
+              "Animate/backgrounds/places/road/photo.png"
+            ],
+            "imageRatings": {
+              "Animate/backgrounds/places/road/candidate.png": {
+                "liked": false,
+                "rejected": false,
+                "source": "codex_image_generation",
+                "status": "candidate_unreviewed"
+              },
+              "Animate/backgrounds/places/road/approved.png": {
+                "liked": true,
+                "rejected": false,
+                "source": "codex_image_generation",
+                "status": "approved"
+              },
+              "Animate/backgrounds/places/road/rated.png": {
+                "rating": 4,
+                "source": "codex_image_generation"
+              }
+            }
+          }
+        ]
+        """
+
+        let decoded = try JSONDecoder().decode([BackgroundPlate].self, from: Data(payload.utf8))
+
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertNil(decoded[0].imageRatings["Animate/backgrounds/places/road/candidate.png"])
+        XCTAssertEqual(decoded[0].imageRatings["Animate/backgrounds/places/road/approved.png"], 5)
+        XCTAssertEqual(decoded[0].imageRatings["Animate/backgrounds/places/road/rated.png"], 4)
+    }
+
+    func testExplicitPlaceSaveRefusesUnreadableExistingManifest() throws {
+        let projectURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlacesPersistenceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+
+        try FileManager.default.createDirectory(
+            at: projectURL.appendingPathComponent("Animate", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let placesDir = projectURL.appendingPathComponent("Places", isDirectory: true)
+        try FileManager.default.createDirectory(at: placesDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: projectURL.appendingPathComponent("Scenes", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+
+        let existingURL = placesDir.appendingPathComponent("places.json")
+        try Data("{\"not\":\"a places array\"}".utf8).write(to: existingURL)
+
+        let store = AnimateStore()
+        store.disableExternalFileWatch = true
+        store.owpURL = projectURL
+        store.backgrounds = [
+            BackgroundPlate(name: "Replacement", filename: "replacement.png")
+        ]
+
+        store.save(writePlaces: true)
+
+        XCTAssertEqual(try String(contentsOf: existingURL, encoding: .utf8), "{\"not\":\"a places array\"}")
+        XCTAssertTrue(
+            store.statusMessage.contains("Refusing to replace Places"),
+            "Expected unreadable manifest guard to block overwrite; got: \(store.statusMessage)"
+        )
+    }
+
     func testExplicitPlaceSavePersistsWorldbuildingWorkflowAndAngleMetadata() throws {
         let projectURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlacesPersistenceTests-\(UUID().uuidString)", isDirectory: true)

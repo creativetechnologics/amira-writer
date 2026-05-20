@@ -542,6 +542,7 @@ final class AnimateStore {
     var placesWorldMapCanonLibrary: PlacesWorldMapCanonLibrary = .init()
     private var placesWorldMapCanonRawPayload: [String: Any] = [:]
     private var placesGeneratedReviewStateLibrary: GeneratedBackgroundReviewStateLibrary = .init()
+    private var placesManifestWriteBlockReason: String?
     var selectedGeneratedBackgroundRecordID: UUID?
     private var generatedBackgroundFingerprintCache: [String: (snapshot: AnimateExternalFileSnapshot, digest: String)] = [:]
     private var generatedBackgroundLibraryNeedsRefresh = false
@@ -7002,7 +7003,12 @@ hydrateRunPodSettings()
             // the Places list from root background images when the manifest was
             // missing or unreadable; that was exactly how a rich project could
             // collapse back to a tiny 4-image stub list and then get saved.
-            backgrounds = hasLocalMirror ? try loadPlaces(from: animateDir) : []
+            if hasLocalMirror {
+                backgrounds = loadPlacesPreservingCurrent(from: animateDir)
+            } else {
+                placesManifestWriteBlockReason = "Project folder was not available when Places were loaded."
+                backgrounds = []
+            }
             placesWorkflowLibrary = await hydratedPlacesWorkflowLibrary(
                 loadPlacesWorkflowLibraryAsync(from: animateDir)
             )
@@ -16959,7 +16965,15 @@ hydrateRunPodSettings()
 
     private func decodedPlacesManifest(at url: URL) throws -> [BackgroundPlate] {
         let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode([BackgroundPlate].self, from: data)
+        do {
+            return try JSONDecoder().decode([BackgroundPlate].self, from: data)
+        } catch {
+            let recovered = recoveredPlacesManifest(from: data, sourceURL: url, primaryError: error)
+            if !recovered.isEmpty {
+                return recovered
+            }
+            throw error
+        }
     }
 
     private func decodedPlacesManifestIfPresent(at url: URL) throws -> [BackgroundPlate]? {
@@ -16982,6 +16996,47 @@ hydrateRunPodSettings()
         return result
     }
 
+    private func recoveredPlacesManifest(
+        from data: Data,
+        sourceURL: URL,
+        primaryError: Error
+    ) -> [BackgroundPlate] {
+        guard let rawPlaces = try? JSONSerialization.jsonObject(with: data) as? [Any] else {
+            return []
+        }
+
+        let decoder = JSONDecoder()
+        var recovered: [BackgroundPlate] = []
+        var failureSummaries: [String] = []
+
+        for (index, rawPlace) in rawPlaces.enumerated() {
+            guard JSONSerialization.isValidJSONObject(rawPlace),
+                  let itemData = try? JSONSerialization.data(withJSONObject: rawPlace) else {
+                failureSummaries.append("#\(index): invalid JSON object")
+                continue
+            }
+
+            do {
+                recovered.append(try decoder.decode(BackgroundPlate.self, from: itemData))
+            } catch {
+                let name = ((rawPlace as? [String: Any])?["name"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let label = name?.isEmpty == false ? name! : "#\(index)"
+                failureSummaries.append("\(label): \(error.localizedDescription)")
+            }
+        }
+
+        guard !failureSummaries.isEmpty else { return recovered }
+
+        let preview = failureSummaries.prefix(3).joined(separator: " | ")
+        AppLog.log(
+            "PLACES",
+            "Recovered \(recovered.count) of \(rawPlaces.count) Places from \(sourceURL.path) after full manifest decode failed (\(primaryError.localizedDescription)). Failed records: \(preview)"
+        )
+        statusMessage = "Recovered \(recovered.count) of \(rawPlaces.count) Places; \(failureSummaries.count) malformed record(s) were skipped."
+        return recovered
+    }
+
     private func loadPlaces(from animateDir: URL) throws -> [BackgroundPlate] {
         let projectRoot = animateDir.deletingLastPathComponent()
         let paths = ProjectPaths(root: projectRoot)
@@ -16992,17 +17047,25 @@ hydrateRunPodSettings()
         if FileManager.default.fileExists(atPath: manifestURL.path) {
             do {
                 decoded = try decodedPlacesManifest(at: manifestURL)
+                placesManifestWriteBlockReason = nil
             } catch {
                 if let backup = try? decodedPlacesManifestIfPresent(at: backupURL) {
                     AppLog.log("PLACES", "Recovered Places list from \(backupURL.path) after decode failure in \(manifestURL.path): \(error.localizedDescription)")
+                    placesManifestWriteBlockReason = nil
                     return hydratedPlaces(backup, projectRoot: projectRoot)
                 }
-                throw PlacesManifestLoadError.unreadable(manifestURL, error)
+                let reason = "Places manifest \(manifestURL.lastPathComponent) could not be decoded: \(error.localizedDescription)"
+                placesManifestWriteBlockReason = reason
+                statusMessage = "\(reason). Opened project without replacing Places; fix the manifest before saving Places."
+                AppLog.log("PLACES", "\(reason). Keeping manifest protected from overwrite.")
+                return []
             }
         } else if let backup = try? decodedPlacesManifestIfPresent(at: backupURL) {
             AppLog.log("PLACES", "Recovered Places list from \(backupURL.path); canonical manifest is missing.")
+            placesManifestWriteBlockReason = nil
             return hydratedPlaces(backup, projectRoot: projectRoot)
         } else {
+            placesManifestWriteBlockReason = nil
             return []
         }
 
@@ -17045,14 +17108,37 @@ hydrateRunPodSettings()
     }
 
     private func validatePlacesManifestWrite(newData: Data, to url: URL) throws {
-        guard let replacement = try? JSONDecoder().decode([BackgroundPlate].self, from: newData) else {
-            return
+        let replacement: [BackgroundPlate]
+        do {
+            replacement = try JSONDecoder().decode([BackgroundPlate].self, from: newData)
+        } catch {
+            throw PlacesManifestLoadError.unreadable(url, error)
+        }
+
+        if let reason = placesManifestWriteBlockReason {
+            throw PlacesManifestLoadError.unreadable(
+                url,
+                NSError(
+                    domain: "AmiraWriter.PlacesManifest",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: reason]
+                )
+            )
         }
 
         let backupURL = siblingPreviousJSONURL(for: url)
-        let existing = (FileManager.default.fileExists(atPath: url.path) ? (try? decodedPlacesManifest(at: url)) : nil)
-            ?? (try? decodedPlacesManifestIfPresent(at: backupURL))
-            ?? []
+        let existing: [BackgroundPlate]
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                existing = try decodedPlacesManifest(at: url)
+                placesManifestWriteBlockReason = nil
+            } catch {
+                throw PlacesManifestLoadError.unreadable(url, error)
+            }
+        } else {
+            existing = (try? decodedPlacesManifestIfPresent(at: backupURL)) ?? []
+        }
+
         let existingCount = existing.count
         let newCount = replacement.count
         guard existingCount >= 10 else { return }

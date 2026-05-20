@@ -2478,6 +2478,121 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         case storyboardSketchPath
     }
 
+    private struct FlexibleImageRating: Decodable {
+        var rating: Int?
+
+        private enum CodingKeys: String, CodingKey {
+            case rating
+            case stars
+            case starRating
+            case liked
+            case rejected
+            case status
+        }
+
+        init(from decoder: Decoder) throws {
+            if let value = try? decoder.singleValueContainer().decode(Int.self) {
+                rating = Self.clamped(value)
+                return
+            }
+
+            if let value = try? decoder.singleValueContainer().decode(Double.self) {
+                rating = Self.clamped(Int(value.rounded()))
+                return
+            }
+
+            if let liked = try? decoder.singleValueContainer().decode(Bool.self) {
+                rating = liked ? 5 : nil
+                return
+            }
+
+            guard let c = try? decoder.container(keyedBy: CodingKeys.self) else {
+                rating = nil
+                return
+            }
+            if let value = try c.decodeIfPresent(Int.self, forKey: .rating)
+                ?? c.decodeIfPresent(Int.self, forKey: .stars)
+                ?? c.decodeIfPresent(Int.self, forKey: .starRating) {
+                rating = Self.clamped(value)
+                return
+            }
+
+            let rejected = (try? c.decodeIfPresent(Bool.self, forKey: .rejected)) ?? false
+            if rejected {
+                rating = nil
+                return
+            }
+
+            let liked = (try? c.decodeIfPresent(Bool.self, forKey: .liked)) ?? false
+            if liked {
+                rating = 5
+                return
+            }
+
+            let status = (try? c.decodeIfPresent(String.self, forKey: .status))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            switch status {
+            case "liked", "picked", "approved", "selected", "favorite", "favourite":
+                rating = 5
+            default:
+                rating = nil
+            }
+        }
+
+        private static func clamped(_ value: Int) -> Int? {
+            let clamped = max(0, min(5, value))
+            return clamped == 0 ? nil : clamped
+        }
+    }
+
+    private static func decodeImageRatings(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> [String: Int] {
+        guard container.contains(.imageRatings) else { return [:] }
+
+        if let direct = try? container.decode([String: Int].self, forKey: .imageRatings) {
+            return direct.reduce(into: [String: Int]()) { partialResult, entry in
+                let clamped = max(0, min(5, entry.value))
+                if clamped > 0 {
+                    partialResult[entry.key] = clamped
+                }
+            }
+        }
+
+        guard let flexible = try? container.decode([String: FlexibleImageRating].self, forKey: .imageRatings) else {
+            return [:]
+        }
+
+        return flexible.reduce(into: [String: Int]()) { partialResult, entry in
+            if let rating = entry.value.rating, rating > 0 {
+                partialResult[entry.key] = rating
+            }
+        }
+    }
+
+    private static func decodeOptionalUUID(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> UUID? {
+        if let uuid = try? container.decodeIfPresent(UUID.self, forKey: key) {
+            return uuid
+        }
+        guard let raw = try? container.decodeIfPresent(String.self, forKey: key) else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return UUID(uuidString: trimmed)
+    }
+
+    private static func decodeRequiredUUID(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> UUID {
+        decodeOptionalUUID(from: container, forKey: key) ?? UUID()
+    }
+
     init(
         id: UUID = UUID(),
         name: String,
@@ -2568,7 +2683,7 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(UUID.self, forKey: .id)
+        id = Self.decodeRequiredUUID(from: c, forKey: .id)
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
         filename = try c.decodeIfPresent(String.self, forKey: .filename) ?? ""
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
@@ -2643,9 +2758,9 @@ struct BackgroundPlate: Identifiable, Codable, Sendable {
         )
         animatedImagePaths = try c.decodeIfPresent([String].self, forKey: .animatedImagePaths) ?? []
         animatedApprovedImagePath = try c.decodeIfPresent(String.self, forKey: .animatedApprovedImagePath)
-        buildingAnchorNodeID = try c.decodeIfPresent(UUID.self, forKey: .buildingAnchorNodeID)
-        linkedExteriorPlaceID = try c.decodeIfPresent(UUID.self, forKey: .linkedExteriorPlaceID)
-        imageRatings = try c.decodeIfPresent([String: Int].self, forKey: .imageRatings) ?? [:]
+        buildingAnchorNodeID = Self.decodeOptionalUUID(from: c, forKey: .buildingAnchorNodeID)
+        linkedExteriorPlaceID = Self.decodeOptionalUUID(from: c, forKey: .linkedExteriorPlaceID)
+        imageRatings = Self.decodeImageRatings(from: c)
         storyboardSketchPath = try c.decodeIfPresent(String.self, forKey: .storyboardSketchPath)
     }
 
