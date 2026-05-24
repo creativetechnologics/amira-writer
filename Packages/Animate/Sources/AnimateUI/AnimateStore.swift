@@ -5632,24 +5632,10 @@ hydrateRunPodSettings()
     private func monitoredExternalFileSnapshots(for projectURL: URL) -> [String: AnimateExternalFileSnapshot] {
         var snapshots: [String: AnimateExternalFileSnapshot] = [:]
 
-        let enumerator = FileManager.default.enumerator(
-            at: ProjectPaths(root: projectURL).songs,
-            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        )
-        while let fileURL = enumerator?.nextObject() as? URL {
-            guard fileURL.pathExtension.lowercased() == "ows",
-                  let snapshot = fileSnapshot(for: fileURL) else {
-                continue
-            }
-            let relativePath = fileURL.path.replacingOccurrences(of: projectURL.path + "/", with: "")
-            snapshots[relativePath] = snapshot
-        }
-
-        for descriptor in ScenePackageReader.discover(in: projectURL) {
-            if snapshots[descriptor.legacySongPath] == nil,
+        for descriptor in ScenePackageStore.discover(in: projectURL) {
+            if snapshots[descriptor.projectRelativePath] == nil,
                let snapshot = fileSnapshot(for: descriptor.sceneJSONURL) {
-                snapshots[descriptor.legacySongPath] = snapshot
+                snapshots[descriptor.projectRelativePath] = snapshot
             }
         }
 
@@ -5658,7 +5644,6 @@ hydrateRunPodSettings()
             "Characters/characters.json",
             "characters.json",
             ProjectDatabaseBridge.animateMetadataPath,
-            ProjectDatabaseBridge.animateScenesPath,
             ProjectDatabaseBridge.animatePlacesPath,
             ProjectDatabaseBridge.animatePlacesWorkflowPath,
             ProjectDatabaseBridge.animatedLookPromptPath,
@@ -5734,15 +5719,15 @@ hydrateRunPodSettings()
         guard !changedPaths.isEmpty else { return }
         lastKnownExternalSnapshots = currentSnapshots
 
-        let currentSongPaths = Set(currentSnapshots.keys.filter { $0.hasSuffix(".ows") })
-        let knownSongPaths = Set(scenes.map(\.owpSongPath))
-        if currentSongPaths != knownSongPaths {
+        let currentScenePaths = Set(currentSnapshots.keys.filter(isScenePackagePath))
+        let knownScenePaths = Set(scenes.map(\.owpSongPath))
+        if currentScenePaths != knownScenePaths {
             handleExternalProjectRescan(projectURL: projectURL, changedPaths: changedPaths)
             return
         }
 
         for path in changedPaths {
-            if path.hasSuffix(".ows") {
+            if isScenePackagePath(path) {
                 handleExternalSongChange(relativePath: path)
             } else {
                 handleExternalProjectFileChange(path: path, projectURL: projectURL)
@@ -5756,10 +5741,14 @@ hydrateRunPodSettings()
             guard let self else { return }
             await self.openOWP(url: projectURL, skipBackgroundRefresh: true)
             await MainActor.run {
-                self.markAgentUpdated(paths: changedPaths.filter { $0.hasSuffix(".ows") })
+                self.markAgentUpdated(paths: changedPaths.filter(self.isScenePackagePath))
                 self.statusMessage = "Reloaded external project changes"
             }
         }
+    }
+
+    private func isScenePackagePath(_ path: String) -> Bool {
+        path.hasPrefix("Scenes/") && path.hasSuffix("/scene.json")
     }
 
     private func handleExternalSongChange(relativePath: String) {
@@ -5786,7 +5775,6 @@ hydrateRunPodSettings()
                     }
                 }
             }
-            _ = await self.refreshPlacesFromScript()
             await MainActor.run {
                 self.markAgentUpdated(paths: [relativePath])
                 self.scheduleDebouncedSave()
@@ -5836,7 +5824,6 @@ hydrateRunPodSettings()
                     if let selectedScene {
                         Task { await self.loadSongData(for: selectedScene) }
                     }
-                    Task { _ = await self.refreshPlacesFromScript() }
                 }
             case ProjectDatabaseBridge.animatePlacesPath, ProjectDatabaseBridge.animatePlacesWorkflowPath:
                 await MainActor.run {
@@ -7097,10 +7084,12 @@ hydrateRunPodSettings()
                 _ = self.applyScriptPlaceRequirements(cachedRequirements, persistChanges: false)
             } else {
                 self.scriptPlaceRequirements = []
-                Task { [weak self] in
-                    guard let self else { return }
-                    _ = await self.refreshPlacesFromScript(persistChanges: true)
-                }
+                // Do not rebuild the Places script index implicitly. The old
+                // behavior hydrated every scene package on workspace open and
+                // then wrote Places as a side effect, which could collapse a
+                // migrated project back to a tiny synthesized Places list.
+                // Canonical Places now come only from Places/places.json unless
+                // an explicit user action asks to rebuild script requirements.
             }
 
             let loadedMotionClips = (try? await Task.detached(priority: .utility) {
@@ -7219,7 +7208,15 @@ hydrateRunPodSettings()
         return true
     }
 
-    // MARK: - Save (writes only to Animate/ subdirectory; places sidecars are explicit-only)
+    private struct ScenePackageShotsDocument: Codable {
+        var schemaVersion: Int
+        var sceneID: UUID
+        var versionID: String
+        var updatedAt: String
+        var shots: [AnimationSceneShot]
+    }
+
+    // MARK: - Save (writes only canonical sidecars; Places sidecars are explicit-only)
 
     func save(writePlaces: Bool = false) {
         let saveStart = Date()
@@ -7251,28 +7248,13 @@ hydrateRunPodSettings()
                 try data.write(to: savePaths.animateJSON)
             }
 
-            // Write scenes.json — convert AnimationScene → AnimateSceneData
-            let sceneData: [AnimateSceneData] = scenes.map { scene in
-                let characterSlugs = scene.characterIDs.compactMap { characterID in
-                    characters.first(where: { $0.id == characterID })?.owpSlug
-                }
-                let directionTemplate = normalizedDirectionTemplateForPersistence(scene.directionTemplate)
-                return AnimateSceneData(
-                    owsSongPath: scene.owpSongPath,
-                    backgroundID: scene.backgroundID,
-                    characterIDs: scene.characterIDs,
-                    characterSlugs: characterSlugs,
-                    objectSetups: normalizedSceneObjectSetups(scene.objectSetups, tracks: scene.tracks),
-                    keyframes: scene.keyframes,
-                    defaultAudioPath: scene.defaultAudioPath,
-                    tracks: scene.tracks,
-                    directionTemplate: directionTemplate,
-                    automationProfile: normalizedSceneAutomationProfileForPersistence(scene.automationProfile, scene: scene),
-                    shots: normalizedSceneShots(scene.shots)
-                )
+            // Legacy Scenes/scenes.json is no longer authoritative and must
+            // not be recreated. Persist animation state into each canonical
+            // Scenes/<slug>/ package instead.
+            if fm.fileExists(atPath: savePaths.animateScenesJSON.path) {
+                try? fm.removeItem(at: savePaths.animateScenesJSON)
             }
-            let scenesJSON = try encoder.encode(sceneData)
-            try scenesJSON.write(to: savePaths.animateScenesJSON)
+            try saveCanonicalSceneAnimationState(projectURL: savePaths.root, encoder: encoder)
 
             // Save each character state to Animate/characters/{slug}/rig.json
             for character in characters {
@@ -7405,6 +7387,43 @@ hydrateRunPodSettings()
         } catch {
             statusMessage = "Save error: \(error.localizedDescription)"
             reevaluatePersistedSaveState()
+        }
+    }
+
+    private func saveCanonicalSceneAnimationState(projectURL: URL, encoder: JSONEncoder) throws {
+        let now = ISO8601DateFormatter().string(from: Date())
+        let descriptorsByRelativePath = Dictionary(
+            uniqueKeysWithValues: ScenePackageStore.discover(in: projectURL).map {
+                (ScenePackageStore.normalizeProjectRelativePath($0.projectRelativePath), $0)
+            }
+        )
+
+        for scene in scenes {
+            let key = ScenePackageStore.normalizeProjectRelativePath(scene.owpSongPath)
+            guard let descriptor = descriptorsByRelativePath[key],
+                  let activeVersionDirectory = ScenePackageStore.activeVersionDirectory(sceneJSONURL: descriptor.sceneJSONURL) else {
+                continue
+            }
+
+            let sceneData = makeSceneData(from: scene)
+            let animationData = try encoder.encode(sceneData)
+            try animationData.write(
+                to: descriptor.sceneDirectoryURL.appendingPathComponent("animation.json"),
+                options: .atomic
+            )
+
+            let shotsDocument = ScenePackageShotsDocument(
+                schemaVersion: 1,
+                sceneID: descriptor.id,
+                versionID: activeVersionDirectory.lastPathComponent,
+                updatedAt: now,
+                shots: normalizedSceneShots(scene.shots)
+            )
+            let shotsData = try encoder.encode(shotsDocument)
+            try shotsData.write(
+                to: activeVersionDirectory.appendingPathComponent("shots.json"),
+                options: .atomic
+            )
         }
     }
 

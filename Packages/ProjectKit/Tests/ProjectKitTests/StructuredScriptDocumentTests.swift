@@ -528,6 +528,80 @@ final class StructuredScriptDocumentTests: XCTestCase {
         XCTAssertLessThan(shot.sourceOrder, secondLyric.sourceOrder)
     }
 
+    func testFoldedProjectionShowsCollapsedMetadataAndMapsVisibleEdits() throws {
+        let raw = """
+        [camera: wide | label="Opening" | focus=johnny]
+        [action: "johnny" | description="raises the camera"]
+        Johnny watches the road.
+        """
+        let document = StructuredScriptDocumentProjector.parse(raw, hideLyricSpeakerCues: true)
+        let projection = FoldedScriptProjection(document: document)
+
+        XCTAssertTrue(projection.displayText.contains("> shot: Opening"))
+        XCTAssertTrue(projection.displayText.contains("> action: Johnny raises the camera"))
+        XCTAssertTrue(projection.displayText.contains("Johnny watches the road."))
+
+        let display = projection.displayText as NSString
+        let displayRange = display.range(of: "watches")
+        let edit = try XCTUnwrap(projection.visibleEdit(
+            forDisplayRange: displayRange,
+            replacementString: "surveys"
+        ))
+        let visible = document.visibleText as NSString
+        let updatedVisible = visible.replacingCharacters(in: edit.affectedVisibleRange, with: edit.replacementString)
+
+        XCTAssertEqual(updatedVisible.trimmingCharacters(in: .whitespacesAndNewlines), "Johnny surveys the road.")
+    }
+
+    func testFoldedProjectionExpandsShotDetailsByFoldKey() throws {
+        let raw = "[camera: wide | label=Opening | focus=johnny | movement=push_in]Line"
+        let document = StructuredScriptDocumentProjector.parse(raw, hideLyricSpeakerCues: true)
+        let shot = try XCTUnwrap(document.shots.first)
+        let projection = FoldedScriptProjection(
+            document: document,
+            expandedFoldKeys: ["shot:\(shot.id.uuidString)"]
+        )
+
+        XCTAssertTrue(projection.displayText.contains("v shot: Opening"))
+        XCTAssertTrue(projection.displayText.contains("| movement: push_in"))
+        XCTAssertTrue(projection.displayText.contains("| focus: johnny"))
+        XCTAssertEqual(projection.foldKey(atDisplayOffset: 0), "shot:\(shot.id.uuidString)")
+    }
+
+    func testLegacyActionPayloadLinesBecomeFoldedMetadata() throws {
+        let raw = """
+        Scene heading
+
+        [Action]
+        scene: "Mountain Valley" | bg=mountain_valley_dawn
+        [Action]
+        object: "road-dust" | position=center | bars=1-4
+        [Action]
+        "johnny" | description="raises the camera" | bars=1-2
+        [Action]
+        The valley is still before sunrise.
+
+        Sung line stays visible.
+        """
+        let document = StructuredScriptDocumentProjector.parse(raw, hideLyricSpeakerCues: true)
+        let projection = FoldedScriptProjection(document: document)
+        let exported = StructuredScriptDocumentProjector.export(document)
+
+        XCTAssertFalse(document.visibleText.contains("[Action]"))
+        XCTAssertFalse(document.visibleText.contains("scene:"))
+        XCTAssertFalse(document.visibleText.contains("raises the camera"))
+        XCTAssertTrue(document.visibleText.contains("Sung line stays visible."))
+        XCTAssertEqual(document.hiddenMarkup.filter { $0.kind == .technical }.count, 2)
+        XCTAssertEqual(document.hiddenMarkup.filter { $0.kind == .action }.count, 2)
+        XCTAssertTrue(projection.displayText.contains("> meta: scene: Mountain Valley"))
+        XCTAssertTrue(projection.displayText.contains("> meta: object: road-dust"))
+        XCTAssertTrue(projection.displayText.contains("> action: Johnny raises the camera"))
+        XCTAssertTrue(projection.displayText.contains("> action: The valley is still before sunrise."))
+        XCTAssertFalse(exported.contains("[Action]"))
+        XCTAssertTrue(exported.contains("[scene: \"Mountain Valley\" | bg=mountain_valley_dawn]"))
+        XCTAssertTrue(exported.contains("[action: \"johnny\" | description=\"raises the camera\" | bars=1-2]"))
+    }
+
     private func promptCount(in text: String) -> Int {
         countMatches(#"(?<!\[)\[[A-Za-z_][A-Za-z0-9_\-]*\s*:[^\[\]]+\](?!\])"#, in: text)
     }

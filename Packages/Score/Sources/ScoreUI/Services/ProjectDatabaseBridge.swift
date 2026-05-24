@@ -47,13 +47,26 @@ enum ProjectDatabaseBridge {
     }
 
     private static func placeholderSongAsset(for stub: SongStub) -> OWSSongAsset {
-        let title = stub.displayName.toTitleCase()
+        let trimmedTitle = stub.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = {
+            guard let trimmedTitle, !trimmedTitle.isEmpty else {
+                return stub.displayName.toTitleCase()
+            }
+            return trimmedTitle
+        }()
+        let trimmedCanonicalTitle = stub.canonicalTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canonicalTitle = {
+            guard let trimmedCanonicalTitle, !trimmedCanonicalTitle.isEmpty else {
+                return title.lowercased()
+            }
+            return trimmedCanonicalTitle
+        }()
         return OWSSongAsset(
             relativePath: stub.relativePath,
             document: OWSSongDocument(
                 songID: stub.id,
                 title: title,
-                canonicalTitle: title.lowercased(),
+                canonicalTitle: canonicalTitle,
                 notes: "",
                 updatedAt: Date(),
                 activeVersionID: nil,

@@ -559,9 +559,8 @@ enum OWPProjectIO {
         let ext = url.pathExtension.lowercased()
         let isOWP = ext == "owp" || ext == "opw"
         let hasMetadata = fm.fileExists(atPath: url.appendingPathComponent(projectMetadataFile).path)
-        let hasSongs = fm.fileExists(atPath: url.appendingPathComponent(songsDir).path)
-        let hasScenePackages = !ScenePackageReader.discover(in: url, fileManager: fm).isEmpty
-        guard isOWP || hasMetadata || hasSongs || hasScenePackages else {
+        let hasScenePackages = !ScenePackageStore.discover(in: url, fileManager: fm).isEmpty
+        guard isOWP || hasMetadata || hasScenePackages else {
             throw NSError(domain: "Score", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not a valid project: \(url.lastPathComponent)"])
         }
 
@@ -579,24 +578,18 @@ enum OWPProjectIO {
     }
 
     static func enumerateProjectSongStubs(in projectURL: URL) -> [SongStub] {
-        let songStubs = enumerateSongStubs(in: projectURL.appendingPathComponent(songsDir))
-        let scenePackageStubs = enumerateScenePackageStubs(in: projectURL)
-        guard !scenePackageStubs.isEmpty else { return songStubs }
-
-        var byPath = Dictionary(uniqueKeysWithValues: songStubs.map { ($0.relativePath, $0) })
-        for stub in scenePackageStubs where byPath[stub.relativePath] == nil {
-            byPath[stub.relativePath] = stub
-        }
-        return byPath.values.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+        enumerateScenePackageStubs(in: projectURL)
     }
 
     static func enumerateScenePackageStubs(in projectURL: URL) -> [SongStub] {
-        ScenePackageReader.discover(in: projectURL).map { descriptor in
+        ScenePackageStore.discover(in: projectURL).map { descriptor in
             SongStub(
                 id: descriptor.id,
                 fileURL: descriptor.sceneJSONURL,
-                relativePath: descriptor.legacySongPath,
-                fileSize: descriptor.fileSize
+                relativePath: descriptor.projectRelativePath,
+                fileSize: descriptor.fileSize,
+                title: descriptor.title,
+                canonicalTitle: descriptor.canonicalTitle
             )
         }
     }
@@ -637,8 +630,8 @@ enum OWPProjectIO {
 
     nonisolated static func loadSongAsync(stub: SongStub) async throws -> OWSSongAsset {
         let data: Data
-        if ScenePackageReader.isScenePackageSceneJSON(stub.fileURL) {
-            data = try ScenePackageReader.makeLegacyOWSData(sceneJSONURL: stub.fileURL)
+        if ScenePackageStore.isScenePackageSceneJSON(stub.fileURL) {
+            data = try ScenePackageStore.makeWorkspaceSceneDocumentData(sceneJSONURL: stub.fileURL)
         } else {
             data = try Data(contentsOf: stub.fileURL, options: .mappedIfSafe)
         }
@@ -683,20 +676,20 @@ enum OWPProjectIO {
         for song in songs {
             let destination = packageURL.appendingPathComponent(song.relativePath)
             let playback = playbackByPath[song.relativePath]
-            if fm.fileExists(atPath: destination.path) {
-                try OWSSongDocument.patchFile(at: destination, with: song.document, playback: playback)
-            } else if let sceneJSONURL = ScenePackageReader.sceneJSONURL(forLegacySongPath: song.relativePath, in: packageURL) {
-                try ScenePackageReader.patchScenePackageFromLegacyOWSObject(
+            if let sceneJSONURL = ScenePackageStore.sceneJSONURL(forProjectRelativePath: song.relativePath, in: packageURL) {
+                try ScenePackageStore.patchScenePackageFromWorkspaceSceneDocumentObject(
                     sceneJSONURL: sceneJSONURL,
-                    legacyRoot: legacyOWSObject(from: song.document, playback: playback)
+                    sceneDocumentRoot: workspaceSceneDocumentObject(from: song.document, playback: playback)
                 )
+            } else if fm.fileExists(atPath: destination.path) {
+                try OWSSongDocument.patchFile(at: destination, with: song.document, playback: playback)
             }
         }
 
         writeCLAUDEmd(to: packageURL)
     }
 
-    private static func legacyOWSObject(from document: OWSSongDocument, playback: OWSPlaybackSnapshot?) -> [String: Any] {
+    private static func workspaceSceneDocumentObject(from document: OWSSongDocument, playback: OWSPlaybackSnapshot?) -> [String: Any] {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         let encoder = JSONEncoder()

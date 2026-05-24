@@ -1,0 +1,888 @@
+{
+  "app": "/Volumes/Programming/!Applications/Amira Writer.app",
+  "commandFile": "/Volumes/Programming/opera-command.txt",
+  "cwd": "/Volumes/Programming/Amira Writer",
+  "host": "Mac.localdomain",
+  "startedAt": "2026-05-17T04:07:31.248512Z",
+  "steps": [
+    {
+      "detail": {
+        "app": "/Volumes/Programming/!Applications/Amira Writer.app"
+      },
+      "elapsed_seconds": 0.961,
+      "error": null,
+      "name": "launch_app",
+      "ok": true
+    },
+    {
+      "detail": {
+        "mode": "write"
+      },
+      "elapsed_seconds": 0.097,
+      "error": null,
+      "name": "command_write",
+      "ok": true
+    },
+    {
+      "detail": {
+        "mode": "score"
+      },
+      "elapsed_seconds": 0.123,
+      "error": null,
+      "name": "command_score",
+      "ok": true
+    },
+    {
+      "detail": {
+        "mode": "mix"
+      },
+      "elapsed_seconds": 0.125,
+      "error": null,
+      "name": "command_mix",
+      "ok": true
+    },
+    {
+      "detail": {
+        "mode": "animate"
+      },
+      "elapsed_seconds": 0.114,
+      "error": null,
+      "name": "command_animate",
+      "ok": true
+    },
+    {
+      "detail": {
+        "mode": "characters"
+      },
+      "elapsed_seconds": 0.089,
+      "error": null,
+      "name": "command_characters",
+      "ok": true
+    },
+    {
+      "detail": {
+        "mode": "places"
+      },
+      "elapsed_seconds": 0.061,
+      "error": null,
+      "name": "command_places",
+      "ok": true
+    },
+    {
+      "detail": {
+        "mode": "props"
+      },
+      "elapsed_seconds": 0.058,
+      "error": null,
+      "name": "command_props",
+      "ok": true
+    },
+    {
+      "detail": {
+        "mode": "scenes"
+      },
+      "elapsed_seconds": 0.05,
+      "error": null,
+      "name": "command_scenes",
+      "ok": true
+    },
+    {
+      "detail": {
+        "mode": "write"
+      },
+      "elapsed_seconds": 0.113,
+      "error": null,
+      "name": "command_write",
+      "ok": true
+    },
+    {
+      "detail": [
+        {
+          "apiPort": 19847,
+          "app": "Score",
+          "isPlaying": false,
+          "projectName": "Amira",
+          "projectPath": "/Users/gary/Amira - A Modern Opera",
+          "selectedSongPath": "Scenes/1-02-0-prologue",
+          "selectedSongTitle": "1.02.0 - Prologue",
+          "songCount": 50,
+          "version": "1.0"
+        },
+        0.026011249981820583
+      ],
+      "elapsed_seconds": 0.026,
+      "error": null,
+      "name": "score_api_status",
+      "ok": true
+    },
+    {
+      "detail": [
+        {
+          "songs": [
+            {
+              "hasLyrics": true,
+              "id": "C8F37189-2263-4163-A7D1-FA6287F6B9A6",
+              "noteCount": 1177,
+              "relativePath": "Scenes/1-01-0-overture",
+              "title": "1.01.0 - Overture",
+              "trackCount": 15,
+              "versionCount": 2
+            },
+            {
+              "hasLyrics": true,
+              "id": "68C9EC73-3B9F-4C77-BEB0-EAB4CCEB4A7E",
+              "noteCount": 467,
+              "relativePath": "Scenes/1-02-0-prologue",
+              "title": "1.02.0 - Prologue",
+              "trackCount": 13,
+              "versionCount": 2
+            },
+            {
+              "hasLyrics": false,
+              "id": "22023608-71F8-49B1-BCEE-C7698CC781D7",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-03-0-scene-luke-s-notebook",
+              "title": "1-03-0-scene-luke-s-notebook",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "0E287C01-E44D-49BD-AC23-191D4A4BC5F1",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-04-0-scene-assignment",
+              "title": "1-04-0-scene-assignment",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "6240056A-45F4-4455-A272-D3AC3563E7FD",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-05-0-silver",
+              "title": "1-05-0-silver",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "26F05EFF-8DEC-47AD-9F3C-826A850F7961",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-06-0-the-shortcut",
+              "title": "1-06-0-the-shortcut",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "266020D2-0CE5-43EC-A4C3-57FC4B593A07",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-07-0-lay-down-your-burdens",
+              "title": "1-07-0-lay-down-your-burdens",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "79F334BF-1976-4221-8878-25FAB291C805",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-08-0-first-meeting",
+              "title": "1-08-0-first-meeting",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "5AAE809B-659A-4923-A258-BE0AEC2FA5D1",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-09-0-scene-the-clinic",
+              "title": "1-09-0-scene-the-clinic",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "1587B24A-3FD4-434B-8868-226D50B49A52",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-10-0-scene-the-mysterious-man",
+              "title": "1-10-0-scene-the-mysterious-man",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "6E04BCE9-F5AC-421B-8380-FF7D8D499230",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-11-0-lament",
+              "title": "1-11-0-lament",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "E064B159-0C08-44BF-AD3A-95F5EED4342A",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-12-0-grace",
+              "title": "1-12-0-grace",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "594D61A9-37E5-4E81-94CD-D45C4C6B3FB3",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-13-0-scene-amira-hears-them",
+              "title": "1-13-0-scene-amira-hears-them",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "84D1C767-6F73-4274-97E8-826A04E26188",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-14-0-scene-amira-s-interruption",
+              "title": "1-14-0-scene-amira-s-interruption",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "11645E28-F157-418B-BA2C-F2E1150C4FC0",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-15-0-ma-dar-ke-kha-nad-mother-who-sings",
+              "title": "1-15-0-ma-dar-ke-kha-nad-mother-who-sings",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "5A3584E7-2AFB-42C5-8F14-C5A8AFD58AF1",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-16-0-scene-the-rumor",
+              "title": "1-16-0-scene-the-rumor",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "DD3652F7-8CC4-42B0-BEDC-69FF4851C0C9",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-17-0-how",
+              "title": "1-17-0-how",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "2EF6F67E-0402-4634-82D0-FE454BC7D98C",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-18-0-somewhere-in-my-heart",
+              "title": "1-18-0-somewhere-in-my-heart",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "EC1F745C-E993-45D2-8941-FB3173E8C013",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-19-0-a-new-life",
+              "title": "1-19-0-a-new-life",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "249534BE-2344-4F35-AD75-145A7E74C526",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-20-0-scene-the-window",
+              "title": "1-20-0-scene-the-window",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "A794152C-6FCE-49CE-992E-45EF05106F2D",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-21-0-scene-amira-shows-luke-the-journal",
+              "title": "1-21-0-scene-amira-shows-luke-the-journal",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "7C568348-DD8D-4368-BDBF-7146D6572EDB",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-22-0-the-list",
+              "title": "1-22-0-the-list",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "CBEC61DA-75A1-4935-A6FD-C3C5C62F4A16",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-23-0-reason",
+              "title": "1-23-0-reason",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "C376425F-3AFC-4A18-8782-8E4B0F3BF857",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-24-0-scene-mark-s-log",
+              "title": "1-24-0-scene-mark-s-log",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "8F0643BA-68B8-4144-A83F-3F8122A71CAF",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-25-0-time-of-war",
+              "title": "1-25-0-time-of-war",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "2498794A-6B63-4CA6-A04C-F5BC8024C5DB",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-26-0-scene-luke-s-resolve",
+              "title": "1-26-0-scene-luke-s-resolve",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "85688D4D-4CDE-4016-BFC6-10A48779426C",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-27-0-the-return",
+              "title": "1-27-0-the-return",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "B79D51B0-58D8-45A2-B12B-A3605D553B1B",
+              "noteCount": 0,
+              "relativePath": "Scenes/1-28-0-something-more-act-i-finale",
+              "title": "1-28-0-something-more-act-i-finale",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "F085B0EB-6BC0-4F46-9E86-E1238807EF76",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-01-0-entracte-act-ii-opening",
+              "title": "2-01-0-entracte-act-ii-opening",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "4377A8D8-8BEB-46E0-A948-0E42F7281A69",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-02-0-ever-singing-i-am-home",
+              "title": "2-02-0-ever-singing-i-am-home",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "61ED2706-B2DF-4AEF-838C-84EA8CF1AD32",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-03-0-marked-the-flag",
+              "title": "2-03-0-marked-the-flag",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "8220DCF1-D1B9-474A-9E2A-60B70F8967A3",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-04-0-scene-johnny-waits",
+              "title": "2-04-0-scene-johnny-waits",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "8574D58A-BC13-42F6-9963-4FEA64AE7CB6",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-05-0-scene-luke-in-the-village",
+              "title": "2-05-0-scene-luke-in-the-village",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "B4932158-FD5B-462E-8395-33A863EDC1E4",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-06-0-the-confession",
+              "title": "2-06-0-the-confession",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "5A251A0E-EC6C-4F11-8A62-8F4E4FCF6872",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-07-0-johnny-s-theme",
+              "title": "2-07-0-johnny-s-theme",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "8DD69EAA-502F-4DAD-AC98-D09076188575",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-08-0-happiness",
+              "title": "2-08-0-happiness",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "830BBD4A-0820-4696-88CF-C2057C36C969",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-09-0-see-it-through",
+              "title": "2-09-0-see-it-through",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "6C3D08B0-D076-4E11-9D92-8E6B4A981A7A",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-10-0-scene-luke-finds-amira",
+              "title": "2-10-0-scene-luke-finds-amira",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "081757C4-8081-495C-8469-00DF92920479",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-11-0-scene-the-teacher",
+              "title": "2-11-0-scene-the-teacher",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "9D84428B-0CA9-46FD-A6D8-B5BC3EF59783",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-12-0-ancient-waters",
+              "title": "2-12-0-ancient-waters",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "B1CAE028-1ABC-4810-AD48-994D0E37CE7B",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-13-0-scene-amira-s-terms",
+              "title": "2-13-0-scene-amira-s-terms",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "7BC175F9-B025-4156-AF85-6D850FEDB40D",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-14-0-scene-amira-s-answer",
+              "title": "2-14-0-scene-amira-s-answer",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "CC9CF2C2-72EE-4F26-A73F-595760EF318E",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-15-0-scene-false-intel",
+              "title": "2-15-0-scene-false-intel",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "299941AD-C352-44D2-BCCC-9A271890AFB2",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-16-0-scene-onto-the-bridge",
+              "title": "2-16-0-scene-onto-the-bridge",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "ABFCB703-192A-412F-806D-EB3A654662FE",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-17-0-the-shooting",
+              "title": "2-17-0-the-shooting",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "3BEB538F-A84D-44B9-B2DC-448C8ED3DFC5",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-19-0-scene-mark-s-handoff",
+              "title": "2-19-0-scene-mark-s-handoff",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "CE0B9F1F-5324-4036-BF6B-D8F1CF4415EF",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-20-0-scene-mark-s-lament",
+              "title": "2-20-0-scene-mark-s-lament",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "03C08055-F1D9-4719-882F-79AC255B1E25",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-21-0-scene-witness",
+              "title": "2-21-0-scene-witness",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "2192CA8E-1328-4C88-BF08-63E105F6223E",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-22-0-stories",
+              "title": "2-22-0-stories",
+              "trackCount": 0,
+              "versionCount": 0
+            },
+            {
+              "hasLyrics": false,
+              "id": "2D43B77C-FCA8-4B13-B6C7-87C2711F07BF",
+              "noteCount": 0,
+              "relativePath": "Scenes/2-23-0-johnny-s-goodbye-finale",
+              "title": "2-23-0-johnny-s-goodbye-finale",
+              "trackCount": 0,
+              "versionCount": 0
+            }
+          ]
+        },
+        0.00500816700514406
+      ],
+      "elapsed_seconds": 0.005,
+      "error": null,
+      "name": "score_api_songs",
+      "ok": true
+    },
+    {
+      "detail": [
+        {
+          "deferredPlaybackAttempted": [],
+          "hydratedSongPaths": [
+            "Scenes/1-01-0-overture",
+            "Scenes/1-02-0-prologue"
+          ],
+          "isPlaying": false,
+          "pianoRollAudioClipsCount": 0,
+          "pianoRollNotesCount": 467,
+          "selectedMidiAssetPath": "Scenes/1-02-0-prologue",
+          "selectedMidiID": "68C9EC73-3B9F-4C77-BEB0-EAB4CCEB4A7E",
+          "selectedSongHasPlayback": true,
+          "songAssetPlaybackStates": {
+            "Scenes/1-01-0-overture": {
+              "hasPlayback": true,
+              "noteCount": 1177
+            },
+            "Scenes/1-02-0-prologue": {
+              "hasPlayback": true,
+              "noteCount": 467
+            },
+            "Scenes/1-03-0-scene-luke-s-notebook": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-04-0-scene-assignment": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-05-0-silver": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-06-0-the-shortcut": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-07-0-lay-down-your-burdens": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-08-0-first-meeting": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-09-0-scene-the-clinic": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-10-0-scene-the-mysterious-man": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-11-0-lament": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-12-0-grace": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-13-0-scene-amira-hears-them": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-14-0-scene-amira-s-interruption": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-15-0-ma-dar-ke-kha-nad-mother-who-sings": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-16-0-scene-the-rumor": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-17-0-how": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-18-0-somewhere-in-my-heart": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-19-0-a-new-life": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-20-0-scene-the-window": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-21-0-scene-amira-shows-luke-the-journal": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-22-0-the-list": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-23-0-reason": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-24-0-scene-mark-s-log": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-25-0-time-of-war": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-26-0-scene-luke-s-resolve": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-27-0-the-return": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/1-28-0-something-more-act-i-finale": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-01-0-entracte-act-ii-opening": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-02-0-ever-singing-i-am-home": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-03-0-marked-the-flag": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-04-0-scene-johnny-waits": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-05-0-scene-luke-in-the-village": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-06-0-the-confession": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-07-0-johnny-s-theme": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-08-0-happiness": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-09-0-see-it-through": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-10-0-scene-luke-finds-amira": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-11-0-scene-the-teacher": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-12-0-ancient-waters": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-13-0-scene-amira-s-terms": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-14-0-scene-amira-s-answer": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-15-0-scene-false-intel": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-16-0-scene-onto-the-bridge": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-17-0-the-shooting": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-19-0-scene-mark-s-handoff": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-20-0-scene-mark-s-lament": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-21-0-scene-witness": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-22-0-stories": {
+              "hasPlayback": false,
+              "noteCount": 0
+            },
+            "Scenes/2-23-0-johnny-s-goodbye-finale": {
+              "hasPlayback": false,
+              "noteCount": 0
+            }
+          },
+          "songAssetsCount": 50,
+          "statusMessage": ""
+        },
+        0.0036054999800398946
+      ],
+      "elapsed_seconds": 0.004,
+      "error": null,
+      "name": "score_api_playback_state",
+      "ok": true
+    },
+    {
+      "detail": {
+        "mode": "animate"
+      },
+      "elapsed_seconds": 0.05,
+      "error": null,
+      "name": "command_animate_for_api",
+      "ok": true
+    },
+    {
+      "detail": [
+        {
+          "backend": "aistudio",
+          "backendDisplayName": "Google AI Studio",
+          "geminiAllowed": true,
+          "ok": true,
+          "placesCount": 4,
+          "project": "Amira - A Modern Opera",
+          "selectedGeminiModel": "gemini-3.1-flash-image-preview",
+          "selectedGeminiModelDisplayName": "Nano Banana 2",
+          "vertexProjectID": "vertex-493406",
+          "vertexRegion": "global"
+        },
+        0.02136641595279798
+      ],
+      "elapsed_seconds": 0.021,
+      "error": null,
+      "name": "animate_api_health",
+      "ok": true
+    },
+    {
+      "detail": [
+        {
+          "characterRigCount": 66,
+          "generatedAt": "2026-05-17T04:07:31Z",
+          "placesCount": 4,
+          "projectRoot": "/Users/gary/Amira - A Modern Opera",
+          "scenesCount": 50,
+          "scenesWithBackgroundID": 50,
+          "schemaVersion": 1,
+          "shotsCount": 353,
+          "shotsWithPopulatedShotBackgroundPlate": 0,
+          "shotsWithPopulatedShotFrameGeneration": 0,
+          "songsCount": 50,
+          "warnings": [
+            "Stored scene shot projection for 1.01.0 - Overture is stale: Scenes/scenes.json has 12 shots, scene package shots.json has 30. Sync shot projections before image generation.",
+            "Stored scene shot projection for 1.02.0 - Prologue is stale: Scenes/scenes.json has 6 shots, scene package shots.json has 30. Sync shot projections before image generation.",
+            "Stored scene shot projection for 1.03.0 - Scene - Luke's Notebook is stale: Scenes/scenes.json has 4 shots, scene package shots.json has 28. Sync shot projections before image generation.",
+            "Stored scene shot projection for 1.04.0 - Scene - Assignment is stale: Scenes/scenes.json has 5 shots, scene package shots.json has 44. Sync shot projections before image generation.",
+            "Stored scene shot projection for 1.05.0 - Silver is stale: Scenes/scenes.json has 5 shots, scene package shots.json has 30. Sync shot projections before image generation.",
+            "Stored scene shot projection for 1.06.0 - The Shortcut is stale: Scenes/scenes.json has 9 shots, scene package shots.json has 32. Sync shot projections before image generation.",
+            "Stored scene shot projection for 1.07.0 - Lay Down Your Burdens is stale: Scenes/scenes.json has 6 shots, scene package shots.json has 28. Sync shot projections before image generation.",
+            "Stored scene shot projection for 1.08.0 - First Meeting is stale: Scenes/scenes.json has 7 shots, scene package shots.json has 48. Sync shot projections before image generation."
+          ],
+          "worldContext": {
+            "aesthetic": "",
+            "environmental": "Persian-Afghan highland valley landscape",
+            "ignoredDuplicatePaths": [
+              "/Users/gary/Amira - A Modern Opera/Animate/places-world-context.json",
+              "/Users/gary/Amira - A Modern Opera/Metadata/chatgpt-5.4-pro-background-animation-style-study/references/places-world-context.json",
+              "/Users/gary/Amira - A Modern Opera/Metadata/chatgpt-5.4-pro-nanobanana-scaffold-gemini-slim/references/places-world-context.json",
+              "/Users/gary/Amira - A Modern Opera/Metadata/chatgpt-5.4-pro-nanobanana-scaffold/references/places-world-context.json",
+              "/Users/gary/Amira - A Modern Opera/Metadata/chatgpt-5.4-pro-scenes-imagine-triplet-scaffold-gemini-slim/references/places-world-context.json",
+              "/Users/gary/Amira - A Modern Opera/Metadata/chatgpt-5.4-pro-scenes-imagine-triplet-scaffold/references/places-world-context.json",
+              "/Users/gary/Amira - A Modern Opera/Metadata/chatgpt-5.4-pro-town-views-scaffold 2/references/places-world-context.json",
+              "/Users/gary/Amira - A Modern Opera/Metadata/chatgpt-5.4-pro-town-views-scaffold/references/places-world-context.json",
+              "/Users/gary/Amira - A Modern Opera/_Archive/20260430-235836-before-possible-stale-app-save-after-song-removal/Places/places-world-context.json",
+              "/Users/gary/Amira - A Modern Opera/_Archive/Places-pre-cleanup-20260421/places-world-context.json"
+            ],
+            "sourcePath": "/Users/gary/Amira - A Modern Opera/Places/places-world-context.json",
+            "timePeriod": "Early 2000s\nNo future technology in frame\nPeriod-appropriate vehicles, clothing, and infrastructure\nAnalog signage, paper records, and only sparse early-mobile-era details"
+          }
+        },
+        0.5957221660064533
+      ],
+      "elapsed_seconds": 0.596,
+      "error": null,
+      "name": "animate_project_summary",
+      "ok": true
+    }
+  ]
+}

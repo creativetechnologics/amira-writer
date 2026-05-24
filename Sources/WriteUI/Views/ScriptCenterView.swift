@@ -7,10 +7,6 @@ import ProjectKit
 @available(macOS 26.0, *)
 struct ScriptCenterView: View {
     @Bindable var store: ScriptStore
-    var showScratchpad: Bool = false
-    var showLyricIterations: Bool = false
-    var showCards: Bool = false
-    var selectedLyricIterationSlot: Int = 1
 
     var body: some View {
         if store.librettoFiles.isEmpty {
@@ -27,13 +23,7 @@ struct ScriptCenterView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScriptScrollContent(
-                store: store,
-                showScratchpad: showScratchpad,
-                showLyricIterations: showLyricIterations,
-                showCards: showCards,
-                selectedLyricIterationSlot: selectedLyricIterationSlot
-            )
+            ScriptScrollContent(store: store)
         }
     }
 }
@@ -43,12 +33,6 @@ struct ScriptCenterView: View {
 @available(macOS 26.0, *)
 struct ScriptScrollContent: View {
     @Bindable var store: ScriptStore
-    var showScratchpad: Bool
-    var showLyricIterations: Bool
-    var showCards: Bool
-    var selectedLyricIterationSlot: Int
-    @AppStorage("amira.write.lyricIterations.width") private var lyricIterationsWidth: Double = 340
-    @AppStorage("amira.write.scratchpad.width") private var scratchpadWidth: Double = 340
     @State private var activeSectionUpdateWorkItem: DispatchWorkItem?
 
     private var displayNamesByPath: [String: String] {
@@ -65,14 +49,7 @@ struct ScriptScrollContent: View {
                                 index: index,
                                 displayName: displayNamesByPath[libretto.relativePath] ?? libretto.displayName,
                                 path: libretto.relativePath,
-                                store: store,
-                                showLyricIterations: showLyricIterations,
-                                selectedLyricIterationSlot: selectedLyricIterationSlot,
-                                lyricIterationsWidth: lyricIterationsWidth,
-                                showScratchpad: showScratchpad,
-                                scratchpadWidth: scratchpadWidth,
-                                showCards: showCards,
-                                cardsWidth: 0
+                                store: store
                             )
                             .id(libretto.relativePath)
                             .background(
@@ -91,7 +68,7 @@ struct ScriptScrollContent: View {
 
                         Spacer().frame(height: 200)
                     }
-                    .padding(.horizontal, (showScratchpad || showLyricIterations) ? 28 : 40)
+                    .padding(.horizontal, 40)
                     .padding(.top, 20)
                     .padding(.bottom, 40)
                 }
@@ -162,13 +139,6 @@ private struct ScriptSectionRowView: View {
     let displayName: String
     let path: String
     @Bindable var store: ScriptStore
-    let showLyricIterations: Bool
-    let selectedLyricIterationSlot: Int
-    let lyricIterationsWidth: Double
-    let showScratchpad: Bool
-    let scratchpadWidth: Double
-    let showCards: Bool
-    let cardsWidth: Double
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -184,30 +154,9 @@ private struct ScriptSectionRowView: View {
                     index: index,
                     displayName: displayName,
                     path: path,
-                    store: store,
-                    showInlineShotCards: showCards
+                    store: store
                 )
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-
-                if showLyricIterations {
-                    ScriptLyricIterationSectionView(
-                        displayName: displayName,
-                        path: path,
-                        slot: selectedLyricIterationSlot,
-                        store: store
-                    )
-                    .frame(width: lyricIterationsWidth, alignment: .topLeading)
-                }
-
-                if showScratchpad {
-                    ScriptScratchpadSectionView(
-                        displayName: displayName,
-                        path: path,
-                        store: store
-                    )
-                    .frame(width: scratchpadWidth, alignment: .topLeading)
-                }
-
             }
         }
     }
@@ -221,7 +170,6 @@ struct ScriptSectionView: View {
     let displayName: String
     let path: String
     @Bindable var store: ScriptStore
-    let showInlineShotCards: Bool
 
     @State private var localText: String = ""
     @State private var hasLoaded: Bool = false
@@ -265,15 +213,6 @@ struct ScriptSectionView: View {
         )
     }
 
-    private func readOnlyText(from rawContent: String) -> String {
-        ScriptTextEditor.displayText(
-            from: SynopsisEmbedding.stripForDisplay(content: rawContent),
-            showDirections: store.showDirections,
-            showStoryboarding: store.showStoryboarding,
-            showAnimateDirections: store.showAnimateDirections
-        )
-    }
-
     private func storedContent(from editedText: String) -> String {
         let existingSynopsis = store.synopsis(forScenePath: path)
         let sanitizedText = ScriptTextEditor.prepareEditableText(from: editedText)
@@ -309,9 +248,8 @@ struct ScriptSectionView: View {
             text: $localText,
             reportedHeight: $editorHeight,
             isEditable: store.isLibrettoEditMode,
-            showInlineShotCards: showInlineShotCards,
-            showLyricCards: showInlineShotCards && !store.textOnlyLyricView,
-            textOnlyLyricView: store.textOnlyLyricView,
+            showInlineShotCards: false,
+            showLyricCards: false,
             characterNames: characterNames,
             directionMarkupColorHex: store.directionMarkupColorHex,
             storyboardingMarkupColorHex: store.storyboardingMarkupColorHex,
@@ -324,46 +262,26 @@ struct ScriptSectionView: View {
 
     @ViewBuilder
     private var readOnlyView: some View {
-        if showInlineShotCards && !isPreviewingThisSection {
-            StructuredScriptTextEditor(
-                text: $localText,
-                reportedHeight: $editorHeight,
-                isEditable: false,
-                showInlineShotCards: showInlineShotCards,
-                showLyricCards: showInlineShotCards && !store.textOnlyLyricView,
-                textOnlyLyricView: store.textOnlyLyricView,
-                characterNames: characterNames,
-                directionMarkupColorHex: store.directionMarkupColorHex,
-                storyboardingMarkupColorHex: store.storyboardingMarkupColorHex,
-                animateMarkupColorHex: store.animateMarkupColorHex,
-                expandedShotCardIDs: $expandedShotCardIDs,
-                allowsShotBoundaryEditing: false,
-                allowsShotCardEditing: !hasPendingEdit
-            )
-            .frame(height: max(40, editorHeight))
-        } else {
-            let raw = store.librettoFiles.first(where: { $0.relativePath == path })?.content ?? ""
-            let text = isPreviewingThisSection
-                ? (previewLyrics.map { SynopsisEmbedding.stripForDisplay(content: $0) } ?? "")
-                : SynopsisEmbedding.stripForDisplay(content: raw)
+        let raw = store.librettoFiles.first(where: { $0.relativePath == path })?.content ?? ""
+        let text = isPreviewingThisSection
+            ? (previewLyrics.map { SynopsisEmbedding.stripForDisplay(content: $0) } ?? "")
+            : SynopsisEmbedding.stripForDisplay(content: raw)
 
-            StructuredScriptTextEditor(
-                text: .constant(text),
-                reportedHeight: $editorHeight,
-                isEditable: false,
-                showInlineShotCards: showInlineShotCards,
-                showLyricCards: showInlineShotCards && !store.textOnlyLyricView,
-                textOnlyLyricView: store.textOnlyLyricView,
-                characterNames: characterNames,
-                directionMarkupColorHex: store.directionMarkupColorHex,
-                storyboardingMarkupColorHex: store.storyboardingMarkupColorHex,
-                animateMarkupColorHex: store.animateMarkupColorHex,
-                expandedShotCardIDs: $expandedShotCardIDs,
-                allowsShotBoundaryEditing: false,
-                allowsShotCardEditing: false
-            )
-            .frame(height: max(40, editorHeight))
-        }
+        StructuredScriptTextEditor(
+            text: .constant(text),
+            reportedHeight: $editorHeight,
+            isEditable: false,
+            showInlineShotCards: false,
+            showLyricCards: false,
+            characterNames: characterNames,
+            directionMarkupColorHex: store.directionMarkupColorHex,
+            storyboardingMarkupColorHex: store.storyboardingMarkupColorHex,
+            animateMarkupColorHex: store.animateMarkupColorHex,
+            expandedShotCardIDs: $expandedShotCardIDs,
+            allowsShotBoundaryEditing: false,
+            allowsShotCardEditing: false
+        )
+        .frame(height: max(40, editorHeight))
     }
 
     private var editorContainer: some View {
@@ -386,12 +304,7 @@ struct ScriptSectionView: View {
 
     private func previewOverlay(content: String) -> some View {
         Text(verbatim:
-            ScriptTextEditor.displayText(
-                from: SynopsisEmbedding.stripForDisplay(content: content),
-                showDirections: store.showDirections,
-                showStoryboarding: store.showStoryboarding,
-                showAnimateDirections: store.showAnimateDirections
-            )
+            ScriptTextEditor.readOnlyDisplayText(from: SynopsisEmbedding.stripForDisplay(content: content))
         )
         .font(.system(size: 13, weight: .regular, design: .monospaced))
         .foregroundStyle(Color.white.opacity(0.90))
@@ -456,8 +369,7 @@ struct ScriptSectionView: View {
                 }
             }
             .onChange(of: localText) { _, newValue in
-                let allowsStructuredCardWriteBack = showInlineShotCards && !isPreviewingThisSection && !hasPendingEdit
-                guard (store.isLibrettoEditMode || allowsStructuredCardWriteBack),
+                guard store.isLibrettoEditMode,
                       hasLoaded,
                       !suppressWriteBack else { return }
                 scheduleWriteBack(newValue)
@@ -598,181 +510,6 @@ struct ScriptSectionView: View {
         }
 
         return ranges
-    }
-}
-
-@available(macOS 26.0, *)
-private struct ScriptScratchpadSectionView: View {
-    let displayName: String
-    let path: String
-    @Bindable var store: ScriptStore
-
-    @State private var localText: String = ""
-    @State private var hasLoaded: Bool = false
-    @State private var editorHeight: CGFloat = 120
-    @State private var suppressWriteBack: Bool = false
-
-    private var marker: String {
-        store.scratchpadMarker(forPath: path)
-    }
-
-    private var hasContent: Bool {
-        !localText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("SCRATCHPAD")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(OperaChromeTheme.warning.opacity(0.9))
-                    .tracking(1.4)
-
-                Text(displayName)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(OperaChromeTheme.textSecondary)
-                    .lineLimit(1)
-
-                Spacer(minLength: 8)
-
-                if hasContent {
-                    OperaChromeStatusBadge(
-                        text: "STAGED",
-                        tint: OperaChromeTheme.warning
-                    )
-                }
-            }
-
-            Text(marker)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(OperaChromeTheme.textTertiary)
-                .textSelection(.enabled)
-
-            ZStack(alignment: .topLeading) {
-                if localText.isEmpty {
-                    Text("Stage scene-specific changes here before handing them to an LLM for commit.")
-                        .font(.system(size: 12, weight: .regular, design: .monospaced))
-                        .foregroundStyle(OperaChromeTheme.textTertiary)
-                        .padding(.top, 10)
-                        .allowsHitTesting(false)
-                }
-
-                ScriptTextEditor(
-                    text: $localText,
-                    reportedHeight: $editorHeight,
-                    isEditable: store.isLibrettoEditMode,
-                    showDirections: store.showDirections,
-                    showStoryboarding: store.showStoryboarding,
-                    showAnimateDirections: store.showAnimateDirections,
-                    directionMarkupColorHex: store.directionMarkupColorHex,
-                    storyboardingMarkupColorHex: store.storyboardingMarkupColorHex,
-                    animateMarkupColorHex: store.animateMarkupColorHex
-                )
-                .frame(height: max(100, editorHeight))
-            }
-        }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(OperaChromeTheme.raisedBackground.opacity(0.7))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(OperaChromeTheme.accentMuted, lineWidth: 1)
-        )
-        .onAppear {
-            if !hasLoaded {
-                localText = store.scratchpadText(forPath: path)
-                hasLoaded = true
-            }
-        }
-        .onChange(of: localText) { _, newValue in
-            guard store.isLibrettoEditMode, hasLoaded, !suppressWriteBack else { return }
-            store.updateScratchpadText(forPath: path, text: newValue)
-        }
-        .onChange(of: store.scratchpadDocumentText) { _, _ in
-            guard hasLoaded else { return }
-            let incoming = store.scratchpadText(forPath: path)
-            guard incoming != localText else { return }
-            suppressWriteBack = true
-            localText = incoming
-            DispatchQueue.main.async {
-                suppressWriteBack = false
-            }
-        }
-    }
-}
-
-@available(macOS 26.0, *)
-private struct ScriptLyricIterationSectionView: View {
-    let displayName: String
-    let path: String
-    let slot: Int
-    @Bindable var store: ScriptStore
-
-    private var iterationText: String {
-        store.lyricIterationText(forPath: path, slot: slot)
-    }
-
-    private var iterationRelativePath: String {
-        store.lyricIterationRelativePath(forPath: path, slot: slot)
-    }
-
-    private var hasContent: Bool {
-        !iterationText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("LYRIC ITERATION \(slot)")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.cyan.opacity(0.9))
-                    .tracking(1.2)
-
-                Text(displayName)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(OperaChromeTheme.textSecondary)
-                    .lineLimit(1)
-
-                Spacer(minLength: 8)
-
-                OperaChromeStatusBadge(
-                    text: hasContent ? "READY" : "EMPTY",
-                    tint: hasContent ? Color.cyan.opacity(0.85) : OperaChromeTheme.textTertiary
-                )
-            }
-
-            Text(iterationRelativePath)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(OperaChromeTheme.textTertiary)
-                .textSelection(.enabled)
-
-            if hasContent {
-                Text(verbatim: iterationText)
-                    .font(.system(size: 13, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.88))
-                    .lineSpacing(5)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(.vertical, 6)
-            } else {
-                Text("Place a lyrics-only draft in this file to preview it here automatically. Keep it plain lyrics with no stage directions.")
-                    .font(.system(size: 12, weight: .regular, design: .monospaced))
-                    .foregroundStyle(OperaChromeTheme.textTertiary)
-                    .padding(.top, 10)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-            }
-        }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(OperaChromeTheme.raisedBackground.opacity(0.7))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
-        )
     }
 }
 

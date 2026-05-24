@@ -1,0 +1,736 @@
+[
+  {
+    "upcast_attention" : false,
+    "default_scale" : 8,
+    "modifier" : "none",
+    "name" : "unstableHomoerotic_v111",
+    "file" : "unstablehomoerotic_v111_f16.ckpt",
+    "prefix" : "",
+    "text_encoder" : "unstablehomoerotic_v111_clip_vit_l14_f16.ckpt",
+    "version" : "v1"
+  },
+  {
+    "clip_encoder" : "clip_vit_l14_f16.ckpt",
+    "high_precision_autoencoder" : true,
+    "name" : "fitfuxHotGaySex_v00",
+    "prefix" : "",
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "file" : "fitfuxhotgaysex_v00_f16.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "hires_fix_scale" : 24,
+    "default_scale" : 16,
+    "upcast_attention" : false,
+    "version" : "flux1",
+    "text_encoder" : "t5_xxl_encoder_q6p.ckpt",
+    "guidance_embed" : true,
+    "modifier" : "none",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "condition_scale" : 1000,
+          "sigma_max" : 1,
+          "sigma_min" : 0
+        }
+      }
+    }
+  },
+  {
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "hires_fix_scale" : 24,
+    "upcast_attention" : false,
+    "default_scale" : 16,
+    "modifier" : "none",
+    "name" : "z_image_bf16",
+    "file" : "z_image_bf16_f16.ckpt",
+    "prefix" : "",
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "sigma_min" : 0,
+          "condition_scale" : 1000,
+          "sigma_max" : 1
+        }
+      }
+    },
+    "version" : "z_image"
+  },
+  {
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "hires_fix_scale" : 24,
+    "upcast_attention" : false,
+    "default_scale" : 16,
+    "name" : "Z Image Turbo 1.0 (Exact)",
+    "file" : "z_image_turbo_1.0_f16.ckpt",
+    "prefix" : "",
+    "text_encoder" : "qwen_3_vl_4b_instruct_f16.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "high_precision_autoencoder" : false,
+    "note" : "[Z Image Turbo](https:\/\/huggingface.co\/Tongyi-MAI\/Z-Image-Turbo) is is a powerful and highly efficient image generation model with 6B parameters. It is Apache 2.0-licensed and commercially friendly. The model is trained at multiple resolutions using a Flow Matching objective; trailing samplers yield the best results, with 8 sampling steps recommended.",
+    "version" : "z_image"
+  },
+  {
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "hires_fix_scale" : 24,
+    "upcast_attention" : false,
+    "default_scale" : 16,
+    "modifier" : "none",
+    "name" : "zImageBase_base",
+    "file" : "zimagebase_base_f16.ckpt",
+    "prefix" : "",
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "condition_scale" : 1000,
+          "sigma_max" : 1,
+          "sigma_min" : 0
+        }
+      }
+    },
+    "version" : "z_image"
+  },
+  {
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "hires_fix_scale" : 24,
+    "upcast_attention" : false,
+    "default_scale" : 16,
+    "modifier" : "none",
+    "name" : "zImageTurboBaseAIO_zImageBaseAIOBF16",
+    "file" : "zimageturbobaseaio_zimagebaseaiobf16_f16.ckpt",
+    "prefix" : "",
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "sigma_min" : 0,
+          "sigma_max" : 1,
+          "condition_scale" : 1000
+        }
+      }
+    },
+    "version" : "z_image"
+  },
+  {
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "hires_fix_scale" : 24,
+    "upcast_attention" : false,
+    "default_scale" : 16,
+    "modifier" : "none",
+    "file" : "redcraftredzimageupdatedjan30_redzibdx1_f16.ckpt",
+    "name" : "redcraftRedzimageUpdatedJAN30_redzibDX1",
+    "prefix" : "",
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "sigma_max" : 1,
+          "sigma_min" : 0,
+          "condition_scale" : 1000
+        }
+      }
+    },
+    "version" : "z_image"
+  },
+  {
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "hires_fix_scale" : 24,
+    "upcast_attention" : false,
+    "default_scale" : 16,
+    "modifier" : "none",
+    "file" : "unstablerevolution_v2fp16_f16.ckpt",
+    "name" : "unstableRevolution_V2Fp16",
+    "prefix" : "",
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "sigma_max" : 1,
+          "condition_scale" : 1000,
+          "sigma_min" : 0
+        }
+      }
+    },
+    "version" : "z_image"
+  },
+  {
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "hires_fix_scale" : 24,
+    "upcast_attention" : false,
+    "default_scale" : 16,
+    "modifier" : "none",
+    "file" : "zimageturbonsfw_30bf16aio_f16.ckpt",
+    "name" : "zImageTurboNSFW_30BF16AIO",
+    "prefix" : "",
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "sigma_max" : 1,
+          "condition_scale" : 1000,
+          "sigma_min" : 0
+        }
+      }
+    },
+    "version" : "z_image"
+  },
+  {
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "hires_fix_scale" : 24,
+    "upcast_attention" : false,
+    "default_scale" : 16,
+    "modifier" : "none",
+    "file" : "zimageturbonsfwby_2602nsfwfp8_f16.ckpt",
+    "name" : "zimageTurboNSFWBy_2602NSFWFP8",
+    "prefix" : "",
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "sigma_max" : 1,
+          "condition_scale" : 1000,
+          "sigma_min" : 0
+        }
+      }
+    },
+    "version" : "z_image"
+  },
+  {
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "hires_fix_scale" : 24,
+    "upcast_attention" : false,
+    "default_scale" : 16,
+    "modifier" : "none",
+    "file" : "beyondreality_zturborebuildv30_f16.ckpt",
+    "name" : "beyondREALITY_zTURBOREBUILDV30",
+    "prefix" : "",
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "sigma_min" : 0,
+          "condition_scale" : 1000,
+          "sigma_max" : 1
+        }
+      }
+    },
+    "version" : "z_image"
+  },
+  {
+    "high_precision_autoencoder" : true,
+    "name" : "flux2Klein9BTrue_v10Bf16",
+    "prefix" : "",
+    "padded_text_encoding_length" : 512,
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "file" : "flux2klein9btrue_v10bf16_f16.ckpt",
+    "autoencoder" : "flux_2_vae_f16.ckpt",
+    "hires_fix_scale" : 32,
+    "default_scale" : 16,
+    "upcast_attention" : false,
+    "version" : "flux2_9b",
+    "text_encoder" : "qwen_3_8b_q8p.ckpt",
+    "modifier" : "kontext",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "condition_scale" : 1000,
+          "sigma_max" : 1,
+          "sigma_min" : 0
+        }
+      }
+    }
+  },
+  {
+    "high_precision_autoencoder" : false,
+    "copyright" : "© 2026 Black Forest Labs",
+    "name" : "FLUX.2 [klein] 9B",
+    "prefix" : "",
+    "padded_text_encoding_length" : 512,
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "file" : "flux_2_klein_9b_q8p.ckpt",
+    "autoencoder" : "flux_2_vae_f16.ckpt",
+    "hires_fix_scale" : 32,
+    "default_scale" : 16,
+    "note" : "[FLUX.2 [klein] 9B](https:\/\/huggingface.co\/black-forest-labs\/FLUX.2-klein-9B) is a 9 billion parameter rectified flow transformer capable of generating, editing and combining images based on text instructions.",
+    "upcast_attention" : false,
+    "version" : "flux2_9b",
+    "text_encoder" : "qwen_3_8b_q8p.ckpt",
+    "hugging_face_link" : "black-forest-labs\/FLUX.2-klein-9B",
+    "modifier" : "kontext"
+  },
+  {
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "hires_fix_scale" : 24,
+    "upcast_attention" : false,
+    "default_scale" : 16,
+    "modifier" : "none",
+    "file" : "zimagefp8_turborev11_f16.ckpt",
+    "name" : "zImageFp8_turboRev11",
+    "prefix" : "",
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "condition_scale" : 1000,
+          "sigma_min" : 0,
+          "sigma_max" : 1
+        }
+      }
+    },
+    "version" : "z_image"
+  },
+  {
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "name" : "beyondREALITY_30FP8",
+    "prefix" : "",
+    "modifier" : "none",
+    "file" : "beyondreality_30fp8_f16.ckpt",
+    "default_scale" : 16,
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "version" : "z_image",
+    "hires_fix_scale" : 24,
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "sigma_max" : 1,
+          "sigma_min" : 0,
+          "condition_scale" : 1000
+        }
+      }
+    },
+    "upcast_attention" : false,
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    }
+  },
+  {
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "name" : "pornmasterZImage_v1",
+    "prefix" : "",
+    "modifier" : "none",
+    "file" : "pornmasterzimage_v1_f16.ckpt",
+    "default_scale" : 16,
+    "text_encoder" : "qwen_3_vl_4b_instruct_q8p.ckpt",
+    "version" : "z_image",
+    "hires_fix_scale" : 24,
+    "noise_discretization" : {
+      "rf" : {
+        "_0" : {
+          "condition_scale" : 1000,
+          "sigma_min" : 0,
+          "sigma_max" : 1
+        }
+      }
+    },
+    "upcast_attention" : false,
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    }
+  },
+  {
+    "mmdit" : {
+      "dual_attention_layers" : [
+
+      ],
+      "activation_ffn_scaling" : {
+        "27" : 1,
+        "19" : 1,
+        "23" : 1,
+        "22" : 1,
+        "33" : 1,
+        "21" : 1,
+        "11" : 1,
+        "3" : 1,
+        "14" : 1,
+        "7" : 1,
+        "6" : 1,
+        "25" : 1,
+        "9" : 1,
+        "1" : 2,
+        "31" : 1,
+        "0" : 2,
+        "30" : 1,
+        "10" : 1,
+        "13" : 1,
+        "18" : 1,
+        "16" : 1,
+        "28" : 1,
+        "24" : 1,
+        "26" : 1,
+        "17" : 1,
+        "4" : 1,
+        "32" : 1,
+        "2" : 1,
+        "5" : 1,
+        "12" : 1,
+        "8" : 1,
+        "29" : 1,
+        "15" : 1,
+        "20" : 1
+      },
+      "activation_qk_scaling" : {
+        "4" : 32,
+        "33" : 32,
+        "5" : 32,
+        "29" : 32,
+        "9" : 32,
+        "1" : 1,
+        "10" : 32,
+        "8" : 32,
+        "19" : 32,
+        "31" : 32,
+        "2" : 32,
+        "18" : 32,
+        "0" : 1,
+        "12" : 32,
+        "15" : 32,
+        "13" : 32,
+        "14" : 32,
+        "16" : 32,
+        "27" : 32,
+        "6" : 32,
+        "7" : 32,
+        "17" : 32,
+        "25" : 32,
+        "21" : 32,
+        "26" : 32,
+        "22" : 32,
+        "32" : 32,
+        "23" : 32,
+        "20" : 32,
+        "28" : 32,
+        "3" : 32,
+        "11" : 32,
+        "30" : 32,
+        "24" : 32
+      },
+      "activation_ffn_proj_up_scaling" : {
+        "4" : 32,
+        "33" : 32,
+        "5" : 32,
+        "29" : 32,
+        "15" : 32,
+        "1" : 1,
+        "31" : 32,
+        "0" : 1,
+        "8" : 32,
+        "2" : 32,
+        "19" : 32,
+        "18" : 32,
+        "9" : 32,
+        "12" : 32,
+        "10" : 32,
+        "13" : 32,
+        "14" : 32,
+        "6" : 32,
+        "16" : 32,
+        "27" : 32,
+        "7" : 32,
+        "17" : 32,
+        "25" : 32,
+        "21" : 32,
+        "26" : 32,
+        "22" : 32,
+        "32" : 32,
+        "23" : 32,
+        "20" : 32,
+        "28" : 32,
+        "3" : 32,
+        "11" : 32,
+        "30" : 32,
+        "24" : 32
+      },
+      "activation_proj_scaling" : {
+        "4" : 1,
+        "33" : 1,
+        "5" : 1,
+        "29" : 1,
+        "15" : 1,
+        "1" : 2,
+        "10" : 1,
+        "8" : 1,
+        "9" : 1,
+        "2" : 1,
+        "31" : 1,
+        "18" : 1,
+        "0" : 2,
+        "12" : 1,
+        "19" : 1,
+        "13" : 1,
+        "14" : 1,
+        "16" : 1,
+        "27" : 1,
+        "6" : 1,
+        "7" : 1,
+        "17" : 1,
+        "25" : 1,
+        "21" : 1,
+        "26" : 1,
+        "22" : 1,
+        "32" : 1,
+        "23" : 1,
+        "20" : 1,
+        "28" : 1,
+        "3" : 1,
+        "24" : 1,
+        "30" : 1,
+        "11" : 1
+      },
+      "qk_norm" : true
+    },
+    "high_precision_autoencoder" : false,
+    "name" : "Z Image Base 1.0 (Exact)",
+    "prefix" : "",
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "file" : "z_image_1.0_f16.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "hires_fix_scale" : 24,
+    "default_scale" : 16,
+    "note" : "[Z Image](https:\/\/huggingface.co\/Tongyi-MAI\/Z-Image) is a powerful and highly efficient image generation model with 6B parameters. It is Apache 2.0-licensed and commercially friendly. The model is trained at multiple resolutions using a Flow Matching objective; trailing samplers yield the best results, with 28 to 50 sampling steps recommended.",
+    "upcast_attention" : false,
+    "version" : "z_image",
+    "text_encoder" : "qwen_3_vl_4b_instruct_f16.ckpt"
+  },
+  {
+    "high_precision_autoencoder" : false,
+    "copyright" : "© 2026 Black Forest Labs",
+    "name" : "FLUX.2 [klein] 9B (Exact)",
+    "prefix" : "",
+    "padded_text_encoding_length" : 512,
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "file" : "flux_2_klein_9b_f16.ckpt",
+    "autoencoder" : "flux_2_vae_f16.ckpt",
+    "hires_fix_scale" : 32,
+    "default_scale" : 16,
+    "note" : "[FLUX.2 [klein] 9B](https:\/\/huggingface.co\/black-forest-labs\/FLUX.2-klein-9B) is a 9 billion parameter rectified flow transformer capable of generating, editing and combining images based on text instructions.",
+    "upcast_attention" : false,
+    "version" : "flux2_9b",
+    "text_encoder" : "qwen_3_8b_f16.ckpt",
+    "modifier" : "kontext"
+  },
+  {
+    "high_precision_autoencoder" : false,
+    "copyright" : "© 2026 Black Forest Labs",
+    "name" : "FLUX.2 [klein] 9B (6-bit)",
+    "prefix" : "",
+    "padded_text_encoding_length" : 512,
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "file" : "flux_2_klein_9b_q6p.ckpt",
+    "autoencoder" : "flux_2_vae_f16.ckpt",
+    "hires_fix_scale" : 32,
+    "default_scale" : 16,
+    "note" : "[FLUX.2 [klein] 9B](https:\/\/huggingface.co\/black-forest-labs\/FLUX.2-klein-9B) is a 9 billion parameter rectified flow transformer capable of generating, editing and combining images based on text instructions.",
+    "upcast_attention" : false,
+    "version" : "flux2_9b",
+    "text_encoder" : "qwen_3_8b_q8p.ckpt",
+    "hugging_face_link" : "black-forest-labs\/FLUX.2-klein-9B",
+    "modifier" : "kontext"
+  },
+  {
+    "name" : "Juggernaut Reborn",
+    "prefix" : "",
+    "modifier" : "none",
+    "file" : "juggernaut_reborn_f16.ckpt",
+    "default_scale" : 12,
+    "text_encoder" : "juggernaut_reborn_clip_vit_l14_f16.ckpt",
+    "version" : "v1",
+    "upcast_attention" : false
+  },
+  {
+    "autoencoder" : "sdxl_vae_v1.0_f16.ckpt",
+    "name" : "Prefect_illustrious_XL_v1.5_1731647",
+    "prefix" : "",
+    "modifier" : "none",
+    "file" : "prefect_illustrious_xl_v1.5_1731647_f16.ckpt",
+    "default_scale" : 16,
+    "text_encoder" : "prefect_illustrious_xl_v1.5_1731647_open_clip_vit_bigg14_f16.ckpt",
+    "version" : "sdxl_base_v0.9",
+    "upcast_attention" : false,
+    "clip_encoder" : "prefect_illustrious_xl_v1.5_1731647_clip_vit_l14_f16.ckpt"
+  },
+  {
+    "high_precision_autoencoder" : true,
+    "clip_encoder" : "clip_vit_l14_f16.ckpt",
+    "name" : "FLUX.1 [dev]",
+    "prefix" : "",
+    "padded_text_encoding_length" : 512,
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "file" : "flux_1_dev_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "hires_fix_scale" : 24,
+    "default_scale" : 16,
+    "upcast_attention" : false,
+    "version" : "flux1",
+    "guidance_embed" : true,
+    "text_encoder" : "t5_xxl_encoder_q6p.ckpt",
+    "tea_cache_coefficients" : [
+      498.65164,
+      -283.78162,
+      55.85544,
+      -3.820214,
+      0.26423085
+    ]
+  },
+  {
+    "high_precision_autoencoder" : true,
+    "clip_encoder" : "clip_vit_l14_f16.ckpt",
+    "name" : "FLUX.1 [dev] De-distill",
+    "prefix" : "",
+    "padded_text_encoding_length" : 512,
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "file" : "flux_1_dev_de_distill_q8p.ckpt",
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "hires_fix_scale" : 24,
+    "default_scale" : 16,
+    "upcast_attention" : false,
+    "version" : "flux1",
+    "text_encoder" : "t5_xxl_encoder_q6p.ckpt",
+    "tea_cache_coefficients" : [
+      498.65164,
+      -283.78162,
+      55.85544,
+      -3.820214,
+      0.26423085
+    ]
+  },
+  {
+    "clip_encoder" : "clip_vit_l14_f16.ckpt",
+    "padded_text_encoding_length" : 512,
+    "version" : "flux1",
+    "tea_cache_coefficients" : [
+      498.65164,
+      -283.78162,
+      55.85544,
+      -3.820214,
+      0.26423085
+    ],
+    "name" : "FLUX.1 [dev] (Exact)",
+    "default_scale" : 16,
+    "file" : "flux_1_dev_f16.ckpt",
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "text_encoder" : "t5_xxl_encoder_f16.ckpt",
+    "high_precision_autoencoder" : true,
+    "hires_fix_scale" : 24,
+    "guidance_embed" : true,
+    "prefix" : "",
+    "upcast_attention" : false
+  },
+  {
+    "clip_encoder" : "clip_vit_l14_f16.ckpt",
+    "padded_text_encoding_length" : 512,
+    "version" : "flux1",
+    "tea_cache_coefficients" : [
+      498.65164,
+      -283.78162,
+      55.85544,
+      -3.820214,
+      0.26423085
+    ],
+    "name" : "FLUX.1 Kontext [dev]",
+    "default_scale" : 16,
+    "file" : "flux_1_kontext_dev_q8p.ckpt",
+    "objective" : {
+      "u" : {
+        "condition_scale" : 1000
+      }
+    },
+    "autoencoder" : "flux_1_vae_f16.ckpt",
+    "text_encoder" : "t5_xxl_encoder_q6p.ckpt",
+    "high_precision_autoencoder" : true,
+    "hires_fix_scale" : 24,
+    "prefix" : "",
+    "guidance_embed" : true,
+    "modifier" : "kontext",
+    "upcast_attention" : false
+  }
+]

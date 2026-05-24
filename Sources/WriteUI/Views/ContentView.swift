@@ -2,19 +2,12 @@ import SwiftUI
 import AppKit
 import ProjectKit
 
-fileprivate let lyricIterationSlotRange = 1...10
-
 @available(macOS 26.0, *)
 struct ContentView: View {
     @Bindable var store: ScriptStore
     var appName: String = "Write"
 
-    @Environment(\.openWindow) private var openWindow
     @AppStorage("amira.write.showInspector") private var showInspector: Bool = true
-    @AppStorage("amira.write.showScratchpad") private var showScratchpad: Bool = true
-    @AppStorage("amira.write.showLyricIterations") private var showLyricIterations: Bool = true
-    @AppStorage("amira.write.showCards") private var showCards: Bool = true
-    @AppStorage("amira.write.lyricIterationSlot") private var selectedLyricIterationSlot: Int = 1
     @AppStorage("amira.write.showSummaries") private var showSummaries: Bool = false
     @AppStorage("amira.write.sidebarVisible") private var showSidebar: Bool = true
     @AppStorage("amira.write.sidebar.width") private var sidebarWidth: Double = OperaChromeSidebarMetrics.defaultWidth
@@ -23,23 +16,6 @@ struct ContentView: View {
 
     private var projectTitle: String {
         store.projectURL?.deletingPathExtension().lastPathComponent ?? "Untitled Opera"
-    }
-
-    private var lyricIterationSelection: Binding<Int> {
-        Binding(
-            get: {
-                min(
-                    max(selectedLyricIterationSlot, lyricIterationSlotRange.lowerBound),
-                    lyricIterationSlotRange.upperBound
-                )
-            },
-            set: {
-                selectedLyricIterationSlot = min(
-                    max($0, lyricIterationSlotRange.lowerBound),
-                    lyricIterationSlotRange.upperBound
-                )
-            }
-        )
     }
 
     private var activeSceneTitle: String? {
@@ -136,99 +112,11 @@ struct ContentView: View {
                         if store.saveIndicator != .idle {
                             OperaChromeCompactSaveIndicator(state: store.saveIndicator)
                         }
-                        ScriptMarkupToolbarButton(
-                            systemImage: "camera.metering.spot",
-                            color: store.directionMarkupColor,
-                            isSelected: store.showDirections,
-                            isEnabled: store.isLibrettoEditMode
-                        ) {
-                            store.showDirections.toggle()
-                        }
-                        .help("Show Direction")
-                        .accessibilityLabel("Show Direction")
-                        ScriptMarkupToolbarButton(
-                            systemImage: "film",
-                            color: store.storyboardingMarkupColor,
-                            isSelected: store.showStoryboarding,
-                            isEnabled: store.isLibrettoEditMode
-                        ) {
-                            store.showStoryboarding.toggle()
-                        }
-                        .help("Show Action")
-                        .accessibilityLabel("Show Action")
-                        ScriptMarkupToolbarButton(
-                            systemImage: "video",
-                            color: store.animateMarkupColor,
-                            isSelected: store.showAnimateDirections,
-                            isEnabled: store.isLibrettoEditMode
-                        ) {
-                            store.showAnimateDirections.toggle()
-                        }
-                        .help("Show Camera")
-                        .accessibilityLabel("Show Camera")
-                        if let badgeLabel = store.collaborationBadgeLabel {
-                            OperaChromeStatusBadge(
-                                title: badgeLabel,
-                                systemImage: store.collaborationBadgeSystemImage,
-                                showsProgress: store.isAgentSyncInProgress
-                            )
-                        }
-                        if showLyricIterations {
-                            LyricIterationSlotPicker(selection: lyricIterationSelection)
-                        }
-                        OperaChromeActionButton(
-                            systemImage: "text.quote",
-                            isSelected: showLyricIterations
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showLyricIterations.toggle()
-                            }
-                        }
-                        .help("Show Lyric Iterations")
-                        OperaChromeActionButton(
-                            systemImage: "square.and.pencil",
-                            isSelected: showScratchpad
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showScratchpad.toggle()
-                            }
-                        }
-                        .help("Show Scratchpad")
-                        OperaChromeActionButton(
-                            systemImage: "rectangle.stack",
-                            isSelected: showCards
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showCards.toggle()
-                            }
-                        }
-                        .help("Show Script Cards")
-                        if showCards {
-                            OperaChromeActionButton(
-                                systemImage: "text.alignleft",
-                                isSelected: store.textOnlyLyricView
-                            ) {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    store.textOnlyLyricView.toggle()
-                                }
-                            }
-                            .help("Toggle Text-Only Lyric View")
-                        }
-                        OperaChromeActionButton(systemImage: "list.bullet.rectangle") {
-                            openWindow(id: GlobalChangeLogWindowView.windowID)
-                        }
-                        .help("Change Log")
                     }
                 }
             } content: {
                 VStack(spacing: 0) {
-                    ScriptCenterView(
-                        store: store,
-                        showScratchpad: showScratchpad,
-                        showLyricIterations: showLyricIterations,
-                        showCards: showCards,
-                        selectedLyricIterationSlot: lyricIterationSelection.wrappedValue
-                    )
+                    ScriptCenterView(store: store)
                     OperaChromeDivider()
                     OperaChromeStatusBar(
                         statusMessage: store.statusMessage,
@@ -326,60 +214,6 @@ private struct ScriptEditorModeButton: View {
 }
 
 @available(macOS 26.0, *)
-private struct LyricIterationSlotPicker: View {
-    @Binding var selection: Int
-
-    private let slotRange = lyricIterationSlotRange
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text("Draft")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(OperaChromeTheme.textTertiary)
-                .tracking(1)
-
-            HStack(spacing: 6) {
-                toolbarStepperButton(systemImage: "chevron.down") {
-                    selection -= 1
-                }
-                .disabled(selection <= slotRange.lowerBound)
-
-                Text("\(selection)")
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(OperaChromeTheme.textPrimary)
-                    .frame(minWidth: 26)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(OperaChromeTheme.selection)
-                    )
-
-                toolbarStepperButton(systemImage: "chevron.up") {
-                    selection += 1
-                }
-                .disabled(selection >= slotRange.upperBound)
-            }
-            .help("Preview lyric iteration \(selection) of \(slotRange.upperBound)")
-        }
-    }
-
-    private func toolbarStepperButton(systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(OperaChromeTheme.textSecondary)
-                .frame(width: 24, height: 24)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(OperaChromeTheme.raisedBackground.opacity(0.9))
-                )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-@available(macOS 26.0, *)
 private struct ScriptSaveToolbarButton: View {
     let saveIndicator: SaveIndicatorState
     let canSave: Bool
@@ -412,48 +246,5 @@ private struct ScriptSaveToolbarButton: View {
             return "Save the current project (Command-S)"
         }
         return "No unsaved changes"
-    }
-}
-
-@available(macOS 26.0, *)
-private struct ScriptMarkupToolbarButton: View {
-    let systemImage: String
-    let color: Color
-    let isSelected: Bool
-    let isEnabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 10, weight: .medium))
-                Circle()
-                    .fill(isSelected ? color : OperaChromeTheme.textTertiary.opacity(0.35))
-                    .frame(width: 6, height: 6)
-            }
-            .foregroundStyle(
-                isEnabled
-                    ? (isSelected ? OperaChromeTheme.textPrimary : OperaChromeTheme.textSecondary)
-                    : OperaChromeTheme.textTertiary
-            )
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
-            .frame(minHeight: 28)
-            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(isSelected ? OperaChromeTheme.selection : Color.clear)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(
-                        isSelected ? color.opacity(0.38) : Color.clear,
-                        lineWidth: 1
-                    )
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
     }
 }

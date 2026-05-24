@@ -48,9 +48,9 @@ struct OWPProjectLoader: Sendable {
 
     /// Load full song data from an OWS file for lip sync and timing.
     func loadSongData(from owsURL: URL) async throws -> OWSSongData {
-        if ScenePackageReader.isScenePackageSceneJSON(owsURL) {
-            let data = try ScenePackageReader.makeLegacyOWSData(sceneJSONURL: owsURL)
-            let title = try? (ScenePackageReader.makeLegacyOWSObject(sceneJSONURL: owsURL)["title"] as? String)
+        if ScenePackageStore.isScenePackageSceneJSON(owsURL) {
+            let data = try ScenePackageStore.makeWorkspaceSceneDocumentData(sceneJSONURL: owsURL)
+            let title = try? (ScenePackageStore.makeWorkspaceSceneDocumentObject(sceneJSONURL: owsURL)["title"] as? String)
             return try await loadSongData(from: data, displayName: title ?? owsURL.deletingLastPathComponent().lastPathComponent)
         }
         let data = try Data(contentsOf: owsURL)
@@ -152,49 +152,15 @@ struct OWPProjectLoader: Sendable {
     }
 
     private func discoverSongs(in projectURL: URL, fm: FileManager) throws -> [OWPSongStub] {
-        var songs: [OWPSongStub] = []
-        
-        // Look in legacy Songs/ and canonical Scenes/<slug>/ packages.
-        let songsURL = ProjectPaths(root: projectURL).songs
-        if fm.fileExists(atPath: songsURL.path) {
-            let enumerator = fm.enumerator(
-                at: songsURL,
-                includingPropertiesForKeys: [.fileSizeKey],
-                options: [.skipsHiddenFiles]
-            )
-
-            while let fileURL = enumerator?.nextObject() as? URL {
-                guard fileURL.pathExtension.lowercased() == "ows" else { continue }
-                // Skip SyncThing conflict files — matches Score, Write, and Mix behavior
-                if fileURL.lastPathComponent.contains(".sync-conflict-") { continue }
-
-                let relativePath = "Songs/" + fileURL.path.replacingOccurrences(
-                    of: songsURL.path + "/",
-                    with: ""
-                )
-
-                let displayName = fileURL.deletingPathExtension().lastPathComponent
-                songs.append(OWPSongStub(
-                    id: stableSongID(fileURL: fileURL, fallbackSeed: relativePath),
-                    title: displayName.toTitleCase(),
-                    owsPath: relativePath,
-                    durationTicks: nil
-                ))
-            }
-        }
-
-        let existingPaths = Set(songs.map(\.owsPath))
-        for descriptor in ScenePackageReader.discover(in: projectURL, fileManager: fm)
-            where !existingPaths.contains(descriptor.legacySongPath) {
-            songs.append(OWPSongStub(
+        ScenePackageStore.discover(in: projectURL, fileManager: fm).map { descriptor in
+            OWPSongStub(
                 id: descriptor.id,
                 title: descriptor.title,
-                owsPath: descriptor.legacySongPath,
+                owsPath: descriptor.projectRelativePath,
                 durationTicks: nil
-            ))
+            )
         }
-
-        return songs.sorted { $0.owsPath < $1.owsPath }
+        .sorted { $0.owsPath < $1.owsPath }
     }
 
     private func stableSongID(fileURL: URL, fallbackSeed: String) -> UUID {

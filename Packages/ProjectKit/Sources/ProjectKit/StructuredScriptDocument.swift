@@ -156,6 +156,308 @@ public struct StructuredScriptDocument: Codable, Sendable, Equatable {
     }
 }
 
+public enum FoldedScriptSegmentKind: String, Sendable {
+    case visibleText
+    case shot
+    case hiddenMarkup
+    case lyricBlock
+}
+
+public struct FoldedScriptSegment: Sendable, Equatable, Identifiable {
+    public var id: String
+    public var kind: FoldedScriptSegmentKind
+    public var displayRange: NSRange
+    public var visibleRange: NSRange?
+    public var foldKey: String?
+
+    public init(
+        id: String,
+        kind: FoldedScriptSegmentKind,
+        displayRange: NSRange,
+        visibleRange: NSRange? = nil,
+        foldKey: String? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.displayRange = displayRange
+        self.visibleRange = visibleRange
+        self.foldKey = foldKey
+    }
+}
+
+public struct FoldedVisibleEdit: Sendable, Equatable {
+    public var affectedVisibleRange: NSRange
+    public var replacementString: String
+
+    public init(affectedVisibleRange: NSRange, replacementString: String) {
+        self.affectedVisibleRange = affectedVisibleRange
+        self.replacementString = replacementString
+    }
+}
+
+public struct FoldedScriptProjection: Sendable, Equatable {
+    public var displayText: String
+    public var segments: [FoldedScriptSegment]
+
+    public init(
+        document: StructuredScriptDocument,
+        expandedFoldKeys: Set<String> = []
+    ) {
+        let normalized = document.recomputingShotExtents()
+        var builder = FoldedScriptProjectionBuilder(
+            document: normalized,
+            expandedFoldKeys: expandedFoldKeys
+        )
+        builder.build()
+        displayText = builder.displayText
+        segments = builder.segments
+    }
+
+    public func foldKey(atDisplayOffset offset: Int) -> String? {
+        segments.first { segment in
+            guard segment.foldKey != nil else { return false }
+            return offset >= segment.displayRange.location
+                && offset <= NSMaxRange(segment.displayRange)
+        }?.foldKey
+    }
+
+    public func visibleEdit(
+        forDisplayRange displayRange: NSRange,
+        replacementString: String
+    ) -> FoldedVisibleEdit? {
+        let displayEnd = NSMaxRange(displayRange)
+        for segment in segments where segment.kind == .visibleText {
+            guard let visibleRange = segment.visibleRange else { continue }
+            let segmentEnd = NSMaxRange(segment.displayRange)
+            if displayRange.location >= segment.displayRange.location,
+               displayEnd <= segmentEnd {
+                let offset = displayRange.location - segment.displayRange.location
+                return FoldedVisibleEdit(
+                    affectedVisibleRange: NSRange(
+                        location: visibleRange.location + offset,
+                        length: displayRange.length
+                    ),
+                    replacementString: replacementString
+                )
+            }
+        }
+        return nil
+    }
+}
+
+private struct FoldedScriptProjectionBuilder {
+    var document: StructuredScriptDocument
+    var expandedFoldKeys: Set<String>
+    var displayText = ""
+    var segments: [FoldedScriptSegment] = []
+
+    private struct FoldEvent {
+        var offset: Int
+        var sourceOrder: Int
+        var key: String
+        var id: String
+        var kind: FoldedScriptSegmentKind
+        var collapsedText: String
+        var expandedLines: [String]
+    }
+
+    mutating func build() {
+        let visible = document.visibleText as NSString
+        let length = visible.length
+        let events = foldEvents().sorted {
+            if $0.offset == $1.offset { return $0.sourceOrder < $1.sourceOrder }
+            return $0.offset < $1.offset
+        }
+
+        var cursor = 0
+        for event in events {
+            let offset = max(0, min(event.offset, length))
+            appendVisibleText(from: cursor, to: offset, visible: visible)
+            appendFoldEvent(event)
+            cursor = max(cursor, offset)
+        }
+        appendVisibleText(from: cursor, to: length, visible: visible)
+    }
+
+    private mutating func appendVisibleText(from start: Int, to end: Int, visible: NSString) {
+        guard end > start else { return }
+        let text = visible.substring(with: NSRange(location: start, length: end - start))
+        let displayStart = (displayText as NSString).length
+        displayText += text
+        let displayLength = (text as NSString).length
+        segments.append(
+            FoldedScriptSegment(
+                id: "visible-\(start)",
+                kind: .visibleText,
+                displayRange: NSRange(location: displayStart, length: displayLength),
+                visibleRange: NSRange(location: start, length: end - start)
+            )
+        )
+    }
+
+    private mutating func appendFoldEvent(_ event: FoldEvent) {
+        if !displayText.isEmpty, !displayText.hasSuffix("\n") {
+            displayText += "\n"
+        }
+
+        let isExpanded = expandedFoldKeys.contains(event.key)
+        let text: String
+        if isExpanded {
+            text = (["v \(event.collapsedText)"] + event.expandedLines.map { "| \($0)" })
+                .joined(separator: "\n") + "\n"
+        } else {
+            text = "> \(event.collapsedText)\n"
+        }
+
+        let displayStart = (displayText as NSString).length
+        displayText += text
+        segments.append(
+            FoldedScriptSegment(
+                id: event.id,
+                kind: event.kind,
+                displayRange: NSRange(location: displayStart, length: (text as NSString).length),
+                foldKey: event.key
+            )
+        )
+    }
+
+    private func foldEvents() -> [FoldEvent] {
+        var events: [FoldEvent] = []
+        for shot in document.shots {
+            events.append(
+                FoldEvent(
+                    offset: shot.startAnchor.offset,
+                    sourceOrder: shot.sourceOrder,
+                    key: "shot:\(shot.id.uuidString)",
+                    id: "shot-\(shot.id.uuidString)",
+                    kind: .shot,
+                    collapsedText: "shot: \(shotHeadline(shot.card))",
+                    expandedLines: shotExpandedLines(shot)
+                )
+            )
+        }
+        for hidden in document.hiddenMarkup {
+            let label = hiddenLabel(hidden)
+            events.append(
+                FoldEvent(
+                    offset: hidden.anchor.offset,
+                    sourceOrder: hidden.sourceOrder,
+                    key: "hidden:\(hidden.id.uuidString)",
+                    id: "hidden-\(hidden.id.uuidString)",
+                    kind: .hiddenMarkup,
+                    collapsedText: label.summary,
+                    expandedLines: label.lines
+                )
+            )
+        }
+        for block in document.lyricBlocks {
+            events.append(
+                FoldEvent(
+                    offset: block.anchor.offset,
+                    sourceOrder: block.sourceOrder,
+                    key: "lyric:\(block.id.uuidString)",
+                    id: "lyric-\(block.id.uuidString)",
+                    kind: .lyricBlock,
+                    collapsedText: "lyric: \(block.speakerName) - \(firstLine(block.text))",
+                    expandedLines: ["speaker: \(block.speakerName)"] + block.text.components(separatedBy: .newlines)
+                )
+            )
+        }
+        return events
+    }
+
+    private func hiddenLabel(_ hidden: StructuredHiddenMarkup) -> (summary: String, lines: [String]) {
+        switch hidden.kind {
+        case .action:
+            let display = StructuredScriptDocumentProjector.actionDisplayText(from: hidden.rawMarkup)
+            return ("action: \(display)", markupLines(hidden.rawMarkup))
+        case .technical:
+            return ("meta: \(markupSummary(hidden.rawMarkup))", markupLines(hidden.rawMarkup))
+        case .lyricSpeaker:
+            return ("speaker: \(StructuredScriptDocumentProjector.lyricSpeakerName(from: hidden.rawMarkup))", markupLines(hidden.rawMarkup))
+        }
+    }
+
+    private func shotHeadline(_ card: ScriptShotCard) -> String {
+        if let label = nonEmpty(card.label) { return label }
+        if let label = nonEmpty(card.camera.label) { return label }
+        if let shotSize = nonEmpty(card.camera.shotSize) { return shotSize.replacingOccurrences(of: "_", with: " ") }
+        if let movement = nonEmpty(card.camera.movement) { return movement.replacingOccurrences(of: "_", with: " ") }
+        if let focus = nonEmpty(card.camera.focus) { return "on \(focus)" }
+        return "direction"
+    }
+
+    private func shotExpandedLines(_ shot: StructuredShotSpan) -> [String] {
+        let card = shot.card
+        var lines: [String] = []
+        append("label", card.label, to: &lines)
+        append("shot", card.camera.shotSize, to: &lines)
+        append("movement", card.camera.movement, to: &lines)
+        append("focus", card.camera.focus, to: &lines)
+        append("intent", card.camera.intent, to: &lines)
+        append("direction", card.direction, to: &lines)
+        append("notes", card.camera.notes, to: &lines)
+        append("time_of_day", card.setting.timeOfDay, to: &lines)
+        append("interior_exterior", card.setting.interiorExterior, to: &lines)
+        append("weather", card.setting.weatherAtmosphere, to: &lines)
+        append("light", card.setting.lightSource, to: &lines)
+        append("lens", card.setting.lens, to: &lines)
+        append("angle", card.setting.cameraAngle, to: &lines)
+        append("depth", card.setting.depthOfField, to: &lines)
+        append("continuity", card.setting.continuityNotes, to: &lines)
+        append("characters", card.tags.characters.joined(separator: ", "), to: &lines)
+        append("places", card.tags.places.joined(separator: ", "), to: &lines)
+        append("props", card.tags.props.joined(separator: ", "), to: &lines)
+        append("mood", card.tags.mood.joined(separator: ", "), to: &lines)
+        append("lighting", card.tags.lighting.joined(separator: ", "), to: &lines)
+        append("character_left", card.characterFraming.left.joined(separator: ", "), to: &lines)
+        append("character_middle", card.characterFraming.middle.joined(separator: ", "), to: &lines)
+        append("character_right", card.characterFraming.right.joined(separator: ", "), to: &lines)
+        if let start = card.timing.startBar, let end = card.timing.endBar {
+            lines.append("bars: \(start)-\(end)")
+        } else if let start = card.timing.startBar {
+            lines.append("bar: \(start)")
+        }
+        if lines.isEmpty {
+            lines.append("no metadata")
+        }
+        return lines
+    }
+
+    private func append(_ label: String, _ value: String?, to lines: inout [String]) {
+        guard let value = nonEmpty(value) else { return }
+        lines.append("\(label): \(value)")
+    }
+
+    private func markupLines(_ raw: String) -> [String] {
+        let lines = raw.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return lines.isEmpty ? [raw] : lines
+    }
+
+    private func markupSummary(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = BracketDSLParser.parse(trimmed) else {
+            return firstLine(trimmed)
+        }
+        let primary = parsed.primary.trimmingCharacters(in: .whitespacesAndNewlines)
+        return primary.isEmpty ? parsed.tag : "\(parsed.tag): \(primary)"
+    }
+
+    private func firstLine(_ text: String) -> String {
+        text.components(separatedBy: .newlines)
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 public enum StructuredScriptDocumentProjector {
     private struct HiddenEvent {
         enum Kind {
@@ -179,6 +481,12 @@ public enum StructuredScriptDocumentProjector {
         var offset: Int
         var sourceOrder: Int
         var text: String
+    }
+
+    private struct LegacyActionPayload {
+        var range: NSRange
+        var rawMarkup: String
+        var kind: HiddenEvent.Kind
     }
 
     private static let cameraBracketPattern: NSRegularExpression = {
@@ -221,6 +529,13 @@ public enum StructuredScriptDocumentProjector {
     private static let actionCurlyPattern: NSRegularExpression = {
         try! NSRegularExpression(
             pattern: #"(?<!\{)\{(action\s*:[\s\S]*?)\}(?!\})"#,
+            options: [.caseInsensitive]
+        )
+    }()
+
+    private static let legacyActionPayloadPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: #"(?m)^[ \t]*\[Action\][ \t]*(?:\r?\n)([^\r\n]+)(?:\r?\n)?"#,
             options: [.caseInsensitive]
         )
     }()
@@ -300,9 +615,12 @@ public enum StructuredScriptDocumentProjector {
             + technicalCurlyPattern.matches(in: rawText, range: fullRange).map(\.range))
         let actionRanges = (actionBracketPattern.matches(in: rawText, range: fullRange).map(\.range)
             + actionCurlyPattern.matches(in: rawText, range: fullRange).map(\.range))
+        let legacyActionPayloads = legacyActionPayloadEvents(in: rawText, nsRaw: nsRaw)
+        let legacyActionRanges = legacyActionPayloads.map(\.range)
         let plainActionRanges = plainBracketPattern.matches(in: rawText, range: fullRange)
             .map(\.range)
             .filter { isPlainActionMarkup(nsRaw.substring(with: $0)) }
+            .filter { !overlapsAny($0, legacyActionRanges) }
         let tripleBraceMetaBlockRanges = tripleBraceMetaBlockPattern.matches(in: rawText, range: fullRange)
             .map(\.range)
 
@@ -336,6 +654,17 @@ public enum StructuredScriptDocumentProjector {
                     range: range,
                     rawMarkup: nsRaw.substring(with: range),
                     kind: .action,
+                    sourceOrder: sourceOrder
+                )
+            )
+            sourceOrder += 1
+        }
+        for payload in legacyActionPayloads {
+            events.append(
+                HiddenEvent(
+                    range: payload.range,
+                    rawMarkup: payload.rawMarkup,
+                    kind: payload.kind,
                     sourceOrder: sourceOrder
                 )
             )
@@ -978,6 +1307,67 @@ public enum StructuredScriptDocumentProjector {
             return false
         }
         return !technicalTags.contains(tag)
+    }
+
+    private static func legacyActionPayloadEvents(in rawText: String, nsRaw: NSString) -> [LegacyActionPayload] {
+        let fullRange = NSRange(location: 0, length: nsRaw.length)
+        return legacyActionPayloadPattern.matches(in: rawText, range: fullRange).compactMap { match in
+            guard match.numberOfRanges > 1 else { return nil }
+            let payload = nsRaw.substring(with: match.range(at: 1))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !payload.isEmpty else { return nil }
+            let resolved = legacyActionPayloadMarkup(for: payload)
+            return LegacyActionPayload(
+                range: match.range,
+                rawMarkup: resolved.rawMarkup,
+                kind: resolved.kind
+            )
+        }
+    }
+
+    private static func legacyActionPayloadMarkup(for payload: String) -> (rawMarkup: String, kind: HiddenEvent.Kind) {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawMarkup: String
+        if isWrappedMarkup(trimmed) {
+            rawMarkup = trimmed
+        } else if isLegacyActionSubjectPayload(trimmed) {
+            rawMarkup = "[action: \(trimmed)]"
+        } else {
+            rawMarkup = "[\(trimmed)]"
+        }
+
+        guard let parsed = BracketDSLParser.parse(rawMarkup) else {
+            return (rawMarkup, .action)
+        }
+
+        let tag = normalized(parsed.tag)
+        if tag == "camera" || tag == "cinematography" {
+            return (rawMarkup, .camera)
+        }
+        if tag == "action" {
+            return (rawMarkup, .action)
+        }
+        if technicalTags.contains(tag) {
+            return (rawMarkup, .technical)
+        }
+        return (rawMarkup, .action)
+    }
+
+    private static func isWrappedMarkup(_ value: String) -> Bool {
+        (value.hasPrefix("[") && value.hasSuffix("]"))
+            || (value.hasPrefix("{") && value.hasSuffix("}"))
+    }
+
+    private static func isLegacyActionSubjectPayload(_ value: String) -> Bool {
+        value.contains("|") && value.range(of: #"\bdescription\s*="#, options: .regularExpression) != nil
+    }
+
+    private static func overlapsAny(_ range: NSRange, _ ranges: [NSRange]) -> Bool {
+        ranges.contains { overlaps(range, $0) }
+    }
+
+    private static func overlaps(_ lhs: NSRange, _ rhs: NSRange) -> Bool {
+        lhs.location < NSMaxRange(rhs) && rhs.location < NSMaxRange(lhs)
     }
 
     private static func lyricBlockEvents(

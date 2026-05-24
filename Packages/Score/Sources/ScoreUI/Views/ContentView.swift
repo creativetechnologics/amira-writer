@@ -333,12 +333,10 @@ struct ScoreSidebarView: View {
         var result: [UUID: Double] = [:]
         for asset in store.songAssets {
             guard let playback = asset.document.activeVersion()?.playback else {
-                let songID = asset.id
-                Task { @MainActor in
-                    let hydrated = await store.hydrateSongPlaybackIfNeeded(id: songID)
-                    guard hydrated else { return }
-                    recomputeDurations()
-                }
+                // The sidebar must never hydrate every scene just to show durations.
+                // Hydrating all 50 scene packages here recursively fanned out detached
+                // playback loads, pegged CPU, and made the Score/Mix switch look frozen.
+                // Durations appear opportunistically after a song is selected/loaded.
                 continue
             }
             let secs = ScoreStore.ticksToSecondsStatic(

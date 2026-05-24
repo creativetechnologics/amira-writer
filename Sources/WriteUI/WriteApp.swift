@@ -32,14 +32,7 @@ struct WriteApp: App {
         .defaultSize(width: 1200, height: 800)
         .commands {
             fileCommands
-            ProjectWindowCommands(store: store)
         }
-
-        Window("Show Change Log", id: GlobalChangeLogWindowView.windowID) {
-            GlobalChangeLogWindowView(store: store)
-
-        }
-        .defaultSize(width: 980, height: 760)
     }
 
     // MARK: - File Menu Commands
@@ -93,22 +86,6 @@ struct WriteApp: App {
                let url = panel.url {
                 await loadProject(url)
             }
-        }
-    }
-}
-
-@available(macOS 26.0, *)
-private struct ProjectWindowCommands: Commands {
-    let store: ScriptStore
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some Commands {
-        CommandMenu("Project") {
-            Button("Show Change Log") {
-                openWindow(id: GlobalChangeLogWindowView.windowID)
-            }
-            .keyboardShortcut("l", modifiers: [.command, .shift])
-            .disabled(store.projectURL == nil)
         }
     }
 }

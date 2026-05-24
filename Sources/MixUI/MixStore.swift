@@ -830,65 +830,16 @@ final class MixStore {
             ?? "Loaded \(scenes.count) scene mix sessions from local project files."
     }
 
-    /// Discover .ows song files on disk and build NPSceneSummary entries.
+    /// Discover canonical scene packages on disk and build NPSceneSummary entries.
     private static func discoverSongSummaries(in projectURL: URL) -> [NPSceneSummary] {
-        let fm = FileManager.default
-        let songsDir = ProjectPaths(root: projectURL).songs
-        if !fm.fileExists(atPath: songsDir.path) {
-            return discoverScenePackageSummaries(in: projectURL)
-        }
-
-        let enumerator = fm.enumerator(
-            at: songsDir,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles]
-        )
-
-        var summaries: [NPSceneSummary] = []
-        var index = 0
-        while let fileURL = enumerator?.nextObject() as? URL {
-            guard fileURL.pathExtension.lowercased() == "ows" else { continue }
-            // Skip SyncThing conflict files
-            if fileURL.lastPathComponent.contains(".sync-conflict-") { continue }
-            let relativePath = "Songs/" + fileURL.path.replacingOccurrences(
-                of: songsDir.path + "/",
-                with: ""
-            )
-            let displayName = fileURL.deletingPathExtension().lastPathComponent
-            let modDate = (try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()
-            summaries.append(NPSceneSummary(
-                id: UUID(),
-                relativePath: relativePath,
-                title: displayName,
-                orderIndex: index,
-                updatedAt: modDate,
-                activeVersionID: nil,
-                activeLyrics: "",
-                noteCount: 0,
-                lengthTicks: 0,
-                animateTrackCount: 0,
-                animateKeyframeCount: 0
-            ))
-            index += 1
-        }
-
-        let sorted = summaries.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
-        let legacySummaries = sorted.enumerated().map { index, scene in
-            var s = scene
-            s.orderIndex = index
-            return s
-        }
-        guard !legacySummaries.isEmpty else {
-            return discoverScenePackageSummaries(in: projectURL)
-        }
-        return legacySummaries
+        discoverScenePackageSummaries(in: projectURL)
     }
 
     private static func discoverScenePackageSummaries(in projectURL: URL) -> [NPSceneSummary] {
-        ScenePackageReader.discover(in: projectURL).enumerated().map { index, descriptor in
+        ScenePackageStore.discover(in: projectURL).enumerated().map { index, descriptor in
             NPSceneSummary(
                 id: descriptor.id,
-                relativePath: descriptor.legacySongPath,
+                relativePath: descriptor.projectRelativePath,
                 title: descriptor.title,
                 orderIndex: index,
                 updatedAt: descriptor.updatedAt.flatMap(MixDateParser.parse) ?? Date(),

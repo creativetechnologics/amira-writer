@@ -397,9 +397,6 @@ final class AllProjectImagesState {
     @ObservationIgnored private var rebuildRequestID: Int = 0
     @ObservationIgnored private var rebuildTask: Task<Void, Never>?
     @ObservationIgnored private var lastProjectPath: String?
-    @ObservationIgnored private var characterRecoveryProjectPath: String?
-    @ObservationIgnored private var characterRecoveryTask: Task<Void, Never>?
-
     // MARK: - Aggregation
 
     /// Lightweight hash of every path collection's `.count`. Used as `.task(id:)`
@@ -566,16 +563,6 @@ final class AllProjectImagesState {
                 self.isRebuilding = false
                 PerfSignposts.end(.allImagesRebuild, token: rebuildSignpost)
             }
-        }
-    }
-
-    func requestCharacterRecoveryIfNeeded(store: AnimateStore) {
-        guard let projectPath = store.owpURL?.standardizedFileURL.path else { return }
-        guard characterRecoveryProjectPath != projectPath else { return }
-        characterRecoveryProjectPath = projectPath
-        characterRecoveryTask?.cancel()
-        characterRecoveryTask = Task { [weak store] in
-            await store?.recoverMissingPersistedCharactersIfNeededAsync()
         }
     }
 

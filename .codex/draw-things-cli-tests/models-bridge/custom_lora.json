@@ -1,0 +1,492 @@
+[
+  {
+    "file" : "project_men___flux_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Project Men - Flux",
+    "prefix" : "",
+    "version" : "flux1"
+  },
+  {
+    "file" : "clothing___gay_harness_v2_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Clothing - Gay Harness_v2",
+    "prefix" : "",
+    "version" : "v1"
+  },
+  {
+    "file" : "gay_erotic_cuddle_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Gay_erotic_cuddle",
+    "prefix" : "",
+    "version" : "sdxl_base_v0.9"
+  },
+  {
+    "file" : "cuddling_men_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Cuddling_men",
+    "prefix" : "",
+    "version" : "flux1"
+  },
+  {
+    "file" : "anal_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Anal",
+    "prefix" : "",
+    "version" : "flux1"
+  },
+  {
+    "file" : "gay_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Gay",
+    "prefix" : "",
+    "version" : "flux1"
+  },
+  {
+    "file" : "yjkbeaxf45wsrrzf53rtqgczw0_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "YJKBEAXF45WSRRZF53RTQGCZW0",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "male_thirst_trap_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Male Thirst Trap",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "male_solo_100_epoch_z_image_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "male-solo-100-epoch-z-image",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "rebelreal_z_image__lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "RebelReal(z-image)",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "redcraftredzimageupdatedjan30_redzibdx1_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "redcraftRedzimageUpdatedJAN30_redzibDX1",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "purple_grainy_zit_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Purple_grainy_zit",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "rembrandt_style_v2.1_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Rembrandt style v2.1",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "race_base_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Race-BASE",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "hands___feet___skin_v1.1_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Hands + Feet + skin v1.1",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "zit_bdsm_14epoc_k3nk_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "zit-bdsm-14epoc-k3nk",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "pen15_z_image_turbo_v1_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "pen15_z_image_turbo-v1",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "harness_bondaged_outfit_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "harness bondaged outfit",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "realisticsnapshot_zimage_turbov5_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "RealisticSnapshot-Zimage-Turbov5",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "z_image_bwc_v2_000020890_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "z-image-bwc-v2_000020890",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "intact_erect_upw_pv1_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Intact_Erect_UPW_PV1",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "anime_factory_e6_zit_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Anime Factory E6 ZIT",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "flaccid_ztx2_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Flaccid ZTX2",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "cockring_zit_v2_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "cockring_ZIT_v2",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "spartacus_style_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Spartacus style",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "mtdm1xbs4dz20ydc5j4m2q0am0_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "MTDM1XBS4DZ20YDC5J4M2Q0AM0",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "z_image_skinnyv2_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "z-image_SkinnyV2",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "eldritch_sketch_painting_z_image_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Eldritch_Sketch_Painting_Z_Image",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "ema_99_cockunderflux_clearvpldown_block4_micro_v01f_28_48_50_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "ema_99_cockunderFlux_clearVPLdown_block4_micro_V01f-28_48_50",
+    "prefix" : "",
+    "version" : "flux1"
+  },
+  {
+    "file" : "golden_rich_retro_bodies_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Golden_Rich_Retro_Bodies",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "bulge_test_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "bulge-test",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "speedo_tan_line_zit_v1.1_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "speedo_tan_line_ZIT-v1.1",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "thefutonera_block1_v01a_000049000_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "TheFutonEra-Block1-v01a_000049000",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "penis___z_image_v3__penis___lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Penis - Z-Image V3 (Penis) ",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "cw03_lunis_zit_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "CW03_Lunis_zit",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "newww1_5_000001750_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "newww1-5_000001750",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "jibs_realistic_z_image_lora_v1_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Jibs_Realistic_z-image_lora_V1",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "qinglong_detailedeye_z_imagev2_comfy__lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "qinglong_detailedeye_z-imageV2(comfy)",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "redlsp_extracted_lora_full_rank_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "RedLSP_extracted_lora_full_rank",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "eason_zitr_realistic_nsfw_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Eason ZITR Realistic NSFW",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "zimagegeneralpenis_v1_0_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "ZImageGeneralPenis_v1-0",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "z_image_fun_lora_distill_8_steps_2602_udcai_comfyui_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Z-Image-Fun-Lora-Distill-8-Steps-2602_UDCAI_ComfyUI",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "zitnsfwlorav2_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "ZITnsfwLoRAv2",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "z_image_bwc_v3_30000_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "z-image-bwc-v3_30000",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "deedee_amateur_photography_zimage_base_and_turbo_v1_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "deedee_amateur_photography_zimage_base_and_turbo_v1",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "playgirl_cover_zimg_v1_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "playgirl_cover_zimg_v1",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "candidinstaxphotoz_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "CandidInstaxphotoZ",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "angle_standard_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "angle_Standard",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "zpenis_flaccid_v3_000018250_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "zpenis-flaccid_v3_000018250",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "beyond_the_mist_e10_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Beyond The Mist E10",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "inksketch_e13_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "inksketch_E13",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "brunodayan.eixz_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "brunoDayan.EixZ",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "illustrationfact4.qmhb_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "illustrationFact4.QMHB",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "zit_erect_bulge_v0_9_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "zit_erect_bulge_v0_9",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "briefs_a1_z_2_30k_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "briefs-a1 Z-2-30k",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "wide_slider2_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "Wide Slider2",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "theaicolab_2__e15_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "TheAIColab_2__E15",
+    "prefix" : "",
+    "version" : "z_image"
+  },
+  {
+    "file" : "better_passion_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "better-passion",
+    "prefix" : "passion ",
+    "version" : "z_image"
+  },
+  {
+    "file" : "luke_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "luke",
+    "prefix" : "luke ",
+    "version" : "flux2_4b"
+  },
+  {
+    "file" : "lkhr84_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "lkhr84",
+    "prefix" : "lkhr84 ",
+    "version" : "flux2_4b"
+  },
+  {
+    "file" : "lkhr25_flux2_klein_base_9b_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "lkhr25-flux2-klein-base-9b",
+    "prefix" : "lkhr25 ",
+    "version" : "flux2_9b"
+  },
+  {
+    "file" : "lkhr26_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "lkhr26",
+    "prefix" : "lkhr26 ",
+    "version" : "flux2_4b"
+  },
+  {
+    "file" : "mttq39_flux2_klein_base_9b_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "mttq39-flux2-klein-base-9b",
+    "prefix" : "mttq39 ",
+    "version" : "flux2_9b"
+  },
+  {
+    "file" : "lkhr27_flux2_klein_base_9b_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "lkhr27-flux2-klein-base-9b",
+    "prefix" : "lkhr27 ",
+    "version" : "flux2_9b"
+  },
+  {
+    "file" : "mrnza5_flux2_klein_base_9b_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "mrnza5-flux2-klein-base-9b",
+    "prefix" : "mrnza5 ",
+    "version" : "flux2_9b"
+  },
+  {
+    "file" : "mrkp43_flux2_klein_base_9b_lora_f16.ckpt",
+    "is_lo_ha" : false,
+    "name" : "mrkp43-flux2-klein-base-9b",
+    "prefix" : "mrkp43 ",
+    "version" : "flux2_9b"
+  },
+  {
+    "file" : "amira__amira-nazari__mrnza5-flux2-klein-base-9b.safetensors",
+    "is_lo_ha" : false,
+    "name" : "Amira Nazari",
+    "prefix" : "mrnza5 ",
+    "version" : "flux2_9b"
+  },
+  {
+    "file" : "amira__luke-hart__lkhr27-flux2-klein-base-9b.safetensors",
+    "is_lo_ha" : false,
+    "name" : "Luke Hart",
+    "prefix" : "lkhr27-flux2-klein-base-9b ",
+    "version" : "flux2_9b"
+  },
+  {
+    "file" : "amira__mark-price__mrkp43-flux2-klein-base-9b.safetensors",
+    "is_lo_ha" : false,
+    "name" : "Mark Price",
+    "prefix" : "mrkp43 ",
+    "version" : "flux2_9b"
+  },
+  {
+    "file" : "amira__matt-quill__mttq39-flux2-klein-base-9b.safetensors",
+    "is_lo_ha" : false,
+    "name" : "Matt Quill",
+    "prefix" : "mttq39 ",
+    "version" : "flux2_9b"
+  }
+]

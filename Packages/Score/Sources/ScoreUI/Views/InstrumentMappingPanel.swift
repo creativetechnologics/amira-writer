@@ -169,6 +169,182 @@ struct InstrumentMapEntry: Identifiable, Equatable {
 }
 
 @available(macOS 26.0, *)
+struct ScoreInstrumentSummaryPanel: View {
+    @Bindable var store: ScoreStore
+    @Binding var selectedTrackFilter: Set<Int>
+
+    private var selectedSongPath: String? {
+        store.selectedMidiAsset?.relativePath
+    }
+
+    private var profiles: [ProjectChannelProfile] {
+        var seen: Set<String> = []
+        return store.channelProfiles(scope: .allSongs, forSongPath: selectedSongPath)
+            .filter { profile in
+                seen.insert(profile.baseKey).inserted
+            }
+            .sorted { lhs, rhs in
+                let lhsMapping = store.mapping(for: lhs)
+                let rhsMapping = store.mapping(for: rhs)
+                if lhsMapping.effectiveSortOrder != rhsMapping.effectiveSortOrder {
+                    return lhsMapping.effectiveSortOrder < rhsMapping.effectiveSortOrder
+                }
+                let lhsName = lhsMapping.displayName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? lhs.displayName
+                let rhsName = rhsMapping.displayName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? rhs.displayName
+                return lhsName.localizedStandardCompare(rhsName) == .orderedAscending
+            }
+    }
+
+    private var masterToggleHelp: String {
+        let total = store.instrumentMappings.count
+        let pinned = store.instrumentMappings.values.filter { $0.pinnedSource != nil }.count
+        let switchable = total - pinned
+        return "\(switchable)/\(total) tracks will switch (\(pinned) pinned)"
+    }
+
+    private func trackIndex(for profile: ProjectChannelProfile) -> Int? {
+        let suffix = "|\(profile.baseKey)"
+        return store.pianoRollChannelKeyByTrackChannel.compactMap { pairKey, mappingKey -> Int? in
+            guard mappingKey == profile.baseKey || mappingKey.hasSuffix(suffix) else { return nil }
+            let parts = pairKey.split(separator: ":")
+            guard parts.count == 2 else { return nil }
+            return Int(parts[0])
+        }
+        .min()
+    }
+
+    private func displayName(for profile: ProjectChannelProfile) -> String {
+        let mappingName = store.mapping(for: profile).displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return mappingName.isEmpty ? profile.displayName : mappingName
+    }
+
+    private func color(for profile: ProjectChannelProfile, trackIndex: Int?) -> Color {
+        if let color = ColorHex.color(from: store.mapping(for: profile).colorHex) {
+            return color
+        }
+        let palette: [Color] = [
+            Color(red: 0.98, green: 0.42, blue: 0.35),
+            Color(red: 0.98, green: 0.73, blue: 0.24),
+            Color(red: 0.58, green: 0.87, blue: 0.29),
+            Color(red: 0.23, green: 0.82, blue: 0.63),
+            Color(red: 0.25, green: 0.71, blue: 0.99),
+            Color(red: 0.55, green: 0.78, blue: 0.55),
+            Color(red: 0.80, green: 0.48, blue: 0.97),
+            Color(red: 0.98, green: 0.45, blue: 0.73)
+        ]
+        let index = abs(trackIndex ?? profile.baseKey.hashValue)
+        return palette[index % palette.count]
+    }
+
+    var body: some View {
+        let currentProfiles = profiles
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Playback Engine")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(OperaChromeTheme.textTertiary)
+
+                    HStack(spacing: 6) {
+                        OperaChromeActionButton(
+                            title: "Lightweight",
+                            systemImage: "leaf",
+                            isSelected: store.masterInstrumentMode == .soundFont
+                        ) {
+                            store.setMasterInstrumentMode(.soundFont)
+                        }
+                        OperaChromeActionButton(
+                            title: "Heavyweight",
+                            systemImage: "waveform",
+                            isSelected: store.masterInstrumentMode == .audioUnit
+                        ) {
+                            store.setMasterInstrumentMode(.audioUnit)
+                        }
+                    }
+                    .help(masterToggleHelp)
+                }
+
+                Button {
+                    selectedTrackFilter.removeAll()
+                    store.clearSolo()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "circle.grid.cross")
+                            .foregroundStyle(Color.white.opacity(0.55))
+                        Text("All Tracks")
+                        Spacer()
+                        Text("\(currentProfiles.count)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                    .padding(.vertical, 5)
+                    .padding(.horizontal, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(selectedTrackFilter.isEmpty ? Color.white.opacity(0.10) : Color.clear)
+                    )
+                }
+                .buttonStyle(.plain)
+
+                LazyVStack(spacing: 2) {
+                    ForEach(currentProfiles, id: \.baseKey) { profile in
+                        let trackIndex = trackIndex(for: profile)
+                        let isSelected = trackIndex.map(selectedTrackFilter.contains) == true
+                        let isMuted = trackIndex.map(store.mutedTracks.contains) == true
+                        let isSoloedOut = trackIndex.map { !store.soloedTracks.isEmpty && !store.soloedTracks.contains($0) } ?? false
+                        let trackColor = color(for: profile, trackIndex: trackIndex)
+
+                        Button {
+                            if let trackIndex {
+                                selectedTrackFilter = [trackIndex]
+                            } else {
+                                selectedTrackFilter.removeAll()
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(trackColor)
+                                    .frame(width: 8, height: 8)
+
+                                Text(displayName(for: profile))
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                if let trackIndex {
+                                    Button {
+                                        store.toggleTrackMute(trackIndex)
+                                    } label: {
+                                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(isMuted || isSoloedOut ? .secondary : .primary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(isMuted ? "Unmute" : "Mute")
+                                }
+                            }
+                            .font(.caption)
+                            .padding(.vertical, 5)
+                            .padding(.horizontal, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(isSelected ? Color.white.opacity(0.10) : Color.clear)
+                            )
+                            .opacity(isMuted || isSoloedOut ? 0.55 : 1.0)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 8)
+        }
+    }
+}
+
+@available(macOS 26.0, *)
 private enum ActiveSheet: Identifiable {
     case audioUnitBrowser(targetKeys: [String])
     case expressionMapEditor
@@ -291,8 +467,15 @@ struct InstrumentMappingPanel: View {
     }
 
     private func representativeMappingKey(for entry: InstrumentMapEntry) -> String? {
+        representativeMappingKey(for: entry, orderedTrackPairs: orderedTrackPairs())
+    }
+
+    private func representativeMappingKey(
+        for entry: InstrumentMapEntry,
+        orderedTrackPairs: [(pairKey: String, trackIndex: Int, mappingKey: String)]
+    ) -> String? {
         let validKeys = Set(entry.mappingKeys)
-        for pair in orderedTrackPairs() {
+        for pair in orderedTrackPairs {
             if validKeys.contains(pair.mappingKey) {
                 return pair.mappingKey
             }
@@ -301,8 +484,15 @@ struct InstrumentMappingPanel: View {
     }
 
     private func representativeTrackIndex(for entry: InstrumentMapEntry) -> Int? {
+        representativeTrackIndex(for: entry, orderedTrackPairs: orderedTrackPairs())
+    }
+
+    private func representativeTrackIndex(
+        for entry: InstrumentMapEntry,
+        orderedTrackPairs: [(pairKey: String, trackIndex: Int, mappingKey: String)]
+    ) -> Int? {
         let validKeys = Set(entry.mappingKeys)
-        for pair in orderedTrackPairs() {
+        for pair in orderedTrackPairs {
             if validKeys.contains(pair.mappingKey) {
                 return pair.trackIndex
             }
@@ -344,14 +534,21 @@ struct InstrumentMappingPanel: View {
     }
 
     private func resolvedTrackColor(for entry: InstrumentMapEntry) -> Color {
-        if let mappingKey = representativeMappingKey(for: entry),
+        resolvedTrackColor(for: entry, orderedTrackPairs: orderedTrackPairs())
+    }
+
+    private func resolvedTrackColor(
+        for entry: InstrumentMapEntry,
+        orderedTrackPairs: [(pairKey: String, trackIndex: Int, mappingKey: String)]
+    ) -> Color {
+        if let mappingKey = representativeMappingKey(for: entry, orderedTrackPairs: orderedTrackPairs),
            let color = resolvedMappingColor(mappingKey: mappingKey) {
             return color
         }
         if let mappingColor = ColorHex.color(from: store.mapping(for: entry.primary).colorHex) {
             return mappingColor
         }
-        if let trackIndex = representativeTrackIndex(for: entry) {
+        if let trackIndex = representativeTrackIndex(for: entry, orderedTrackPairs: orderedTrackPairs) {
             return fallbackTrackPaletteColor(trackIndex: trackIndex)
         }
         return Color(red: 0.26, green: 0.68, blue: 0.97)
@@ -377,6 +574,29 @@ struct InstrumentMappingPanel: View {
         return store.pianoRollNotes.filter { note in
             pairs.contains("\(note.trackIndex):\(note.channel)")
         }
+    }
+
+    private func notesByEntryID(for entries: [InstrumentMapEntry]) -> [String: [PianoRollNote]] {
+        guard !entries.isEmpty else { return [:] }
+
+        var entryIDByTrackChannel: [String: String] = [:]
+        for entry in entries {
+            let validKeys = Set(entry.mappingKeys)
+            guard !validKeys.isEmpty else { continue }
+            for (pairKey, channelKey) in store.pianoRollChannelKeyByTrackChannel where validKeys.contains(channelKey) {
+                entryIDByTrackChannel[pairKey] = entry.id
+            }
+        }
+
+        guard !entryIDByTrackChannel.isEmpty else { return [:] }
+
+        var grouped: [String: [PianoRollNote]] = [:]
+        for note in store.pianoRollNotes {
+            let pairKey = "\(note.trackIndex):\(note.channel)"
+            guard let entryID = entryIDByTrackChannel[pairKey] else { continue }
+            grouped[entryID, default: []].append(note)
+        }
+        return grouped
     }
 
     private func baseDisplayName(for entry: InstrumentMapEntry) -> String {
@@ -587,6 +807,13 @@ struct InstrumentMappingPanel: View {
     }
 
     var body: some View {
+        let currentEntries = entries
+        let currentSelectedEntry = selectedEntryID.flatMap { selectedID in
+            currentEntries.first(where: { $0.id == selectedID })
+        }
+        let currentTrackPairs = orderedTrackPairs()
+        let currentNotesByEntryID = notesByEntryID(for: currentEntries)
+
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -649,16 +876,17 @@ struct InstrumentMappingPanel: View {
                         selectedEntryID = nil
                     }
 
-                    ForEach(Array(entries.enumerated()), id: \.element.id) { idx, entry in
-                        let trackIndex = representativeTrackIndex(for: entry)
+                    ForEach(Array(currentEntries.enumerated()), id: \.element.id) { idx, entry in
+                        let trackIndex = representativeTrackIndex(for: entry, orderedTrackPairs: currentTrackPairs)
                         // "Selected" = clicked for visual focus (ghost notes). All notes still play.
                         let isSelected = !selectedTrackFilter.isEmpty && trackIndex.map(selectedTrackFilter.contains) == true
                         // "Soloed" = audio isolation. Only soloed track(s) play.
                         let isSoloed = !store.soloedTracks.isEmpty && trackIndex.map(store.soloedTracks.contains) == true
+                        let trackColor = resolvedTrackColor(for: entry, orderedTrackPairs: currentTrackPairs)
 
                         VStack(spacing: 0) {
                             HStack(spacing: 6) {
-                                MiniVolumeKnob(gainDB: gainBinding(for: entry), color: resolvedTrackColor(for: entry))
+                                MiniVolumeKnob(gainDB: gainBinding(for: entry), color: trackColor)
 
                                 HStack(spacing: 4) {
                                     Text(displayName(for: entry))
@@ -672,8 +900,7 @@ struct InstrumentMappingPanel: View {
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                                let entryNotes = notesForEntry(entry)
-                                let trackColor = resolvedTrackColor(for: entry)
+                                let entryNotes = currentNotesByEntryID[entry.id] ?? []
                                 MiniMidiPreview(notes: entryNotes, color: trackColor)
                                     .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
 
@@ -743,7 +970,7 @@ struct InstrumentMappingPanel: View {
                         .onDrop(of: [.plainText], delegate: TrackReorderDropDelegate(
                             targetEntry: entry,
                             store: store,
-                            entries: entries,
+                            entries: currentEntries,
                             draggingEntry: $draggingEntry,
                             hasChangedLocation: $hasChangedLocation
                         ))
@@ -761,9 +988,9 @@ struct InstrumentMappingPanel: View {
                                     id: entry.id,
                                     title: displayName(for: entry),
                                     mappingKeys: entry.mappingKeys,
-                                    currentColor: resolvedTrackColor(for: entry)
+                                    currentColor: trackColor
                                 ))
-                                customTrackColorDraft = resolvedTrackColor(for: entry)
+                                customTrackColorDraft = trackColor
                             }
                             Divider()
                             Button("Move Up") {
@@ -773,7 +1000,7 @@ struct InstrumentMappingPanel: View {
                             Button("Move Down") {
                                 moveInstrument(entry: entry, direction: 1)
                             }
-                            .disabled(idx == entries.count - 1)
+                            .disabled(idx == currentEntries.count - 1)
                             Divider()
                             Button("Add Instrument Below") {
                                 addInstrumentBelow(entry: entry)
@@ -781,7 +1008,7 @@ struct InstrumentMappingPanel: View {
                             Button("Remove Instrument") {
                                 removeInstrument(entry: entry)
                             }
-                            .disabled(entries.count <= 1)
+                            .disabled(currentEntries.count <= 1)
                         }
                     }
 
@@ -799,7 +1026,7 @@ struct InstrumentMappingPanel: View {
                 }
                 .controlSize(.small)
 
-                if let entry = selectedEntry, let key = entry.mappingKeys.first {
+                if let entry = currentSelectedEntry, let key = entry.mappingKeys.first {
                     Button(action: {
                         activeSheet = .fxChain(channelKey: key)
                     }) {
@@ -811,7 +1038,7 @@ struct InstrumentMappingPanel: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
 
-            if let selectedEntry {
+            if let selectedEntry = currentSelectedEntry {
                 mappingEditor(entry: selectedEntry)
             } else {
                 ContentUnavailableView("Select a track", systemImage: "slider.horizontal.3")
@@ -822,10 +1049,10 @@ struct InstrumentMappingPanel: View {
         }
         .onAppear {
             if selectedEntryID == nil {
-                selectedEntryID = entries.first?.id
+                selectedEntryID = currentEntries.first?.id
             }
         }
-        .onChange(of: entries.map(\.id)) { _, ids in
+        .onChange(of: currentEntries.map(\.id)) { _, ids in
             guard let selectedEntryID, ids.contains(selectedEntryID) else {
                 self.selectedEntryID = ids.first
                 return

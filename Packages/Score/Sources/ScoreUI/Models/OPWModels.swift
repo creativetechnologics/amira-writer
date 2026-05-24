@@ -24,8 +24,30 @@ struct SongStub: Identifiable {
     let fileURL: URL
     let relativePath: String
     let fileSize: Int64
+    let title: String?
+    let canonicalTitle: String?
+
+    init(
+        id: UUID,
+        fileURL: URL,
+        relativePath: String,
+        fileSize: Int64,
+        title: String? = nil,
+        canonicalTitle: String? = nil
+    ) {
+        self.id = id
+        self.fileURL = fileURL
+        self.relativePath = relativePath
+        self.fileSize = fileSize
+        self.title = title
+        self.canonicalTitle = canonicalTitle
+    }
 
     var displayName: String {
+        let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedTitle.isEmpty {
+            return trimmedTitle
+        }
         let url = URL(fileURLWithPath: relativePath)
         let withoutExtension = url.deletingPathExtension().lastPathComponent
         return withoutExtension.isEmpty ? url.lastPathComponent : withoutExtension

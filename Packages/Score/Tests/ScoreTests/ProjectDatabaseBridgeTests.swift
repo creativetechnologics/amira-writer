@@ -160,6 +160,22 @@ struct ProjectDatabaseBridgeTests {
 
         #expect(loaded.songAssets.first?.displayName == "Opening Reprise")
     }
+
+    @Test func loadScoreProjectUsesScenePackageTitlesForPlaceholders() async throws {
+        let projectURL = try makeScenePackageProject()
+        defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
+
+        let loaded = try await ProjectDatabaseBridge.loadScoreProject(url: projectURL)
+
+        #expect(loaded.stubs.map(\.displayName) == [
+            "1.01.0 - Overture",
+            "1.02.0 - Prologue",
+        ])
+        #expect(loaded.songAssets.map(\.displayName) == [
+            "1.01.0 - Overture",
+            "1.02.0 - Prologue",
+        ])
+    }
 }
 
 private func makeProjectPackage() throws -> URL {
@@ -218,6 +234,87 @@ private func makeProjectPackage() throws -> URL {
     ]
     let songData = try JSONSerialization.data(withJSONObject: songObject, options: [.prettyPrinted, .sortedKeys])
     try songData.write(to: songsURL.appendingPathComponent("01 Opening.ows"), options: .atomic)
+
+    return projectURL
+}
+
+private func makeScenePackageProject() throws -> URL {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let projectURL = root.appendingPathComponent("BridgeSceneTest.owp", isDirectory: true)
+    let scenesURL = projectURL.appendingPathComponent("Scenes", isDirectory: true)
+    let metadataURL = projectURL.appendingPathComponent("Metadata", isDirectory: true)
+    let settingsURL = projectURL.appendingPathComponent("Settings", isDirectory: true)
+    try fm.createDirectory(at: scenesURL, withIntermediateDirectories: true)
+    try fm.createDirectory(at: metadataURL, withIntermediateDirectories: true)
+    try fm.createDirectory(at: settingsURL, withIntermediateDirectories: true)
+
+    let diskMetadata = ProjectMetadata(
+        name: "Scene Package Project",
+        createdAt: Date(timeIntervalSince1970: 1),
+        updatedAt: Date(timeIntervalSince1970: 2),
+        notes: "disk"
+    )
+    try metadataData(diskMetadata).write(
+        to: projectURL.appendingPathComponent(OWPProjectIO.projectMetadataFile),
+        options: .atomic
+    )
+
+    let now = isoFormatter().string(from: Date(timeIntervalSince1970: 5))
+    let scenes: [(slug: String, title: String, id: UUID, versionID: UUID, order: Int)] = [
+        ("1-01-0-overture", "1.01.0 - Overture", UUID(), UUID(), 1010000),
+        ("1-02-0-prologue", "1.02.0 - Prologue", UUID(), UUID(), 1020000),
+    ]
+
+    var indexEntries: [[String: Any]] = []
+    for scene in scenes {
+        let sceneDir = scenesURL.appendingPathComponent(scene.slug, isDirectory: true)
+        let versionsDir = sceneDir.appendingPathComponent("versions", isDirectory: true)
+        let versionDir = versionsDir.appendingPathComponent(scene.versionID.uuidString, isDirectory: true)
+        try fm.createDirectory(at: versionDir, withIntermediateDirectories: true)
+
+        let sceneJSON: [String: Any] = [
+            "schemaVersion": 1,
+            "id": scene.id.uuidString,
+            "songID": scene.id.uuidString,
+            "slug": scene.slug,
+            "title": scene.title,
+            "canonicalTitle": scene.slug,
+            "activeVersionID": scene.versionID.uuidString,
+            "order": scene.order,
+            "updatedAt": now,
+            "versions": [[
+                "id": scene.versionID.uuidString,
+                "label": "Current Draft",
+                "createdAt": now,
+                "updatedAt": now,
+                "saveType": "manual",
+                "isBookmarked": false,
+            ]],
+        ]
+        let sceneData = try JSONSerialization.data(withJSONObject: sceneJSON, options: [.prettyPrinted, .sortedKeys])
+        try sceneData.write(to: sceneDir.appendingPathComponent("scene.json"), options: .atomic)
+        try Data("Lyrics".utf8).write(to: versionDir.appendingPathComponent("manuscript.md"), options: .atomic)
+
+        indexEntries.append([
+            "id": scene.id.uuidString,
+            "slug": scene.slug,
+            "scenePath": "Scenes/\(scene.slug)/scene.json",
+            "title": scene.title,
+            "canonicalTitle": scene.slug,
+            "activeVersionID": scene.versionID.uuidString,
+            "order": scene.order,
+            "updatedAt": now,
+        ])
+    }
+
+    let indexJSON: [String: Any] = [
+        "projectID": UUID().uuidString,
+        "updatedAt": now,
+        "scenes": indexEntries,
+    ]
+    let indexData = try JSONSerialization.data(withJSONObject: indexJSON, options: [.prettyPrinted, .sortedKeys])
+    try indexData.write(to: scenesURL.appendingPathComponent("scene-index.json"), options: .atomic)
 
     return projectURL
 }

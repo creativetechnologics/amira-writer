@@ -34,10 +34,10 @@ public actor ProjectDatabase {
         try migrateSchemaIfNeeded()
 
         if forceRebuild {
-            let imported = try importLegacyProject()
+            let imported = try importProjectIndex()
             try replaceAll(with: imported)
         } else if try needsRebuild() {
-            let imported = try importLegacyProject()
+            let imported = try importProjectIndex()
             try replaceAll(with: imported)
         }
         try trimWAL()
@@ -339,18 +339,22 @@ public actor ProjectDatabase {
         }
     }
 
-    public func exportLegacy() throws {
+    public func exportProjectToDisk() throws {
         let project = try loadProject()
         try exportProject(project)
     }
 
-    public func refreshLegacyFingerprint() throws {
+    public func exportLegacy() throws {
+        try exportProjectToDisk()
+    }
+
+    public func refreshProjectFingerprint() throws {
         try openIfNeeded()
-        let fingerprint = try legacyFingerprint()
+        let fingerprint = try projectFingerprint()
         try execute(
             """
             INSERT INTO metadata(key, value)
-            VALUES ('legacy_fingerprint', ?)
+            VALUES ('project_fingerprint', ?)
             ON CONFLICT(key)
             DO UPDATE SET value = excluded.value
             """,
@@ -365,6 +369,10 @@ public actor ProjectDatabase {
             """,
             binds: [.text(Self.storageFormatVersion)]
         )
+    }
+
+    public func refreshLegacyFingerprint() throws {
+        try refreshProjectFingerprint()
     }
 
     public func loadProjectFile(path: String) throws -> NPProjectFileRecord? {
@@ -799,12 +807,12 @@ public actor ProjectDatabase {
         )?[0]
         guard storedFormatVersion == Self.storageFormatVersion else { return true }
 
-        let currentFingerprint = try legacyFingerprint()
-        let stored = try querySingle("SELECT value FROM metadata WHERE key = 'legacy_fingerprint'")?[0]
+        let currentFingerprint = try projectFingerprint()
+        let stored = try querySingle("SELECT value FROM metadata WHERE key = 'project_fingerprint'")?[0]
         return stored != currentFingerprint
     }
 
-    private func importLegacyProject() throws -> NPProjectRecord {
+    private func importProjectIndex() throws -> NPProjectRecord {
         let fm = FileManager.default
         let projectID = UUID()
         let defaultName = projectURL.deletingPathExtension().lastPathComponent
@@ -819,8 +827,6 @@ public actor ProjectDatabase {
         var scenes: [NPSceneRecord] = []
 
         let candidateProjectFiles = try enumerateAuxiliaryProjectFiles()
-
-        var animateSceneMap: [String: Data] = [:]
 
         for relative in candidateProjectFiles {
             let fileURL = projectURL.appendingPathComponent(relative)
@@ -853,38 +859,17 @@ public actor ProjectDatabase {
                     )
                 }
             }
-
-            if relative == Self.animateScenesPath,
-               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let sceneMap = root["scenes"] as? [String: Any] {
-                for (key, value) in sceneMap {
-                    if let dict = value as? [String: Any], let sceneData = try? jsonData(from: dict) {
-                        let path = dict["owpSongPath"] as? String ?? dict["owsSongPath"] as? String ?? key
-                        animateSceneMap[path] = sceneData
-                    }
-                }
-            } else if relative == Self.animateScenesPath,
-                      let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                for entry in array {
-                    let path = entry["owpSongPath"] as? String ?? entry["owsSongPath"] as? String ?? UUID().uuidString
-                    if let sceneData = try? jsonData(from: entry) {
-                        animateSceneMap[path] = sceneData
-                    }
-                }
-            }
         }
 
-        let songsRoot = ProjectPaths(root: projectURL).songs
-        let songURLs = try enumerateSongFiles(in: songsRoot)
-        for (index, songURL) in songURLs.enumerated() {
-            let relativePath = relativePath(for: songURL)
-            let data = try Data(contentsOf: songURL, options: .mappedIfSafe)
+        for (index, descriptor) in ScenePackageStore.discover(in: projectURL).enumerated() {
+            let relativePath = descriptor.projectRelativePath
+            let data = try ScenePackageStore.makeWorkspaceSceneDocumentData(sceneJSONURL: descriptor.sceneJSONURL)
             guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
-            let songID = Self.parseUUID(root["songID"]) ?? UUID()
-            let sceneID = songID
-            let title = root["title"] as? String ?? songURL.deletingPathExtension().lastPathComponent
-            let canonicalTitle = root["canonicalTitle"] as? String ?? title.lowercased()
+            let songID = descriptor.id
+            let sceneID = descriptor.id
+            let title = root["title"] as? String ?? descriptor.title
+            let canonicalTitle = root["canonicalTitle"] as? String ?? descriptor.canonicalTitle
             let sceneNotes = root["notes"] as? String ?? ""
             let sceneUpdatedAt = Self.parseDate(root["updatedAt"]) ?? updatedAt
             let activeVersionID = Self.parseUUID(root["activeVersionID"])
@@ -892,7 +877,7 @@ public actor ProjectDatabase {
             let versionArray = compactRoot["versions"] as? [[String: Any]]
             compactRoot.removeValue(forKey: "versions")
             let rootJSON = try? jsonData(from: compactRoot)
-            let animateJSON = animateSceneMap[relativePath]
+            let animateJSON: Data? = nil
 
             let (animateTrackCount, animateKeyframeCount) = summarizeAnimateScene(animateJSON)
 
@@ -996,9 +981,9 @@ public actor ProjectDatabase {
                 ]
             )
 
-            let fingerprint = try legacyFingerprint()
+            let fingerprint = try projectFingerprint()
             try execute(
-                "INSERT INTO metadata(key, value) VALUES ('legacy_fingerprint', ?)",
+                "INSERT INTO metadata(key, value) VALUES ('project_fingerprint', ?)",
                 binds: [.text(fingerprint)]
             )
             try execute(
@@ -1099,18 +1084,21 @@ public actor ProjectDatabase {
 
     private func exportProject(_ project: NPProjectRecord) throws {
         let fm = FileManager.default
-        for file in project.projectFiles where file.path != "Scenes/scenes.json" && file.path != "Animate/scenes.json" {
+        for file in project.projectFiles {
             let destination = project.projectURL.appendingPathComponent(file.path)
             try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             try file.jsonData.write(to: destination, options: .atomic)
         }
 
         for scene in project.scenes {
-            let destination = project.projectURL.appendingPathComponent(scene.relativePath)
-            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-
-            let patched = try exportedSceneJSON(scene)
-            try patched.write(to: destination, options: .atomic)
+            let sceneDocumentData = try exportedSceneJSON(scene)
+            guard let sceneDocumentRoot = try JSONSerialization.jsonObject(with: sceneDocumentData) as? [String: Any] else { continue }
+            if let sceneJSONURL = ScenePackageStore.sceneJSONURL(forProjectRelativePath: scene.relativePath, in: project.projectURL) {
+                try ScenePackageStore.patchScenePackageFromWorkspaceSceneDocumentObject(
+                    sceneJSONURL: sceneJSONURL,
+                    sceneDocumentRoot: sceneDocumentRoot
+                )
+            }
         }
 
         if let charactersFile = project.projectFile(at: "Characters/characters.json") ?? project.projectFile(at: "characters.json") {
@@ -1119,24 +1107,6 @@ public actor ProjectDatabase {
             try charactersFile.jsonData.write(to: destination, options: .atomic)
         }
 
-        let animatedSceneData = project.scenes.compactMap { scene -> [String: Any]? in
-            guard let animateSceneJSON = scene.animateSceneJSON,
-                  let object = try? JSONSerialization.jsonObject(with: animateSceneJSON) as? [String: Any] else {
-                return nil
-            }
-            return object
-        }
-
-        if !animatedSceneData.isEmpty {
-            let destination = ProjectPaths(root: project.projectURL).animateScenesJSON
-            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONSerialization.data(withJSONObject: animatedSceneData, options: [.prettyPrinted, .sortedKeys])
-            try data.write(to: destination, options: .atomic)
-        } else if let animateScenesFile = project.projectFile(at: "Scenes/scenes.json") ?? project.projectFile(at: "Animate/scenes.json") {
-            let destination = project.projectURL.appendingPathComponent(animateScenesFile.path)
-            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try animateScenesFile.jsonData.write(to: destination, options: .atomic)
-        }
     }
 
     private func exportedSceneJSON(_ scene: NPSceneRecord) throws -> Data {
@@ -1402,7 +1372,7 @@ public actor ProjectDatabase {
 
     // MARK: - Helpers
 
-    private func legacyFingerprint() throws -> String {
+    private func projectFingerprint() throws -> String {
         let fm = FileManager.default
         let enumerator = fm.enumerator(
             at: projectURL,
@@ -1415,7 +1385,7 @@ public actor ProjectDatabase {
             let relative = relativePath(for: fileURL)
             if relative.hasPrefix(".amira/") { continue }
             guard fileURL.hasDirectoryPath == false else { continue }
-            guard isPrimarySongPath(relative) || isCanonicalProjectFile(relative) else { continue }
+            guard isCanonicalProjectFile(relative) else { continue }
             let values = try fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
             let size = values.fileSize ?? 0
             let date = values.contentModificationDate?.timeIntervalSince1970 ?? 0
@@ -1424,18 +1394,6 @@ public actor ProjectDatabase {
         return parts.sorted().joined(separator: "\n")
     }
 
-    private func enumerateSongFiles(in songsRoot: URL) throws -> [URL] {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: songsRoot.path) else { return [] }
-        let enumerator = fm.enumerator(at: songsRoot, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-        var files: [URL] = []
-        while let fileURL = enumerator?.nextObject() as? URL {
-            if fileURL.pathExtension.lowercased() == "ows" {
-                files.append(fileURL)
-            }
-        }
-        return files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-    }
 
     private func enumerateAuxiliaryProjectFiles() throws -> [String] {
         let fm = FileManager.default
@@ -1450,7 +1408,6 @@ public actor ProjectDatabase {
             guard fileURL.hasDirectoryPath == false else { continue }
             let relative = relativePath(for: fileURL)
             guard relative.hasPrefix(".amira/") == false else { continue }
-            guard isPrimarySongPath(relative) == false else { continue }
             guard isCanonicalProjectFile(relative) else { continue }
             files.append(relative)
         }
@@ -1559,9 +1516,6 @@ public actor ProjectDatabase {
         }
     }
 
-    private func isPrimarySongPath(_ relativePath: String) -> Bool {
-        relativePath.hasPrefix("Songs/") && relativePath.hasSuffix(".ows")
-    }
 
     private func isCanonicalProjectFile(_ relativePath: String) -> Bool {
         // Legacy root-level Instruments.json kept for back-compat; canonical post-Wave-D is Settings/instruments.json.
@@ -1589,9 +1543,6 @@ public actor ProjectDatabase {
     private func isCharactersProjectFile(_ relativePath: String) -> Bool {
         relativePath == "Characters/characters.json" || relativePath == "characters.json"
     }
-
-    /// Wave D: canonical scenes.json moved from Animate/ to Scenes/.
-    private static let animateScenesPath = "Scenes/scenes.json"
 
     private func pruneLegacyIndexCache() throws {
         let legacyDirectory = projectURL.appendingPathComponent(".novtro", isDirectory: true)

@@ -9,7 +9,6 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
     var isEditable: Bool = true
     var showInlineShotCards: Bool = true
     var showLyricCards: Bool = true
-    var textOnlyLyricView: Bool = false
     var characterNames: [String] = []
     var directionMarkupColorHex: String = ScriptMarkupPalette.defaultDirectionHex
     var storyboardingMarkupColorHex: String = ScriptMarkupPalette.defaultStoryboardingHex
@@ -160,6 +159,9 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
         host.timelineView.onAddShotCard = { [weak coordinator] offset in
             coordinator?.addShotCard(at: offset)
         }
+        host.textView.onToggleFold = { [weak coordinator] displayOffset in
+            coordinator?.toggleFold(atDisplayOffset: displayOffset)
+        }
         host.onAddLyricCard = { [weak coordinator] offset in
             coordinator?.addLyricCard(at: offset)
         }
@@ -209,6 +211,7 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
         weak var hostView: StructuredScriptTimelineHostView?
         var currentRawText = ""
         var currentDocument = StructuredScriptDocument()
+        var currentFoldedProjection = FoldedScriptProjection(document: StructuredScriptDocument())
         var isEditing = false
         var lastShowLyricCards = false
         private var isApplyingProgrammaticText = false
@@ -267,6 +270,12 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             shouldChangeTextIn affectedRange: NSRange,
             replacementString: String?
         ) -> Bool {
+            if currentFoldedProjection.visibleEdit(
+                forDisplayRange: affectedRange,
+                replacementString: replacementString ?? ""
+            ) == nil {
+                return false
+            }
             pendingEdit = VisibleEdit(
                 affectedRange: affectedRange,
                 replacementString: replacementString ?? ""
@@ -283,13 +292,30 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             )
             pendingEdit = nil
 
+            guard let foldedEdit = currentFoldedProjection.visibleEdit(
+                forDisplayRange: edit.affectedRange,
+                replacementString: edit.replacementString
+            ) else {
+                refreshVisibleText(in: tv)
+                return
+            }
+            let nsVisible = currentDocument.visibleText as NSString
+            guard foldedEdit.affectedVisibleRange.location >= 0,
+                  NSMaxRange(foldedEdit.affectedVisibleRange) <= nsVisible.length else {
+                refreshVisibleText(in: tv)
+                return
+            }
+            let resulting = nsVisible.replacingCharacters(
+                in: foldedEdit.affectedVisibleRange,
+                with: foldedEdit.replacementString
+            )
             let updated = StructuredScriptDocumentProjector.applyingVisibleEdit(
                 to: currentDocument,
-                affectedRange: edit.affectedRange,
-                replacementString: edit.replacementString,
-                resultingVisibleText: tv.string
+                affectedRange: foldedEdit.affectedVisibleRange,
+                replacementString: foldedEdit.replacementString,
+                resultingVisibleText: resulting
             )
-            commitDocument(updated, updateTextView: false)
+            commitDocument(updated, updateTextView: true)
         }
 
         func refreshDisplay(
@@ -303,7 +329,7 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             if !isInitialParseDone || lyricCardModeChanged || forceTextUpdate {
                 let document = StructuredScriptDocumentProjector.parse(
                     preparedText,
-                    hideLyricSpeakerCues: parent.showLyricCards
+                    hideLyricSpeakerCues: true
                 )
                 currentRawText = rawText
                 currentDocument = document
@@ -322,26 +348,60 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
                 } else {
                     let document = StructuredScriptDocumentProjector.parse(
                         preparedText,
-                        hideLyricSpeakerCues: parent.showLyricCards
+                        hideLyricSpeakerCues: true
                     )
                     currentDocument = document
                 }
                 currentRawText = rawText
             }
             lastShowLyricCards = parent.showLyricCards
+            currentFoldedProjection = FoldedScriptProjection(
+                document: currentDocument,
+                expandedFoldKeys: parent.expandedShotCardIDs.wrappedValue
+            )
 
             let textView = host.textView
-            if forceTextUpdate || textView.string != currentDocument.visibleText {
+            let displayText = currentDisplayText
+            if forceTextUpdate || textView.string != displayText {
                 let selection = textView.selectedRange()
                 isApplyingProgrammaticText = true
-                textView.string = currentDocument.visibleText
+                textView.string = displayText
+                applyFoldedTextAttributes(to: textView)
                 isApplyingProgrammaticText = false
                 let length = (textView.string as NSString).length
                 textView.setSelectedRange(NSRange(location: min(selection.location, length), length: 0))
             }
+            host.textView.foldedProjection = currentFoldedProjection
 
             configureTimeline(in: host)
             host.recalcHeight()
+        }
+
+        private var currentDisplayText: String {
+            currentFoldedProjection.displayText
+        }
+
+        private func refreshVisibleText(in textView: NSTextView) {
+            isApplyingProgrammaticText = true
+            textView.string = currentDisplayText
+            applyFoldedTextAttributes(to: textView)
+            isApplyingProgrammaticText = false
+        }
+
+        private func applyFoldedTextAttributes(to textView: NSTextView) {
+            let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+            let storage = textView.textStorage
+            storage?.beginEditing()
+            storage?.setAttributes([
+                .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+                .foregroundColor: NSColor.white.withAlphaComponent(0.84)
+            ], range: fullRange)
+            for segment in currentFoldedProjection.segments where segment.kind != .visibleText {
+                storage?.addAttributes([
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.58)
+                ], range: segment.displayRange)
+            }
+            storage?.endEditing()
         }
 
         private func incrementalDiff(
@@ -375,48 +435,49 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
         func configureTimeline(in host: StructuredScriptTimelineHostView) {
             host.showsShotColumn = parent.showInlineShotCards
             host.showsLyricCards = parent.showLyricCards
-            host.textOnlyLyricMode = parent.textOnlyLyricView
-        host.timelineView.document = currentDocument
-        host.timelineView.showsShotColumn = parent.showInlineShotCards
-        host.timelineView.expandedShotIDs = parent.expandedShotCardIDs.wrappedValue
-        host.timelineView.allowsEditing = parent.allowsShotBoundaryEditing
-        host.timelineView.allowsCardEditing = parent.allowsShotCardEditing
-        host.timelineView.fieldSuggestions = fieldSuggestions()
-        host.timelineView.accentColor = StructuredScriptTextEditor.nsColor(
-            from: parent.animateMarkupColorHex,
-            fallback: ScriptMarkupPalette.defaultAnimateHex
-        )
-        host.timelineView.yForOffset = { [weak host] offset in
-            host?.lyricSpeakerOverlayView.yForOffset(offset)
-        }
-        host.timelineView.yForAnchor = { [weak host] offset, sourceOrder in
-            host?.lyricSpeakerOverlayView.yForAnchor(offset: offset, sourceOrder: sourceOrder)
-        }
-        host.timelineView.offsetForY = { [weak host] y in
-            host?.lyricSpeakerOverlayView.offsetForY(y)
-        }
-        host.timelineView.invalidateCachedLayout()
-        host.lyricSpeakerOverlayView.document = currentDocument
-        host.lyricSpeakerOverlayView.showsLyricCards = parent.showLyricCards
+            host.textOnlyLyricMode = true
+            host.timelineView.document = currentDocument
+            host.timelineView.showsShotColumn = parent.showInlineShotCards
+            host.timelineView.expandedShotIDs = parent.expandedShotCardIDs.wrappedValue
+            host.timelineView.allowsEditing = parent.allowsShotBoundaryEditing
+            host.timelineView.allowsCardEditing = parent.allowsShotCardEditing
+            host.timelineView.fieldSuggestions = fieldSuggestions()
+            host.timelineView.accentColor = StructuredScriptTextEditor.nsColor(
+                from: parent.animateMarkupColorHex,
+                fallback: ScriptMarkupPalette.defaultAnimateHex
+            )
+            host.timelineView.yForOffset = { [weak host] offset in
+                host?.lyricSpeakerOverlayView.yForOffset(offset)
+            }
+            host.timelineView.yForAnchor = { [weak host] offset, sourceOrder in
+                host?.lyricSpeakerOverlayView.yForAnchor(offset: offset, sourceOrder: sourceOrder)
+            }
+            host.timelineView.offsetForY = { [weak host] y in
+                host?.lyricSpeakerOverlayView.offsetForY(y)
+            }
+            host.timelineView.invalidateCachedLayout()
+            host.lyricSpeakerOverlayView.document = currentDocument
+            host.lyricSpeakerOverlayView.showsLyricCards = parent.showLyricCards
             host.lyricSpeakerOverlayView.allowsEditing = parent.isEditable
                 && parent.allowsShotBoundaryEditing
-        host.lyricSpeakerOverlayView.characterNames = parent.characterNames
-        host.textOnlyLyricOverlayView.document = currentDocument
-        host.textOnlyLyricOverlayView.characterNames = parent.characterNames
-        host.lyricSpeakerOverlayView.directionAccentColor = StructuredScriptTextEditor.nsColor(
-            from: parent.directionMarkupColorHex,
-            fallback: ScriptMarkupPalette.defaultDirectionHex
-        )
-        host.lyricSpeakerOverlayView.actionAccentColor = StructuredScriptTextEditor.nsColor(
-            from: parent.storyboardingMarkupColorHex,
-            fallback: ScriptMarkupPalette.defaultStoryboardingHex
-        )
-        host.lyricSpeakerOverlayView.reloadCards()
-        host.textView.alphaValue = (parent.showLyricCards && !parent.textOnlyLyricView) ? 0.0 : 1.0
-        host.textView.isEditable = (parent.showLyricCards && !parent.textOnlyLyricView) ? false : parent.isEditable
-        host.textView.isSelectable = !(parent.showLyricCards && !parent.textOnlyLyricView)
-        host.needsLayout = true
-        host.needsDisplay = true
+            host.lyricSpeakerOverlayView.characterNames = parent.characterNames
+            host.textOnlyLyricOverlayView.document = currentDocument
+            host.textOnlyLyricOverlayView.characterNames = parent.characterNames
+            host.lyricSpeakerOverlayView.directionAccentColor = StructuredScriptTextEditor.nsColor(
+                from: parent.directionMarkupColorHex,
+                fallback: ScriptMarkupPalette.defaultDirectionHex
+            )
+            host.lyricSpeakerOverlayView.actionAccentColor = StructuredScriptTextEditor.nsColor(
+                from: parent.storyboardingMarkupColorHex,
+                fallback: ScriptMarkupPalette.defaultStoryboardingHex
+            )
+            host.lyricSpeakerOverlayView.reloadCards()
+            host.textView.foldedProjection = currentFoldedProjection
+            host.textView.alphaValue = 1.0
+            host.textView.isEditable = parent.isEditable
+            host.textView.isSelectable = true
+            host.needsLayout = true
+            host.needsDisplay = true
             host.timelineView.needsDisplay = true
             host.timelineView.needsLayout = true
             host.lyricSpeakerOverlayView.needsLayout = true
@@ -434,6 +495,25 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             }
             parent.expandedShotCardIDs.wrappedValue = ids
             if let hostView {
+                configureTimeline(in: hostView)
+            }
+        }
+
+        func toggleFold(atDisplayOffset offset: Int) {
+            guard let key = currentFoldedProjection.foldKey(atDisplayOffset: offset) else { return }
+            var ids = parent.expandedShotCardIDs.wrappedValue
+            if ids.contains(key) {
+                ids.remove(key)
+            } else {
+                ids.insert(key)
+            }
+            parent.expandedShotCardIDs.wrappedValue = ids
+            currentFoldedProjection = FoldedScriptProjection(
+                document: currentDocument,
+                expandedFoldKeys: ids
+            )
+            if let hostView {
+                refreshVisibleText(in: hostView.textView)
                 configureTimeline(in: hostView)
             }
         }
@@ -569,11 +649,17 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             currentDocument = document
             currentRawText = raw
             parent.text = raw
+            currentFoldedProjection = FoldedScriptProjection(
+                document: document,
+                expandedFoldKeys: parent.expandedShotCardIDs.wrappedValue
+            )
 
             guard let hostView else { return }
-            if updateTextView, hostView.textView.string != document.visibleText {
+            let displayText = currentDisplayText
+            if updateTextView, hostView.textView.string != displayText {
                 isApplyingProgrammaticText = true
-                hostView.textView.string = document.visibleText
+                hostView.textView.string = displayText
+                applyFoldedTextAttributes(to: hostView.textView)
                 isApplyingProgrammaticText = false
             }
             configureTimeline(in: hostView)
@@ -583,8 +669,55 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
 
 @available(macOS 26.0, *)
 @MainActor
+final class FoldedScriptTextView: NSTextView {
+    var foldedProjection: FoldedScriptProjection?
+    var onToggleFold: ((Int) -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        guard let projection = foldedProjection else {
+            super.mouseDown(with: event)
+            return
+        }
+        let pointInView = convert(event.locationInWindow, from: nil)
+        guard let layoutManager,
+              let textContainer else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        var point = pointInView
+        point.x -= textContainerOrigin.x
+        point.y -= textContainerOrigin.y
+        let index = layoutManager.characterIndex(
+            for: point,
+            in: textContainer,
+            fractionOfDistanceBetweenInsertionPoints: nil
+        )
+        let text = string as NSString
+        guard index >= 0, index < text.length else {
+            super.mouseDown(with: event)
+            return
+        }
+        let lineRange = text.lineRange(for: NSRange(location: index, length: 0))
+        guard lineRange.length >= 2 else {
+            super.mouseDown(with: event)
+            return
+        }
+        let linePrefix = text.substring(with: NSRange(location: lineRange.location, length: min(2, lineRange.length)))
+        if (linePrefix == "> " || linePrefix == "v "),
+           index <= lineRange.location + 2,
+           projection.foldKey(atDisplayOffset: lineRange.location) != nil {
+            onToggleFold?(lineRange.location)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+}
+
+@available(macOS 26.0, *)
+@MainActor
 final class StructuredScriptTimelineHostView: NSView {
-    let textView = NSTextView()
+    let textView = FoldedScriptTextView()
     fileprivate let lyricSpeakerOverlayView = StructuredLyricSpeakerOverlayView()
     fileprivate let textOnlyLyricOverlayView = StructuredTextOnlyLyricOverlayView()
     fileprivate let timelineView = StructuredShotTimelineView()
@@ -651,8 +784,7 @@ final class StructuredScriptTimelineHostView: NSView {
 
         if textOnlyLyricMode {
             lyricSpeakerOverlayView.isHidden = true
-            textOnlyLyricOverlayView.frame = NSRect(x: 0, y: 0, width: textWidth, height: bounds.height)
-            textOnlyLyricOverlayView.isHidden = false
+            textOnlyLyricOverlayView.isHidden = true
         } else {
             lyricSpeakerOverlayView.frame = NSRect(x: 0, y: 0, width: width, height: bounds.height)
             lyricSpeakerOverlayView.scriptColumnWidth = textView.frame.width
@@ -672,11 +804,9 @@ final class StructuredScriptTimelineHostView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        if textOnlyLyricMode && !textOnlyLyricOverlayView.isHidden {
-            let lyricPoint = textOnlyLyricOverlayView.convert(point, from: self)
-            if let hit = textOnlyLyricOverlayView.hitTest(lyricPoint) {
-                return hit
-            }
+        if textOnlyLyricMode {
+            let textPoint = textView.convert(point, from: self)
+            return textView.hitTest(textPoint)
         }
         if !timelineView.isHidden {
             let timelinePoint = timelineView.convert(point, from: self)
@@ -760,7 +890,7 @@ final class StructuredScriptTimelineHostView: NSView {
         layoutManager.ensureLayout(for: textContainer)
         let usedRect = layoutManager.usedRect(for: textContainer)
         let textHeight = ceil(usedRect.height + textView.textContainerInset.height * 2 + 8)
-        let lyricHeight = textOnlyLyricMode ? textOnlyLyricOverlayView.requiredHeight() : lyricSpeakerOverlayView.requiredHeight()
+        let lyricHeight = textOnlyLyricMode ? 0 : lyricSpeakerOverlayView.requiredHeight()
         let timelineHeight = timelineView.requiredHeight()
         let clamped = showsLyricCards
             ? max(40, lyricHeight, timelineHeight)
@@ -777,14 +907,6 @@ final class StructuredScriptTimelineHostView: NSView {
     }
 
     private func insertionOffset(at point: NSPoint) -> Int {
-        if textOnlyLyricMode {
-            let lyricPoint = textOnlyLyricOverlayView.convert(point, from: self)
-            let lineHeight: CGFloat = 19
-            let topPadding: CGFloat = 6
-            let estimatedLine = max(0, Int((lyricPoint.y - topPadding) / lineHeight))
-            let charsPerLine = max(40, Int(min(500, bounds.width > 0 ? bounds.width : 500) / 7.2))
-            return estimatedLine * charsPerLine
-        }
         if showsLyricCards {
             let lyricPoint = lyricSpeakerOverlayView.convert(point, from: self)
             if let offset = lyricSpeakerOverlayView.offsetForY(lyricPoint.y) {

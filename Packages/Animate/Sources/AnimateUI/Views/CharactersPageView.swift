@@ -92,9 +92,6 @@ struct CharactersPageView: View {
                 deferredPromptSaveTask = nil
                 heavyDetailReadyCharacterID = nil
             }
-            .task(id: store.owpURL?.path) {
-                await store.recoverMissingPersistedCharactersIfNeededAsync()
-            }
             .onChange(of: showReferenceWorkflowPane) { _, expanded in
                 if expanded, let character = store.selectedCharacter {
                     store.seedCharacterReferenceWorkflowIfNeeded(for: character.id)

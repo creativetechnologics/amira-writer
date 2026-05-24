@@ -101,10 +101,15 @@ public final class MixWorkspaceController: ObservableObject {
         isLoadingProject = true
         loadStatusMessage = "Loading Mix workspace from disk..."
         await Task.yield()
+        defer {
+            if requestID == loadRequestID {
+                loadStatusMessage = store.statusMessage
+                isLoadingProject = false
+            }
+        }
+
         let message = await store.ensureProjectLoaded(normalizedURL)
         guard requestID == loadRequestID else { return message }
-        loadStatusMessage = store.statusMessage
-        isLoadingProject = false
 
         if message == nil {
             loadedProjectPath = normalizedPath

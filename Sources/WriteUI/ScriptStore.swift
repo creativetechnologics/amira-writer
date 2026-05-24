@@ -176,8 +176,30 @@ struct SongStub: Identifiable, Sendable {
     let fileURL: URL
     let relativePath: String
     let fileSize: Int64
+    let title: String?
+    let canonicalTitle: String?
+
+    init(
+        id: UUID,
+        fileURL: URL,
+        relativePath: String,
+        fileSize: Int64,
+        title: String? = nil,
+        canonicalTitle: String? = nil
+    ) {
+        self.id = id
+        self.fileURL = fileURL
+        self.relativePath = relativePath
+        self.fileSize = fileSize
+        self.title = title
+        self.canonicalTitle = canonicalTitle
+    }
 
     var displayName: String {
+        let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedTitle.isEmpty {
+            return trimmedTitle
+        }
         let url = URL(fileURLWithPath: relativePath)
         let withoutExtension = url.deletingPathExtension().lastPathComponent
         return withoutExtension.isEmpty ? url.lastPathComponent : withoutExtension
@@ -577,9 +599,8 @@ enum OWPProjectIO {
         let ext = url.pathExtension.lowercased()
         let isOWP = ext == "owp" || ext == "opw"
         let hasMetadata = fm.fileExists(atPath: url.appendingPathComponent(projectMetadataFile).path)
-        let hasSongs = fm.fileExists(atPath: url.appendingPathComponent(songsDir).path)
-        let hasScenePackages = !ScenePackageReader.discover(in: url, fileManager: fm).isEmpty
-        guard isOWP || hasMetadata || hasSongs || hasScenePackages else {
+        let hasScenePackages = !ScenePackageStore.discover(in: url, fileManager: fm).isEmpty
+        guard isOWP || hasMetadata || hasScenePackages else {
             throw NSError(domain: "ScriptWriter", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not a valid project: \(url.lastPathComponent)"])
         }
 
@@ -597,24 +618,18 @@ enum OWPProjectIO {
     }
 
     static func enumerateProjectSongStubs(in projectURL: URL) -> [SongStub] {
-        let songStubs = enumerateSongStubs(in: projectURL.appendingPathComponent(songsDir))
-        let scenePackageStubs = enumerateScenePackageStubs(in: projectURL)
-        guard !scenePackageStubs.isEmpty else { return songStubs }
-
-        var byPath = Dictionary(uniqueKeysWithValues: songStubs.map { ($0.relativePath, $0) })
-        for stub in scenePackageStubs where byPath[stub.relativePath] == nil {
-            byPath[stub.relativePath] = stub
-        }
-        return byPath.values.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+        enumerateScenePackageStubs(in: projectURL)
     }
 
     static func enumerateScenePackageStubs(in projectURL: URL) -> [SongStub] {
-        ScenePackageReader.discover(in: projectURL).map { descriptor in
+        ScenePackageStore.discover(in: projectURL).map { descriptor in
             SongStub(
                 id: descriptor.id,
                 fileURL: descriptor.sceneJSONURL,
-                relativePath: descriptor.legacySongPath,
-                fileSize: descriptor.fileSize
+                relativePath: descriptor.projectRelativePath,
+                fileSize: descriptor.fileSize,
+                title: descriptor.title,
+                canonicalTitle: descriptor.canonicalTitle
             )
         }
     }
@@ -652,8 +667,8 @@ enum OWPProjectIO {
 
     nonisolated static func loadSongAsync(stub: SongStub) async throws -> OWSSongAsset {
         let data: Data
-        if ScenePackageReader.isScenePackageSceneJSON(stub.fileURL) {
-            data = try ScenePackageReader.makeLegacyOWSData(sceneJSONURL: stub.fileURL)
+        if ScenePackageStore.isScenePackageSceneJSON(stub.fileURL) {
+            data = try ScenePackageStore.makeWorkspaceSceneDocumentData(sceneJSONURL: stub.fileURL)
         } else {
             data = try Data(contentsOf: stub.fileURL, options: .mappedIfSafe)
         }
@@ -691,7 +706,7 @@ enum OWPProjectIO {
                    currentSnapshot != expectedSnapshot {
                     conflicts.append(song.relativePath)
                 }
-            } else if let sceneJSONURL = ScenePackageReader.sceneJSONURL(forLegacySongPath: song.relativePath, in: packageURL),
+            } else if let sceneJSONURL = ScenePackageStore.sceneJSONURL(forProjectRelativePath: song.relativePath, in: packageURL),
                       let expectedSnapshot = expectedSnapshots[song.relativePath],
                       let currentSnapshot = fileSnapshot(for: sceneJSONURL),
                       currentSnapshot != expectedSnapshot {
@@ -703,22 +718,22 @@ enum OWPProjectIO {
             throw SaveConflictError.externalChanges(paths: conflicts)
         }
 
-        // Songs — patch files in-place (only update title/notes/lyrics, preserve heavy data)
+        // Scene packages — patch canonical scene/version files in-place.
         for song in songs {
             let destination = packageURL.appendingPathComponent(song.relativePath)
-            if fm.fileExists(atPath: destination.path) {
-                try OWSSongDocument.patchFile(at: destination, with: song.document)
-            } else if let sceneJSONURL = ScenePackageReader.sceneJSONURL(forLegacySongPath: song.relativePath, in: packageURL) {
-                try ScenePackageReader.patchScenePackageFromLegacyOWSObject(
+            if let sceneJSONURL = ScenePackageStore.sceneJSONURL(forProjectRelativePath: song.relativePath, in: packageURL) {
+                try ScenePackageStore.patchScenePackageFromWorkspaceSceneDocumentObject(
                     sceneJSONURL: sceneJSONURL,
-                    legacyRoot: legacyOWSObject(from: song.document)
+                    sceneDocumentRoot: workspaceSceneDocumentObject(from: song.document)
                 )
+            } else if fm.fileExists(atPath: destination.path) {
+                try OWSSongDocument.patchFile(at: destination, with: song.document)
             }
-            // If neither the legacy file nor a scene package exists, skip instead of inventing data.
+            // If the canonical scene package is missing, skip instead of inventing data.
         }
     }
 
-    private static func legacyOWSObject(from document: OWSSongDocument) -> [String: Any] {
+    private static func workspaceSceneDocumentObject(from document: OWSSongDocument) -> [String: Any] {
         var root: [String: Any] = [
             "songID": document.songID.uuidString,
             "title": document.title,
@@ -817,16 +832,6 @@ final class ScriptStore {
     var activeSongPath: String?
     var isLibrettoEditMode: Bool = UserDefaults.standard.object(forKey: "amira.write.librettoEditMode") as? Bool ?? false {
         didSet { UserDefaults.standard.set(isLibrettoEditMode, forKey: "amira.write.librettoEditMode") }
-    }
-    var textOnlyLyricView: Bool = false
-    var showDirections: Bool = UserDefaults.standard.object(forKey: "showDirections") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(showDirections, forKey: "showDirections"); saveProjectSettings() }
-    }
-    var showStoryboarding: Bool = UserDefaults.standard.object(forKey: "showStoryboarding") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(showStoryboarding, forKey: "showStoryboarding"); saveProjectSettings() }
-    }
-    var showAnimateDirections: Bool = UserDefaults.standard.object(forKey: "showAnimateDirections") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(showAnimateDirections, forKey: "showAnimateDirections"); saveProjectSettings() }
     }
     var directionMarkupColorHex: String = UserDefaults.standard.string(forKey: "amira.write.directionMarkupColorHex") ?? ScriptMarkupPalette.defaultDirectionHex {
         didSet {
@@ -1353,25 +1358,26 @@ final class ScriptStore {
         let isStandalone = url.pathExtension.lowercased() == "ows"
         guard !isStandalone else { return }
 
-        // Determine next scene number based on existing files
+        // Determine next scene number based on existing canonical scene packages.
         let existingNumbers = songAssets.compactMap { asset -> Int? in
-            let filename = URL(fileURLWithPath: asset.relativePath).deletingPathExtension().lastPathComponent
-            let parts = filename.components(separatedBy: " ")
+            let parts = asset.document.title.components(separatedBy: " ")
             return Int(parts.first ?? "")
         }
         let nextNumber = (existingNumbers.max() ?? 0) + 1
         let paddedNumber = String(format: "%02d", nextNumber)
-        let filename = "\(paddedNumber) New Scene.ows"
-        let relativePath = "\(OWPProjectIO.songsDir)/\(filename)"
+        let title = "\(paddedNumber) New Scene"
+        let slug = Self.slugifySceneTitle(title)
+        let relativePath = "Scenes/\(slug)/scene.json"
 
         let versionID = UUID()
-        let songID = UUID()
+        let sceneID = UUID()
         let now = Date()
+        let isoNow = OWSSongDocument.isoFormatter.string(from: now)
 
         let newDoc = OWSSongDocument(
-            songID: songID,
-            title: "\(paddedNumber) New Scene",
-            canonicalTitle: "\(paddedNumber) new scene",
+            songID: sceneID,
+            title: title,
+            canonicalTitle: slug,
             notes: "",
             updatedAt: now,
             activeVersionID: versionID,
@@ -1387,31 +1393,61 @@ final class ScriptStore {
             )]
         )
 
-        // Write minimal .ows JSON file to disk
-        let fileURL = url.appendingPathComponent(relativePath)
-        let jsonDict: [String: Any] = [
-            "songID": songID.uuidString,
+        let scenesDir = url.appendingPathComponent("Scenes", isDirectory: true)
+        let sceneDir = scenesDir.appendingPathComponent(slug, isDirectory: true)
+        let versionDir = sceneDir
+            .appendingPathComponent("versions", isDirectory: true)
+            .appendingPathComponent(versionID.uuidString.lowercased(), isDirectory: true)
+        let fileURL = sceneDir.appendingPathComponent("scene.json")
+        let sceneJSON: [String: Any] = [
+            "schemaVersion": 1,
+            "id": sceneID.uuidString,
+            "slug": slug,
+            "canonicalTitle": slug,
             "title": newDoc.title,
-            "canonicalTitle": newDoc.canonicalTitle,
             "notes": "",
-            "updatedAt": OWSSongDocument.isoFormatter.string(from: now),
-            "activeVersionID": versionID.uuidString,
+            "order": nextNumber * 1_000,
+            "updatedAt": isoNow,
+            "activeVersionID": versionID.uuidString.lowercased(),
+            "versionOrder": [versionID.uuidString.lowercased()],
             "versions": [[
-                "id": versionID.uuidString,
+                "id": versionID.uuidString.lowercased(),
                 "label": "Initial",
-                "createdAt": OWSSongDocument.isoFormatter.string(from: now),
-                "updatedAt": OWSSongDocument.isoFormatter.string(from: now),
-                "lyrics": "",
+                "createdAt": isoNow,
+                "updatedAt": isoNow,
                 "saveType": "manual",
                 "isBookmarked": false,
             ] as [String: Any]],
         ]
 
         do {
-            let data = try JSONSerialization.data(withJSONObject: jsonDict, options: [.prettyPrinted, .sortedKeys])
-            let songsDir = url.appendingPathComponent(OWPProjectIO.songsDir)
-            try FileManager.default.createDirectory(at: songsDir, withIntermediateDirectories: true)
-            try data.write(to: fileURL, options: .atomic)
+            try FileManager.default.createDirectory(at: versionDir, withIntermediateDirectories: true)
+            let sceneData = try JSONSerialization.data(withJSONObject: sceneJSON, options: [.prettyPrinted, .sortedKeys])
+            try sceneData.write(to: fileURL, options: .atomic)
+            try Data("".utf8).write(to: versionDir.appendingPathComponent("manuscript.md"), options: .atomic)
+            let playbackJSON: [String: Any] = [
+                "schemaVersion": 1,
+                "sceneID": sceneID.uuidString,
+                "versionID": versionID.uuidString.lowercased(),
+                "playback": [
+                    "ticksPerQuarter": 480,
+                    "tempoEvents": [["tick": 0, "bpm": 120]],
+                    "notes": [],
+                    "trackNames": [:],
+                    "lyrics": "",
+                ],
+            ]
+            let playbackData = try JSONSerialization.data(withJSONObject: playbackJSON, options: [.prettyPrinted, .sortedKeys])
+            try playbackData.write(to: versionDir.appendingPathComponent("score.playback.json"), options: .atomic)
+            try Self.upsertSceneIndexEntry(
+                projectURL: url,
+                sceneID: sceneID,
+                slug: slug,
+                title: title,
+                activeVersionID: versionID,
+                order: nextNumber * 1_000,
+                updatedAt: isoNow
+            )
         } catch {
             statusMessage = "Failed to create scene: \(error.localizedDescription)"
             return
@@ -1428,7 +1464,7 @@ final class ScriptStore {
         normalizeScratchpadFiles()
 
         requestScrollTarget(relativePath)
-        statusMessage = "Created \(filename)"
+        statusMessage = "Created \(title)"
     }
 
     func deleteScene(path: String) {
@@ -1934,10 +1970,7 @@ final class ScriptStore {
         guard let url = fileProjectURL else { return }
         let settings = ProjectSettingsPersistence.load(from: url)
 
-        // Apply Direction / Action / Camera settings (project values override UserDefaults)
-        if let v = settings.showDirections { showDirections = v }
-        if let v = settings.showStoryboarding { showStoryboarding = v }
-        if let v = settings.showAnimateDirections { showAnimateDirections = v }
+        // Apply page and metadata styling settings (project values override UserDefaults)
         if let v = settings.directionMarkupColorHex { directionMarkupColorHex = v }
         if let v = settings.storyboardingMarkupColorHex { storyboardingMarkupColorHex = v }
         if let v = settings.animateMarkupColorHex { animateMarkupColorHex = v }
@@ -2019,9 +2052,6 @@ final class ScriptStore {
         guard let url = fileProjectURL else { return }
         let config = LLMProviderConfig.shared
         let settings = ProjectSettingsData(
-            showDirections: showDirections,
-            showStoryboarding: showStoryboarding,
-            showAnimateDirections: showAnimateDirections,
             directionMarkupColorHex: directionMarkupColorHex,
             storyboardingMarkupColorHex: storyboardingMarkupColorHex,
             animateMarkupColorHex: animateMarkupColorHex,
@@ -2487,6 +2517,62 @@ final class ScriptStore {
             at: 0
         )
         projectHistoryEntries = Array(projectHistoryEntries.prefix(Self.maxProjectHistoryEntries))
+    }
+
+    private static func slugifySceneTitle(_ title: String) -> String {
+        let replaced = title.lowercased().replacingOccurrences(
+            of: "[^a-z0-9]+",
+            with: "-",
+            options: .regularExpression
+        )
+        return replaced.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    private static func upsertSceneIndexEntry(
+        projectURL: URL,
+        sceneID: UUID,
+        slug: String,
+        title: String,
+        activeVersionID: UUID,
+        order: Int,
+        updatedAt: String
+    ) throws {
+        let indexURL = projectURL.appendingPathComponent("Scenes/scene-index.json")
+        var root: [String: Any] = [
+            "schemaVersion": 1,
+            "projectID": UUID().uuidString,
+            "updatedAt": updatedAt,
+            "scenes": [],
+        ]
+        if let data = try? Data(contentsOf: indexURL),
+           let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            root = decoded
+        }
+
+        var scenes = root["scenes"] as? [[String: Any]] ?? []
+        scenes.removeAll { ($0["slug"] as? String) == slug || ($0["id"] as? String) == sceneID.uuidString }
+        scenes.append([
+            "id": sceneID.uuidString,
+            "slug": slug,
+            "scenePath": "Scenes/\(slug)/scene.json",
+            "title": title,
+            "canonicalTitle": slug,
+            "activeVersionID": activeVersionID.uuidString.lowercased(),
+            "order": order,
+            "updatedAt": updatedAt,
+        ])
+        scenes.sort {
+            let lhs = ($0["order"] as? Int) ?? 0
+            let rhs = ($1["order"] as? Int) ?? 0
+            if lhs != rhs { return lhs < rhs }
+            return (($0["slug"] as? String) ?? "") < (($1["slug"] as? String) ?? "")
+        }
+        root["scenes"] = scenes
+        root["updatedAt"] = updatedAt
+
+        try FileManager.default.createDirectory(at: indexURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: indexURL, options: .atomic)
     }
 
     func applySyncedLyricsChange(atPath path: String, lyrics: String, sourceTitle: String = "Applied synced AI change") {

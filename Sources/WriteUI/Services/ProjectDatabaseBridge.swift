@@ -39,10 +39,24 @@ enum ProjectDatabaseBridge {
     static func makePlaceholderDocument(from stub: SongStub) -> OWSSongDocument {
         let now = Date()
         let versionID = UUID()
+        let trimmedTitle = stub.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = {
+            guard let trimmedTitle, !trimmedTitle.isEmpty else {
+                return stub.displayName.toTitleCase()
+            }
+            return trimmedTitle
+        }()
+        let trimmedCanonicalTitle = stub.canonicalTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canonicalTitle = {
+            guard let trimmedCanonicalTitle, !trimmedCanonicalTitle.isEmpty else {
+                return title.lowercased()
+            }
+            return trimmedCanonicalTitle
+        }()
         var document = OWSSongDocument(
             songID: stub.id,
-            title: stub.displayName.toTitleCase(),
-            canonicalTitle: stub.displayName.lowercased(),
+            title: title,
+            canonicalTitle: canonicalTitle,
             notes: "",
             updatedAt: now,
             activeVersionID: versionID,

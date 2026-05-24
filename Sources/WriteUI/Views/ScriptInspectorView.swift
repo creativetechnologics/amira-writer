@@ -109,27 +109,6 @@ struct ToolsSectionContent: View {
     @State private var pendingImportNotes: [AppleNotesService.SceneNote] = []
     @State private var importMatchResults: [ImportMatchResult] = []
 
-    private var directionColorBinding: Binding<Color> {
-        Binding(
-            get: { store.directionMarkupColor },
-            set: { store.directionMarkupColorHex = ScriptMarkupPalette.hex(from: $0, fallback: ScriptMarkupPalette.defaultDirectionHex) }
-        )
-    }
-
-    private var storyboardingColorBinding: Binding<Color> {
-        Binding(
-            get: { store.storyboardingMarkupColor },
-            set: { store.storyboardingMarkupColorHex = ScriptMarkupPalette.hex(from: $0, fallback: ScriptMarkupPalette.defaultStoryboardingHex) }
-        )
-    }
-
-    private var animateColorBinding: Binding<Color> {
-        Binding(
-            get: { store.animateMarkupColor },
-            set: { store.animateMarkupColorHex = ScriptMarkupPalette.hex(from: $0, fallback: ScriptMarkupPalette.defaultAnimateHex) }
-        )
-    }
-
     private var scriptBackgroundColorBinding: Binding<Color> {
         Binding(
             get: { store.scriptBackgroundColor },
@@ -143,33 +122,10 @@ struct ToolsSectionContent: View {
                 Image(systemName: store.isLibrettoEditMode ? "pencil" : "eye")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(store.isLibrettoEditMode ? .orange : .secondary)
-                Text(store.isLibrettoEditMode ? "Edit mode enables typing and the category toggles can reveal or hide markup." : "View mode is read-only and hides bracketed markup.")
+                Text(store.isLibrettoEditMode ? "Edit mode enables typing in visible libretto text." : "View mode is read-only with metadata folded inline.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-
-            markupToggleRow(
-                title: "Show Direction",
-                systemImage: "camera.metering.spot",
-                isOn: $store.showDirections,
-                color: directionColorBinding
-            )
-
-            markupToggleRow(
-                title: "Show Action",
-                systemImage: "film",
-                isOn: $store.showStoryboarding,
-                color: storyboardingColorBinding
-            )
-
-            markupToggleRow(
-                title: "Show Camera",
-                systemImage: "video",
-                isOn: $store.showAnimateDirections,
-                color: animateColorBinding
-            )
-
-            Divider()
 
             backgroundColorRow()
 
@@ -307,27 +263,6 @@ struct ToolsSectionContent: View {
             Text(value)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder
-    private func markupToggleRow(
-        title: String,
-        systemImage: String,
-        isOn: Binding<Bool>,
-        color: Binding<Color>
-    ) -> some View {
-        HStack(spacing: 10) {
-            Toggle(isOn: isOn) {
-                Label(title, systemImage: systemImage)
-                    .font(.system(size: 11))
-            }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-
-            ColorPicker("", selection: color, supportsOpacity: false)
-                .labelsHidden()
-                .frame(width: 28)
         }
     }
 

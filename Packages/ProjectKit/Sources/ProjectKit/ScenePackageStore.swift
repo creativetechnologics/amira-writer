@@ -1,19 +1,14 @@
 import Foundation
 
-/// Compatibility bridge for the canonical `Scenes/<slug>/` package layout.
-///
-/// Older Write/Score/Mix/Animate code still presents scenes as legacy
-/// `Songs/*.ows` entries.  The active Amira project has already moved the real
-/// scene data into per-scene packages:
+/// Canonical access layer for the `Scenes/<slug>/` package layout.
 ///
 ///     Scenes/scene-index.json
 ///     Scenes/<slug>/scene.json
 ///     Scenes/<slug>/versions/<version-id>/{manuscript.md,score.playback.json,shots.json}
 ///
-/// This reader exposes those scene packages through a lightweight legacy-OWS
-/// shape so the existing workspaces can load the canonical project without
-/// requiring a destructive re-materialization of `Songs/*.ows` files.
-public enum ScenePackageReader {
+/// Workspaces should discover and save scenes through this type instead of
+/// treating `Songs/*.ows` or `Scenes/scenes.json` as authoritative data.
+public enum ScenePackageStore {
     public static let scenesDirectoryName = "Scenes"
     public static let sceneIndexFileName = "scene-index.json"
     public static let sceneFileName = "scene.json"
@@ -22,7 +17,7 @@ public enum ScenePackageReader {
         public let id: UUID
         public let title: String
         public let canonicalTitle: String
-        public let legacySongPath: String
+        public let projectRelativePath: String
         public let order: Int
         public let sceneDirectoryURL: URL
         public let sceneJSONURL: URL
@@ -33,7 +28,7 @@ public enum ScenePackageReader {
             id: UUID,
             title: String,
             canonicalTitle: String,
-            legacySongPath: String,
+            projectRelativePath: String,
             order: Int,
             sceneDirectoryURL: URL,
             sceneJSONURL: URL,
@@ -43,7 +38,7 @@ public enum ScenePackageReader {
             self.id = id
             self.title = title
             self.canonicalTitle = canonicalTitle
-            self.legacySongPath = legacySongPath
+            self.projectRelativePath = projectRelativePath
             self.order = order
             self.sceneDirectoryURL = sceneDirectoryURL
             self.sceneJSONURL = sceneJSONURL
@@ -118,30 +113,35 @@ public enum ScenePackageReader {
 
         return descriptors.sorted { lhs, rhs in
             if lhs.order != rhs.order { return lhs.order < rhs.order }
-            return lhs.legacySongPath.localizedStandardCompare(rhs.legacySongPath) == .orderedAscending
+            return lhs.projectRelativePath.localizedStandardCompare(rhs.projectRelativePath) == .orderedAscending
         }
     }
 
     public static func sceneJSONURL(
-        forLegacySongPath legacySongPath: String,
+        forProjectRelativePath projectRelativePath: String,
         in projectURL: URL,
         fileManager fm: FileManager = .default
     ) -> URL? {
-        let normalized = normalizeLegacySongPath(legacySongPath)
+        let directURL = projectURL.appendingPathComponent(projectRelativePath)
+        if isScenePackageSceneJSON(directURL), fm.fileExists(atPath: directURL.path) {
+            return directURL
+        }
+
+        let normalized = normalizeProjectRelativePath(projectRelativePath)
         return discover(in: projectURL, fileManager: fm).first {
-            normalizeLegacySongPath($0.legacySongPath) == normalized
+            normalizeProjectRelativePath($0.projectRelativePath) == normalized
         }?.sceneJSONURL
     }
 
-    public static func makeLegacyOWSData(sceneJSONURL: URL) throws -> Data {
-        let object = try makeLegacyOWSObject(sceneJSONURL: sceneJSONURL)
+    public static func makeWorkspaceSceneDocumentData(sceneJSONURL: URL) throws -> Data {
+        let object = try makeWorkspaceSceneDocumentObject(sceneJSONURL: sceneJSONURL)
         return try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
     }
 
-    public static func makeLegacyOWSObject(sceneJSONURL: URL) throws -> [String: Any] {
+    public static func makeWorkspaceSceneDocumentObject(sceneJSONURL: URL) throws -> [String: Any] {
         guard let sceneRoot = jsonObject(at: sceneJSONURL) as? [String: Any] else {
             throw NSError(
-                domain: "ScenePackageReader",
+                domain: "ScenePackageStore",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Could not decode scene package root at \(sceneJSONURL.path)"]
             )
@@ -161,7 +161,7 @@ public enum ScenePackageReader {
         var versions: [[String: Any]] = []
         if versionMetas.isEmpty {
             let versionID = activeVersionID ?? UUID().uuidString
-            versions.append(legacyVersionObject(
+            versions.append(workspaceSceneVersionObject(
                 sceneDirectoryURL: sceneJSONURL.deletingLastPathComponent(),
                 sceneID: sceneID,
                 metadata: [
@@ -175,7 +175,7 @@ public enum ScenePackageReader {
             ))
         } else {
             for metadata in sortedVersionMetas(versionMetas, activeVersionID: activeVersionID, versionOrder: versionOrder) {
-                versions.append(legacyVersionObject(
+                versions.append(workspaceSceneVersionObject(
                     sceneDirectoryURL: sceneJSONURL.deletingLastPathComponent(),
                     sceneID: sceneID,
                     metadata: metadata
@@ -197,27 +197,27 @@ public enum ScenePackageReader {
         return root
     }
 
-    public static func patchScenePackageFromLegacyOWSObject(
+    public static func patchScenePackageFromWorkspaceSceneDocumentObject(
         sceneJSONURL: URL,
-        legacyRoot: [String: Any]
+        sceneDocumentRoot: [String: Any]
     ) throws {
         guard var sceneRoot = jsonObject(at: sceneJSONURL) as? [String: Any] else {
             throw NSError(
-                domain: "ScenePackageReader",
+                domain: "ScenePackageStore",
                 code: 2,
                 userInfo: [NSLocalizedDescriptionKey: "Could not decode scene package root at \(sceneJSONURL.path)"]
             )
         }
 
-        let sceneID = string(sceneRoot["id"]) ?? string(legacyRoot["songID"]) ?? UUID().uuidString
-        if let title = string(legacyRoot["title"]) { sceneRoot["title"] = title }
-        if let canonicalTitle = string(legacyRoot["canonicalTitle"]) { sceneRoot["canonicalTitle"] = canonicalTitle }
-        if let notes = string(legacyRoot["notes"]) { sceneRoot["notes"] = notes }
-        if let updatedAt = string(legacyRoot["updatedAt"]) { sceneRoot["updatedAt"] = updatedAt }
-        if let activeVersionID = string(legacyRoot["activeVersionID"]) { sceneRoot["activeVersionID"] = activeVersionID }
+        let sceneID = string(sceneRoot["id"]) ?? string(sceneDocumentRoot["songID"]) ?? UUID().uuidString
+        if let title = string(sceneDocumentRoot["title"]) { sceneRoot["title"] = title }
+        if let canonicalTitle = string(sceneDocumentRoot["canonicalTitle"]) { sceneRoot["canonicalTitle"] = canonicalTitle }
+        if let notes = string(sceneDocumentRoot["notes"]) { sceneRoot["notes"] = notes }
+        if let updatedAt = string(sceneDocumentRoot["updatedAt"]) { sceneRoot["updatedAt"] = updatedAt }
+        if let activeVersionID = string(sceneDocumentRoot["activeVersionID"]) { sceneRoot["activeVersionID"] = activeVersionID }
 
         let sceneDirectoryURL = sceneJSONURL.deletingLastPathComponent()
-        let versionObjects = legacyRoot["versions"] as? [[String: Any]] ?? []
+        let versionObjects = sceneDocumentRoot["versions"] as? [[String: Any]] ?? []
         var sceneVersionMetas: [[String: Any]] = []
         var versionOrder: [String] = []
 
@@ -273,7 +273,7 @@ public enum ScenePackageReader {
         return FileManager.default.fileExists(atPath: versionURL.path) ? versionURL : nil
     }
 
-    public static func normalizeLegacySongPath(_ path: String) -> String {
+    public static func normalizeProjectRelativePath(_ path: String) -> String {
         path.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\", with: "/")
     }
@@ -322,14 +322,14 @@ public enum ScenePackageReader {
             ?? string(entry["slug"])
             ?? slugify(title)
         let id = uuid(root["id"]) ?? uuid(entry["id"]) ?? uuid(root["songID"]) ?? UUID()
-        let legacy = legacySongPath(sceneRoot: root, indexEntry: entry, title: title)
+        let projectRelativePath = canonicalScenePath(sceneJSONURL: sceneJSONURL)
         let order = int(root["order"]) ?? int(entry["order"]) ?? fallbackOrder
         let fileSize = (try? sceneJSONURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
         return Descriptor(
             id: id,
             title: title,
             canonicalTitle: canonicalTitle,
-            legacySongPath: legacy,
+            projectRelativePath: projectRelativePath,
             order: order,
             sceneDirectoryURL: sceneJSONURL.deletingLastPathComponent(),
             sceneJSONURL: sceneJSONURL,
@@ -338,17 +338,9 @@ public enum ScenePackageReader {
         )
     }
 
-    private static func legacySongPath(sceneRoot: [String: Any], indexEntry: [String: Any], title: String) -> String {
-        if let legacy = sceneRoot["legacy"] as? [String: Any],
-           let path = string(legacy["owsPath"]),
-           !path.isEmpty {
-            return path
-        }
-        for key in ["legacySongPath", "owsPath", "relativePath"] {
-            if let path = string(indexEntry[key]), !path.isEmpty { return path }
-            if let path = string(sceneRoot[key]), !path.isEmpty { return path }
-        }
-        return "Songs/\(title).ows"
+    private static func canonicalScenePath(sceneJSONURL: URL) -> String {
+        let slug = sceneJSONURL.deletingLastPathComponent().lastPathComponent
+        return "\(scenesDirectoryName)/\(slug)/\(sceneFileName)"
     }
 
     private static func sortedVersionMetas(
@@ -374,7 +366,7 @@ public enum ScenePackageReader {
         return metas
     }
 
-    private static func legacyVersionObject(
+    private static func workspaceSceneVersionObject(
         sceneDirectoryURL: URL,
         sceneID: String,
         metadata: [String: Any]
@@ -403,10 +395,10 @@ public enum ScenePackageReader {
         return version
     }
 
-    private static func sceneVersionMetadata(from legacyVersion: [String: Any]) -> [String: Any] {
+    private static func sceneVersionMetadata(from sceneDocumentVersion: [String: Any]) -> [String: Any] {
         var result: [String: Any] = [:]
         for key in ["id", "label", "createdAt", "updatedAt", "saveType", "userLabel", "isBookmarked"] {
-            if let value = legacyVersion[key] { result[key] = value }
+            if let value = sceneDocumentVersion[key] { result[key] = value }
         }
         if result["label"] == nil { result["label"] = "Current Draft" }
         if result["saveType"] == nil { result["saveType"] = "imported" }

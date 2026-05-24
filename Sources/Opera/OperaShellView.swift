@@ -220,10 +220,27 @@ private enum OperaLoadState: Equatable {
 }
 
 @available(macOS 26.0, *)
-private enum OperaModeLoadResult {
+private enum OperaModeLoadResult: Sendable {
     case success
     case failure(String)
     case timedOut
+}
+
+@available(macOS 26.0, *)
+private final class OperaModeLoadRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didResolve = false
+
+    func resolve(
+        _ result: OperaModeLoadResult,
+        continuation: CheckedContinuation<OperaModeLoadResult, Never>
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didResolve else { return }
+        didResolve = true
+        continuation.resume(returning: result)
+    }
 }
 
 @available(macOS 26.0, *)
@@ -979,11 +996,15 @@ struct OperaShellView: View {
             detail: "Preparing the \(newMode.title) tools for \(projectName)."
         )
         activeProjectLoadError = nil
-        if newMode == .allImages {
+        if newMode == .mix || newMode == .allImages {
             // All Images can show its own loading/indexing shell while the
             // Animate store finishes hydrating. Rendering the destination
             // immediately avoids the title-bar click feeling like it hung
             // during the first post-launch Animate load.
+            //
+            // Mix needs the same treatment when switching away from Score:
+            // keeping the piano-roll/mapping inspector mounted behind the
+            // global loading overlay can peg the UI while Mix is indexing.
             renderedMode = newMode
         }
         await Task.yield()
@@ -1153,63 +1174,18 @@ struct OperaShellView: View {
     @MainActor
     private func scheduleIdleWorkspacePrewarm(for projectURL: URL, activeMode: OperaMode) {
         workspacePrewarmTask?.cancel()
-        let normalizedURL = projectURL.standardizedFileURL
-        let projectPath = normalizedURL.path
+        workspacePrewarmTask = nil
 
-        workspacePrewarmTask = Task {
-            try? await Task.sleep(for: .seconds(1.5))
-            guard !Task.isCancelled else { return }
-            let canPrewarmScore = await MainActor.run(resultType: Bool.self) {
-                activeProjectURL?.standardizedFileURL.path == projectPath && loadState == .idle
-            }
-            guard canPrewarmScore else {
-                return
-            }
-
-            if activeMode != .score {
-                _ = await load(mode: .score, projectURL: normalizedURL)
-                await MainActor.run {
-                    if selectedMode.navigationMode != .score {
-                        scoreController.suspendBackgroundWork()
-                    }
-                }
-            }
-
-            guard !Task.isCancelled else { return }
-
-            if !Self.animateClusterModes.contains(activeMode) {
-                if activeMode == .score {
-                    let isScorePlaying = await MainActor.run(resultType: Bool.self) {
-                        scoreController.isPlaybackActive
-                    }
-                    guard !isScorePlaying else { return }
-                    try? await Task.sleep(for: .seconds(4))
-                    guard !Task.isCancelled else { return }
-                    let isStillSafeToPrewarmFromScore = await MainActor.run(resultType: Bool.self) {
-                        activeProjectURL?.standardizedFileURL.path == projectPath
-                            && loadState == .idle
-                            && !scoreController.isPlaybackActive
-                    }
-                    guard isStillSafeToPrewarmFromScore else { return }
-                } else {
-                    try? await Task.sleep(for: .milliseconds(250))
-                }
-                guard !Task.isCancelled else { return }
-                let canPrewarmAnimate = await MainActor.run(resultType: Bool.self) {
-                    activeProjectURL?.standardizedFileURL.path == projectPath && loadState == .idle
-                }
-                guard canPrewarmAnimate else {
-                    return
-                }
-                _ = await load(mode: .scenes, projectURL: normalizedURL)
-                await MainActor.run {
-                    if activeProjectURL?.standardizedFileURL.path == projectPath,
-                       !Self.animateClusterModes.contains(selectedMode.navigationMode) {
-                        animateController.suspendBackgroundWork()
-                    }
-                }
-            }
-        }
+        // Do not silently hydrate inactive workspaces.
+        //
+        // The old prewarm path loaded Score and then Animate shortly after a
+        // project opened, even while the user was still on Write. Animate load
+        // performs scene-package decoding, Places indexing, and deferred
+        // persistence checks; running that hidden work in the background was
+        // enough to peg the laptop CPU and could write Places state without the
+        // user ever opening Places. Workspaces now load only when selected.
+        _ = projectURL
+        _ = activeMode
     }
 
     @MainActor
@@ -1228,22 +1204,21 @@ struct OperaShellView: View {
         let modeLoadTask = Task { await load(mode: mode, projectURL: projectURL) }
         let timeoutNanoseconds: UInt64 = 350_000_000
 
-        let result = await withTaskGroup(of: OperaModeLoadResult.self, returning: OperaModeLoadResult.self) { group in
-            group.addTask {
+        let result = await withCheckedContinuation { continuation in
+            let race = OperaModeLoadRace()
+
+            Task.detached {
                 if let error = await modeLoadTask.value {
-                    return .failure(error)
+                    race.resolve(.failure(error), continuation: continuation)
+                } else {
+                    race.resolve(.success, continuation: continuation)
                 }
-                return .success
             }
 
-            group.addTask {
+            Task.detached {
                 try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                return .timedOut
+                race.resolve(.timedOut, continuation: continuation)
             }
-
-            let first = await group.next() ?? .success
-            group.cancelAll()
-            return first
         }
 
         if case .timedOut = result {

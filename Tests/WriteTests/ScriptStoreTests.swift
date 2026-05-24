@@ -352,14 +352,6 @@ final class ScriptStoreTests: XCTestCase {
         XCTAssertTrue(displayText.contains("Visible line"))
     }
 
-    func testScriptStoreDefaultsHideInlineMarkup() {
-        let store = makeStore(historyStore: ProjectHistoryStore(storageURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)))
-
-        XCTAssertFalse(store.showDirections)
-        XCTAssertFalse(store.showStoryboarding)
-        XCTAssertFalse(store.showAnimateDirections)
-    }
-
     func testApplyDirectionStylingRemovesHiddenTextFromRenderedString() {
         let textView = NSTextView()
         textView.string = """

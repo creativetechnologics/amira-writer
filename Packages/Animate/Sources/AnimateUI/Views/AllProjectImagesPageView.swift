@@ -218,9 +218,6 @@ struct AllProjectImagesPageView: View {
         .task(id: layoutSignature) {
             state.thumbnailSize = min(max(state.thumbnailSize, layout.thumbnailMin), layout.thumbnailMax)
         }
-        .task(id: store.owpURL?.path) {
-            state.requestCharacterRecoveryIfNeeded(store: store)
-        }
         .dropDestination(for: URL.self) { urls, _ in
             store.importDroppedImagesToUnattachedLibrary(urls: ImageMultiSelectionDragContext.resolveDroppedURLs(urls))
         } isTargeted: { isTargeted in

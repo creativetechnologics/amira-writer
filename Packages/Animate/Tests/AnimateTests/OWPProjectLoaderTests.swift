@@ -4,14 +4,29 @@ import XCTest
 import ProjectKit
 
 final class OWPProjectLoaderTests: XCTestCase {
-    func testDiscoverSongsUsesPersistedSongIDsAcrossLoads() async throws {
+    func testDiscoverScenesUsesPackageIDsAcrossLoads() async throws {
         let projectURL = try makeProject()
         defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
+        try FileManager.default.removeItem(at: projectURL.appendingPathComponent("Songs", isDirectory: true))
 
         let overtureID = UUID(uuidString: "C8F37189-2263-4163-A7D1-FA6287F6B9A6")!
         let prologueID = UUID(uuidString: "68C9EC73-3B9F-4C77-BEB0-EAB4CCEB4A7E")!
-        try writeSong("Songs/1.01.0 - Overture.ows", songID: overtureID, title: "1.01.0 - Overture", in: projectURL)
-        try writeSong("Songs/1.02.0 - Prologue.ows", songID: prologueID, title: "1.02.0 - Prologue", in: projectURL)
+        try writeScenePackage(
+            slug: "1-01-0-overture",
+            sceneID: overtureID,
+            versionID: UUID(uuidString: "A8F37189-2263-4163-A7D1-FA6287F6B9A6")!,
+            title: "1.01.0 - Overture",
+            manuscript: "Overture",
+            in: projectURL
+        )
+        try writeScenePackage(
+            slug: "1-02-0-prologue",
+            sceneID: prologueID,
+            versionID: UUID(uuidString: "B8F37189-2263-4163-A7D1-FA6287F6B9A6")!,
+            title: "1.02.0 - Prologue",
+            manuscript: "Prologue",
+            in: projectURL
+        )
 
         let firstLoad = try await OWPProjectLoader().load(from: projectURL)
         let secondLoad = try await OWPProjectLoader().load(from: projectURL)
@@ -21,16 +36,18 @@ final class OWPProjectLoaderTests: XCTestCase {
         XCTAssertEqual(firstLoad.songs.map(\.id), secondLoad.songs.map(\.id))
     }
 
-    func testDiscoverSongsFallsBackToDeterministicPathIDWhenSongIDIsMissing() async throws {
+    func testDiscoverScenesUsesCanonicalSceneJSONPaths() async throws {
         let projectURL = try makeProject()
         defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
+        try FileManager.default.removeItem(at: projectURL.appendingPathComponent("Songs", isDirectory: true))
 
-        try writeRawSong(
-            "Songs/1.01.0 - Overture.ows",
-            payload: [
-                "title": "1.01.0 - Overture",
-                "versions": []
-            ],
+        let sceneID = UUID(uuidString: "C8F37189-2263-4163-A7D1-FA6287F6B9A6")!
+        try writeScenePackage(
+            slug: "1-01-0-overture",
+            sceneID: sceneID,
+            versionID: UUID(uuidString: "A8F37189-2263-4163-A7D1-FA6287F6B9A6")!,
+            title: "1.01.0 - Overture",
+            manuscript: "Overture",
             in: projectURL
         )
 
@@ -38,10 +55,12 @@ final class OWPProjectLoaderTests: XCTestCase {
         let secondLoad = try await OWPProjectLoader().load(from: projectURL)
 
         XCTAssertEqual(firstLoad.songs.count, 1)
+        XCTAssertEqual(firstLoad.songs.first?.id, sceneID)
+        XCTAssertEqual(firstLoad.songs.first?.owsPath, "Scenes/1-01-0-overture/scene.json")
         XCTAssertEqual(firstLoad.songs.first?.id, secondLoad.songs.first?.id)
     }
 
-    func testScenePackagesLoadWhenLegacySongsFolderIsEmpty() async throws {
+    func testScenePackagesLoadWhenSongsFolderIsAbsent() async throws {
         let projectURL = try makeProject()
         defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
         try FileManager.default.removeItem(at: projectURL.appendingPathComponent("Songs", isDirectory: true))
@@ -52,19 +71,19 @@ final class OWPProjectLoaderTests: XCTestCase {
             slug: "1-03-0-scene-luke-s-notebook",
             sceneID: sceneID,
             versionID: versionID,
-            legacySongPath: "Songs/1.03.0 - Scene - Luke's Notebook.ows",
             title: "1.03.0 - Scene - Luke's Notebook",
             manuscript: "Luke keeps writing between med crates.",
             in: projectURL
         )
 
         let load = try await OWPProjectLoader().load(from: projectURL)
+        let canonicalPath = "Scenes/1-03-0-scene-luke-s-notebook/scene.json"
         XCTAssertEqual(load.songs.map(\.id), [sceneID])
-        XCTAssertEqual(load.songs.map(\.owsPath), ["Songs/1.03.0 - Scene - Luke's Notebook.ows"])
+        XCTAssertEqual(load.songs.map(\.owsPath), [canonicalPath])
 
         let hydratedSongData = await ProjectDatabaseBridge.hydrateSongData(
             projectURL: projectURL,
-            relativePath: "Songs/1.03.0 - Scene - Luke's Notebook.ows"
+            relativePath: canonicalPath
         )
         let songData = try XCTUnwrap(hydratedSongData)
         XCTAssertEqual(songData.lyricsText, "Luke keeps writing between med crates.")
@@ -72,7 +91,7 @@ final class OWPProjectLoaderTests: XCTestCase {
         XCTAssertEqual(songData.lengthTicks, 96)
     }
 
-    func testEmptyLegacyScenesJSONFallsBackToScenePackageShots() throws {
+    func testScenePackagesSupplySavedShotsWithoutScenesManifest() throws {
         let projectURL = try makeProject()
         defer { try? FileManager.default.removeItem(at: projectURL.deletingLastPathComponent()) }
         try FileManager.default.removeItem(at: projectURL.appendingPathComponent("Songs", isDirectory: true))
@@ -83,16 +102,13 @@ final class OWPProjectLoaderTests: XCTestCase {
             slug: "1-03-0-scene-luke-s-notebook",
             sceneID: sceneID,
             versionID: versionID,
-            legacySongPath: "Songs/1.03.0 - Scene - Luke's Notebook.ows",
             title: "1.03.0 - Scene - Luke's Notebook",
             manuscript: "Luke keeps writing between med crates.",
             in: projectURL
         )
-        let legacyScenesURL = projectURL.appendingPathComponent("Scenes/scenes.json")
-        try Data("[]".utf8).write(to: legacyScenesURL, options: .atomic)
 
         let savedScenes = ProjectDatabaseBridge.loadSavedScenesFromDisk(projectURL: projectURL)
-        let scene = try XCTUnwrap(savedScenes["Songs/1.03.0 - Scene - Luke's Notebook.ows"])
+        let scene = try XCTUnwrap(savedScenes["Scenes/1-03-0-scene-luke-s-notebook/scene.json"])
         XCTAssertEqual(scene.shots.count, 1)
         XCTAssertEqual(scene.shots.first?.name, "Convoy unload after the prologue")
         XCTAssertEqual(scene.shots.first?.cameraShot, .wide)
@@ -186,7 +202,6 @@ final class OWPProjectLoaderTests: XCTestCase {
         slug: String,
         sceneID: UUID,
         versionID: UUID,
-        legacySongPath: String,
         title: String,
         manuscript: String,
         in projectURL: URL
@@ -206,7 +221,6 @@ final class OWPProjectLoaderTests: XCTestCase {
                 "id": sceneID.uuidString,
                 "slug": slug,
                 "title": title,
-                "legacySongPath": legacySongPath,
                 "order": 1030000,
                 "updatedAt": "2026-05-01T00:00:00Z",
             ]],
@@ -224,7 +238,6 @@ final class OWPProjectLoaderTests: XCTestCase {
             "order": 1030000,
             "activeVersionID": versionID.uuidString.lowercased(),
             "updatedAt": "2026-05-01T00:00:00Z",
-            "legacy": ["owsPath": legacySongPath],
             "versionOrder": [versionID.uuidString.lowercased()],
             "versions": [[
                 "id": versionID.uuidString.lowercased(),
@@ -270,12 +283,6 @@ final class OWPProjectLoaderTests: XCTestCase {
                     "intent": "establishing",
                     "label": "Convoy unload after the prologue",
                     "notes": "Opening ridge shot.",
-                ],
-                "legacy": [
-                    "lyricAnchor": [
-                        "startLine": 3,
-                        "excerpt": "[camera: wide]",
-                    ],
                 ],
                 "timing": [
                     "startFrame": 10,
