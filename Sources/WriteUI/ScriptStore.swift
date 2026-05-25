@@ -16,38 +16,11 @@ struct SongLyricIterationFile: Identifiable, Hashable, Sendable {
     }
 }
 
-enum ScriptMarkupPalette {
-    static let defaultDirectionHex = "#59C7CC"
-    static let defaultStoryboardingHex = "#F2A640"
-    static let defaultAnimateHex = "#D973B3"
-    static let defaultScriptBackgroundHex = "#121314"
-
-    static func color(from hex: String, fallback fallbackHex: String) -> Color {
-        let resolvedHex = normalizedHex(hex) ?? fallbackHex
-        let raw = resolvedHex.hasPrefix("#") ? String(resolvedHex.dropFirst()) : resolvedHex
-        guard raw.count == 6, let value = Int(raw, radix: 16) else {
-            return .white
-        }
-
-        let red = Double((value >> 16) & 0xFF) / 255.0
-        let green = Double((value >> 8) & 0xFF) / 255.0
-        let blue = Double(value & 0xFF) / 255.0
-        return Color(red: red, green: green, blue: blue)
-    }
-
-    static func hex(from color: Color, fallback fallbackHex: String) -> String {
-#if canImport(AppKit)
-        let nsColor = NSColor(color).usingColorSpace(.deviceRGB) ?? NSColor(color)
-        return String(
-            format: "#%02X%02X%02X",
-            Int(round(nsColor.redComponent * 255)),
-            Int(round(nsColor.greenComponent * 255)),
-            Int(round(nsColor.blueComponent * 255))
-        )
-#else
-        return fallbackHex
-#endif
-    }
+enum ScriptPalette {
+    static let direction = "#59C7CC"
+    static let storyboarding = "#F2A640"
+    static let animate = "#D973B3"
+    static let scriptBackground = "#121314"
 
     static func normalizedHex(_ hex: String) -> String? {
         let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -611,9 +584,9 @@ final class ScriptStore {
     var isLibrettoEditMode: Bool = UserDefaults.standard.object(forKey: "amira.write.librettoEditMode") as? Bool ?? false {
         didSet { UserDefaults.standard.set(isLibrettoEditMode, forKey: "amira.write.librettoEditMode") }
     }
-    var directionMarkupColorHex: String = UserDefaults.standard.string(forKey: "amira.write.directionMarkupColorHex") ?? ScriptMarkupPalette.defaultDirectionHex {
+    var directionMarkupColorHex: String = UserDefaults.standard.string(forKey: "amira.write.directionMarkupColorHex") ?? ScriptPalette.direction {
         didSet {
-            let normalized = ScriptMarkupPalette.normalizedHex(directionMarkupColorHex) ?? ScriptMarkupPalette.defaultDirectionHex
+            let normalized = ScriptPalette.normalizedHex(directionMarkupColorHex) ?? ScriptPalette.direction
             guard normalized == directionMarkupColorHex else {
                 directionMarkupColorHex = normalized
                 return
@@ -622,9 +595,9 @@ final class ScriptStore {
             saveProjectSettings()
         }
     }
-    var storyboardingMarkupColorHex: String = UserDefaults.standard.string(forKey: "amira.write.storyboardingMarkupColorHex") ?? ScriptMarkupPalette.defaultStoryboardingHex {
+    var storyboardingMarkupColorHex: String = UserDefaults.standard.string(forKey: "amira.write.storyboardingMarkupColorHex") ?? ScriptPalette.storyboarding {
         didSet {
-            let normalized = ScriptMarkupPalette.normalizedHex(storyboardingMarkupColorHex) ?? ScriptMarkupPalette.defaultStoryboardingHex
+            let normalized = ScriptPalette.normalizedHex(storyboardingMarkupColorHex) ?? ScriptPalette.storyboarding
             guard normalized == storyboardingMarkupColorHex else {
                 storyboardingMarkupColorHex = normalized
                 return
@@ -633,9 +606,9 @@ final class ScriptStore {
             saveProjectSettings()
         }
     }
-    var animateMarkupColorHex: String = UserDefaults.standard.string(forKey: "amira.write.animateMarkupColorHex") ?? ScriptMarkupPalette.defaultAnimateHex {
+    var animateMarkupColorHex: String = UserDefaults.standard.string(forKey: "amira.write.animateMarkupColorHex") ?? ScriptPalette.animate {
         didSet {
-            let normalized = ScriptMarkupPalette.normalizedHex(animateMarkupColorHex) ?? ScriptMarkupPalette.defaultAnimateHex
+            let normalized = ScriptPalette.normalizedHex(animateMarkupColorHex) ?? ScriptPalette.animate
             guard normalized == animateMarkupColorHex else {
                 animateMarkupColorHex = normalized
                 return
@@ -644,9 +617,9 @@ final class ScriptStore {
             saveProjectSettings()
         }
     }
-    var scriptBackgroundColorHex: String = UserDefaults.standard.string(forKey: "amira.write.scriptBackgroundColorHex") ?? ScriptMarkupPalette.defaultScriptBackgroundHex {
+    var scriptBackgroundColorHex: String = UserDefaults.standard.string(forKey: "amira.write.scriptBackgroundColorHex") ?? ScriptPalette.scriptBackground {
         didSet {
-            let normalized = ScriptMarkupPalette.normalizedHex(scriptBackgroundColorHex) ?? ScriptMarkupPalette.defaultScriptBackgroundHex
+            let normalized = ScriptPalette.normalizedHex(scriptBackgroundColorHex) ?? ScriptPalette.scriptBackground
             guard normalized == scriptBackgroundColorHex else {
                 scriptBackgroundColorHex = normalized
                 return
@@ -660,19 +633,19 @@ final class ScriptStore {
     var showsRecentAgentUpdate: Bool = false
 
     var directionMarkupColor: Color {
-        ScriptMarkupPalette.color(from: directionMarkupColorHex, fallback: ScriptMarkupPalette.defaultDirectionHex)
+        Color(hex: directionMarkupColorHex, fallback: ScriptPalette.direction)
     }
 
     var storyboardingMarkupColor: Color {
-        ScriptMarkupPalette.color(from: storyboardingMarkupColorHex, fallback: ScriptMarkupPalette.defaultStoryboardingHex)
+        Color(hex: storyboardingMarkupColorHex, fallback: ScriptPalette.storyboarding)
     }
 
     var animateMarkupColor: Color {
-        ScriptMarkupPalette.color(from: animateMarkupColorHex, fallback: ScriptMarkupPalette.defaultAnimateHex)
+        Color(hex: animateMarkupColorHex, fallback: ScriptPalette.animate)
     }
 
     var scriptBackgroundColor: Color {
-        ScriptMarkupPalette.color(from: scriptBackgroundColorHex, fallback: ScriptMarkupPalette.defaultScriptBackgroundHex)
+        Color(hex: scriptBackgroundColorHex, fallback: ScriptPalette.scriptBackground)
     }
 
     var isDarkBackground: Bool {

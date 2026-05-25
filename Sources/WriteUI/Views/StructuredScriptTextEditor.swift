@@ -10,9 +10,9 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
     var showInlineShotCards: Bool = true
     var showLyricCards: Bool = true
     var characterNames: [String] = []
-    var directionMarkupColorHex: String = ScriptMarkupPalette.defaultDirectionHex
-    var storyboardingMarkupColorHex: String = ScriptMarkupPalette.defaultStoryboardingHex
-    var animateMarkupColorHex: String = ScriptMarkupPalette.defaultAnimateHex
+    var directionMarkupColorHex: String = ScriptPalette.direction
+    var storyboardingMarkupColorHex: String = ScriptPalette.storyboarding
+    var animateMarkupColorHex: String = ScriptPalette.animate
     var expandedShotCardIDs: Binding<Set<String>> = .constant([])
     var allowsShotBoundaryEditing: Bool = false
     var allowsShotCardEditing: Bool = true
@@ -27,7 +27,7 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
     }
 
     private static func nsColor(from hex: String, fallback fallbackHex: String) -> NSColor {
-        let resolvedHex = ScriptMarkupPalette.normalizedHex(hex) ?? fallbackHex
+        let resolvedHex = ScriptPalette.normalizedHex(hex) ?? fallbackHex
         let raw = resolvedHex.hasPrefix("#") ? String(resolvedHex.dropFirst()) : resolvedHex
         guard raw.count == 6, let value = Int(raw, radix: 16) else {
             return .white
@@ -444,7 +444,7 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             host.timelineView.fieldSuggestions = fieldSuggestions()
             host.timelineView.accentColor = StructuredScriptTextEditor.nsColor(
                 from: parent.animateMarkupColorHex,
-                fallback: ScriptMarkupPalette.defaultAnimateHex
+                fallback: ScriptPalette.animate
             )
             host.timelineView.yForOffset = { [weak host] offset in
                 host?.lyricSpeakerOverlayView.yForOffset(offset)
@@ -465,11 +465,11 @@ struct StructuredScriptTextEditor: NSViewRepresentable {
             host.textOnlyLyricOverlayView.characterNames = parent.characterNames
             host.lyricSpeakerOverlayView.directionAccentColor = StructuredScriptTextEditor.nsColor(
                 from: parent.directionMarkupColorHex,
-                fallback: ScriptMarkupPalette.defaultDirectionHex
+                fallback: ScriptPalette.direction
             )
             host.lyricSpeakerOverlayView.actionAccentColor = StructuredScriptTextEditor.nsColor(
                 from: parent.storyboardingMarkupColorHex,
-                fallback: ScriptMarkupPalette.defaultStoryboardingHex
+                fallback: ScriptPalette.storyboarding
             )
             host.lyricSpeakerOverlayView.reloadCards()
             host.textView.foldedProjection = currentFoldedProjection

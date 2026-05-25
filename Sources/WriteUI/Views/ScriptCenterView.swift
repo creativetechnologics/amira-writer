@@ -523,9 +523,9 @@ struct ScriptTextEditor: NSViewRepresentable {
     var showDirections: Bool
     var showStoryboarding: Bool
     var showAnimateDirections: Bool
-    var directionMarkupColorHex: String = ScriptMarkupPalette.defaultDirectionHex
-    var storyboardingMarkupColorHex: String = ScriptMarkupPalette.defaultStoryboardingHex
-    var animateMarkupColorHex: String = ScriptMarkupPalette.defaultAnimateHex
+    var directionMarkupColorHex: String = ScriptPalette.direction
+    var storyboardingMarkupColorHex: String = ScriptPalette.storyboarding
+    var animateMarkupColorHex: String = ScriptPalette.animate
     var pendingHighlightRanges: [NSRange] = []
     var externalChangeRanges: [NSRange] = []
     var externalChangeOpacity: Double = 0
@@ -743,9 +743,9 @@ struct ScriptTextEditor: NSViewRepresentable {
         showDirections show: Bool,
         showStoryboarding: Bool = true,
         showAnimateDirections: Bool = true,
-        directionMarkupColorHex: String = ScriptMarkupPalette.defaultDirectionHex,
-        storyboardingMarkupColorHex: String = ScriptMarkupPalette.defaultStoryboardingHex,
-        animateMarkupColorHex: String = ScriptMarkupPalette.defaultAnimateHex,
+        directionMarkupColorHex: String = ScriptPalette.direction,
+        storyboardingMarkupColorHex: String = ScriptPalette.storyboarding,
+        animateMarkupColorHex: String = ScriptPalette.animate,
         showInlineShotCards: Bool = false,
         expandedShotCardIDs: Set<String> = []
     ) -> DisplayProjection {
@@ -813,7 +813,7 @@ struct ScriptTextEditor: NSViewRepresentable {
             let tealColor = show
                 ? nsColor(
                     from: directionMarkupColorHex,
-                    fallback: ScriptMarkupPalette.defaultDirectionHex
+                    fallback: ScriptPalette.direction
                 ).withAlphaComponent(0.82)
                 : NSColor.clear
             for range in directionRanges {
@@ -836,7 +836,7 @@ struct ScriptTextEditor: NSViewRepresentable {
             let orangeColor = showStoryboarding
                 ? nsColor(
                     from: storyboardingMarkupColorHex,
-                    fallback: ScriptMarkupPalette.defaultStoryboardingHex
+                    fallback: ScriptPalette.storyboarding
                 ).withAlphaComponent(0.86)
                 : NSColor.clear
             for range in storyboardRanges {
@@ -851,7 +851,7 @@ struct ScriptTextEditor: NSViewRepresentable {
             let pinkColor = showAnimateDirections
                 ? nsColor(
                     from: animateMarkupColorHex,
-                    fallback: ScriptMarkupPalette.defaultAnimateHex
+                    fallback: ScriptPalette.animate
                 ).withAlphaComponent(0.86)
                 : NSColor.clear
             for range in animateCanonicalRanges {
@@ -918,9 +918,9 @@ struct ScriptTextEditor: NSViewRepresentable {
     }
 
     private static func nsColor(from hex: String, fallback fallbackHex: String) -> NSColor {
-        NSColor(ScriptMarkupPalette.color(from: hex, fallback: fallbackHex))
+        NSColor(Color(hex: hex, fallback: fallbackHex))
             .usingColorSpace(.deviceRGB)
-        ?? NSColor(ScriptMarkupPalette.color(from: fallbackHex, fallback: fallbackHex))
+        ?? NSColor(Color(hex: fallbackHex, fallback: fallbackHex))
     }
 
     static func displayProjection(
@@ -1552,9 +1552,9 @@ struct ScriptTextEditor: NSViewRepresentable {
         var lastShowInlineShotCards = false
         var lastAllowsShotCardEditing = false
         var lastAllowsShotBoundaryEditing = false
-        var lastDirectionMarkupColorHex = ScriptMarkupPalette.defaultDirectionHex
-        var lastStoryboardingMarkupColorHex = ScriptMarkupPalette.defaultStoryboardingHex
-        var lastAnimateMarkupColorHex = ScriptMarkupPalette.defaultAnimateHex
+        var lastDirectionMarkupColorHex = ScriptPalette.direction
+        var lastStoryboardingMarkupColorHex = ScriptPalette.storyboarding
+        var lastAnimateMarkupColorHex = ScriptPalette.animate
         var lastHighlightRanges: [NSRange] = []
         var lastExternalRanges: [NSRange] = []
         var lastExternalOpacity: Double = 0

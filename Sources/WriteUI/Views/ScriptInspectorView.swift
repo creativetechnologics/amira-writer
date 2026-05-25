@@ -107,7 +107,7 @@ struct ToolsSectionContent: View {
     private var scriptBackgroundColorBinding: Binding<Color> {
         Binding(
             get: { store.scriptBackgroundColor },
-            set: { store.scriptBackgroundColorHex = ScriptMarkupPalette.hex(from: $0, fallback: ScriptMarkupPalette.defaultScriptBackgroundHex) }
+            set: { store.scriptBackgroundColorHex = ColorHex.hex(from: $0) ?? ScriptPalette.scriptBackground }
         )
     }
 
@@ -239,7 +239,7 @@ struct ToolsSectionContent: View {
                 .frame(width: 28)
 
             Button {
-                store.scriptBackgroundColorHex = ScriptMarkupPalette.defaultScriptBackgroundHex
+                store.scriptBackgroundColorHex = ScriptPalette.scriptBackground
             } label: {
                 Image(systemName: "arrow.counterclockwise")
                     .font(.system(size: 10, weight: .semibold))

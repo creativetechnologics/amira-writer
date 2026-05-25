@@ -18,19 +18,13 @@ final class ProjectSettingsTests: XCTestCase {
     }
 
     func testScriptBackgroundColorInvalidHexFallsBackToDefault() {
-        let color = ScriptMarkupPalette.color(
-            from: "not-a-color",
-            fallback: ScriptMarkupPalette.defaultScriptBackgroundHex
-        )
-        let fallback = ScriptMarkupPalette.color(
-            from: ScriptMarkupPalette.defaultScriptBackgroundHex,
-            fallback: "#FFFFFF"
-        )
+        let color = Color(hex: "not-a-color", fallback: ScriptPalette.scriptBackground)
+        let fallback = Color(hex: ScriptPalette.scriptBackground, fallback: "#FFFFFF")
 
-        XCTAssertEqual(ScriptMarkupPalette.normalizedHex("not-a-color"), nil)
+        XCTAssertEqual(ScriptPalette.normalizedHex("not-a-color"), nil)
         XCTAssertEqual(
-            ScriptMarkupPalette.hex(from: color, fallback: "#FFFFFF"),
-            ScriptMarkupPalette.hex(from: fallback, fallback: "#FFFFFF")
+            ColorHex.hex(from: color),
+            ColorHex.hex(from: fallback)
         )
     }
 }
