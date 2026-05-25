@@ -2,19 +2,6 @@ import Foundation
 import ProjectKit
 import SwiftUI
 
-// MARK: - Debug Logging
-
-private func amiraDebugLog(_ message: String) {
-    let ts = ISO8601DateFormatter().string(from: Date())
-    let line = "[\(ts)] [Write] \(message)\n"
-    if let data = line.data(using: .utf8),
-       let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/write-debug.log")) {
-        handle.seekToEndOfFile()
-        handle.write(data)
-        try? handle.close()
-    }
-}
-
 // MARK: - Write-Only Models (not shared via ProjectKit)
 
 struct SongLyricIterationFile: Identifiable, Hashable, Sendable {
@@ -802,9 +789,9 @@ final class ScriptStore {
     // MARK: - Load Project
 
     func loadProject(url: URL) async {
-        amiraDebugLog("loadProject START url=\(url.path)")
+        AmiraLogger.log(.write, "loadProject START url=\(url.path)")
         guard !isLoadingProject else {
-            amiraDebugLog("loadProject SKIPPED: already loading")
+            AmiraLogger.log(.write, "loadProject SKIPPED: already loading")
             return
         }
 

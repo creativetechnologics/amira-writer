@@ -10,24 +10,6 @@ import ProjectKit
 import os
 import UniformTypeIdentifiers
 
-// MARK: - Debug Logging
-
-/// Reuse a single formatter to avoid allocating ISO8601DateFormatter on every log call.
-private nonisolated(unsafe) let amiraDebugDateFormatter: ISO8601DateFormatter = ISO8601DateFormatter()
-
-private func amiraDebugLog(_ message: String) {
-    let ts = amiraDebugDateFormatter.string(from: Date())
-    let line = "[\(ts)] [Score] \(message)\n"
-    let url = URL(fileURLWithPath: "/tmp/score-debug.log")
-    if let fh = try? FileHandle(forWritingTo: url) {
-        fh.seekToEndOfFile()
-        fh.write(Data(line.utf8))
-        fh.closeFile()
-    } else {
-        try? line.write(to: url, atomically: false, encoding: .utf8)
-    }
-}
-
 // MARK: - Supporting Enums
 
 enum InstrumentProfileScope: String, CaseIterable, Identifiable, Sendable {
@@ -1286,7 +1268,7 @@ final class ScoreStore {
     var apiServerEnabled: Bool = true
     var apiServerPort: UInt16 = 19847
     func startAPIServer() {
-        amiraDebugLog("startAPIServer: enabled=\(apiServerEnabled) existing=\(apiServer != nil) port=\(apiServerPort)")
+        AmiraLogger.log(.score, "startAPIServer: enabled=\(apiServerEnabled) existing=\(apiServer != nil) port=\(apiServerPort)")
         guard apiServerEnabled, apiServer == nil else { return }
         do {
             let server = try APIServer(store: self, port: apiServerPort)
@@ -1295,9 +1277,9 @@ final class ScoreStore {
             }
             server.start()
             apiServer = server
-            amiraDebugLog("startAPIServer: OK on port \(apiServerPort)")
+            AmiraLogger.log(.score, "startAPIServer: OK on port \(apiServerPort)")
         } catch {
-            amiraDebugLog("startAPIServer: FAILED — \(error.localizedDescription)")
+            AmiraLogger.log(.score, "startAPIServer: FAILED — \(error.localizedDescription)")
             statusMessage = "API server failed to start: \(error.localizedDescription)"
         }
     }
@@ -1831,7 +1813,7 @@ final class ScoreStore {
     // MARK: - Load Project
 
     func loadProject(url: URL, preferService: Bool? = nil) async {
-        amiraDebugLog("loadProject START url=\(url.path)")
+        AmiraLogger.log(.score, "loadProject START url=\(url.path)")
         statusMessage = "Loading \(url.lastPathComponent)..."
         saveIndicator = .idle
         stopExternalFileWatch()
@@ -1881,11 +1863,11 @@ final class ScoreStore {
 
             isDirty = false
             statusMessage = "\(meta.name) — \(songAssets.count) songs loaded"
-            amiraDebugLog("loadProject LOADED \(songAssets.count) songs, hydratedPaths=\(hydratedSongPaths.count)")
+            AmiraLogger.log(.score, "loadProject LOADED \(songAssets.count) songs, hydratedPaths=\(hydratedSongPaths.count)")
 
             // Auto-select first song
             if let first = songAssets.first {
-                amiraDebugLog("loadProject auto-selecting first song: \(first.relativePath)")
+                AmiraLogger.log(.score, "loadProject auto-selecting first song: \(first.relativePath)")
                 setSelectedMidi(id: first.id, deferLoading: true)
             }
 
@@ -2159,13 +2141,13 @@ final class ScoreStore {
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
 
         guard !changedPaths.isEmpty else { return }
-        amiraDebugLog("checkForExternalProjectChanges: \(changedPaths.count) changed: \(changedPaths.joined(separator: ", "))")
+        AmiraLogger.log(.score, "checkForExternalProjectChanges: \(changedPaths.count) changed: \(changedPaths.joined(separator: ", "))")
         lastKnownExternalSnapshots = currentSnapshots
 
         let currentSongPaths = Set(currentSnapshots.keys.filter { $0.hasSuffix(".ows") })
         let knownSongPaths = Set(songStubs.map(\.relativePath))
         if currentSongPaths != knownSongPaths {
-            amiraDebugLog("checkForExternalProjectChanges: song paths changed, full rescan triggered")
+            AmiraLogger.log(.score, "checkForExternalProjectChanges: song paths changed, full rescan triggered")
             handleExternalProjectRescan(projectURL: projectURL, changedPaths: changedPaths)
             return
         }
@@ -2181,7 +2163,7 @@ final class ScoreStore {
 
     private func handleExternalProjectRescan(projectURL: URL, changedPaths: [String]) {
         let sourceProjectURL = self.projectURL ?? projectURL
-        amiraDebugLog("handleExternalProjectRescan: \(changedPaths.count) changed paths")
+        AmiraLogger.log(.score, "handleExternalProjectRescan: \(changedPaths.count) changed paths")
 
         guard !isDirty else {
             hasPendingAgentChanges = true
@@ -2364,7 +2346,7 @@ final class ScoreStore {
         let playback = songAsset.document.activeVersion()?.playback
         let playbackNoteCount = playback?.notes.count ?? 0
         let shouldMarkLoaded = playbackNoteCount > 0 || dirtySongPaths.contains(songAsset.relativePath)
-        amiraDebugLog("loadSelectedMidiIfPossible: \(songAsset.relativePath) playback=\(playback != nil ? "YES (\(playbackNoteCount) notes)" : "nil")")
+        AmiraLogger.log(.score, "loadSelectedMidiIfPossible: \(songAsset.relativePath) playback=\(playback != nil ? "YES (\(playbackNoteCount) notes)" : "nil")")
         if let playback, !playback.notes.isEmpty {
             // Load from playback snapshot (most common path for OWS files)
             pianoRollNotes = playback.notes.sorted {
@@ -2564,12 +2546,12 @@ final class ScoreStore {
         forceRefreshFromSource: Bool = false
     ) async -> Bool {
         guard let songIndex = songAssets.firstIndex(where: { $0.id == id }) else {
-            amiraDebugLog("hydrateSongDetailsIfNeeded: song id not found")
+            AmiraLogger.log(.score, "hydrateSongDetailsIfNeeded: song id not found")
             return false
         }
 
         let relativePath = songAssets[songIndex].relativePath
-        amiraDebugLog("hydrateSongDetailsIfNeeded START: \(relativePath) includePlayback=\(includePlayback)")
+        AmiraLogger.log(.score, "hydrateSongDetailsIfNeeded START: \(relativePath) includePlayback=\(includePlayback)")
         let hasPlayback = songAssets[songIndex].document.activeVersion()?.playback != nil
         if hydratedSongPaths.contains(relativePath) && !forceRefreshFromSource && (!includePlayback || hasPlayback) {
             return true
@@ -2590,12 +2572,12 @@ final class ScoreStore {
         }
 
         guard let rawHydratedAsset = loadedHydratedAsset else {
-            amiraDebugLog("hydrateSongDetailsIfNeeded FAILED: no asset loaded for \(relativePath)")
+            AmiraLogger.log(.score, "hydrateSongDetailsIfNeeded FAILED: no asset loaded for \(relativePath)")
             return false
         }
         let hydratedAsset = runtimeStableAsset(rawHydratedAsset, relativePath: relativePath)
         let hydPlayback = hydratedAsset.document.activeVersion()?.playback
-        amiraDebugLog("hydrateSongDetailsIfNeeded OK: \(relativePath) playback=\(hydPlayback != nil ? "YES (\(hydPlayback!.notes.count) notes)" : "nil")")
+        AmiraLogger.log(.score, "hydrateSongDetailsIfNeeded OK: \(relativePath) playback=\(hydPlayback != nil ? "YES (\(hydPlayback!.notes.count) notes)" : "nil")")
 
         if let latestIndex = songAssets.firstIndex(where: { $0.relativePath == relativePath }) {
             songAssets[latestIndex] = hydratedAsset
@@ -2904,7 +2886,7 @@ final class ScoreStore {
         if cancelPendingAdvance {
             cancelPendingAdvanceStart()
         }
-        amiraDebugLog("playPianoRoll: song=\(selectedMidiAsset?.relativePath ?? "nil") notes=\(pianoRollNotes.count) clips=\(pianoRollAudioClips.count)")
+        AmiraLogger.log(.score, "playPianoRoll: song=\(selectedMidiAsset?.relativePath ?? "nil") notes=\(pianoRollNotes.count) clips=\(pianoRollAudioClips.count)")
         NSLog("[ScoreStore] playPianoRoll — song=%@ notes=%d clips=%d startTick=%d",
               selectedMidiAsset?.relativePath ?? "nil", pianoRollNotes.count, pianoRollAudioClips.count, startTick)
         let unmuted = pianoRollNotes.filter { !$0.muted }
@@ -2943,13 +2925,13 @@ final class ScoreStore {
         let resolvedMappings = resolvedInstrumentMappings()
 
         // Debug: log mapping state to help diagnose silent playback
-        amiraDebugLog("playPianoRoll mappings: \(pianoRollChannelKeyByTrackChannel.count) entries, sampleRoot=\(sampleRootDirectoryPath)")
+        AmiraLogger.log(.score, "playPianoRoll mappings: \(pianoRollChannelKeyByTrackChannel.count) entries, sampleRoot=\(sampleRootDirectoryPath)")
         for (pairKey, mappingKey) in pianoRollChannelKeyByTrackChannel.sorted(by: { $0.key < $1.key }) {
             let mapping = resolvedMappings[mappingKey]
             let sf2 = mapping?.sf2Path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let exists = !sf2.isEmpty && FileManager.default.fileExists(atPath: sf2)
             let status = sf2.isEmpty ? "NO SF2" : "\(URL(fileURLWithPath: sf2).lastPathComponent) exists=\(exists)"
-            amiraDebugLog("  mapping \(pairKey) → \(mappingKey) [\(status)] muted=\(mapping?.muted ?? false) sourceType=\(String(describing: mapping?.effectiveSourceType))")
+            AmiraLogger.log(.score, "  mapping \(pairKey) → \(mappingKey) [\(status)] muted=\(mapping?.muted ?? false) sourceType=\(String(describing: mapping?.effectiveSourceType))")
         }
 
         playbackEngine.metronomeTimeSignatures = pianoRollTimeSignatures
