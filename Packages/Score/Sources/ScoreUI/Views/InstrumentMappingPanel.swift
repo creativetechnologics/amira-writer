@@ -1326,12 +1326,6 @@ struct InstrumentMappingPanel: View {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
-    }
-}
-
 private struct TrackColorTarget: Identifiable {
     let id: String
     let title: String

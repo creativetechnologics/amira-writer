@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 @available(macOS 26.0, *)
 struct CharacterExpressionState: Sendable, Hashable {
@@ -168,6 +169,3 @@ private extension CharacterExpressionEngine {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
-}

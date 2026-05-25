@@ -2505,12 +2505,6 @@ private struct InlineShotCardOverlayView: View {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
-    }
-}
-
 // MARK: - Script Text Host View
 
 /// Custom NSView that hosts an NSTextView directly (no NSScrollView)

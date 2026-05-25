@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 @available(macOS 26.0, *)
 @MainActor
@@ -408,9 +409,4 @@ private struct LyricLineAnchor: Sendable {
     var endFrame: Int
 }
 
-private extension String {
-    var nilIfEmpty: String? {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-}
+
