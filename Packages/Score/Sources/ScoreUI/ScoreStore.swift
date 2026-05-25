@@ -3985,19 +3985,9 @@ final class ScoreStore {
 
     // MARK: - Style & Composition
 
-    func analyzeMusicalStyle() {
-        guard !pianoRollNotes.isEmpty else { return }
-        let key = currentStructuralAnalysis?.detectedKey ?? KeyDetector.detectKey(notes: pianoRollNotes) ?? DetectedKey(root: 0, isMinor: false, confidence: 0)
-        let melodic = StyleAnalyzer.analyzeMelodicProfile(notes: pianoRollNotes, ticksPerQuarter: ticksPerQuarter)
-        let rhythmic = StyleAnalyzer.analyzeRhythmicProfile(notes: pianoRollNotes, ticksPerQuarter: ticksPerQuarter)
-        let harmonic = StyleAnalyzer.analyzeHarmonicComplexity(chords: currentChordProgression?.chords ?? [], key: key)
-        detectedStyle = MusicalStyleProfile(melodicProfile: melodic, rhythmicProfile: rhythmic, harmonicComplexity: harmonic, genreHints: [])
-    }
+    func analyzeMusicalStyle() { composition.analyzeMusicalStyle() }
 
-    func composeMelody(constraints: MelodyConstraints) {
-        let melody = CompositionEngine.generateMelody(constraints: constraints)
-        composedMelody = melody
-    }
+    func composeMelody(constraints: MelodyConstraints) { composition.composeMelody(constraints: constraints) }
 
     func registerLeitmotif(name: String, noteIDs: [UUID]) {
         let selectedNotes = pianoRollNotes.filter { noteIDs.contains($0.id) }.sorted { $0.startTick < $1.startTick }
@@ -4043,21 +4033,15 @@ final class ScoreStore {
 
     // MARK: - MidiAI (Stubs)
 
-    func midiAIGenerateFromText(_ prompt: String, maxTokens: Int = 1024, temperature: Double = 0.95) {
-        midiAIStatusMessage = "MidiAI not available in Score."
-    }
+    func midiAIGenerateFromText(_ prompt: String, maxTokens: Int = 1024, temperature: Double = 0.95) { composition.midiAIGenerateFromText(prompt, maxTokens: maxTokens, temperature: temperature) }
 
-    func midiAIGenerateContinuation(maxTokens: Int = 512, temperature: Double = 0.95) {
-        midiAIStatusMessage = "MidiAI not available in Score."
-    }
+    func midiAIGenerateContinuation(maxTokens: Int = 512, temperature: Double = 0.95) { composition.midiAIGenerateContinuation(maxTokens: maxTokens, temperature: temperature) }
 
     func midiAIGenerateAccompaniment(maxTokens: Int = 512, temperature: Double = 0.95) {
         midiAIStatusMessage = "MidiAI not available in Score."
     }
 
-    func midiAIGenerateMelody(lyrics: String, tempoBPM: Int? = nil, key: String? = nil) {
-        midiAIStatusMessage = "MidiAI not available in Score."
-    }
+    func midiAIGenerateMelody(lyrics: String, tempoBPM: Int? = nil, key: String? = nil) { composition.midiAIGenerateMelody(lyrics: lyrics, tempoBPM: tempoBPM, key: key) }
 
     // MARK: - Version Manager
 
@@ -4100,6 +4084,14 @@ final class ScoreStore {
         let a = APIStore(parent: self)
         _apiStore = a
         return a
+    }
+
+    @ObservationIgnored private var _composition: CompositionStore?
+    var composition: CompositionStore {
+        if let c = _composition { return c }
+        let c = CompositionStore(parent: self)
+        _composition = c
+        return c
     }
 
     // MARK: - Step Input
