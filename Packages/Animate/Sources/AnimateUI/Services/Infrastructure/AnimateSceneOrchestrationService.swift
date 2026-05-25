@@ -12,6 +12,8 @@ struct AnimateSceneOrchestrationService {
         AnimateSceneExecutionService(store: store, parsedPlan: parsedPlan)
     }
 
+    // MARK: - Scene Execution Coordinator
+
     func planReview(for scene: AnimationScene) -> AnimatePlanReview {
         planReview(for: scene, plan: parsedPlan)
     }
@@ -166,6 +168,8 @@ struct AnimateSceneOrchestrationService {
     func planReviewJSON(_ review: AnimatePlanReview) -> String {
         encode(review)
     }
+
+    // MARK: - Shot Sequencing Manager
 
     func planApplyPreview(for scene: AnimationScene) -> AnimatePlanApplyPreview {
         planApplyPreview(for: scene, plan: parsedPlan)
@@ -385,6 +389,8 @@ struct AnimateSceneOrchestrationService {
     func dialogueVisemePreviewJSON(_ preview: AnimateDialogueVisemePreview) -> String {
         encode(preview)
     }
+
+    // MARK: - Scene Synchronization
 
     func lightingPacket(for scene: AnimationScene) -> AnimateLightingPacket {
         let cast = sceneCharacters(for: scene)
@@ -640,6 +646,8 @@ struct AnimateSceneOrchestrationService {
     func sceneSyncPacketJSON(_ packet: AnimateSceneSyncPacket) -> String {
         encode(packet)
     }
+
+    // MARK: - Orchestration Packet Generation
 
     func orchestrationPacket(
         for scene: AnimationScene,

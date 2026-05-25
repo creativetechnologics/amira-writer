@@ -3,6 +3,8 @@ import AppKit
 import ProjectKit
 
 @available(macOS 26.0, *)
+// MARK: - Top-level Editor Composition
+
 struct StructuredScriptTextEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var reportedHeight: CGFloat

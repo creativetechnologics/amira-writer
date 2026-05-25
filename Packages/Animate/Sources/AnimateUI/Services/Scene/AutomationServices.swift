@@ -89,6 +89,8 @@ enum AutomationSourceResolver {
 
 @available(macOS 26.0, *)
 @MainActor
+// MARK: - Shot Specification Builder
+
 struct EffectiveShotSpecBuilder {
     var store: AnimateStore
 
@@ -1022,6 +1024,8 @@ struct EffectiveShotSpecBuilder {
 }
 
 @available(macOS 26.0, *)
+// MARK: - Shot Spec Validation Service
+
 struct ShotSpecValidationService {
     func validate(_ spec: EffectiveShotSpec) -> [AutomationBlocker] {
         spec.blockers
@@ -1112,6 +1116,8 @@ struct ShotSpecValidationService {
 
 @available(macOS 26.0, *)
 @MainActor
+// MARK: - Reference Contract Resolver
+
 struct ReferenceContractResolver {
     var store: AnimateStore
 
@@ -2241,6 +2247,8 @@ struct ReferenceContractResolver {
 
 @available(macOS 26.0, *)
 @MainActor
+// MARK: - Shot Frame Plan Builder
+
 struct ShotFramePlanBuilder {
     var store: AnimateStore
 
@@ -2392,6 +2400,8 @@ struct AutomationFrameGenerationRunResponse: Codable, Sendable, Hashable {
 
 @available(macOS 26.0, *)
 @MainActor
+// MARK: - Frame Generation Service
+
 struct AutomationFrameGenerationService {
     var store: AnimateStore
 
