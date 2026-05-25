@@ -153,7 +153,7 @@ public enum ScenePackageStore {
         let canonicalTitle = string(sceneRoot["canonicalTitle"])
             ?? string(sceneRoot["slug"])
             ?? slugify(title)
-        let updatedAt = string(sceneRoot["updatedAt"]) ?? ISO8601DateFormatter().string(from: Date())
+        let updatedAt = string(sceneRoot["updatedAt"]) ?? AmiraDateFormatter.iso8601.string(from: Date())
         let activeVersionID = string(sceneRoot["activeVersionID"])
         let versionMetas = sceneRoot["versions"] as? [[String: Any]] ?? []
         let versionOrder = sceneRoot["versionOrder"] as? [String] ?? []
@@ -382,7 +382,7 @@ public enum ScenePackageStore {
         version["saveType"] = string(version["saveType"]) ?? "imported"
         version["isBookmarked"] = bool(version["isBookmarked"]) ?? false
 
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = AmiraDateFormatter.iso8601.string(from: Date())
         version["createdAt"] = string(version["createdAt"]) ?? now
         version["updatedAt"] = string(version["updatedAt"]) ?? string(metadata["createdAt"]) ?? now
         version["lyrics"] = readManuscript(in: versionDirectoryURL) ?? scriptBlocksText(in: versionDirectoryURL) ?? ""

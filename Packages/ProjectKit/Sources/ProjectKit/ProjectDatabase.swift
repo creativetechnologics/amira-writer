@@ -506,7 +506,7 @@ public actor ProjectDatabase {
         }
 
         let now = Date()
-        let nowStr = Self.isoFormatter.string(from: now)
+        let nowStr = AmiraDateFormatter.iso8601Full.string(from: now)
 
         // Targeted UPDATEs instead of DELETE-all/re-INSERT — avoids WAL bloat
         // and unnecessary I/O when only one field changes.
@@ -544,7 +544,7 @@ public actor ProjectDatabase {
 
         let metrics = summarizePlaybackJSON(playbackJSON)
         let now = Date()
-        let nowStr = Self.isoFormatter.string(from: now)
+        let nowStr = AmiraDateFormatter.iso8601Full.string(from: now)
 
         try execute("BEGIN IMMEDIATE TRANSACTION")
         do {
@@ -617,7 +617,7 @@ public actor ProjectDatabase {
                     .text(scene.title),
                     .text(scene.canonicalTitle),
                     .text(scene.notes),
-                    .text(Self.isoFormatter.string(from: scene.updatedAt)),
+                    .text(AmiraDateFormatter.iso8601Full.string(from: scene.updatedAt)),
                     bindUUID(scene.activeVersionID),
                     .int(scene.orderIndex),
                     bindBlob(scene.rootJSON),
@@ -646,8 +646,8 @@ public actor ProjectDatabase {
                         bindText(version.userLabel),
                         .int(version.isBookmarked ? 1 : 0),
                         .int(version.sortIndex),
-                        .text(Self.isoFormatter.string(from: version.createdAt)),
-                        .text(Self.isoFormatter.string(from: version.updatedAt)),
+                        .text(AmiraDateFormatter.iso8601Full.string(from: version.createdAt)),
+                        .text(AmiraDateFormatter.iso8601Full.string(from: version.updatedAt)),
                         .text(version.lyrics),
                         bindBlob(version.versionJSON),
                         bindBlob(version.playbackJSON),
@@ -685,7 +685,7 @@ public actor ProjectDatabase {
                 .text(entityID),
                 .text(kind),
                 .text(actorID),
-                .text(Self.isoFormatter.string(from: Date()))
+                .text(AmiraDateFormatter.iso8601Full.string(from: Date()))
             ]
         )
     }
@@ -975,8 +975,8 @@ public actor ProjectDatabase {
                     .text(project.id.uuidString),
                     .text(project.name),
                     .text(project.notes),
-                    .text(Self.isoFormatter.string(from: project.createdAt)),
-                    .text(Self.isoFormatter.string(from: project.updatedAt)),
+                    .text(AmiraDateFormatter.iso8601Full.string(from: project.createdAt)),
+                    .text(AmiraDateFormatter.iso8601Full.string(from: project.updatedAt)),
                     .text(project.projectURL.path)
                 ]
             )
@@ -1011,7 +1011,7 @@ public actor ProjectDatabase {
                         .text(character.id.uuidString),
                         .text(character.name),
                         .blob(character.jsonData),
-                        .text(Self.isoFormatter.string(from: character.updatedAt))
+                        .text(AmiraDateFormatter.iso8601Full.string(from: character.updatedAt))
                     ]
                 )
             }
@@ -1033,7 +1033,7 @@ public actor ProjectDatabase {
                         .text(scene.title),
                         .text(scene.canonicalTitle),
                         .text(scene.notes),
-                        .text(Self.isoFormatter.string(from: scene.updatedAt)),
+                        .text(AmiraDateFormatter.iso8601Full.string(from: scene.updatedAt)),
                         bindUUID(scene.activeVersionID),
                         .int(scene.orderIndex),
                         bindBlob(scene.rootJSON),
@@ -1060,8 +1060,8 @@ public actor ProjectDatabase {
                         bindText(version.userLabel),
                         .int(version.isBookmarked ? 1 : 0),
                         .int(version.sortIndex),
-                        .text(Self.isoFormatter.string(from: version.createdAt)),
-                        .text(Self.isoFormatter.string(from: version.updatedAt)),
+                        .text(AmiraDateFormatter.iso8601Full.string(from: version.createdAt)),
+                        .text(AmiraDateFormatter.iso8601Full.string(from: version.updatedAt)),
                         .text(version.lyrics),
                             bindBlob(version.versionJSON),
                             bindBlob(version.playbackJSON),
@@ -1115,7 +1115,7 @@ public actor ProjectDatabase {
         root["title"] = scene.title
         root["canonicalTitle"] = scene.canonicalTitle
         root["notes"] = scene.notes
-        root["updatedAt"] = Self.isoFormatter.string(from: scene.updatedAt)
+        root["updatedAt"] = AmiraDateFormatter.iso8601Full.string(from: scene.updatedAt)
         root["activeVersionID"] = scene.activeVersionID?.uuidString
 
         let sortedVersions = scene.versions.sorted { lhs, rhs in
@@ -1129,8 +1129,8 @@ public actor ProjectDatabase {
             var entry = (version.versionJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) ?? [:]
             entry["id"] = version.id.uuidString
             entry["label"] = version.label
-            entry["createdAt"] = Self.isoFormatter.string(from: version.createdAt)
-            entry["updatedAt"] = Self.isoFormatter.string(from: version.updatedAt)
+            entry["createdAt"] = AmiraDateFormatter.iso8601Full.string(from: version.createdAt)
+            entry["updatedAt"] = AmiraDateFormatter.iso8601Full.string(from: version.updatedAt)
             entry["lyrics"] = version.lyrics
             entry["saveType"] = version.saveType
             entry["isBookmarked"] = version.isBookmarked
@@ -1473,8 +1473,8 @@ public actor ProjectDatabase {
             binds: [
                 .text(name),
                 .text(notes),
-                .text(Self.isoFormatter.string(from: createdAt)),
-                .text(Self.isoFormatter.string(from: updatedAt)),
+                .text(AmiraDateFormatter.iso8601Full.string(from: createdAt)),
+                .text(AmiraDateFormatter.iso8601Full.string(from: updatedAt)),
                 .text(projectPath),
                 .text(projectID),
             ]
@@ -1505,7 +1505,7 @@ public actor ProjectDatabase {
                         .text(id.uuidString),
                         .text(charName),
                         .blob(charData),
-                        .text(Self.isoFormatter.string(from: updatedAt)),
+                        .text(AmiraDateFormatter.iso8601Full.string(from: updatedAt)),
                     ]
                 )
             }
@@ -1602,7 +1602,7 @@ public actor ProjectDatabase {
 
     private static func parseDate(_ value: Any?) -> Date? {
         guard let string = value as? String else { return nil }
-        return isoFormatter.date(from: string) ?? isoFormatterBasic.date(from: string)
+        return AmiraDateFormatter.parse(string)
     }
 
     private static func parseUUID(_ value: Any?) -> UUID? {
@@ -1634,18 +1634,6 @@ public actor ProjectDatabase {
         }
         return .null
     }
-
-    private nonisolated(unsafe) static let isoFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-
-    private nonisolated(unsafe) static let isoFormatterBasic: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
 }
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)

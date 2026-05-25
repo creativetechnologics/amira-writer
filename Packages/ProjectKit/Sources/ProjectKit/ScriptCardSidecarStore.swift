@@ -61,24 +61,13 @@ public enum ScriptCardSidecarStore {
 
     // MARK: Coders
 
-    /// ISO8601 formatter with fractional-second precision so dates round
-    /// trip exactly through encode → decode (the default `.iso8601`
-    /// strategy truncates to whole seconds, breaking equality).
-    /// `ISO8601DateFormatter` is not `Sendable`; build a fresh one each
-    /// call — they're cheap and the encode/decode hot paths are not.
-    private static func makeISOFormatter() -> ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }
-
     /// Stable JSON encoding so file diffs stay reviewable in git.
     public static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var container = encoder.singleValueContainer()
-            try container.encode(makeISOFormatter().string(from: date))
+            try container.encode(AmiraDateFormatter.iso8601Full.string(from: date))
         }
         return encoder
     }
@@ -88,12 +77,8 @@ public enum ScriptCardSidecarStore {
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
             let raw = try container.decode(String.self)
-            if let date = makeISOFormatter().date(from: raw) { return date }
-            // Fall back to plain ISO8601 (older sidecar files written
-            // before fractional-seconds support landed).
-            let fallback = ISO8601DateFormatter()
-            fallback.formatOptions = [.withInternetDateTime]
-            if let date = fallback.date(from: raw) { return date }
+            if let date = AmiraDateFormatter.iso8601Full.date(from: raw) { return date }
+            if let date = AmiraDateFormatter.iso8601.date(from: raw) { return date }
             throw DecodingError.dataCorruptedError(
                 in: container,
                 debugDescription: "Cannot decode ISO8601 date: \(raw)"

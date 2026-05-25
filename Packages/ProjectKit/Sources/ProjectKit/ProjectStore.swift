@@ -1223,13 +1223,7 @@ public actor ProjectStore {
 
     private static func parseDate(_ value: Any?) -> Date? {
         guard let string = value as? String else { return nil }
-        let fullFormatter = ISO8601DateFormatter()
-        fullFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fullFormatter.date(from: string) { return date }
-        let basicFormatter = ISO8601DateFormatter()
-        basicFormatter.formatOptions = [.withInternetDateTime]
-        if let date = basicFormatter.date(from: string) { return date }
-        return nil
+        return AmiraDateFormatter.parse(string) ?? AmiraDateFormatter.iso8601.date(from: string)
     }
 
     private static func jsonData(_ object: Any?) -> Data? {
