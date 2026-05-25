@@ -120,18 +120,16 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     /// Key = TrackSend.id
     private var sendMixerNodes: [UUID: AVAudioMixerNode] = [:]
 
-    /// Audio metering: accumulated levels from tap callbacks, published at 30fps
-    private var meterTapLevels: [UUID: MeterLevels] = [:]  // per-track raw levels from taps
-    private var masterMeterRaw: MeterLevels = .zero
-    private var meterPublishTimer: DispatchSourceTimer?
-    private var meterTapsInstalled = false
-    /// When > 0, installMeterTaps uses this as the tap bufferSize instead of the live default.
+    /// When > 0, installSubmixTaps uses this as the tap bufferSize instead of the live default.
     /// Set by enterExportMode() to reduce render-thread deadline misses during WAV export.
     var exportTapBufferFrames: AVAudioFrameCount = 0
-    /// Held peak values (decay 24dB/sec)
-    private var meterPeakHold: [UUID: (peakL: Float, peakR: Float)] = [:]
-    private var masterPeakHold: (peakL: Float, peakR: Float) = (-160, -160)
-    var onMeterUpdate: (([UUID: MeterLevels], MeterLevels) -> Void)?
+    /// Guards against double-installing the main mixer tap (shared with mixdown recording).
+    private var mainMixerTapInstalled = false
+    /// Meter update callback, forwarded to MeterManager.
+    var onMeterUpdate: (([UUID: MeterLevels], MeterLevels) -> Void)? {
+        get { meters.onMeterUpdate }
+        set { meters.onMeterUpdate = newValue }
+    }
 
     /// Automation playback: single 60Hz timer applying automation values to submix nodes
     private var automationTimer: DispatchSourceTimer?
@@ -148,6 +146,8 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
     /// Extracted metronome engine.
     lazy var metronome: MetronomeEngine = MetronomeEngine(parent: self)
+    /// Extracted meter manager.
+    lazy var meters: MeterManager = MeterManager(parent: self)
 
     // MARK: - Silent Export
     /// When true, the hardware output AudioUnit volume is set to 0 after
@@ -295,7 +295,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
     deinit {
         healthCheckTimer?.cancel()
-        meterPublishTimer?.cancel()
+        meters.stopMeterPublishTimer()
         automationTimer?.cancel()
         loopRecordingTimer?.cancel()
         playbackStopWorkItem?.cancel()
@@ -358,8 +358,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         fadeTimers.removeAll()
         automationTimer?.cancel()
         automationTimer = nil
-        meterPublishTimer?.cancel()
-        meterPublishTimer = nil
+        meters.stopMeterPublishTimer()
         loopRecordingTimer?.cancel()
         loopRecordingTimer = nil
 
@@ -376,11 +375,8 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         trackSubmixNodes.removeAll()
         trackFXChains.removeAll()
         sendMixerNodes.removeAll()
-        meterTapLevels.removeAll()
-        meterPeakHold.removeAll()
-        masterMeterRaw = .zero
-        masterPeakHold = (-160, -160)
-        meterTapsInstalled = false
+        meters.resetMeterState()
+        mainMixerTapInstalled = false
         isRecordingAudio = false
         isRecordingMainMix = false
         isReconfiguring = false
@@ -1155,15 +1151,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
     /// Get current meter levels for all tracks and master. Thread-safe snapshot.
     func getMeterLevels(completion: @escaping @Sendable ([UUID: MeterLevels], MeterLevels) -> Void) {
-        audioQueue.async { [weak self] in
-            guard let self else {
-                completion([:], .zero)
-                return
-            }
-            let tracks = self.meterTapLevels
-            let master = self.masterMeterRaw
-            completion(tracks, master)
-        }
+        meters.getMeterLevels(completion: completion)
     }
 
     // MARK: - Recording API
@@ -3315,7 +3303,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             // immediately sends the first look-ahead batch, so installing taps after it
             // can miss the attack of the opening notes in captured WAVs.
             if isRecordingMainMix {
-                installMeterTaps()
+                installMainMixerTapForRecordingAndMetering()
             }
 
             guard !shouldRenderMIDI || startHostedMIDIPlayback(
@@ -3353,8 +3341,9 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 ticksPerQuarter: ticksPerQuarter
             )
 
-            installMeterTaps()
-            startMeterPublishTimer()
+            meters.installSubmixTaps(submixNodes: trackSubmixNodes)
+            installMainMixerTapForRecordingAndMetering()
+            meters.startMeterPublishTimer()
 
             metronome.setupMetronomeNodeOnAudioQueue()
             metronome.scheduleMetronomeClicks(
@@ -3465,7 +3454,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             // capture, the master tap has to be armed before AVAudioSequencer.start(),
             // otherwise tick-0 notes can begin before the file writer sees audio.
             if isRecordingMainMix {
-                installMeterTaps()
+                installMainMixerTapForRecordingAndMetering()
             }
 
             let startBeats = Double(clampedStartTick) / Double(max(ticksPerQuarter, 1))
@@ -3492,8 +3481,9 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             )
 
             // Install metering taps on submix nodes and start publishing meter levels
-            installMeterTaps()
-            startMeterPublishTimer()
+            meters.installSubmixTaps(submixNodes: trackSubmixNodes)
+            installMainMixerTapForRecordingAndMetering()
+            meters.startMeterPublishTimer()
 
             // Setup and schedule metronome clicks
             metronome.setupMetronomeNodeOnAudioQueue()
@@ -4061,110 +4051,21 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         return totalSeconds
     }
 
-    // MARK: - Metering
+    // MARK: - Metering (Main Mixer Tap)
 
-    /// Copy float channel data out of an AVAudioPCMBuffer so it can be used after the tap callback returns.
-    /// Returns (leftChannel, rightChannelOrNil, frameCount).
-    nonisolated private static func copyChannelData(from buffer: AVAudioPCMBuffer) -> (left: [Float], right: [Float]?, frameCount: Int) {
-        guard let floatData = buffer.floatChannelData else { return ([], nil, 0) }
-        let frameCount = Int(buffer.frameLength)
-        guard frameCount > 0 else { return ([], nil, 0) }
-        let channelCount = Int(buffer.format.channelCount)
-
-        let left = Array(UnsafeBufferPointer(start: floatData[0], count: frameCount))
-        let right: [Float]? = channelCount >= 2
-            ? Array(UnsafeBufferPointer(start: floatData[1], count: frameCount))
-            : nil
-        return (left, right, frameCount)
-    }
-
-    /// Deep-copy a float PCM buffer so it can be written off the audio thread.
-    nonisolated private static func copyPCMBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        guard let floatData = buffer.floatChannelData else { return nil }
-        let frameCount = buffer.frameLength
-        guard frameCount > 0 else { return nil }
-        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: frameCount) else {
-            return nil
-        }
-        copy.frameLength = frameCount
-
-        let channels = Int(buffer.format.channelCount)
-        let samples = Int(frameCount)
-        guard let copyData = copy.floatChannelData else { return nil }
-        for channel in 0..<channels {
-            copyData[channel].update(from: floatData[channel], count: samples)
-        }
-        return copy
-    }
-
-    /// Compute peak and RMS from pre-copied channel data using Accelerate/vDSP.
-    nonisolated private static func computeLevelsFromCopy(left: [Float], right: [Float]?, frameCount: Int) -> MeterLevels {
-        guard frameCount > 0 else { return .zero }
-        let count = vDSP_Length(frameCount)
-
-        var peakL: Float = 0
-        var rmsL: Float = 0
-        var peakR: Float = 0
-        var rmsR: Float = 0
-
-        left.withUnsafeBufferPointer { buf in
-            vDSP_maxmgv(buf.baseAddress!, 1, &peakL, count)
-            vDSP_rmsqv(buf.baseAddress!, 1, &rmsL, count)
-        }
-
-        if let right {
-            right.withUnsafeBufferPointer { buf in
-                vDSP_maxmgv(buf.baseAddress!, 1, &peakR, count)
-                vDSP_rmsqv(buf.baseAddress!, 1, &rmsR, count)
-            }
-        } else {
-            peakR = peakL
-            rmsR = rmsL
-        }
-
-        let clipped = peakL >= 1.0 || peakR >= 1.0
-
-        func toDB(_ v: Float) -> Float {
-            20 * log10(max(v, 1e-8))
-        }
-
-        return MeterLevels(
-            peakL: toDB(peakL), peakR: toDB(peakR),
-            rmsL: toDB(rmsL), rmsR: toDB(rmsR),
-            clipped: clipped
-        )
-    }
-
-    private func installMeterTaps() {
-        guard !meterTapsInstalled else { return }
-        meterTapsInstalled = true
+    /// Install tap on the main mixer node for mixdown recording and master metering.
+    /// The submix track taps are handled by MeterManager.
+    private func installMainMixerTapForRecordingAndMetering() {
+        guard !mainMixerTapInstalled else { return }
+        mainMixerTapInstalled = true
         let bufferSize: AVAudioFrameCount = exportTapBufferFrames > 0 ? exportTapBufferFrames : 1024
-
-        // Install tap on each track's submix node (skip detached nodes)
-        let attached = engine.attachedNodes
-        for (trackID, submix) in trackSubmixNodes {
-            guard attached.contains(submix) else { continue }
-            let tid = trackID  // capture for closure
-            submix.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, _ in
-                guard let self else { return }
-                // Copy buffer data on the audio render thread (pointer only valid during callback)
-                let (left, right, frameCount) = Self.copyChannelData(from: buffer)
-                self.audioQueue.async { [weak self] in
-                    guard let self else { return }
-                    let levels = Self.computeLevelsFromCopy(left: left, right: right, frameCount: frameCount)
-                    self.meterTapLevels[tid] = levels
-                }
-            }
-        }
-
-        // Install tap on master mixer
         engine.mainMixerNode.installTap(onBus: 0, bufferSize: bufferSize, format: nil) { [weak self] buffer, time in
             guard let self else { return }
             os_unfair_lock_lock(&self.mixdownRecordingLock)
             let mixdownRecording = self.isRecordingMainMix
             let mixdownFile = self.mixdownRecordingFile
             os_unfair_lock_unlock(&self.mixdownRecordingLock)
-            if mixdownRecording, let mixdownFile, let mixdownBuffer = Self.copyPCMBuffer(buffer) {
+            if mixdownRecording, let mixdownFile, let mixdownBuffer = MeterManager.copyPCMBuffer(buffer) {
                 self.mixdownWriteGroup.enter()
                 self.mixdownWriterQueue.async { [weak self] in
                     defer { self?.mixdownWriteGroup.leave() }
@@ -4208,107 +4109,19 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 }
             }
             // Copy buffer data on the audio render thread (pointer only valid during callback)
-            let (left, right, frameCount) = Self.copyChannelData(from: buffer)
+            let (left, right, frameCount) = MeterManager.copyChannelData(from: buffer)
             self.audioQueue.async { [weak self] in
                 guard let self else { return }
-                let levels = Self.computeLevelsFromCopy(left: left, right: right, frameCount: frameCount)
-                self.masterMeterRaw = levels
+                let levels = MeterManager.computeLevelsFromCopy(left: left, right: right, frameCount: frameCount)
+                self.meters.masterMeterRaw = levels
             }
         }
     }
 
-    private func removeMeterTaps() {
-        guard meterTapsInstalled else { return }
-        meterTapsInstalled = false
-        for submix in trackSubmixNodes.values {
-            submix.removeTap(onBus: 0)
-        }
-        // Only remove master tap if it was installed
+    private func removeMainMixerTap() {
+        guard mainMixerTapInstalled else { return }
+        mainMixerTapInstalled = false
         engine.mainMixerNode.removeTap(onBus: 0)
-    }
-
-    private func startMeterPublishTimer() {
-        stopMeterPublishTimer()
-        let timer = DispatchSource.makeTimerSource(flags: [], queue: audioQueue)
-        timer.schedule(deadline: .now(), repeating: 1.0 / 30.0, leeway: .milliseconds(5))
-        let decayPerFrame: Float = 24.0 / 30.0  // 24dB/sec at 30fps
-
-        timer.setEventHandler { [weak self] in
-            guard let self, self.isPlaying else { return }
-
-            // Apply peak hold + decay for each track
-            var publishLevels: [UUID: MeterLevels] = [:]
-            for (trackID, raw) in self.meterTapLevels {
-                var held = self.meterPeakHold[trackID] ?? (-160, -160)
-                held.peakL = max(raw.peakL, held.peakL - decayPerFrame)
-                held.peakR = max(raw.peakR, held.peakR - decayPerFrame)
-                self.meterPeakHold[trackID] = held
-                publishLevels[trackID] = MeterLevels(
-                    peakL: held.peakL, peakR: held.peakR,
-                    rmsL: raw.rmsL, rmsR: raw.rmsR,
-                    clipped: raw.clipped
-                )
-            }
-
-            // Master
-            var masterHeld = self.masterPeakHold
-            masterHeld.peakL = max(self.masterMeterRaw.peakL, masterHeld.peakL - decayPerFrame)
-            masterHeld.peakR = max(self.masterMeterRaw.peakR, masterHeld.peakR - decayPerFrame)
-            self.masterPeakHold = masterHeld
-            let masterLevels = MeterLevels(
-                peakL: masterHeld.peakL, peakR: masterHeld.peakR,
-                rmsL: self.masterMeterRaw.rmsL, rmsR: self.masterMeterRaw.rmsR,
-                clipped: self.masterMeterRaw.clipped
-            )
-
-            self.onMeterUpdate?(publishLevels, masterLevels)
-        }
-        timer.resume()
-        meterPublishTimer = timer
-    }
-
-    private func stopMeterPublishTimer() {
-        meterPublishTimer?.cancel()
-        meterPublishTimer = nil
-    }
-
-    /// Compute peak and RMS from an audio buffer using Accelerate/vDSP.
-    nonisolated private static func computeLevels(buffer: AVAudioPCMBuffer) -> MeterLevels {
-        guard let floatData = buffer.floatChannelData else { return .zero }
-        let frameCount = vDSP_Length(buffer.frameLength)
-        guard frameCount > 0 else { return .zero }
-        let channelCount = Int(buffer.format.channelCount)
-
-        var peakL: Float = 0
-        var rmsL: Float = 0
-        var peakR: Float = 0
-        var rmsR: Float = 0
-
-        // Left channel (channel 0)
-        vDSP_maxmgv(floatData[0], 1, &peakL, frameCount)
-        vDSP_rmsqv(floatData[0], 1, &rmsL, frameCount)
-
-        // Right channel (channel 1, or duplicate left for mono)
-        if channelCount >= 2 {
-            vDSP_maxmgv(floatData[1], 1, &peakR, frameCount)
-            vDSP_rmsqv(floatData[1], 1, &rmsR, frameCount)
-        } else {
-            peakR = peakL
-            rmsR = rmsL
-        }
-
-        let clipped = peakL >= 1.0 || peakR >= 1.0
-
-        // Convert to dB
-        func toDB(_ v: Float) -> Float {
-            20 * log10(max(v, 1e-8))
-        }
-
-        return MeterLevels(
-            peakL: toDB(peakL), peakR: toDB(peakR),
-            rmsL: toDB(rmsL), rmsR: toDB(rmsR),
-            clipped: clipped
-        )
     }
 
     /// - Parameter keepReconfiguring: When `true`, leaves `isReconfiguring` set so the
@@ -4376,13 +4189,11 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         stopLoopRecordingTimer()
         metronome.tearDownMetronomeOnAudioQueue()
         stopLivePreviewOnAudioQueue()
-        removeMeterTaps()
-        stopMeterPublishTimer()
+        meters.removeSubmixTaps(submixNodes: trackSubmixNodes)
+        removeMainMixerTap()
+        meters.stopMeterPublishTimer()
         cancelHostedMIDIDelivery()
-        meterTapLevels.removeAll()
-        meterPeakHold.removeAll()
-        masterMeterRaw = .zero
-        masterPeakHold = (-160, -160)
+        meters.resetMeterState()
 
         // Never call AVAudioSequencer.stop() here.
         // AVAudioSequencer.stop() broadcasts CC 120 "All Sound Off" + CC 123 "All Notes Off"
