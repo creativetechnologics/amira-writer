@@ -301,6 +301,14 @@ final class AnimateStore {
 
     // MARK: - Motion Capture State
 
+    @ObservationIgnored private var _mocap: MotionCaptureStore?
+    var mocap: MotionCaptureStore {
+        if let m = _mocap { return m }
+        let m = MotionCaptureStore(parent: self)
+        _mocap = m
+        return m
+    }
+
     var mocapIsRunning = false
     var mocapCameraID: String?
     @ObservationIgnored var mocapLatestPoseFrame: UnifiedPoseFrame?
@@ -390,73 +398,9 @@ final class AnimateStore {
     var liveMocapBlendShapes: [BlendShapeName: Float]?
     var mocapDirectMorphMode: Bool = true
 
-    func startMocap() {
-        guard !mocapIsRunning else { return }
-        mocapErrorMessage = nil
-        mocapFrameCount = 0
-        mocapLatestPoseFrame = nil
-        mocapTemporalFilter.reset()
+    func startMocap() { mocap.startMocap() }
 
-        let capture = CaptureSession()
-        let tracker = VisionBodyTracker { [weak self] frame in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                var finalFrame = frame
-                if self.mocapFilterEnabled, let joints = frame.bodyJoints {
-                    let filtered = self.mocapTemporalFilter.filter(
-                        joints: joints,
-                        timestamp: frame.timestamp
-                    )
-                    finalFrame = UnifiedPoseFrame(
-                        timestamp: frame.timestamp,
-                        source: frame.source,
-                        bodyJoints: filtered,
-                        bodyConfidences: frame.bodyConfidences,
-                        leftHandJoints: frame.leftHandJoints,
-                        rightHandJoints: frame.rightHandJoints,
-                        faceBlendShapes: frame.faceBlendShapes,
-                        faceLandmarks: frame.faceLandmarks
-                    )
-                }
-                self.mocapLatestPoseFrame = finalFrame
-                self.mocapFrameCount += 1
-            }
-        }
-
-        capture.setPixelBufferHandler { [weak tracker] pixelBuffer, presentationTime in
-            let seconds = CMTimeGetSeconds(presentationTime)
-            tracker?.processFrame(pixelBuffer, timestamp: seconds)
-        }
-
-        capture.onStateChange = { [weak self] newState in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                switch newState {
-                case .running:
-                    self.mocapIsRunning = true
-                    self.mocapErrorMessage = nil
-                case .failed:
-                    self.mocapIsRunning = false
-                    self.mocapErrorMessage = "Camera failed to start. Check permissions or camera connection."
-                case .stopped:
-                    self.mocapIsRunning = false
-                default:
-                    break
-                }
-            }
-        }
-
-        mocapCaptureSession = capture
-        mocapBodyTracker = tracker
-        capture.start(cameraID: mocapCameraID)
-    }
-
-    func stopMocap() {
-        mocapCaptureSession?.stop()
-        mocapCaptureSession = nil
-        mocapBodyTracker = nil
-        mocapIsRunning = false
-    }
+    func stopMocap() { mocap.stopMocap() }
 
     // MARK: - Image Crop State
 
@@ -20180,16 +20124,11 @@ extension AnimateStore {
 
     // MARK: - Audio Lip Sync Recording
 
-    func startAudioLipSyncRecording() {
-        guard !isRecordingAudioLipSync else { return }
-        let recorder = AudioLipSyncRecorder()
-        do {
-            try recorder.startRecording()
-            _audioLipSyncRecorder = recorder
-            isRecordingAudioLipSync = true
-        } catch {
-            print("[AudioLipSync] Failed to start: \(error.localizedDescription)")
-        }
+    func startAudioLipSyncRecording() { mocap.startAudioLipSyncRecording() }
+
+    func stopAudioLipSyncRecording() { mocap.stopAudioLipSyncRecording() }
+
+    func setTrackingMode(_ mode: CaptureTrackingMode) throws { try mocap.setTrackingMode(mode) }
     }
 
     func stopAudioLipSyncRecording() {
