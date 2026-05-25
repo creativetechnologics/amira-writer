@@ -111,7 +111,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     /// Per-track submix mixer nodes. Key = MixTrack.id (UUID).
     /// All clips on a track route through this node, enabling per-track volume/pan,
     /// metering taps, FX chains, and automation.
-    private var trackSubmixNodes: [UUID: AVAudioMixerNode] = [:]
+    var trackSubmixNodes: [UUID: AVAudioMixerNode] = [:]
 
     /// Per-track FX chains: ordered array of AU effects inserted between submix and mainMixer.
     private var trackFXChains: [UUID: [AVAudioUnitEffect]] = [:]
@@ -158,41 +158,32 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     nonisolated(unsafe) var muteHardwareOutput: Bool = false
     nonisolated(unsafe) var requireHardwareOutputMute: Bool = false
 
-    // MARK: - Recording
-    /// Lock protecting recordingFile and isRecordingAudio from concurrent access
-    /// between audioQueue (writes) and the AVAudioEngine IOThread (reads in tap callback).
-    private var recordingLock = os_unfair_lock()
-    private var recordingFile: AVAudioFile?
-    private var recordingTrackID: UUID?
-    private(set) var isRecordingAudio: Bool = false
-    private var recordingHadWriteError: Bool = false
-    /// Separate lock/state for live main-mix capture used by WAV export previews.
-    private var mixdownRecordingLock = os_unfair_lock()
-    private var mixdownRecordingFile: AVAudioFile?
-    private(set) var isRecordingMainMix: Bool = false
-    private var mixdownRecordingHadWriteError: Bool = false
-    private let mixdownWriterQueue = DispatchQueue(label: "Score.MixdownWriter")
-    private let mixdownWriteGroup = DispatchGroup()
-    // Phase0 tap diagnostics — reset on each recording start
-    private var phase0TapPrevSampleTime: Int64 = -1
-    private var phase0TapTotalFrames: Int64 = 0
-    private var phase0TapGapCount: Int = 0
-    private var phase0TapLastHeartbeat: CFAbsoluteTime = 0
-    private var inputMonitorNodes: [UUID: AVAudioMixerNode] = [:]
-    /// Callback fired on main thread when recording stops, providing the output file URL
+    // MARK: - Recording State (accessed by RecordingEngine)
+    var recordingLock = os_unfair_lock()
+    var recordingFile: AVAudioFile?
+    var recordingTrackID: UUID?
+    var isRecordingAudio: Bool = false
+    var recordingHadWriteError: Bool = false
+    var mixdownRecordingLock = os_unfair_lock()
+    var mixdownRecordingFile: AVAudioFile?
+    var isRecordingMainMix: Bool = false
+    var mixdownRecordingHadWriteError: Bool = false
+    let mixdownWriterQueue = DispatchQueue(label: "Score.MixdownWriter")
+    let mixdownWriteGroup = DispatchGroup()
+    var phase0TapPrevSampleTime: Int64 = -1
+    var phase0TapTotalFrames: Int64 = 0
+    var phase0TapGapCount: Int = 0
+    var phase0TapLastHeartbeat: CFAbsoluteTime = 0
+    var inputMonitorNodes: [UUID: AVAudioMixerNode] = [:]
     var onRecordingComplete: ((URL) -> Void)?
-    /// Callback fired on main thread when live main-mix capture finishes.
     var onMainMixRecordingComplete: ((URL) -> Void)?
-    /// Callback fired on main thread each time a loop pass completes during loop recording
     var onLoopPassComplete: ((URL) -> Void)?
-
-    // MARK: - Loop Recording
-    private var loopRecordingTimer: DispatchSourceTimer?
-    private var loopRecordingEnabled: Bool = false
-    private var loopStartTick: Int = 0
-    private var loopEndTick: Int = 0
-    private var lastLoopCheckTick: Int = 0
-    private var loopRecordingOutputGenerator: (() -> URL)?
+    var loopRecordingTimer: DispatchSourceTimer?
+    var loopRecordingEnabled: Bool = false
+    var loopStartTick: Int = 0
+    var loopEndTick: Int = 0
+    var lastLoopCheckTick: Int = 0
+    var loopRecordingOutputGenerator: (() -> URL)?
 
     private(set) var isPlaying: Bool = false
 
@@ -371,7 +362,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         patchSignatureByMappingKey.removeAll()
         audioPlayerNodes.removeAll()
         clipTimePitchNodes.removeAll()
-        inputMonitorNodes.removeAll()
+        recorder.removeAllInputMonitorNodes()
         trackSubmixNodes.removeAll()
         trackFXChains.removeAll()
         sendMixerNodes.removeAll()
@@ -1154,344 +1145,88 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         meters.getMeterLevels(completion: completion)
     }
 
-    // MARK: - Recording API
+    // MARK: - Recording Engine
 
-    /// Start recording audio from the engine's input node to a WAV file.
-    /// Must be called after the engine is running (i.e., during playback).
+    lazy var recorder: RecordingEngine = RecordingEngine(parent: self)
+
     func startRecording(trackID: UUID, outputURL: URL) {
-        audioQueue.async { [weak self] in
-            guard let self else { return }
-            self.startRecordingOnAudioQueue(trackID: trackID, outputURL: outputURL)
-        }
+        recorder.startRecording(trackID: trackID, outputURL: outputURL)
     }
 
-    /// Stop recording and return the output file URL via the onRecordingComplete callback.
     func stopRecording() {
-        audioQueue.async { [weak self] in
-            guard let self else { return }
-            self.stopRecordingOnAudioQueue()
-        }
+        recorder.stopRecording()
     }
 
-    /// Start capturing the engine's main mix to a WAV file. Used for real-time export
-    /// so third-party Audio Units render through the same path as live playback.
     func startMainMixRecording(outputURL: URL) {
-        audioQueue.async { [weak self] in
-            guard let self else { return }
-            self.startMainMixRecordingOnAudioQueue(outputURL: outputURL)
-        }
+        recorder.startMainMixRecording(outputURL: outputURL)
     }
 
-    /// Stop capturing the engine's main mix and finalize the WAV file.
     func stopMainMixRecording() {
-        audioQueue.async { [weak self] in
-            guard let self else { return }
-            self.stopMainMixRecordingOnAudioQueue()
-        }
+        recorder.stopMainMixRecording()
     }
 
-    /// Configure input monitoring: route hardware input through a track's FX chain.
     func configureInputMonitoring(trackID: UUID, enabled: Bool) {
-        audioQueue.async { [weak self] in
-            guard let self else { return }
-            if enabled {
-                self.enableInputMonitoringOnAudioQueue(trackID: trackID)
-            } else {
-                self.disableInputMonitoringOnAudioQueue(trackID: trackID)
-            }
-        }
+        recorder.configureInputMonitoring(trackID: trackID, enabled: enabled)
     }
 
-    // MARK: - Recording Implementation
-
-    private func startRecordingOnAudioQueue(trackID: UUID, outputURL: URL) {
-        guard !isRecordingAudio else { return }
-
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-
-        // Ensure engine is running
-        guard configureAudioGraphIfNeeded() else {
-            reportError("Cannot start recording: audio engine failed to start.")
-            return
-        }
-
-        // Create the output WAV file
-        do {
-            let file = try AVAudioFile(
-                forWriting: outputURL,
-                settings: inputFormat.settings,
-                commonFormat: inputFormat.commonFormat,
-                interleaved: inputFormat.isInterleaved
-            )
-            os_unfair_lock_lock(&recordingLock)
-            recordingFile = file
-            isRecordingAudio = true
-            os_unfair_lock_unlock(&recordingLock)
-            recordingHadWriteError = false
-            recordingTrackID = trackID
-
-            // Install tap on input node to capture audio
-            inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-                guard let self else { return }
-                // Lock protects recordingFile/isRecordingAudio from concurrent
-                // writes on audioQueue while this tap fires on the IOThread.
-                os_unfair_lock_lock(&self.recordingLock)
-                let recording = self.isRecordingAudio
-                let file = self.recordingFile
-                os_unfair_lock_unlock(&self.recordingLock)
-                guard recording, let file else { return }
-                do {
-                    try file.write(from: buffer)
-                } catch {
-                    // Flag the error — stopRecordingOnAudioQueue will report it.
-                    // Cannot call reportError here (IOThread — no ObjC messaging).
-                    // Use the recording lock to synchronize with audioQueue reads.
-                    os_unfair_lock_lock(&self.recordingLock)
-                    self.recordingHadWriteError = true
-                    os_unfair_lock_unlock(&self.recordingLock)
-                }
-            }
-        } catch {
-            reportError("Failed to create recording file: \(error.localizedDescription)")
-        }
-    }
-
-    private func stopRecordingOnAudioQueue() {
-        guard isRecordingAudio else { return }
-
-        // Remove the tap first — this synchronizes with the render thread,
-        // ensuring no more tap callbacks will fire after this returns.
-        engine.inputNode.removeTap(onBus: 0)
-
-        // Now safe to clear recording state under the lock.
-        // Also read/clear recordingHadWriteError under the same lock to
-        // synchronize with the IOThread tap callback that writes it.
-        os_unfair_lock_lock(&recordingLock)
-        let fileURL = recordingFile?.url
-        recordingFile = nil
-        isRecordingAudio = false
-        let hadError = recordingHadWriteError
-        recordingHadWriteError = false
-        os_unfair_lock_unlock(&recordingLock)
-        recordingTrackID = nil
-
-        if hadError {
-            reportError("Recording may be incomplete — disk write errors occurred during capture.")
-        }
-        if let url = fileURL {
-            let callback = onRecordingComplete
-            DispatchQueue.main.async {
-                callback?(url)
-            }
-        }
-    }
-
-    private func startMainMixRecordingOnAudioQueue(outputURL: URL) {
-        guard !isRecordingMainMix else { return }
-
-        let mixFormat = engine.mainMixerNode.outputFormat(forBus: 0)
-        guard mixFormat.channelCount > 0, mixFormat.sampleRate > 0 else {
-            reportError("Cannot start mix export: invalid main mixer format.")
-            return
-        }
-
-        do {
-            let file = try AVAudioFile(
-                forWriting: outputURL,
-                settings: mixFormat.settings,
-                commonFormat: mixFormat.commonFormat,
-                interleaved: mixFormat.isInterleaved
-            )
-            os_unfair_lock_lock(&mixdownRecordingLock)
-            mixdownRecordingFile = file
-            isRecordingMainMix = true
-            os_unfair_lock_unlock(&mixdownRecordingLock)
-            mixdownRecordingHadWriteError = false
-            // Phase0: reset tap diagnostics at start of each recording
-            phase0TapPrevSampleTime = -1
-            phase0TapTotalFrames = 0
-            phase0TapGapCount = 0
-            phase0TapLastHeartbeat = 0
-            NSLog("[Phase0Tap] Recording started — tap diagnostics reset")
-        } catch {
-            reportError("Failed to create mix export file: \(error.localizedDescription)")
-        }
-    }
-
-    private func stopMainMixRecordingOnAudioQueue() {
-        guard isRecordingMainMix else { return }
-
-        os_unfair_lock_lock(&mixdownRecordingLock)
-        let fileURL = mixdownRecordingFile?.url
-        mixdownRecordingFile = nil
-        isRecordingMainMix = false
-        os_unfair_lock_unlock(&mixdownRecordingLock)
-
-        // Phase0: report cumulative tap stats at end of recording
-        NSLog("[Phase0Tap] Recording stopped — totalFramesCaptured=%lld totalGaps=%d",
-              phase0TapTotalFrames, phase0TapGapCount)
-
-        mixdownWriteGroup.wait()
-
-        let hadError = mixdownRecordingHadWriteError
-        mixdownRecordingHadWriteError = false
-
-        if hadError {
-            reportError("Mix export may be incomplete — disk write errors occurred during capture.")
-        }
-        if let url = fileURL {
-            let callback = onMainMixRecordingComplete
-            DispatchQueue.main.async {
-                callback?(url)
-            }
-        }
-    }
-
-    // MARK: - Loop Recording
-
-    /// Configure loop recording mode. When enabled, the engine will detect when
-    /// the playhead crosses the loop boundary and split the recording into a new file.
     func configureLoopRecording(
         enabled: Bool,
         loopStart: Int,
         loopEnd: Int,
         outputURLGenerator: @escaping @Sendable () -> URL
     ) {
+        recorder.configureLoopRecording(
+            enabled: enabled,
+            loopStart: loopStart,
+            loopEnd: loopEnd,
+            outputURLGenerator: outputURLGenerator
+        )
+    }
+
+    func setTrackFXChain(trackID: UUID, effects: [AVAudioUnitEffect]) {
         audioQueue.async { [weak self] in
             guard let self else { return }
-            self.loopRecordingEnabled = enabled
-            self.loopStartTick = loopStart
-            self.loopEndTick = loopEnd
-            self.loopRecordingOutputGenerator = outputURLGenerator
+            self.rewireTrackFXChain(trackID: trackID, effects: effects)
         }
     }
 
-    /// Start the loop recording timer. Runs at 60Hz to detect loop boundary crossings.
-    private func startLoopRecordingTimer(
-        startTick: Int,
-        tempoMap: [TempoPoint],
-        ticksPerQuarter: Int
-    ) {
-        loopRecordingTimer?.cancel()
-        guard loopRecordingEnabled, loopEndTick > loopStartTick else { return }
+    private func rewireTrackFXChain(trackID: UUID, effects: [AVAudioUnitEffect]) {
+        guard let submix = trackSubmixNodes[trackID] else { return }
 
-        lastLoopCheckTick = startTick
-
-        let timer = DispatchSource.makeTimerSource(queue: audioQueue)
-        timer.schedule(deadline: .now() + 0.05, repeating: .milliseconds(16), leeway: .milliseconds(4))
-        let startTime = DispatchTime.now()
-        let startSeconds = seconds(atTick: startTick, tempoMap: tempoMap, ticksPerQuarter: ticksPerQuarter)
-        let loopEnd = loopEndTick
-        let loopStart = loopStartTick
-
-        timer.setEventHandler { [weak self] in
-            guard let self, self.isRecordingAudio, self.loopRecordingEnabled else { return }
-            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - startTime.uptimeNanoseconds) / 1_000_000_000
-            let currentSeconds = startSeconds + elapsed
-            let currentTick = self.tickAtSeconds(currentSeconds, tempoMap: tempoMap, ticksPerQuarter: ticksPerQuarter)
-
-            // Detect loop boundary crossing: the playhead has wrapped from loopEnd back to loopStart
-            if self.lastLoopCheckTick < loopEnd && currentTick >= loopEnd {
-                self.splitRecordingForLoopPass()
-            }
-            // Also handle the case where audio engine loops back (currentTick < lastCheckTick by a lot)
-            else if currentTick < self.lastLoopCheckTick - (loopEnd - loopStart) / 2 {
-                self.splitRecordingForLoopPass()
-            }
-            self.lastLoopCheckTick = currentTick
-        }
-        loopRecordingTimer = timer
-        timer.resume()
-    }
-
-    private func stopLoopRecordingTimer() {
-        loopRecordingTimer?.cancel()
-        loopRecordingTimer = nil
-        loopRecordingEnabled = false
-    }
-
-    /// Atomically swap the recording file to a new one for the next loop pass.
-    /// The old file is finalized and reported via onLoopPassComplete.
-    private func splitRecordingForLoopPass() {
-        guard isRecordingAudio, let currentFile = recordingFile,
-              let generator = loopRecordingOutputGenerator else { return }
-
-        // Get new output URL — generator is not @MainActor so safe to call on audioQueue.
-        // Do NOT use DispatchQueue.main.sync here: audioQueue↔main deadlock risk.
-        let newURL = generator()
-
-        // Close current file (the tap will keep running, we just swap the file)
-        let completedURL = currentFile.url
-
-        // Create new file with same format
-        let inputFormat = engine.inputNode.outputFormat(forBus: 0)
-        do {
-            let newFile = try AVAudioFile(
-                forWriting: newURL,
-                settings: inputFormat.settings,
-                commonFormat: inputFormat.commonFormat,
-                interleaved: inputFormat.isInterleaved
-            )
-            // Swap under lock: the tap callback reads recordingFile on the IOThread
-            os_unfair_lock_lock(&recordingLock)
-            recordingFile = newFile
-            os_unfair_lock_unlock(&recordingLock)
-        } catch {
-            // If we can't create the new file, keep writing to the old one
-            reportError("Loop recording: failed to create new pass file — \(error.localizedDescription)")
-            return
-        }
-
-        // Notify about the completed pass
-        let callback = onLoopPassComplete
-        DispatchQueue.main.async {
-            callback?(completedURL)
-        }
-    }
-
-    private func enableInputMonitoringOnAudioQueue(trackID: UUID) {
-        guard inputMonitorNodes[trackID] == nil else { return }
-
-        // Ensure engine is running
-        guard configureAudioGraphIfNeeded() else { return }
-
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-
-        // Create a monitor mixer node between input and track submix
-        let monitorMixer = AVAudioMixerNode()
-
-        // Must pause engine before graph mutations to avoid IOThread race
         withEnginePaused {
-            engine.attach(monitorMixer)
-            monitorMixer.outputVolume = 1.0
+            if let oldChain = trackFXChains[trackID] {
+                for fx in oldChain {
+                    engine.disconnectNodeOutput(fx)
+                    engine.detach(fx)
+                }
+            }
 
-            // Route: inputNode → monitorMixer → trackSubmix → [FX chain] → mainMixer
-            let submix = ensureTrackSubmix(trackID: trackID, format: nil)
-            engine.connect(inputNode, to: monitorMixer, format: inputFormat)
-            engine.connect(monitorMixer, to: submix, format: inputFormat)
-        }
+            engine.disconnectNodeOutput(submix)
 
-        inputMonitorNodes[trackID] = monitorMixer
-    }
-
-    private func disableInputMonitoringOnAudioQueue(trackID: UUID) {
-        guard let monitorMixer = inputMonitorNodes.removeValue(forKey: trackID) else { return }
-        withEnginePaused {
-            engine.disconnectNodeOutput(monitorMixer)
-            engine.disconnectNodeInput(monitorMixer)
-            engine.detach(monitorMixer)
+            if effects.isEmpty {
+                engine.connect(submix, to: engine.mainMixerNode, format: nil)
+                trackFXChains[trackID] = []
+            } else {
+                for fx in effects {
+                    engine.attach(fx)
+                }
+                var prevNode: AVAudioNode = submix
+                for fx in effects {
+                    let sourceFormat = prevNode.outputFormat(forBus: 0)
+                    engine.connect(prevNode, to: fx, format: sourceFormat)
+                    prevNode = fx
+                }
+                engine.connect(prevNode, to: engine.mainMixerNode, format: nil)
+                trackFXChains[trackID] = effects
+            }
         }
     }
 
     /// Ensure a per-track submix mixer node exists. Creates one if needed.
     /// All clips on this track route through this node instead of directly to mainMixerNode.
-    private func ensureTrackSubmix(trackID: UUID, format: AVAudioFormat?) -> AVAudioMixerNode {
+    func ensureTrackSubmix(trackID: UUID, format: AVAudioFormat?) -> AVAudioMixerNode {
         if let existing = trackSubmixNodes[trackID] { return existing }
         let mixer = AVAudioMixerNode()
-        // Caller is responsible for pausing the engine if it's running.
-        // When called from within a withEnginePaused block, this is safe.
         engine.attach(mixer)
         engine.connect(mixer, to: engine.mainMixerNode, format: format)
         trackSubmixNodes[trackID] = mixer
@@ -1509,69 +1244,6 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 }
             }
             self.trackSubmixNodes.removeAll()
-        }
-    }
-
-    /// Set the FX chain for a track. Inserts effects in series between the submix node and mainMixerNode.
-    /// Must be called from the audio queue or before playback starts.
-    func setTrackFXChain(trackID: UUID, effects: [AVAudioUnitEffect]) {
-        audioQueue.async { [weak self] in
-            guard let self else { return }
-            self.rewireTrackFXChain(trackID: trackID, effects: effects)
-        }
-    }
-
-    private func rewireTrackFXChain(trackID: UUID, effects: [AVAudioUnitEffect]) {
-        guard let submix = trackSubmixNodes[trackID] else { return }
-
-        withEnginePaused {
-            // Remove old FX chain
-            if let oldChain = trackFXChains[trackID] {
-                for fx in oldChain {
-                    engine.disconnectNodeOutput(fx)
-                    engine.detach(fx)
-                }
-            }
-
-            // Disconnect submix from its current destination
-            engine.disconnectNodeOutput(submix)
-
-            if effects.isEmpty {
-                // No effects: connect submix directly to mainMixerNode
-                engine.connect(submix, to: engine.mainMixerNode, format: nil)
-                trackFXChains[trackID] = []
-            } else {
-                // Insert effects in series: submix → fx1 → fx2 → ... → mainMixer
-                for fx in effects {
-                    engine.attach(fx)
-                }
-                // submix → first effect
-                engine.connect(submix, to: effects[0], format: nil)
-                // chain effects together
-                for i in 0..<(effects.count - 1) {
-                    engine.connect(effects[i], to: effects[i + 1], format: nil)
-                }
-                // last effect → mainMixer
-                guard let lastFX = effects.last else { return }
-                engine.connect(lastFX, to: engine.mainMixerNode, format: nil)
-                trackFXChains[trackID] = effects
-            }
-        }
-    }
-
-    /// Clear all FX chains (for project close).
-    func clearTrackFXChains() {
-        audioQueue.async { [weak self] in
-            guard let self else { return }
-            self.withEnginePaused {
-                for (_, chain) in self.trackFXChains {
-                    for fx in chain {
-                        self.engine.disconnectNodeOutput(fx)
-                        self.engine.detach(fx)
-                    }
-                }
-            }
-            self.trackFXChains.removeAll()
         }
     }
 
@@ -1747,7 +1419,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     }
 
     /// Inverse of seconds(atTick:): given elapsed seconds, find the corresponding tick.
-    private func tickAtSeconds(_ targetSeconds: Double, tempoMap: [TempoPoint], ticksPerQuarter: Int) -> Int {
+    func tickAtSeconds(_ targetSeconds: Double, tempoMap: [TempoPoint], ticksPerQuarter: Int) -> Int {
         guard !tempoMap.isEmpty, targetSeconds > 0 else { return 0 }
         let tpq = Double(max(1, ticksPerQuarter))
         var accumulatedSeconds: Double = 0
@@ -3006,7 +2678,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         return succeeded
     }
 
-    private func configureAudioGraphIfNeeded() -> Bool {
+    func configureAudioGraphIfNeeded() -> Bool {
         // Fast path: if engine is already running, skip all setup and start() calls.
         // Calling engine.start() even on a running engine acquires internal locks
         // and causes audible glitches when called at 60Hz during live preview.
@@ -3355,7 +3027,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             )
 
             if isRecordingAudio && loopRecordingEnabled {
-                startLoopRecordingTimer(
+                recorder.startLoopRecordingTimer(
                     startTick: clampedStartTick,
                     tempoMap: tempoMapForAutomation,
                     ticksPerQuarter: ticksPerQuarter
@@ -3497,7 +3169,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
             // Start loop recording timer if recording + looping
             if isRecordingAudio && loopRecordingEnabled {
-                startLoopRecordingTimer(
+                recorder.startLoopRecordingTimer(
                     startTick: clampedStartTick,
                     tempoMap: tempoMapForAutomation,
                     ticksPerQuarter: ticksPerQuarter
@@ -4147,7 +3819,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
         if lightweight {
             stopAutomationTimer()
-            stopLoopRecordingTimer()
+            recorder.stopLoopRecordingTimer()
             setPlaying(false)
             if !keepReconfiguring {
                 isReconfiguring = false
@@ -4174,19 +3846,19 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
         // Stop recording if active
         if isRecordingAudio {
-            stopRecordingOnAudioQueue()
+            recorder.stopRecording()
         }
         if isRecordingMainMix && !preserveMainMixRecording {
-            stopMainMixRecordingOnAudioQueue()
+            recorder.stopMainMixRecording()
         }
 
         // Tear down input monitoring (snapshot keys to avoid mutating dict during iteration)
         for trackID in Array(inputMonitorNodes.keys) {
-            disableInputMonitoringOnAudioQueue(trackID: trackID)
+            recorder.configureInputMonitoring(trackID: trackID, enabled: false)
         }
 
         stopAutomationTimer()
-        stopLoopRecordingTimer()
+        recorder.stopLoopRecordingTimer()
         metronome.tearDownMetronomeOnAudioQueue()
         stopLivePreviewOnAudioQueue()
         meters.removeSubmixTaps(submixNodes: trackSubmixNodes)
@@ -4265,7 +3937,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         onPlaybackStateChange?(playing)
     }
 
-    private func reportError(_ message: String) {
+    func reportError(_ message: String) {
         onPlaybackError?(message)
     }
 
