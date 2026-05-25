@@ -1032,7 +1032,7 @@ final class ScoreStore {
     var isStandaloneSongWorkspace: Bool = false
     var librettoFiles: [ProjectTextFile] = []
 
-    private var fileProjectURL: URL? {
+    var fileProjectURL: URL? {
         workingProjectURL ?? projectURL
     }
 
@@ -1216,6 +1216,14 @@ final class ScoreStore {
     // MARK: - Freeze / Bounce
 
     var frozenTracks: [Int: URL] = [:]
+
+    @ObservationIgnored private var _exportStore: ExportStore?
+    var export: ExportStore {
+        if let es = _exportStore { return es }
+        let es = ExportStore(parent: self)
+        _exportStore = es
+        return es
+    }
 
     // MARK: - Audio Devices
 
@@ -4163,7 +4171,7 @@ final class ScoreStore {
     /// Returns a copy of `instrumentMappings` with any broken SF2 paths resolved.
     /// Fast path only: (1) check absolute path, (2) try relative to sampleRootDirectoryPath.
     /// The slow fallback search runs in the background and fixes mappings asynchronously.
-    private func resolvedInstrumentMappings() -> [String: InstrumentMapping] {
+    func resolvedInstrumentMappings() -> [String: InstrumentMapping] {
         let fm = FileManager.default
         let root = sampleRootDirectoryPath
         var resolved = instrumentMappings
@@ -4317,7 +4325,7 @@ final class ScoreStore {
         }
     }
 
-    private struct WavQualityReport {
+    struct WavQualityReport {
         let fileSize: Int64
         let durationSeconds: Double
         let sampleRate: Double
@@ -5111,7 +5119,7 @@ final class ScoreStore {
         return fileSize > 0 && fileSize <= 4096
     }
 
-    nonisolated private static func removeIncompleteExportFile(at url: URL) {
+    nonisolated static func removeIncompleteExportFile(at url: URL) {
         let fm = FileManager.default
         guard fm.fileExists(atPath: url.path) else { return }
         do {
@@ -5122,7 +5130,7 @@ final class ScoreStore {
     }
 
     @discardableResult
-    nonisolated private static func validateCompletedWavExport(
+    nonisolated static func validateCompletedWavExport(
         at url: URL,
         expectedDurationSeconds: Double?,
         context: String,
@@ -7568,81 +7576,9 @@ final class ScoreStore {
 
     /// Present a save panel and render the entire song to a single WAV file.
     #if canImport(AppKit)
-    func exportFullMixToWavWithPanel() {
-        guard !pianoRollNotes.isEmpty else {
-            fullMixExportStatus = "No notes to export."
-            return
-        }
-        guard !isExportingFullMix else {
-            fullMixExportStatus = "Export already in progress."
-            return
-        }
-        guard !isPresentingFullMixExportPanel else { return }
+    func exportFullMixToWavWithPanel() { export.exportFullMixToWavWithPanel() }
 
-        isPresentingFullMixExportPanel = true
-
-        let panel = NSSavePanel()
-        panel.title = "Export Full Mix to WAV"
-        panel.allowedContentTypes = [.wav]
-        panel.nameFieldStringValue = fullMixExportPanelDefaultFilename()
-        panel.directoryURL = fullMixExportPanelDefaultDirectoryURL()
-        panel.canCreateDirectories = true
-        panel.isExtensionHidden = false
-        panel.canSelectHiddenExtension = true
-
-        let completion: (NSApplication.ModalResponse) -> Void = { [weak self, panel] response in
-            Task { @MainActor in
-                guard let self else { return }
-                self.isPresentingFullMixExportPanel = false
-                guard response == .OK, let url = panel.url else { return }
-                self.startFullMixWavExportAfterPanel(outputURL: url, instrumentalOnly: false)
-            }
-        }
-
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
-            panel.beginSheetModal(for: window, completionHandler: completion)
-        } else {
-            panel.begin(completionHandler: completion)
-        }
-    }
-
-    func exportInstrumentalMixToWavWithPanel() {
-        guard !pianoRollNotes.isEmpty else {
-            fullMixExportStatus = "No notes to export."
-            return
-        }
-        guard !isExportingFullMix else {
-            fullMixExportStatus = "Export already in progress."
-            return
-        }
-        guard !isPresentingFullMixExportPanel else { return }
-
-        isPresentingFullMixExportPanel = true
-
-        let panel = NSSavePanel()
-        panel.title = "Export Instrumental Mix to WAV"
-        panel.allowedContentTypes = [.wav]
-        panel.nameFieldStringValue = instrumentalExportPanelDefaultFilename()
-        panel.directoryURL = fullMixExportPanelDefaultDirectoryURL()
-        panel.canCreateDirectories = true
-        panel.isExtensionHidden = false
-        panel.canSelectHiddenExtension = true
-
-        let completion: (NSApplication.ModalResponse) -> Void = { [weak self, panel] response in
-            Task { @MainActor in
-                guard let self else { return }
-                self.isPresentingFullMixExportPanel = false
-                guard response == .OK, let url = panel.url else { return }
-                self.startFullMixWavExportAfterPanel(outputURL: url, instrumentalOnly: true)
-            }
-        }
-
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
-            panel.beginSheetModal(for: window, completionHandler: completion)
-        } else {
-            panel.begin(completionHandler: completion)
-        }
-    }
+    func exportInstrumentalMixToWavWithPanel() { export.exportInstrumentalMixToWavWithPanel() }
     #endif
 
     private func startFullMixWavExportAfterPanel(outputURL: URL, instrumentalOnly: Bool) {
@@ -7730,14 +7666,8 @@ final class ScoreStore {
     #endif
 
     /// Render the full song to a WAV file at the given URL.
-    func exportFullMixToWav(outputURL: URL) async {
-        await exportSongWav(outputURL: outputURL, instrumentalOnly: false)
-    }
-
-    /// Render the current song to a WAV file with vocal-tagged tracks omitted.
-    func exportInstrumentalMixToWav(outputURL: URL) async {
-        await exportSongWav(outputURL: outputURL, instrumentalOnly: true)
-    }
+    func exportFullMixToWav(outputURL: URL) async { await export.exportFullMixToWav(outputURL: outputURL) }
+    func exportInstrumentalMixToWav(outputURL: URL) async { await export.exportInstrumentalMixToWav(outputURL: outputURL) }
 
     private func exportSongWav(
         outputURL: URL,
@@ -7817,161 +7747,17 @@ final class ScoreStore {
     /// Present a save panel and render a rehearsal track:
     /// vocal parts at full volume, accompaniment attenuated by the given dB offset.
     #if canImport(AppKit)
-    func exportRehearsalTrackWithPanel() {
-        guard !pianoRollNotes.isEmpty else {
-            fullMixExportStatus = "No notes to export."
-            return
-        }
-        guard !isExportingFullMix else {
-            fullMixExportStatus = "Export already in progress."
-            return
-        }
-
-        let panel = NSSavePanel()
-        panel.title = "Export Rehearsal Track"
-        panel.allowedContentTypes = [.wav]
-        let baseName = selectedMidiAsset?.displayName ?? "untitled"
-        panel.nameFieldStringValue = "\(baseName) - Rehearsal.wav"
-        panel.canCreateDirectories = true
-
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url, let self else { return }
-            Task { @MainActor in
-                await self.exportRehearsalTrack(outputURL: url)
-            }
-        }
-    }
+    func exportRehearsalTrackWithPanel() { export.exportRehearsalTrackWithPanel() }
     #endif
 
     /// Render a rehearsal track: vocal tracks at original gain, accompaniment at -12dB.
-    func exportRehearsalTrack(outputURL: URL, accompanimentAttenuationDB: Double = -12.0) async {
-        guard !pianoRollNotes.isEmpty else {
-            fullMixExportStatus = "No notes to export."
-            return
-        }
-
-        isExportingFullMix = true
-        fullMixExportStatus = "Rendering rehearsal track..."
-        fullMixExportDetailStatus = ""
-
-        // Build gain overrides: vocal mappings keep their gain, others get attenuated
-        var gainOverrides: [String: Double] = [:]
-        let resolvedMappings = resolvedInstrumentMappings()
-        for (key, mapping) in resolvedMappings {
-            if mapping.trackRole == .vocal {
-                gainOverrides[key] = mapping.gainDB  // keep original
-            } else {
-                gainOverrides[key] = mapping.gainDB + accompanimentAttenuationDB
-            }
-        }
-
-        let endTick = pianoRollNotes.map { $0.startTick + $0.duration }.max() ?? pianoRollLengthTicks
-        guard endTick > 0 else {
-            fullMixExportStatus = "Song has zero length."
-            isExportingFullMix = false
-            return
-        }
-
-        do {
-            try await renderChunkToWav(
-                notes: pianoRollNotes,
-                startTick: 0,
-                endTick: endTick,
-                outputURL: outputURL,
-                gainOverrides: gainOverrides
-            )
-            fullMixExportStatus = "Rehearsal track exported to \(outputURL.lastPathComponent)"
-            fullMixExportDetailStatus = ""
-            NSLog("[Rehearsal] Exported rehearsal track to %@", outputURL.path)
-        } catch {
-            fullMixExportStatus = "Export failed: \(error.localizedDescription)"
-            fullMixExportDetailStatus = ""
-            NSLog("[Rehearsal] Export failed: %@", error.localizedDescription)
-        }
-
-        isExportingFullMix = false
-    }
+    func exportRehearsalTrack(outputURL: URL, accompanimentAttenuationDB: Double = -12.0) async { await export.exportRehearsalTrack(outputURL: outputURL, accompanimentAttenuationDB: accompanimentAttenuationDB) }
 
     // MARK: - Stem Export
 
-    /// Present a folder chooser and render each track to a separate WAV file.
-    #if canImport(AppKit)
-    func exportStemsWithPanel() {
-        guard !pianoRollNotes.isEmpty else {
-            fullMixExportStatus = "No notes to export."
-            return
-        }
-        guard !isExportingFullMix else {
-            fullMixExportStatus = "Export already in progress."
-            return
-        }
+    func exportStemsWithPanel() { export.exportStemsWithPanel() }
 
-        let panel = NSOpenPanel()
-        panel.title = "Choose Folder for Stems"
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url, let self else { return }
-            Task { @MainActor in
-                await self.exportStems(outputDir: url)
-            }
-        }
-    }
-    #endif
-
-    /// Render each unique track to a separate WAV in the given directory.
-    func exportStems(outputDir: URL) async {
-        guard !pianoRollNotes.isEmpty else {
-            fullMixExportStatus = "No notes to export."
-            return
-        }
-
-        isExportingFullMix = true
-        fullMixExportDetailStatus = ""
-
-        // Group notes by trackIndex
-        let trackIndices = Set(pianoRollNotes.map(\.trackIndex)).sorted()
-        let endTick = pianoRollNotes.map { $0.startTick + $0.duration }.max() ?? pianoRollLengthTicks
-        guard endTick > 0 else {
-            fullMixExportStatus = "Song has zero length."
-            isExportingFullMix = false
-            return
-        }
-
-        let baseName = selectedMidiAsset?.displayName ?? "untitled"
-        var exported = 0
-
-        for trackIdx in trackIndices {
-            let trackNotes = pianoRollNotes.filter { $0.trackIndex == trackIdx }
-            guard !trackNotes.isEmpty else { continue }
-
-            let trackName = pianoRollTrackNames[trackIdx] ?? "Track \(trackIdx)"
-            let safeName = trackName.replacingOccurrences(of: "/", with: "-")
-            let fileName = "\(baseName) - \(safeName).wav"
-            let outputURL = outputDir.appendingPathComponent(fileName)
-
-            fullMixExportStatus = "Rendering stem: \(trackName)..."
-
-            do {
-                try await renderChunkToWav(
-                    notes: trackNotes,
-                    startTick: 0,
-                    endTick: endTick,
-                    outputURL: outputURL
-                )
-                exported += 1
-            } catch {
-                NSLog("[Stems] Failed to export stem for %@: %@", trackName, error.localizedDescription)
-            }
-        }
-
-        fullMixExportStatus = "Exported \(exported) stems to \(outputDir.lastPathComponent)/"
-        fullMixExportDetailStatus = ""
-        NSLog("[Stems] Exported %d stems to %@", exported, outputDir.path)
-        isExportingFullMix = false
-    }
+    func exportStems(outputDir: URL) async { await export.exportStems(outputDir: outputDir) }
 
     // MARK: - Send-to-Mix / Batch Export
 
@@ -7994,100 +7780,11 @@ final class ScoreStore {
         return wavExportURL(for: asset, in: exportsDir)
     }
 
-    /// Export the currently-loaded song to <projectURL>/Mix/exports/<slug>.wav
-    /// and post `didExportSongToMix` so the Mix layer can register the clip.
-    func exportCurrentSongToMix() {
-        guard let asset = selectedMidiAsset else {
-            fullMixExportStatus = "No song selected."
-            return
-        }
-        guard !pianoRollNotes.isEmpty else {
-            fullMixExportStatus = "No notes to export."
-            return
-        }
-        guard !isExportingFullMix else {
-            fullMixExportStatus = "Export already in progress."
-            return
-        }
-        guard let outputURL = mixExportURL(for: asset) else {
-            fullMixExportStatus = "No project open."
-            return
-        }
-        Task { @MainActor in
-            do {
-                try FileManager.default.createDirectory(
-                    at: outputURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-            } catch {
-                fullMixExportStatus = "Could not create Mix/exports/: \(error.localizedDescription)"
-                return
-            }
-            await exportSongWav(outputURL: outputURL, instrumentalOnly: false)
-            if fullMixExportStatus.hasPrefix("Exported") {
-                NotificationCenter.default.post(
-                    name: ScoreStore.didExportSongToMix,
-                    object: nil,
-                    userInfo: [
-                        "wavURL": outputURL,
-                        "songRelativePath": asset.relativePath
-                    ]
-                )
-            }
-        }
-    }
+    func exportCurrentSongToMix() { export.exportCurrentSongToMix() }
 
-    #if canImport(AppKit)
-    func exportAllSongsToWavsWithPanel() {
-        guard !midiAssets.isEmpty else {
-            batchExportStatus = "No songs to export."
-            return
-        }
-        guard !isBatchExporting, !isExportingFullMix else {
-            batchExportStatus = "An export is already in progress."
-            return
-        }
+    func exportAllSongsToWavsWithPanel() { export.exportAllSongsToWavsWithPanel() }
 
-        let panel = NSOpenPanel()
-        panel.title = "Choose Folder for WAV Exports"
-        panel.prompt = "Export"
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url, let self else { return }
-            Task { @MainActor in
-                self.startBatchWavExportAfterPanel(outputDir: url, instrumentalOnly: false)
-            }
-        }
-    }
-
-    func exportAllSongsToInstrumentalWavsWithPanel() {
-        guard !midiAssets.isEmpty else {
-            batchExportStatus = "No songs to export."
-            return
-        }
-        guard !isBatchExporting, !isExportingFullMix else {
-            batchExportStatus = "An export is already in progress."
-            return
-        }
-
-        let panel = NSOpenPanel()
-        panel.title = "Choose Folder for Instrumental WAV Exports"
-        panel.prompt = "Export"
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url, let self else { return }
-            Task { @MainActor in
-                self.startBatchWavExportAfterPanel(outputDir: url, instrumentalOnly: true)
-            }
-        }
-    }
-    #endif
+    func exportAllSongsToInstrumentalWavsWithPanel() { export.exportAllSongsToInstrumentalWavsWithPanel() }
 
     private func startBatchWavExportAfterPanel(outputDir: URL, instrumentalOnly: Bool) {
         guard !isBatchExporting, !isExportingFullMix else {
@@ -8115,13 +7812,8 @@ final class ScoreStore {
         }
     }
 
-    func exportAllSongsToWavs(outputDir: URL) async {
-        await exportAllSongsToWavs(outputDir: outputDir, instrumentalOnly: false)
-    }
-
-    func exportAllSongsToInstrumentalWavs(outputDir: URL) async {
-        await exportAllSongsToWavs(outputDir: outputDir, instrumentalOnly: true)
-    }
+    func exportAllSongsToWavs(outputDir: URL) async { await export.exportAllSongsToWavs(outputDir: outputDir) }
+    func exportAllSongsToInstrumentalWavs(outputDir: URL) async { await export.exportAllSongsToInstrumentalWavs(outputDir: outputDir) }
 
     private func exportAllSongsToWavs(
         outputDir: URL,
@@ -8288,91 +7980,7 @@ final class ScoreStore {
         isBatchExporting = false
     }
 
-    /// Export ALL songs that have MIDI note data to <projectURL>/Mix/exports/.
-    /// Loads each song if not already hydrated. Posts `didExportSongToMix` per song.
-    func exportAllSongsToMix() async {
-        guard let projectURL = fileProjectURL else {
-            batchExportStatus = "No project open."
-            return
-        }
-        guard !isBatchExporting, !isExportingFullMix else {
-            batchExportStatus = "An export is already in progress."
-            return
-        }
-
-        let exportsDir = ProjectPaths(root: projectURL).mixExports
-        do {
-            try FileManager.default.createDirectory(at: exportsDir, withIntermediateDirectories: true)
-        } catch {
-            batchExportStatus = "Could not create Mix/exports/: \(error.localizedDescription)"
-            return
-        }
-
-        isBatchExporting = true
-        batchExportProgress = 0
-        batchExportStatus = "Starting batch export..."
-
-        let assets = midiAssets
-        var exported = 0
-
-        for (index, asset) in assets.enumerated() {
-            batchExportStatus = "Hydrating \(asset.displayName)..."
-
-            // Ensure song is loaded from disk (hydrateSongPlaybackIfNeeded is the public-ish entry point)
-            _ = await hydrateSongPlaybackIfNeeded(id: asset.id)
-
-            // Switch to this song so pianoRollNotes / mappings are populated
-            let savedSelectedID = selectedMidiID
-            if selectedMidiID != asset.id {
-                setSelectedMidi(id: asset.id, stopPlaybackBeforeSelect: true)
-                // Brief yield so @Observable updates propagate
-                for _ in 0..<3 { await Task.yield() }
-            }
-
-            guard !pianoRollNotes.isEmpty else {
-                NSLog("[BatchExport] Skipping %@ — no notes.", asset.displayName)
-                batchExportProgress = Double(index + 1) / Double(assets.count)
-                if savedSelectedID != asset.id { setSelectedMidi(id: savedSelectedID, stopPlaybackBeforeSelect: false) }
-                continue
-            }
-
-            guard let outputURL = mixExportURL(for: asset) else { continue }
-
-            batchExportStatus = "Rendering \(asset.displayName) (\(index + 1)/\(assets.count))..."
-            let endTick = pianoRollNotes.map { $0.startTick + $0.duration }.max() ?? 0
-            guard endTick > 0 else {
-                batchExportProgress = Double(index + 1) / Double(assets.count)
-                if savedSelectedID != asset.id { setSelectedMidi(id: savedSelectedID, stopPlaybackBeforeSelect: false) }
-                continue
-            }
-
-            do {
-                try await renderChunkToWav(notes: pianoRollNotes, startTick: 0, endTick: endTick, outputURL: outputURL)
-                exported += 1
-                NSLog("[BatchExport] Exported %@ -> %@", asset.displayName, outputURL.path)
-                let capturedPath = asset.relativePath
-                NotificationCenter.default.post(
-                    name: ScoreStore.didExportSongToMix,
-                    object: nil,
-                    userInfo: ["wavURL": outputURL, "songRelativePath": capturedPath]
-                )
-            } catch {
-                NSLog("[BatchExport] Failed %@: %@", asset.displayName, error.localizedDescription)
-            }
-
-            batchExportProgress = Double(index + 1) / Double(assets.count)
-
-            // Restore original selection if we changed it
-            if savedSelectedID != asset.id {
-                setSelectedMidi(id: savedSelectedID, stopPlaybackBeforeSelect: false)
-                for _ in 0..<2 { await Task.yield() }
-            }
-        }
-
-        batchExportProgress = 1.0
-        batchExportStatus = "Batch export done — \(exported)/\(assets.count) songs exported."
-        isBatchExporting = false
-    }
+    func exportAllSongsToMix() async { await export.exportAllSongsToMix() }
 
 }
 
