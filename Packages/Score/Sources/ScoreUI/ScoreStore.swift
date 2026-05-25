@@ -3722,53 +3722,9 @@ final class ScoreStore {
 
     // MARK: - Music Intelligence Engine
 
-    func analyzeCurrentSongStructure() {
-        guard !pianoRollNotes.isEmpty else { musicEngineStatus = "No notes to analyze."; return }
-        musicEngineStatus = "Analyzing structure..."
-        let capturedSongID = selectedMidiID
-        Task {
-            let phrases = PhraseDetector.detectPhrases(
-                notes: pianoRollNotes, tempoEvents: pianoRollTempoEvents,
-                timeSignatures: pianoRollTimeSignatures, ticksPerQuarter: ticksPerQuarter
-            )
-            let sections = StructureAnalyzer.analyze(
-                phrases: phrases, notes: pianoRollNotes,
-                tempoEvents: pianoRollTempoEvents, timeSignatures: pianoRollTimeSignatures,
-                ticksPerQuarter: ticksPerQuarter
-            )
-            let key = KeyDetector.detectKeyWithFallback(
-                notes: pianoRollNotes, keySignatures: pianoRollKeySignatures
-            )
-            let chords = ChordProgressionAnalyzer.analyze(
-                notes: pianoRollNotes, timeSignatures: pianoRollTimeSignatures,
-                ticksPerQuarter: ticksPerQuarter, key: key
-            )
-            guard selectedMidiID == capturedSongID else { return }
-            currentStructuralAnalysis = StructuralAnalysis(phrases: phrases, sections: sections, detectedKey: key)
-            currentChordProgression = chords
-            musicEngineStatus = "Analysis complete: \(phrases.count) phrases, \(sections.count) sections, key: \(key?.displayName ?? "Unknown")"
-        }
-    }
+    func analyzeCurrentSongStructure() { musicIntelligence.analyzeCurrentSongStructure() }
 
-    func performSmartAlignment() {
-        guard !pianoRollNotes.isEmpty else { musicEngineStatus = "No notes for alignment."; return }
-        guard let lyrics = selectedLibrettoFile?.content, !lyrics.isEmpty else {
-            musicEngineStatus = "No lyrics for alignment."; return
-        }
-        musicEngineStatus = "Aligning lyrics..."
-        let capturedSongID = selectedMidiID
-        Task {
-            let syllabified = SyllabificationService.syllabify(lyrics)
-            let result = SmartLyricAligner.align(
-                syllabifiedWords: syllabified, notes: pianoRollNotes,
-                tempoEvents: pianoRollTempoEvents, timeSignatures: pianoRollTimeSignatures,
-                ticksPerQuarter: ticksPerQuarter, lyricText: lyrics
-            )
-            guard selectedMidiID == capturedSongID else { return }
-            smartAlignmentPreview = result
-            musicEngineStatus = "Alignment preview ready (\(result.assignments.count) assignments)."
-        }
-    }
+    func performSmartAlignment() { musicIntelligence.performSmartAlignment() }
 
     #if canImport(MLXLLM)
     func performLLMAlignment() {
@@ -3803,24 +3759,9 @@ final class ScoreStore {
     }
     #endif
 
-    func acceptSmartAlignmentPreview() {
-        guard let preview = smartAlignmentPreview else { return }
-        pushUndoState(label: "Apply Lyric Alignment")
-        // Apply syllable assignments to notes via lyric alignment entries
-        for assignment in preview.assignments {
-            if let noteIdx = pianoRollNotes.firstIndex(where: { $0.id == assignment.noteID }) {
-                pianoRollNotes[noteIdx].lyricSyllable = assignment.syllable
-            }
-        }
-        smartAlignmentPreview = nil
-        isDirty = true
-        musicEngineStatus = "Alignment applied."
-    }
+    func acceptSmartAlignmentPreview() { musicIntelligence.acceptSmartAlignmentPreview() }
 
-    func rejectSmartAlignmentPreview() {
-        smartAlignmentPreview = nil
-        musicEngineStatus = "Alignment discarded."
-    }
+    func rejectSmartAlignmentPreview() { musicIntelligence.rejectSmartAlignmentPreview() }
 
     func acceptMelodicMutation() {
         guard let mutation = proposedMelodicMutation else { return }
@@ -4162,6 +4103,14 @@ final class ScoreStore {
     func restorePreviousVersionForSelectedSong() { versionManager.restorePreviousVersionForSelectedSong() }
     var selectedSongVersionLabel: String? { versionManager.selectedSongVersionLabel }
     func removeAllAutosaves(for midiID: MidiAsset.ID) { versionManager.removeAllAutosaves(for: midiID) }
+
+    @ObservationIgnored private var _musicIntelligence: MusicIntelligenceStore?
+    var musicIntelligence: MusicIntelligenceStore {
+        if let mi = _musicIntelligence { return mi }
+        let mi = MusicIntelligenceStore(parent: self)
+        _musicIntelligence = mi
+        return mi
+    }
 
     // MARK: - Step Input
 
