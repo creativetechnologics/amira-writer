@@ -1,9 +1,0 @@
-{
-  "presets": [
-    {"locationId": "district-clinic-exterior", "defaultProfile": "daylight_soft", "alternateProfiles": ["sunset_warm", "moonlight_blue", "dust_storm_flat"]},
-    {"locationId": "clinic-interior-fluorescent", "defaultProfile": "fluorescent_clinic", "alternateProfiles": ["tungsten_interior", "night_practical_mix"]},
-    {"locationId": "rooftop-sunset", "defaultProfile": "sunset_warm", "alternateProfiles": ["dusk_desaturated", "moonlight_blue"]},
-    {"locationId": "village-street-night", "defaultProfile": "moonlight_blue", "alternateProfiles": ["night_practical_mix", "firelight_flicker"]},
-    {"locationId": "family-courtyard", "defaultProfile": "daylight_soft", "alternateProfiles": ["sunset_warm", "night_practical_mix"]}
-  ]
-}

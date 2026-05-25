@@ -1,7 +1,0 @@
-{
-  "oldPackage": "sample_hero_ready_package.json",
-  "newPackage": "sample_hero_ready_package_regressed.json",
-  "diffReport": "package_diff_report.json",
-  "markdownSummary": "package_diff_report.md",
-  "requiresHumanAcknowledgement": true
-}
