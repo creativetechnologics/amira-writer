@@ -50,7 +50,7 @@ final class CharacterPartsLibraryService {
         let dir = partsDirectory(projectRoot: projectRoot, characterSlug: characterSlug)
         let url = manifestURL(dir)
         guard let data = try? Data(contentsOf: url),
-              let manifest = try? JSONDecoder().decode(CharacterPartsManifest.self, from: data)
+              let manifest = try? JSONCoders.makeDecoder().decode(CharacterPartsManifest.self, from: data)
         else {
             return CharacterPartsManifest(characterSlug: characterSlug, parts: [])
         }
@@ -60,7 +60,7 @@ final class CharacterPartsLibraryService {
     func saveManifest(_ manifest: CharacterPartsManifest, projectRoot: URL) throws {
         let dir = partsDirectory(projectRoot: projectRoot, characterSlug: manifest.characterSlug)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let data = try JSONEncoder().encode(manifest)
+        let data = try JSONCoders.makeEncoder().encode(manifest)
         try data.write(to: manifestURL(dir))
     }
 

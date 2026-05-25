@@ -1990,16 +1990,7 @@ struct TitleBarOverlay: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // --- Suno A/B mode indicator (centered) ---
             Spacer()
-            if store.sunoRenderLayer != nil {
-                Text(store.sunoRenderLayer?.playbackMode.rawValue ?? "—")
-                    .font(.caption.monospaced())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(OperaChromeTheme.accentMuted)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-            }
             Spacer()
         }
     }

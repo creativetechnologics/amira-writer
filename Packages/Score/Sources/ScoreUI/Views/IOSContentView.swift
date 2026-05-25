@@ -16,7 +16,6 @@ struct IOSContentView: View {
         case libretto = "Libretto"
         case versions = "Versions"
         case files = "Files"
-        case suno = "Suno"
 
         var id: String { rawValue }
 
@@ -26,7 +25,6 @@ struct IOSContentView: View {
             case .libretto: return "text.book.closed"
             case .versions: return "clock.arrow.circlepath"
             case .files: return "folder"
-            case .suno: return "sparkles"
             }
         }
     }
@@ -200,8 +198,6 @@ struct IOSContentView: View {
                     VersionHistoryView(store: store)
                 case .files:
                     FilesInspectorView(store: store)
-                case .suno:
-                    SunoInspectorView(store: store)
                 }
             }
         }

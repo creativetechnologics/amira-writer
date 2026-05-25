@@ -37,7 +37,6 @@ struct KeyboardShortcutsView: View {
                     shortcutSection("Playback") {
                         shortcutRow("Play / Stop", "Cmd + Return")
                         shortcutRow("Play / Pause", "Space")
-                        shortcutRow("Cycle Suno A/B Mode", "Cmd + Shift + U")
                     }
 
                     shortcutSection("Piano Roll Tools") {

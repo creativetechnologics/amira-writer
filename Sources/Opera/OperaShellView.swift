@@ -41,7 +41,7 @@ enum OperaMode: String, CaseIterable, Identifiable {
         switch self {
         case .write: return "Libretto and scene drafting"
         case .score: return "Playback, orchestration, and export"
-        case .mix: return "DAW timeline, Suno comping, and polish"
+        case .mix: return "DAW timeline, audio comping, and polish"
         case .characters: return "Character design, reference workflow, and asset generation"
         case .places: return "Background plates, locations, and set imagery"
         case .props: return "Scene objects, vehicles, and interactive props"
@@ -1495,7 +1495,7 @@ struct OperaShellView: View {
         case .score:
             return "Loading playback and orchestration data from local files."
         case .mix:
-            return "Loading mix sessions, Suno file browser, and arrangement lanes from local files."
+            return "Loading mix sessions, audio browser, and arrangement lanes from local files."
         case .scenes:
             return "Loading scene image generation data."
         case .characters:

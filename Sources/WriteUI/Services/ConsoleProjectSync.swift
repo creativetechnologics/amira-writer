@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 // MARK: - Console Project Sync Service
 
@@ -21,9 +22,8 @@ final class ConsoleProjectSync {
             .appendingPathComponent("WriteUI-Console-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempBase, withIntermediateDirectories: true)
 
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let encoder = JSONCoders.makeEncoder()
+        encoder.outputFormatting.insert(.sortedKeys)
 
         // project_metadata.json
         try encoder.encode(store.metadata).write(to: tempBase.appendingPathComponent("project_metadata.json"))
@@ -148,7 +148,7 @@ final class ConsoleProjectSync {
         // Sync metadata (direct — not part of text editor preview)
         let metaURL = tempDir.appendingPathComponent("project_metadata.json")
         if let data = try? Data(contentsOf: metaURL),
-           let decoded = try? JSONDecoder.iso8601Decoder().decode(ProjectMetadata.self, from: data) {
+           let decoded = try? JSONCoders.makeDecoder().decode(ProjectMetadata.self, from: data) {
             if decoded.name != store.metadata.name || decoded.notes != store.metadata.notes {
                 store.metadata.name = decoded.name
                 store.metadata.notes = decoded.notes
@@ -180,8 +180,8 @@ final class ConsoleProjectSync {
         // Sync characters (direct — not part of text editor preview)
         let charsDir = tempDir.appendingPathComponent("characters")
         if let files = try? FileManager.default.contentsOfDirectory(at: charsDir, includingPropertiesForKeys: nil) {
-            let decoder = JSONDecoder.iso8601Decoder()
             for fileURL in files where fileURL.pathExtension == "json" {
+                let decoder = JSONCoders.makeDecoder()
                 guard let data = try? Data(contentsOf: fileURL),
                       let decoded = try? decoder.decode(OPWCharacter.self, from: data) else { continue }
                 if let index = store.characters.firstIndex(where: { $0.id == decoded.id }) {
@@ -227,13 +227,4 @@ final class ConsoleProjectSync {
         name.replacingOccurrences(of: "/", with: "_")
     }
 }
-
-// MARK: - JSON Decoder Extension
-
-extension JSONDecoder {
-    static func iso8601Decoder() -> JSONDecoder {
-        let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
-        return d
-    }
-}
+// JSON Coders: use ProjectKit.JSONCoders.makeDecoder() / makeEncoder() instead of custom extensions.

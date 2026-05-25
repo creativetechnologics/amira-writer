@@ -109,7 +109,7 @@ enum ImagePreferenceProfileService {
     static func latestProfile(projectRoot: URL) -> ImagePreferenceProfileArtifact? {
         let url = latestProfileURL(projectRoot: projectRoot)
         guard let data = try? Data(contentsOf: url) else { return nil }
-        let decoder = JSONDecoder()
+        let decoder = JSONCoders.makeDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(ImagePreferenceProfileArtifact.self, from: data)
     }
@@ -493,7 +493,7 @@ enum ImagePreferenceProfileService {
     private static func write(_ artifact: ImagePreferenceProfileArtifact, projectRoot: URL) throws {
         let dir = profileDirectory(projectRoot: projectRoot)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(artifact)

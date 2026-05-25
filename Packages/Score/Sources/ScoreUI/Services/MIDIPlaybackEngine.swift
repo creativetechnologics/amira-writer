@@ -1184,8 +1184,8 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
             // Generate click buffers if needed
             if enabled && self.metronomeDownbeatBuffer == nil {
-                self.metronomeDownbeatBuffer = self.generateClickBuffer(frequency: 1000, duration: 0.04, sampleRate: 44100)
-                self.metronomeUpbeatBuffer = self.generateClickBuffer(frequency: 800, duration: 0.04, sampleRate: 44100)
+                self.metronomeDownbeatBuffer = MIDIPlaybackMetronomeSupport.makeClickBuffer(frequency: 1000, duration: 0.04, sampleRate: 44100)
+                self.metronomeUpbeatBuffer = MIDIPlaybackMetronomeSupport.makeClickBuffer(frequency: 800, duration: 0.04, sampleRate: 44100)
             }
         }
     }
@@ -1688,36 +1688,6 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
     // MARK: - Metronome Implementation
 
-    /// Generate a short sine-wave click buffer for the metronome.
-    /// Attack: 2ms, sustain+decay: remaining duration. Mono Float32.
-    private func generateClickBuffer(frequency: Double, duration: Double, sampleRate: Double) -> AVAudioPCMBuffer? {
-        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false) else { return nil }
-        let frameCount = AVAudioFrameCount(sampleRate * duration)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return nil }
-        buffer.frameLength = frameCount
-
-        guard let data = buffer.floatChannelData?[0] else { return nil }
-        let twoPi = 2.0 * Double.pi
-        let attackFrames = Int(sampleRate * 0.002)  // 2ms attack
-        let totalFrames = Int(frameCount)
-
-        for i in 0..<totalFrames {
-            let phase = sin(twoPi * frequency * Double(i) / sampleRate)
-            let envelope: Double
-            if i < attackFrames {
-                // Linear attack
-                envelope = Double(i) / Double(attackFrames)
-            } else {
-                // Exponential decay
-                let decaySpan = totalFrames - attackFrames
-                let decayProgress = decaySpan > 0 ? Double(i - attackFrames) / Double(decaySpan) : 1.0
-                envelope = max(0, 1.0 - decayProgress) * exp(-3.0 * decayProgress)
-            }
-            data[i] = Float(phase * envelope * 0.8)  // 0.8 peak to avoid clipping
-        }
-        return buffer
-    }
-
     /// Setup metronome player node and connect to main mixer.
     /// Must be called on audioQueue after engine is running.
     private func setupMetronomeNodeOnAudioQueue() {
@@ -1729,10 +1699,10 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
         // Generate click buffers if not yet created (or if sample rate changed)
         if metronomeDownbeatBuffer == nil || metronomeDownbeatBuffer?.format.sampleRate != clickRate {
-            metronomeDownbeatBuffer = generateClickBuffer(frequency: 1000, duration: 0.04, sampleRate: clickRate)
+            metronomeDownbeatBuffer = MIDIPlaybackMetronomeSupport.makeClickBuffer(frequency: 1000, duration: 0.04, sampleRate: clickRate)
         }
         if metronomeUpbeatBuffer == nil || metronomeUpbeatBuffer?.format.sampleRate != clickRate {
-            metronomeUpbeatBuffer = generateClickBuffer(frequency: 800, duration: 0.04, sampleRate: clickRate)
+            metronomeUpbeatBuffer = MIDIPlaybackMetronomeSupport.makeClickBuffer(frequency: 800, duration: 0.04, sampleRate: clickRate)
         }
 
         let node = AVAudioPlayerNode()
@@ -1788,10 +1758,10 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             let scheduledTime = AVAudioTime(sampleTime: hostSampleTime + sampleOffset, atRate: sampleRate)
 
             // Determine beats per bar from the active time signature at this tick
-            let beatsPerBar = activeBeatsPerBar(atTick: beatTick, timeSignatures: sortedTimeSigs, ticksPerQuarter: tpq)
+            let beatsPerBar = MIDIPlaybackMetronomeSupport.activeBeatsPerBar(atTick: beatTick, timeSignatures: sortedTimeSigs)
 
             // Determine if this is beat 1 of a bar
-            let barStartTick = barStartTickBefore(beatTick, timeSignatures: sortedTimeSigs, ticksPerQuarter: tpq)
+            let barStartTick = MIDIPlaybackMetronomeSupport.barStartTickBefore(beatTick, timeSignatures: sortedTimeSigs, ticksPerQuarter: tpq)
             let beatsFromBarStart = (beatTick - barStartTick) / tpq
             let isDownbeat = beatsFromBarStart % beatsPerBar == 0
             let buffer = isDownbeat ? downbeatBuf : upbeatBuf
@@ -1799,38 +1769,6 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             node.scheduleBuffer(buffer, at: scheduledTime, options: [], completionHandler: nil)
             beatTick += tpq
         }
-    }
-
-    /// Returns the number of beats per bar for the time signature active at `tick`.
-    private func activeBeatsPerBar(atTick tick: Int, timeSignatures: [TimeSignatureEvent], ticksPerQuarter tpq: Int) -> Int {
-        // Find the last time signature at or before this tick
-        var activeSig: TimeSignatureEvent? = nil
-        for sig in timeSignatures where sig.tick <= tick {
-            activeSig = sig
-        }
-        guard let sig = activeSig else { return 4 } // default 4/4
-        // For compound meters (6/8, 9/8, 12/8), the beat unit is a dotted quarter
-        // but the metronome clicks on quarter-note divisions. Return numerator adjusted
-        // for the denominator relative to quarter notes.
-        // numerator/denominator: 4/4 → 4 beats, 3/4 → 3 beats, 6/8 → 6 eighth-note beats (3 dotted-quarter groups)
-        // Since we click every quarter note (tpq ticks), adjust numerator:
-        // denom=4 → 1 beat per quarter, denom=8 → 0.5 beats per quarter, denom=2 → 2 beats per quarter
-        let beatsPerBar = sig.numerator * 4 / max(1, sig.denominator)
-        return max(1, beatsPerBar)
-    }
-
-    /// Returns the tick of the most recent bar start at or before `tick`.
-    private func barStartTickBefore(_ tick: Int, timeSignatures: [TimeSignatureEvent], ticksPerQuarter tpq: Int) -> Int {
-        // Find the active time signature
-        var activeSig = TimeSignatureEvent(tick: 0, numerator: 4, denominator: 4)
-        for sig in timeSignatures where sig.tick <= tick {
-            activeSig = sig
-        }
-        let beatsPerBar = max(1, activeSig.numerator * 4 / max(1, activeSig.denominator))
-        let ticksPerBar = beatsPerBar * tpq
-        let ticksSinceSigStart = tick - activeSig.tick
-        let barsElapsed = ticksSinceSigStart / ticksPerBar
-        return activeSig.tick + barsElapsed * ticksPerBar
     }
 
     /// Tear down metronome node.

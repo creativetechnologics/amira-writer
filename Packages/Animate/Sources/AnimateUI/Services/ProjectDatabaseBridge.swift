@@ -134,7 +134,7 @@ enum ProjectDatabaseBridge {
     ) -> AnimateSceneData? {
         let fileURL = sceneDirectoryURL.appendingPathComponent(sceneAnimationFileName)
         guard let data = try? Data(contentsOf: fileURL),
-              var decoded = try? JSONDecoder().decode(AnimateSceneData.self, from: data) else {
+              var decoded = try? JSONCoders.makeDecoder().decode(AnimateSceneData.self, from: data) else {
             return nil
         }
         decoded.owsSongPath = decoded.owsSongPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -328,14 +328,14 @@ enum ProjectDatabaseBridge {
         if !FileManager.default.fileExists(atPath: dir.path) {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        let data = try JSONEncoder().encode(["enabled": enabled])
+        let data = try JSONCoders.makeEncoder().encode(["enabled": enabled])
         try data.write(to: url, options: .atomic)
     }
 
     static func loadGeminiMasterSwitch(projectURL: URL) -> Bool? {
         let url = ProjectPaths(root: projectURL).animateGeminiSwitchJSON
         guard let data = try? Data(contentsOf: url),
-              let dict = try? JSONDecoder().decode([String: Bool].self, from: data) else { return nil }
+              let dict = try? JSONCoders.makeDecoder().decode([String: Bool].self, from: data) else { return nil }
         return dict["enabled"]
     }
 }

@@ -72,17 +72,6 @@ struct APIAudioClipsResponse: Codable {
     var clips: [AudioClip]
 }
 
-struct APISunoSplitsResponse: Codable {
-    var splitTicks: [Int]
-    var chunks: [APISunoChunkInfo]
-}
-
-struct APISunoChunkInfo: Codable {
-    var startTick: Int
-    var endTick: Int
-    var durationSeconds: Double
-}
-
 struct APIVersionsResponse: Codable {
     var versions: [APIVersionInfo]
     var activeVersionID: String?
@@ -197,10 +186,6 @@ struct APISetTempoRequest: Codable {
     var keySignatures: [KeySignatureEvent]?
 }
 
-struct APISetSunoSplitsRequest: Codable {
-    var splitTicks: [Int]
-}
-
 struct APISelectSongRequest: Codable {
     var index: Int?
     var relativePath: String?
@@ -243,11 +228,6 @@ struct APIDeleteAnnotationRequest: Codable {
 
 struct APIExportStemsRequest: Codable {
     var outputDir: String
-}
-
-struct APIExportSunoChunksRequest: Codable {
-    var outputDir: String?
-    var overrideSF2Path: String?
 }
 
 struct APIOpenProjectRequest: Codable {

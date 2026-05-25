@@ -190,11 +190,6 @@ final class PianoRollEditorView: NSView {
         didSet { rulerView.markers = markers; rulerView.setNeedsDisplay(rulerView.bounds) }
     }
 
-    /// Suno split tick positions (shown on the ruler as green dashed lines).
-    var sunoSplits: [Int] = [] {
-        didSet { rulerView.sunoSplits = sunoSplits; rulerView.setNeedsDisplay(rulerView.bounds) }
-    }
-
     // MARK: - Lasso Overlay
 
     /// Update the lasso overlay from canvas-coordinate points. Pass nil/empty to clear.
@@ -317,12 +312,6 @@ final class PianoRollEditorView: NSView {
 
     /// Called when the user renames a marker.
     var onRenameMarker: ((UUID, String) -> Void)?
-
-    /// Called when the user adds a Suno split via right-click menu.
-    var onAddSunoSplit: ((Int) -> Void)?
-
-    /// Called when the user deletes a Suno split via right-click menu.
-    var onDeleteSunoSplit: ((Int) -> Void)?
 
     // MARK: - Subviews
 
@@ -463,12 +452,6 @@ final class PianoRollEditorView: NSView {
         }
         rulerView.onRenameMarker = { [weak self] id, name in
             self?.onRenameMarker?(id, name)
-        }
-        rulerView.onAddSunoSplit = { [weak self] tick in
-            self?.onAddSunoSplit?(tick)
-        }
-        rulerView.onDeleteSunoSplit = { [weak self] tick in
-            self?.onDeleteSunoSplit?(tick)
         }
         addSubview(rulerView)
     }
@@ -1129,20 +1112,11 @@ final class PianoRollRulerView: NSView {
     /// Named timeline markers displayed as colored flags.
     var markers: [MixMarker] = []
 
-    /// Suno split tick positions (sorted).
-    var sunoSplits: [Int] = []
-
     /// Callback when the user clicks/drags to seek.
     var onSeek: ((Int) -> Void)?
 
     /// Callback when the user right-clicks on the ruler to add a marker at a tick.
     var onAddMarker: ((Int) -> Void)?
-
-    /// Callback when the user adds a Suno split via right-click menu.
-    var onAddSunoSplit: ((Int) -> Void)?
-
-    /// Callback when the user deletes a Suno split via right-click menu.
-    var onDeleteSunoSplit: ((Int) -> Void)?
 
     /// Callback when the user clicks on a marker to jump to it.
     var onJumpToMarker: ((MixMarker) -> Void)?
@@ -1418,50 +1392,6 @@ final class PianoRollRulerView: NSView {
             context.strokePath()
         }
 
-        // --- Suno Splits ---
-        let sunoColor = NSColor.systemGreen
-        let sunoFont = NSFont.systemFont(ofSize: 8, weight: .bold)
-        let sunoCTFont = sunoFont as CTFont
-        let sunoFontAscent = CTFontGetAscent(sunoCTFont)
-        for (idx, splitTick) in sunoSplits.enumerated() {
-            let sx = CGFloat(splitTick) * safePixelsPerTick - scrollOffset
-            guard sx >= -40, sx <= width + 10 else { continue }
-
-            // Draw scissor icon (small diamond)
-            context.setFillColor(sunoColor.cgColor)
-            context.beginPath()
-            context.move(to: CGPoint(x: sx, y: 0))
-            context.addLine(to: CGPoint(x: sx + 6, y: 0))
-            context.addLine(to: CGPoint(x: sx + 6, y: 6))
-            context.addLine(to: CGPoint(x: sx + 3, y: 10))
-            context.addLine(to: CGPoint(x: sx, y: 6))
-            context.closePath()
-            context.fillPath()
-
-            // Draw split label
-            let splitLabel = "S\(idx + 1)" as CFString
-            let sAttrs: [CFString: Any] = [
-                kCTFontAttributeName: sunoCTFont,
-                kCTForegroundColorAttributeName: sunoColor.cgColor,
-            ]
-            let sAttrStr = CFAttributedStringCreate(nil, splitLabel, sAttrs as CFDictionary)!
-            let sLine = CTLineCreateWithAttributedString(sAttrStr)
-            context.saveGState()
-            context.translateBy(x: sx + 8, y: 1 + sunoFontAscent)
-            context.scaleBy(x: 1, y: -1)
-            CTLineDraw(sLine, context)
-            context.restoreGState()
-
-            // Dashed vertical line
-            context.setStrokeColor(sunoColor.withAlphaComponent(0.6).cgColor)
-            context.setLineWidth(1.0)
-            context.setLineDash(phase: 0, lengths: [4, 3])
-            context.move(to: CGPoint(x: sx, y: 10))
-            context.addLine(to: CGPoint(x: sx, y: height))
-            context.strokePath()
-            context.setLineDash(phase: 0, lengths: [])
-        }
-
         // Playhead is rendered via playheadLineLayer + playheadTriangleLayer (CALayer) for 60fps smoothness
 
         // Bottom border line
@@ -1502,12 +1432,6 @@ final class PianoRollRulerView: NSView {
             return abs(location.x - mx) < 20 && location.y < 20
         }
 
-        // Check if clicking near a Suno split (within 20px)
-        let hitSunoSplit = sunoSplits.first { splitTick in
-            let sx = CGFloat(splitTick) * safePixelsPerTick - scrollOffset
-            return abs(location.x - sx) < 20
-        }
-
         let menu = NSMenu()
 
         if let marker = hitMarker {
@@ -1526,23 +1450,11 @@ final class PianoRollRulerView: NSView {
             deleteItem.target = self
             deleteItem.representedObject = marker
             menu.addItem(deleteItem)
-        } else if let splitTick = hitSunoSplit {
-            let deleteItem = NSMenuItem(title: "Delete Suno Split", action: #selector(rulerDeleteSunoSplit(_:)), keyEquivalent: "")
-            deleteItem.target = self
-            deleteItem.tag = splitTick
-            menu.addItem(deleteItem)
         } else {
             let addItem = NSMenuItem(title: "Add Marker Here", action: #selector(rulerAddMarker(_:)), keyEquivalent: "")
             addItem.target = self
             addItem.tag = clickTick
             menu.addItem(addItem)
-
-            menu.addItem(NSMenuItem.separator())
-
-            let addSunoItem = NSMenuItem(title: "Add Suno Split", action: #selector(rulerAddSunoSplit(_:)), keyEquivalent: "")
-            addSunoItem.target = self
-            addSunoItem.tag = clickTick
-            menu.addItem(addSunoItem)
         }
 
         NSMenu.popUpContextMenu(menu, with: event, for: self)
@@ -1580,14 +1492,6 @@ final class PianoRollRulerView: NSView {
                 onRenameMarker?(marker.id, newName)
             }
         }
-    }
-
-    @objc private func rulerAddSunoSplit(_ sender: NSMenuItem) {
-        onAddSunoSplit?(sender.tag)
-    }
-
-    @objc private func rulerDeleteSunoSplit(_ sender: NSMenuItem) {
-        onDeleteSunoSplit?(sender.tag)
     }
 
     // MARK: - Hit Testing

@@ -356,7 +356,12 @@ struct CharacterReferenceWorkflowSheet: View {
         let approvedFullBodyCount = character.costumeReferenceSets.flatMap(\.fullBodySlots).filter { $0.approvedVariant != nil }.count
         let approvedAccessoryCount = character.costumeReferenceSets.flatMap(\.accessorySlots).filter { $0.approvedVariant != nil }.count
 
-        return DisclosureGroup(isExpanded: $isOverviewExpanded) {
+        return OperaChromeCollapsibleSection(
+            title: "Overview",
+            subtitle: "Workflow summary and progress",
+            icon: "text.alignleft",
+            isExpanded: $isOverviewExpanded
+        ) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Use the realistic inspiration images to generate several beautiful master sheets first. Approve the best master sheet, then use it as the ingredient for specific head poses, full-body costume poses, and accessories.")
                     .font(.callout)
@@ -370,16 +375,7 @@ struct CharacterReferenceWorkflowSheet: View {
                     workflowPill(title: "Accessories", value: "\(approvedAccessoryCount)", systemImage: "briefcase")
                 }
             }
-            .padding(.top, 12)
-        } label: {
-            sectionDisclosureLabel(
-                title: "Overview",
-                subtitle: "Workflow summary and progress",
-                systemImage: "text.alignleft"
-            )
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private func workflowPill(title: String, value: String, systemImage: String) -> some View {
@@ -399,7 +395,12 @@ struct CharacterReferenceWorkflowSheet: View {
     }
 
     private func masterReferenceSheetSection(_ character: AnimationCharacter) -> some View {
-        DisclosureGroup(isExpanded: $isMasterReferenceExpanded) {
+        OperaChromeCollapsibleSection(
+            title: "Master Reference Sheet",
+            subtitle: "Generate and approve the core character reference",
+            icon: "rectangle.3.group",
+            isExpanded: $isMasterReferenceExpanded
+        ) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -523,20 +524,16 @@ struct CharacterReferenceWorkflowSheet: View {
                     }
                 }
             }
-            .padding(.top, 12)
-        } label: {
-            sectionDisclosureLabel(
-                title: "Master Reference Sheet",
-                subtitle: "Generate and approve the core character reference",
-                systemImage: "rectangle.3.group"
-            )
         }
-        .padding(18)
-        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private func headTurnaroundSection(_ character: AnimationCharacter) -> some View {
-        DisclosureGroup(isExpanded: $isHeadTurnaroundExpanded) {
+        OperaChromeCollapsibleSection(
+            title: "Head Turnaround Grid",
+            subtitle: "Crop and manage the six head poses",
+            icon: "person.crop.square",
+            isExpanded: $isHeadTurnaroundExpanded
+        ) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -724,20 +721,16 @@ struct CharacterReferenceWorkflowSheet: View {
                     }
                 }
             }
-            .padding(.top, 12)
-        } label: {
-            sectionDisclosureLabel(
-                title: "Head Turnaround Grid",
-                subtitle: "Crop and manage the six head poses",
-                systemImage: "person.crop.square"
-            )
         }
-        .padding(18)
-        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     private func costumesSection(_ character: AnimationCharacter) -> some View {
-        DisclosureGroup(isExpanded: $isCostumesExpanded) {
+        OperaChromeCollapsibleSection(
+            title: "Costume Pose Sets",
+            subtitle: "Full-body poses and accessories",
+            icon: "figure.stand",
+            isExpanded: $isCostumesExpanded
+        ) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text("Create one or more costume reference sets for clothing, accessories, and body poses. Each set can hold full-body poses and accessory reference variants.")
@@ -756,34 +749,6 @@ struct CharacterReferenceWorkflowSheet: View {
                     CostumeSectionView(store: store, characterID: characterID, costume: costume)
                 }
             }
-            .padding(.top, 12)
-        } label: {
-            sectionDisclosureLabel(
-                title: "Costume Pose Sets",
-                subtitle: "Full-body poses and accessories",
-                systemImage: "figure.stand"
-            )
-        }
-        .padding(18)
-        .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-    }
-
-    private func sectionDisclosureLabel(title: String, subtitle: String, systemImage: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: systemImage)
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .frame(width: 18, alignment: .center)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer(minLength: 0)
         }
     }
 

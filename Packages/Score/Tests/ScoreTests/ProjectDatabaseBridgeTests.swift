@@ -324,7 +324,7 @@ private func metadataData(_ metadata: ProjectMetadata) throws -> Data {
 }
 
 private func metadataEncoder() -> JSONEncoder {
-    let encoder = JSONEncoder()
+    let encoder = JSONCoders.makeEncoder()
     encoder.dateEncodingStrategy = .iso8601
     return encoder
 }

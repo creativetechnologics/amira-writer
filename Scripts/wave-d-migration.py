@@ -14,7 +14,7 @@ Operations (all within the same volume, so os.rename is atomic — iCloud/Syncth
   6. Animate/3d/                   -> _Archive/Animate-3d/
   7. Instruments.json (root)       -> Settings/instruments.json
   8. config/api-credentials.json   -> Settings/api-credentials.json (then remove empty config/)
-  9. Create empty Suno/covers/ and Suno/logs/
+  9. Leave retired cloud-music output folders untouched; current exports live under Mix/exports.
 
 Explicitly NOT touched:
   - Syncthing markers (.stfolder, .stignore)
@@ -22,7 +22,7 @@ Explicitly NOT touched:
   - Root .md / text files
   - Audio/, Inspiration/, Songs/, Research/, Synopsis/, Write/, ChatHistory/, SoundFonts/,
     Metadata/, Removed From Active Show/
-  - Mix/exports/** (no covers exist yet; routing handled in Wave E)
+  - Mix/exports/**
   - Other Animate/ cruft (backgrounds, cache, costumes, debug, generated, objects,
     review-state-backups, scene-generation, reference-registry.*, shot-presets.json,
     character-package-selections.json, animate.json*) — flagged for follow-up pass.
@@ -173,11 +173,6 @@ def plan_ops() -> list[Op]:
     ops.append(
         Op("rmdir_empty", PROJECT_ROOT / "config", None, note="after creds moves")
     )
-
-    # 8. Suno/covers and Suno/logs (empty dirs, Wave E routing targets)
-    for sub in ["covers", "logs"]:
-        target = PROJECT_ROOT / "Suno" / sub
-        ops.append(Op("mkdir", None, target, note="Wave E target"))
 
     return ops
 

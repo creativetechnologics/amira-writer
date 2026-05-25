@@ -135,14 +135,14 @@ struct ActionImageService {
     static func loadPoses(animateURL: URL, characterSlug: String) -> [ActionPose] {
         let url = posesJSONPath(animateURL: animateURL, characterSlug: characterSlug)
         guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([ActionPose].self, from: data)) ?? []
+        return (try? JSONCoders.makeDecoder().decode([ActionPose].self, from: data)) ?? []
     }
 
     static func savePoses(_ poses: [ActionPose], animateURL: URL, characterSlug: String) throws {
         let dir = actionImagesDirectory(animateURL: animateURL, characterSlug: characterSlug)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = posesJSONPath(animateURL: animateURL, characterSlug: characterSlug)
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(poses).write(to: url, options: .atomic)
     }

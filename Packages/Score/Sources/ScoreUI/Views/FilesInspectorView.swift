@@ -505,28 +505,6 @@ struct FilesInspectorView: View {
             }
         }
 
-        // Check Suno Downloads
-        let sunoDir = desktopExportDir.appendingPathComponent("Suno Downloads")
-        if let contents = try? FileManager.default.contentsOfDirectory(
-            at: sunoDir, includingPropertiesForKeys: [.fileSizeKey]
-        ) {
-            for url in contents.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-                let ext = url.pathExtension.lowercased()
-                guard ["wav", "mp3"].contains(ext) else { continue }
-                files.append(DiscoveredFile(
-                    name: url.lastPathComponent,
-                    path: url.path,
-                    icon: "sparkles",
-                    tone: .purple,
-                    detail: "Suno render",
-                    isDraggable: true,
-                    isRemovable: false,
-                    fileSize: Self.fileSize(at: url),
-                    clipID: nil
-                ))
-            }
-        }
-
         return files
     }
 

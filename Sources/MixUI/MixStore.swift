@@ -419,52 +419,6 @@ private struct EmptyDecodable: Decodable {
     }
 }
 
-@available(macOS 26.0, *)
-struct MixBrowserNode: Identifiable, Hashable, Sendable {
-    enum Kind: String, Hashable, Sendable {
-        case root
-        case folder
-        case audio
-    }
-
-    var id: String { path }
-    var name: String
-    var path: String
-    var kind: Kind
-    var children: [MixBrowserNode]
-    var fileSize: Int64?
-
-    var isDirectory: Bool {
-        kind != .audio
-    }
-}
-
-@available(macOS 26.0, *)
-struct MixPluginInfo: Identifiable, Hashable, Sendable {
-    var id: String
-    var name: String
-    var manufacturerName: String
-    var formatLabel: String
-    var hasCustomView: Bool
-}
-
-@available(macOS 26.0, *)
-struct MixInputDevice: Identifiable, Hashable, Sendable {
-    var id: String
-    var name: String
-    var uniqueID: String?
-    var isConnected: Bool
-}
-
-@available(macOS 26.0, *)
-enum MixMicrophonePermissionState: String, Sendable {
-    case unknown
-    case notDetermined
-    case denied
-    case restricted
-    case authorized
-}
-
 /// Thin NSObject wrapper for CADisplayLink callbacks — MixStore is not an NSObject
 /// so it can't be a CADisplayLink target directly.
 @available(macOS 26.0, *)
@@ -505,7 +459,7 @@ private struct MixSaveSnapshot {
 /// Using a class (not actor) is intentional: it's written once on the scan queue before the
 /// semaphore signals, then read on the wait queue after the signal — there is no concurrent access.
 @available(macOS 26.0, *)
-private final class MixBrowserScanBox: @unchecked Sendable {
+final class MixBrowserScanBox: @unchecked Sendable {
     var nodes: [MixBrowserNode] = []
 }
 
@@ -517,9 +471,9 @@ final class MixStore {
     private nonisolated static let legacyMixActorID = ProjectClientIdentity.actorID(for: "amira-mix")
     private nonisolated static let mixActorID = ProjectClientIdentity.actorID(for: "mix")
     private nonisolated static let mixActorIDs: Set<String> = [mixActorID, legacyMixActorID]
-    nonisolated private static let audioExtensions: Set<String> = ["wav", "aiff", "aif", "mp3", "m4a", "caf", "flac"]
-    nonisolated private static let minimumTimelinePixelsPerSecond = 12.0
-    nonisolated private static let maximumTimelinePixelsPerSecond = 48.0
+    nonisolated static let audioExtensions: Set<String> = ["wav", "aiff", "aif", "mp3", "m4a", "caf", "flac"]
+    nonisolated static let minimumTimelinePixelsPerSecond = 12.0
+    nonisolated static let maximumTimelinePixelsPerSecond = 48.0
 
     var projectURL: URL?
     var workingProjectURL: URL?
@@ -1112,7 +1066,7 @@ final class MixStore {
 
     func snapToGrid(_ seconds: Double, excludingClipID: UUID? = nil) -> Double {
         // Magnetic snap to nearby clip edges takes priority over grid snap.
-        // This makes end-to-end Suno WAV assembly precise and intuitive.
+        // This makes end-to-end WAV assembly precise and intuitive.
         let edgeSnapped = snapToNearestClipEdge(seconds, excludingClipID: excludingClipID)
         if edgeSnapped != seconds { return edgeSnapped }
 
@@ -1537,7 +1491,7 @@ final class MixStore {
 
     /// Import all audio files from a folder (recursively) onto the specified track,
     /// auto-sequenced end-to-end. Sorts files by name for deterministic order.
-    /// Use this for batch-importing Suno WAV renders from a scene folder.
+    /// Use this for batch-importing WAV renders from a scene folder.
     func importFolder(_ folderURL: URL, to trackID: UUID, startAt: Double = 0) {
         Task { [weak self] in
             guard let self else { return }
@@ -1574,7 +1528,7 @@ final class MixStore {
                 results.append(fileURL)
             }
         }
-        // Sort by filename for deterministic order (usually numeric for Suno renders)
+        // Sort by filename for deterministic order, which keeps numbered renders in sequence.
         results.sort { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
         return results
     }
@@ -1895,7 +1849,7 @@ final class MixStore {
         statusMessage = "Duplicated \(clip.name)."
     }
 
-    // MARK: - Suno WAV Assembly Helpers
+    // MARK: - WAV Assembly Helpers
 
     /// Re-sequence all clips on the given track in their current order, with a
     /// configurable gap between them.  Use negative overlap to create crossfades.
@@ -1938,7 +1892,7 @@ final class MixStore {
     }
 
     /// Sort clips on the given track by filename, then re-sequence them end-to-end.
-    /// Useful when Suno renders are numbered (01-intro.wav, 02-verse.wav, etc.).
+    /// Useful when renders are numbered (01-intro.wav, 02-verse.wav, etc.).
     func sortClipsByName(on trackID: UUID) {
         pushUndoSnapshot()
         mutateCurrentSession { session in
@@ -2064,7 +2018,7 @@ final class MixStore {
             self.isRefreshingBrowser = false
             let browserStatus = self.stickyProjectWarning
                 ?? (roots.isEmpty
-                    ? "No desktop or project audio roots found yet. Drop renders into the project's suno folder or export a Suno render to populate the browser."
+                    ? "No project audio roots found yet. Drop renders into the project's Exports, Mixes, or Renders folder to populate the browser."
                     : "Indexed \(roots.count) audio roots for drag-and-drop.")
             if self.stickyProjectWarning != nil || self.statusMessage == baselineStatusMessage {
                 self.statusMessage = browserStatus
@@ -2705,7 +2659,7 @@ final class MixStore {
             return MixDocumentLoadOutcome(document: MixProjectDocument(), warningMessage: nil)
         }
 
-        let decoder = JSONDecoder()
+        let decoder = JSONCoders.makeDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
             return MixDocumentLoadOutcome(
@@ -2862,7 +2816,7 @@ final class MixStore {
             let dirURL = fileURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
 
-            let encoder = JSONEncoder()
+            let encoder = JSONCoders.makeEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(snapshot.document)
@@ -2916,181 +2870,6 @@ final class MixStore {
         }
     }
 
-    nonisolated private static func corruptBackupPath(date: Date = .now) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return "Metadata/mix_session.corrupt-\(formatter.string(from: date)).json"
-    }
-
-    nonisolated private static func scanBrowserRoots(
-        selectedScene: MixSceneSummary?,
-        workingProjectURL: URL?
-    ) async -> [MixBrowserNode] {
-        // Project-local paths (in /tmp, on local volumes) scan near-instantly.
-        // Desktop paths may be on network mounts or iCloud-synced volumes and can block
-        // for seconds or indefinitely. We race the full scan against a 3-second timeout;
-        // if it completes in time we return all roots, otherwise we fall back to project-only roots.
-        let scanSemaphore = DispatchSemaphore(value: 0)
-        let results = MixBrowserScanBox()
-        DispatchQueue(label: "com.amira.mix.browserScan", qos: .utility).async {
-            results.nodes = Self.candidateBrowserRootsSync(
-                selectedScene: selectedScene,
-                workingProjectURL: workingProjectURL
-            )
-            scanSemaphore.signal()
-        }
-        return await withCheckedContinuation { continuation in
-            DispatchQueue(label: "com.amira.mix.browserScanWait", qos: .utility).async {
-                let completed = scanSemaphore.wait(timeout: .now() + 3) == .success
-                if completed {
-                    continuation.resume(returning: results.nodes)
-                } else {
-                    // Timed out — fall back to project-only roots which are always fast.
-                    let fallback = workingProjectURL.map { Self.projectBrowserRootsSync(workingProjectURL: $0) } ?? []
-                    continuation.resume(returning: fallback)
-                }
-            }
-        }
-    }
-
-    /// Fully synchronous version of the browser scan — runs on a non-Swift-concurrency thread
-    /// (DispatchQueue) so that slow filesystem operations don't block the cooperative thread pool.
-    /// Scans project-local paths for browser roots.
-    nonisolated private static func candidateBrowserRootsSync(
-        selectedScene: MixSceneSummary?,
-        workingProjectURL: URL?
-    ) -> [MixBrowserNode] {
-        let roots = candidateBrowserRoots(selectedScene: selectedScene, workingProjectURL: workingProjectURL)
-        return roots.compactMap { root in
-            buildBrowserNode(at: root, kind: .root, depth: 0)
-        }
-    }
-
-    /// Fast scan of project-local paths only (no Desktop traversal) for use when speed matters.
-    nonisolated private static func projectBrowserRootsSync(workingProjectURL: URL) -> [MixBrowserNode] {
-        let projectCandidates = [
-            ProjectPaths(root: workingProjectURL).suno,
-            ProjectPaths(root: workingProjectURL).mixExports,
-            ProjectPaths(root: workingProjectURL).mixes,
-            workingProjectURL.appendingPathComponent("Renders", isDirectory: true),
-            workingProjectURL.appendingPathComponent("Exports", isDirectory: true),
-        ]
-        var roots: [URL] = []
-        for candidate in projectCandidates where pathExistsNoCloud(candidate.path) {
-            roots.append(candidate.standardizedFileURL)
-        }
-        return roots.compactMap { buildBrowserNode(at: $0, kind: .root, depth: 0) }
-    }
-
-    nonisolated private static func candidateBrowserRoots(
-        selectedScene: MixSceneSummary?,
-        workingProjectURL: URL?
-    ) -> [URL] {
-        var roots: [URL] = []
-
-        // Use project-local Exports directory instead of ~/Desktop to avoid
-        // TCC permission prompts on macOS.
-        if let projectURL = workingProjectURL {
-            let projectExports = projectURL.appendingPathComponent("Exports", isDirectory: true)
-            if Self.pathExistsNoCloud(projectExports.path) {
-                roots.append(projectExports)
-            }
-        }
-
-        if let workingProjectURL {
-            let projectCandidates = [
-                ProjectPaths(root: workingProjectURL).suno,
-                ProjectPaths(root: workingProjectURL).mixExports,
-                ProjectPaths(root: workingProjectURL).mixes,
-                workingProjectURL.appendingPathComponent("Renders", isDirectory: true),
-                workingProjectURL.appendingPathComponent("Exports", isDirectory: true),
-            ]
-            for candidate in projectCandidates where !Task.isCancelled && Self.pathExistsNoCloud(candidate.path) {
-                roots.append(candidate)
-            }
-        }
-
-        var deduped: [String: URL] = [:]
-        for root in roots {
-            deduped[root.standardizedFileURL.path] = root.standardizedFileURL
-        }
-        return deduped.values.sorted { $0.path < $1.path }
-    }
-
-    /// Non-blocking existence check using `lstat` to avoid triggering iCloud Drive downloads
-    /// or stalling on network-mounted paths the way `FileManager.fileExists` can.
-    nonisolated private static func pathExistsNoCloud(_ path: String) -> Bool {
-        var st = stat()
-        return lstat(path, &st) == 0
-    }
-
-    nonisolated private static func buildBrowserNode(at url: URL, kind: MixBrowserNode.Kind, depth: Int) -> MixBrowserNode? {
-        let fm = FileManager.default
-        // Use lstat to avoid triggering iCloud Drive downloads for placeholder files.
-        var st = stat()
-        guard lstat(url.path, &st) == 0 else { return nil }
-        let isDirectory = (st.st_mode & S_IFMT) == S_IFDIR
-
-        if isDirectory {
-            let displayName: String
-            if url.lastPathComponent.lowercased() == "exports" && url.deletingLastPathComponent().lastPathComponent == "Mix" {
-                displayName = "Score"
-            } else {
-                displayName = url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent
-            }
-            guard depth < 6 else {
-                return MixBrowserNode(name: displayName, path: url.path, kind: kind, children: [], fileSize: nil)
-            }
-            let contents = (try? fm.contentsOfDirectory(
-                at: url,
-                includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
-                options: [.skipsHiddenFiles]
-            )) ?? []
-            let children = contents.compactMap { childURL -> MixBrowserNode? in
-                guard !Task.isCancelled else { return nil }
-                let childKind: MixBrowserNode.Kind = (try? childURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true ? .folder : .audio
-                if childKind == .audio, Self.audioExtensions.contains(childURL.pathExtension.lowercased()) == false {
-                    return nil
-                }
-                return buildBrowserNode(at: childURL, kind: childKind, depth: depth + 1)
-            }
-            .sorted { lhs, rhs in
-                if lhs.isDirectory != rhs.isDirectory {
-                    return lhs.isDirectory && !rhs.isDirectory
-                }
-                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-            }
-
-            guard kind == .root || children.isEmpty == false else { return nil }
-            return MixBrowserNode(
-                name: displayName,
-                path: url.path,
-                kind: kind,
-                children: children,
-                fileSize: nil
-            )
-        }
-
-        guard Self.audioExtensions.contains(url.pathExtension.lowercased()) else { return nil }
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
-        guard Self.isBrowsableAudioFile(at: url, fileSize: size) else { return nil }
-        return MixBrowserNode(
-            name: url.lastPathComponent,
-            path: url.path,
-            kind: .audio,
-            children: [],
-            fileSize: size
-        )
-    }
-
-    nonisolated private static func isBrowsableAudioFile(at url: URL, fileSize: Int64?) -> Bool {
-        guard let fileSize else { return true }
-        if url.pathExtension.lowercased() == "wav", fileSize > 0, fileSize <= 4096 {
-            return false
-        }
-        return true
-    }
-
     private func filterBrowserNodes(_ nodes: [MixBrowserNode], query: String) -> [MixBrowserNode] {
         nodes.compactMap { node in
             let matchesNode = node.name.localizedCaseInsensitiveContains(query)
@@ -3109,207 +2888,12 @@ final class MixStore {
             return nil
         }
     }
-
-    nonisolated private static func findBrowserNode(in nodes: [MixBrowserNode], path: String) -> MixBrowserNode? {
-        for node in nodes {
-            if node.path == path {
-                return node
-            }
-            if let match = findBrowserNode(in: node.children, path: path) {
-                return match
-            }
-        }
-        return nil
-    }
-
-    nonisolated private static func findBrowserAncestorPaths(in nodes: [MixBrowserNode], path: String) -> [String]? {
-        for node in nodes {
-            if node.path == path {
-                return []
-            }
-            if let childMatch = findBrowserAncestorPaths(in: node.children, path: path) {
-                return node.isDirectory ? [node.path] + childMatch : childMatch
-            }
-        }
-        return nil
-    }
-
-    // NOTE: This is intentionally synchronous and must only be called from a
-    // nonisolated/background context.  The two call sites — addClips and
-    // stopRecordingIfNeeded — are wrapped in Task.detached so this never
-    // blocks the main thread.
-    private nonisolated static func audioDurationSync(for url: URL) -> Double? {
-        guard let audioFile = try? AVAudioFile(forReading: url) else { return nil }
-        let sampleRate = audioFile.processingFormat.sampleRate
-        guard sampleRate > 0 else { return nil }
-        let seconds = Double(audioFile.length) / sampleRate
-        guard seconds.isFinite, seconds > 0 else { return nil }
-        return seconds
-    }
-
-    nonisolated static func dropPreviewDuration(for url: URL) -> Double? {
-        audioDurationSync(for: url)
-    }
-
     private func sourceGroup(for fileURL: URL) -> String {
         Self.sourceGroupStatic(for: fileURL)
-    }
-
-    private nonisolated static func sourceGroupStatic(for fileURL: URL) -> String {
-        let path = fileURL.path.lowercased()
-        if path.contains("suno") { return "Suno" }
-        if path.contains("preview") { return "Preview" }
-        if path.contains("export") { return "Export" }
-        return "Project"
     }
 
     private func colorHex(for fileURL: URL) -> String {
         Self.colorHexStatic(for: fileURL)
     }
 
-    private nonisolated static func colorHexStatic(for fileURL: URL) -> String {
-        let path = fileURL.path.lowercased()
-        if path.contains("suno") { return "#5B9BD5" }
-        if path.contains("preview") { return "#4A90E2" }
-        if path.contains("export") { return "#39C0BA" }
-        return "#6B8E6B"
-    }
-
-    private static func maximumFadeSeconds(for clip: MixClip) -> Double {
-        min(max(clip.durationSeconds * 0.5, 0), 8)
-    }
-
-    private static let defaultFadeSeconds = 0.08
-
-    private static func applyAutomaticCrossfades(in session: inout MixSceneSession, trackID: UUID) {
-        // Build a sorted (by startSeconds) list of array indices for clips on this track.
-        let sortedIndices = session.clips.enumerated()
-            .filter { $0.element.trackID == trackID }
-            .sorted { lhs, rhs in
-                if lhs.element.startSeconds != rhs.element.startSeconds {
-                    return lhs.element.startSeconds < rhs.element.startSeconds
-                }
-                return lhs.element.name.localizedStandardCompare(rhs.element.name) == .orderedAscending
-            }
-            .map(\.offset)
-
-        guard sortedIndices.count >= 2 else { return }
-
-        // Track which clips have received an auto-crossfade so we can reset fades that
-        // were auto-set in a previous arrangement but are no longer appropriate.
-        var autoCrossfadeIn: Set<Int> = []
-        var autoCrossfadeOut: Set<Int> = []
-
-        for pairIndex in 0..<(sortedIndices.count - 1) {
-            let currentIndex = sortedIndices[pairIndex]
-            let nextIndex = sortedIndices[pairIndex + 1]
-
-            let currentClip = session.clips[currentIndex]
-            let nextClip = session.clips[nextIndex]
-            let overlap = (currentClip.startSeconds + currentClip.durationSeconds) - nextClip.startSeconds
-
-            if overlap > 0 {
-                let currentFade = min(overlap, maximumFadeSeconds(for: currentClip))
-                let nextFade = min(overlap, maximumFadeSeconds(for: nextClip))
-                session.clips[currentIndex].fadeOutSeconds = max(session.clips[currentIndex].fadeOutSeconds, currentFade)
-                session.clips[nextIndex].fadeInSeconds = max(session.clips[nextIndex].fadeInSeconds, nextFade)
-                autoCrossfadeOut.insert(currentIndex)
-                autoCrossfadeIn.insert(nextIndex)
-            }
-        }
-
-        // Reset fades that were auto-elevated to a crossfade value but the clips are no
-        // longer overlapping.  Only reset down to the default — never below it, and never
-        // below a value the user may have set manually (which we don't track, so we cap
-        // at the default floor to avoid wiping intentional fades).
-        for idx in sortedIndices {
-            if autoCrossfadeOut.contains(idx) == false {
-                let maxFade = maximumFadeSeconds(for: session.clips[idx])
-                // Clamp: reset to the default unless the clip's fade is <= default already
-                // or the fade was set so large it exceeds the maximum (trim happened).
-                if session.clips[idx].fadeOutSeconds > defaultFadeSeconds {
-                    session.clips[idx].fadeOutSeconds = min(defaultFadeSeconds, maxFade)
-                }
-            }
-            if autoCrossfadeIn.contains(idx) == false {
-                let maxFade = maximumFadeSeconds(for: session.clips[idx])
-                if session.clips[idx].fadeInSeconds > defaultFadeSeconds {
-                    session.clips[idx].fadeInSeconds = min(defaultFadeSeconds, maxFade)
-                }
-            }
-        }
-    }
-
-    private static func clampedTimelinePixelsPerSecond(_ value: Double) -> Double {
-        min(max(value, minimumTimelinePixelsPerSecond), maximumTimelinePixelsPerSecond)
-    }
-
-    private static func repairSelection(in session: inout MixSceneSession) {
-        if let selectedClipID = session.selectedClipID,
-           let clip = session.clips.first(where: { $0.id == selectedClipID }),
-           session.tracks.contains(where: { $0.id == clip.trackID }) {
-            session.selectedTrackID = clip.trackID
-        } else {
-            session.selectedClipID = nil
-            if session.tracks.contains(where: { $0.id == session.selectedTrackID }) == false {
-                session.selectedTrackID = session.tracks.first?.id
-            }
-        }
-    }
-
-    nonisolated private static func discoverPlugins() async -> [MixPluginInfo] {
-        await Task.detached(priority: .utility) { () -> [MixPluginInfo] in
-            let manager = AVAudioUnitComponentManager.shared()
-            let types: [OSType] = [kAudioUnitType_MusicDevice, kAudioUnitType_Effect, kAudioUnitType_MusicEffect]
-            var results: [MixPluginInfo] = []
-            var seen: Set<String> = []
-
-            for type in types {
-                let description = AudioComponentDescription(
-                    componentType: type,
-                    componentSubType: 0,
-                    componentManufacturer: 0,
-                    componentFlags: 0,
-                    componentFlagsMask: 0
-                )
-                for component in manager.components(matching: description) {
-                    let compDesc = component.audioComponentDescription
-                    let identifier = "\(compDesc.componentType)-\(compDesc.componentSubType)-\(compDesc.componentManufacturer)"
-                    guard seen.insert(identifier).inserted else { continue }
-                    let label: String
-                    switch compDesc.componentType {
-                    case kAudioUnitType_Effect:
-                        label = "Effect"
-                    case kAudioUnitType_MusicEffect:
-                        label = "Music FX"
-                    case kAudioUnitType_MusicDevice:
-                        label = "Instrument"
-                    default:
-                        label = "Audio Unit"
-                    }
-                    results.append(
-                        MixPluginInfo(
-                            id: identifier,
-                            name: component.name.trimmingCharacters(in: .whitespacesAndNewlines),
-                            manufacturerName: component.manufacturerName.trimmingCharacters(in: .whitespacesAndNewlines),
-                            formatLabel: label,
-                            hasCustomView: component.hasCustomView
-                        )
-                    )
-                }
-            }
-
-            return results.sorted { lhs, rhs in
-                let manufacturerOrder = lhs.manufacturerName.localizedCaseInsensitiveCompare(rhs.manufacturerName)
-                if manufacturerOrder != .orderedSame {
-                    return manufacturerOrder == .orderedAscending
-                }
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-            }
-        }.value
-    }
-
-    static let trackPalette = [
-        "#8C8C8C",
-    ]
 }

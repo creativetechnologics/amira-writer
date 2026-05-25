@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import ProjectKit
 @testable import ScoreUI
 
 @Suite("SoundFontAssignment")
@@ -10,8 +11,8 @@ struct SoundFontAssignmentTests {
             sf2FileName: "Piano.sf2",
             bankMSB: 0, bankLSB: 0, program: 1
         )
-        let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(SoundFontAssignment.self, from: data)
+        let data = try JSONCoders.makeEncoder().encode(original)
+        let decoded = try JSONCoders.makeDecoder().decode(SoundFontAssignment.self, from: data)
         #expect(decoded == original)
     }
 }
@@ -25,8 +26,8 @@ struct AudioUnitAssignmentTests {
             componentManufacturer: 1634758764,
             presetData: nil
         )
-        let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(AudioUnitAssignment.self, from: data)
+        let data = try JSONCoders.makeEncoder().encode(original)
+        let decoded = try JSONCoders.makeDecoder().decode(AudioUnitAssignment.self, from: data)
         #expect(decoded == original)
     }
 }

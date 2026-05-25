@@ -85,7 +85,7 @@ struct ImagineProjectStorage {
     static func loadGalleries(owpURL: URL) -> [ImagineSceneShotGallery] {
         let url = galleriesJSONURL(owpURL: owpURL)
         guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([ImagineSceneShotGallery].self, from: data)) ?? []
+        return (try? JSONCoders.makeDecoder().decode([ImagineSceneShotGallery].self, from: data)) ?? []
     }
 
     static func saveGalleries(_ galleries: [ImagineSceneShotGallery], owpURL: URL) throws {
@@ -95,7 +95,7 @@ struct ImagineProjectStorage {
         if !fm.fileExists(atPath: dir.path) {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(galleries)
         try data.write(to: url, options: .atomic)

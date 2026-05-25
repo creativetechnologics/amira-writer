@@ -66,13 +66,13 @@ extension LLMChatSession {
     /// Decode Write-specific suggestions from the session's `additionalJSON` blob.
     var writeSuggestions: [LLMSuggestion]? {
         guard let data = additionalJSON else { return nil }
-        return try? JSONDecoder().decode([LLMSuggestion].self, from: data)
+        return try? JSONCoders.makeDecoder().decode([LLMSuggestion].self, from: data)
     }
 
     /// Encode Write-specific suggestions into the session's `additionalJSON` blob.
     mutating func setWriteSuggestions(_ suggestions: [LLMSuggestion]?) {
         guard let suggestions else { additionalJSON = nil; return }
-        additionalJSON = try? JSONEncoder().encode(suggestions)
+        additionalJSON = try? JSONCoders.makeEncoder().encode(suggestions)
     }
 }
 

@@ -54,7 +54,7 @@ final class ProjectCredentialStore: @unchecked Sendable {
 
             if FileManager.default.fileExists(atPath: file.path) {
                 if let data = try? Data(contentsOf: file),
-                   let decoded = try? JSONDecoder().decode(Payload.self, from: data) {
+                   let decoded = try? JSONCoders.makeDecoder().decode(Payload.self, from: data) {
                     cachedPayload = decoded
                     isPayloadLoaded = true
                     return
@@ -136,7 +136,7 @@ final class ProjectCredentialStore: @unchecked Sendable {
     }
 
     nonisolated(unsafe) private static let sharedEncoder: JSONEncoder = {
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return encoder
     }()

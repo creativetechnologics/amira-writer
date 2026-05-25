@@ -413,7 +413,7 @@ struct CharactersPageView: View {
 
                         characterHeader(character)
 
-                    collapsiblePane(
+                    OperaChromeCollapsibleSection(
                         title: "Character Notes",
                         icon: "text.alignleft",
                         counterText: textInfoSummary(for: character),
@@ -422,16 +422,21 @@ struct CharactersPageView: View {
                         textInfoSection(character)
                     }
 
-                    collapsiblePane(
+                    OperaChromeCollapsibleSection(
                         title: "Shot Reference Images",
                         icon: "photo.stack",
                         counterText: "\(character.shotReferenceImages.count) refs",
                         isExpanded: $showShotReferenceImagesPane
                     ) {
-                        shotReferenceImagesSection(character)
+                        ShotReferenceSectionView(
+                            store: store,
+                            character: character,
+                            showPicker: $showShotReferencePicker,
+                            onQuickLook: { paths, index in openQuickLook(for: paths, startingAt: index) }
+                        )
                     }
 
-                    collapsiblePane(
+                    OperaChromeCollapsibleSection(
                         title: "Look Development",
                         icon: "paintpalette",
                         counterText: nil,
@@ -440,7 +445,7 @@ struct CharactersPageView: View {
                         lookDevelopmentSection(character)
                     }
 
-                    collapsiblePane(
+                    OperaChromeCollapsibleSection(
                         title: "Character Reference Workflow",
                         icon: "square.grid.3x3.topleft.filled",
                         counterText: character.approvedMasterReferenceSheetVariant == nil
@@ -460,7 +465,7 @@ struct CharactersPageView: View {
 
                     // Character Packages archived 2026-04-05 — Vidu pipeline replaces SceneKit
 
-                    collapsiblePane(
+                    OperaChromeCollapsibleSection(
                         title: "Costumes",
                         icon: "tshirt",
                         counterText: "\(character.costumeReferenceSets.count) costumes",
@@ -471,7 +476,7 @@ struct CharactersPageView: View {
                         }
                     }
 
-                    collapsiblePane(
+                    OperaChromeCollapsibleSection(
                         title: "Character Parts Library",
                         icon: "square.grid.3x2",
                         counterText: nil,
@@ -482,7 +487,7 @@ struct CharactersPageView: View {
                         }
                     }
 
-                    collapsiblePane(
+                    OperaChromeCollapsibleSection(
                         title: "Action Images",
                         icon: "figure.walk.motion",
                         isExpanded: $showActionImagesPane
@@ -492,7 +497,7 @@ struct CharactersPageView: View {
                         }
                     }
 
-                    collapsiblePane(
+                    OperaChromeCollapsibleSection(
                         title: "Expression Library",
                         icon: "face.smiling",
                         counterText: "\(EmotionLibrary.presets.count) presets",
@@ -655,169 +660,8 @@ struct CharactersPageView: View {
 
     // MARK: - Text Info Section
 
-    @ViewBuilder
     private func textInfoSection(_ character: AnimationCharacter) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Character Type", systemImage: "person.crop.rectangle")
-                        .font(.headline)
-
-                    Picker(
-                        "Character Type",
-                        selection: Binding(
-                            get: { character.defaultWardrobeType },
-                            set: { store.updateCharacterDefaultWardrobeType($0, for: character.id) }
-                        )
-                    ) {
-                        ForEach(CharacterWardrobeType.allCases) { wardrobe in
-                            Text(wardrobe.displayName).tag(wardrobe)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Gender", systemImage: "figure.stand")
-                        .font(.headline)
-
-                    Picker(
-                        "Gender",
-                        selection: Binding(
-                            get: { character.genderType },
-                            set: { store.updateCharacterGenderType($0, for: character.id) }
-                        )
-                    ) {
-                        ForEach(CharacterGenderType.allCases) { gender in
-                            Text(gender.displayName).tag(gender)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Age", systemImage: "number")
-                        .font(.headline)
-
-                    TextField(
-                        "Age",
-                        text: Binding(
-                            get: { character.age.map(String.init) ?? "" },
-                            set: { newValue in
-                                let digits = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                                if digits.isEmpty {
-                                    store.updateCharacterAge(nil, for: character.id)
-                                } else {
-                                    store.updateCharacterAge(Int(digits), for: character.id)
-                                }
-                            }
-                        )
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 88)
-                }
-            }
-
-            Text("Image generation uses Character Type, Gender, Age, and Prompt Notes when writing prompts.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Divider()
-
-            DebouncedTextEditorRow(
-                title: "Prompt Notes",
-                icon: "sparkles",
-                storeValue: character.promptNotes,
-                placeholder: "Canonical visual and costume rules for future character image generation...",
-                onChange: { store.updateCharacterPromptNotes($0, for: character.id) }
-            )
-
-            DebouncedTextEditorRow(
-                title: "Backstory",
-                icon: "book.fill",
-                storeValue: character.backstory,
-                placeholder: "Enter character backstory, history, and origin...",
-                onChange: { store.updateCharacterBackstory($0, for: character.id) }
-            )
-
-            DebouncedTextEditorRow(
-                title: "Personality",
-                icon: "brain.fill",
-                storeValue: character.personality,
-                placeholder: "Describe personality traits, mannerisms, and behaviors...",
-                onChange: { store.updateCharacterPersonality($0, for: character.id) }
-            )
-
-            DebouncedTextEditorRow(
-                title: "Notes",
-                icon: "note.text",
-                storeValue: character.notes,
-                placeholder: "General notes about the character...",
-                onChange: { store.updateCharacterNotes($0, for: character.id) }
-            )
-        }
-    }
-
-    @available(macOS 26.0, *)
-    private struct DebouncedTextEditorRow: View {
-        let title: String
-        let icon: String
-        let storeValue: String
-        let placeholder: String
-        let onChange: (String) -> Void
-
-        @State private var localText: String = ""
-        @State private var hasAppeared = false
-        @State private var debounceTask: Task<Void, Never>?
-
-        var body: some View {
-            VStack(alignment: .leading, spacing: 8) {
-                Label(title, systemImage: icon)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
-
-                ZStack(alignment: .topLeading) {
-                    TextEditor(text: $localText)
-                        .font(.body)
-                        .frame(minHeight: 100, maxHeight: 200)
-                        .scrollContentBackground(.hidden)
-                        .background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
-                        .onChange(of: localText) { _, newValue in
-                            guard hasAppeared else { return }
-                            debounceTask?.cancel()
-                            let value = newValue
-                            debounceTask = Task { @MainActor in
-                                try? await Task.sleep(for: .milliseconds(120))
-                                guard !Task.isCancelled else { return }
-                                onChange(value)
-                            }
-                        }
-
-                    if localText.isEmpty {
-                        Text(placeholder)
-                            .font(.body)
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 12)
-                            .allowsHitTesting(false)
-                    }
-                }
-            }
-            .onAppear {
-                localText = storeValue
-                hasAppeared = true
-            }
-            .onChange(of: storeValue) { _, newValue in
-                if !hasAppeared || localText != newValue {
-                    localText = newValue
-                }
-            }
-            .onDisappear {
-                debounceTask?.cancel()
-                debounceTask = nil
-            }
-        }
+        CharacterNotesSectionView(store: store, character: character)
     }
 
     private func inspirationBatchJobRow(_ job: CharacterInspirationBatchJob, characterID: UUID) -> some View {
@@ -860,89 +704,8 @@ struct CharactersPageView: View {
 
     // MARK: - Look Development Section
 
-    @ViewBuilder
     private func lookDevelopmentSection(_ character: AnimationCharacter) -> some View {
-        let approvedHeadCount = character.headTurnaroundSlots.filter { $0.approvedVariant != nil }.count
-        let approvedMaster = character.approvedMasterReferenceSheetVariant
-        let costumeCount = max(character.costumeReferenceSets.count, CharacterReferenceWorkflowCatalog.defaultCostumeSets(for: character.name).count)
-        let approvedFullBodyCount = character.costumeReferenceSets.flatMap(\.fullBodySlots).filter { $0.approvedVariant != nil }.count
-        let approvedAccessoryCount = character.costumeReferenceSets.flatMap(\.accessorySlots).filter { $0.approvedVariant != nil }.count
-
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Start with inspiration photos, generate several master sheets, approve the best one, then generate the six-pose head grid, each costume’s six-pose full-body grid, and accessories. Every NB2 request now previews prompt, reference images, size, and estimated cost before sending.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 10) {
-                lookDevelopmentSummaryPill(title: "Master Sheets", value: character.masterReferenceSheetVariants.count, icon: "rectangle.3.group")
-                lookDevelopmentSummaryPill(title: "Head Poses", value: approvedHeadCount, icon: "person.crop.square")
-                lookDevelopmentSummaryPill(title: "Costumes", value: costumeCount, icon: "figure.stand")
-                lookDevelopmentSummaryPill(title: "Full Body", value: approvedFullBodyCount, icon: "figure.walk")
-                lookDevelopmentSummaryPill(title: "Accessories", value: approvedAccessoryCount, icon: "briefcase")
-            }
-
-            if approvedMaster == nil {
-                emptyStateMessage(
-                    icon: "square.grid.3x3.topleft.filled",
-                    message: "No approved master sheet yet. Generate several sheet variants first, pick the best one, then use it to drive head, full-body, and accessory requests."
-                )
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        if let approvedMaster {
-                            approvedMasterPreview(variant: approvedMaster, title: "Approved Master", characterID: character.id)
-                        }
-                        ForEach(Array(character.headTurnaroundSlots.filter { $0.approvedVariant != nil }.prefix(5))) { slot in
-                            approvedPosePreview(title: slot.title, variant: slot.approvedVariant, characterID: character.id)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-            }
-        }
-    }
-
-    private func lookDevelopmentSummaryPill(title: String, value: Int, icon: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-            Text("\(title) \(value)")
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.quaternary.opacity(0.24), in: Capsule())
-    }
-
-    @ViewBuilder
-    private func approvedMasterPreview(variant: CharacterLookDevelopmentVariant, title: String, characterID: UUID) -> some View {
-        AsyncApprovedVariantView(
-            store: store,
-            variant: variant,
-            title: title,
-            width: 156, height: 92,
-            onQuickLook: { openQuickLook(for: [variant.imagePath], startingAt: 0) },
-            onShowInFinder: { showInFinder(at: variant.imagePath) },
-            onCopy: { copyImage(at: variant.imagePath) },
-            onSetAsProfilePic: { store.prepareProfilePicCrop(from: variant.imagePath, for: characterID) }
-        )
-    }
-
-    @ViewBuilder
-    private func approvedPosePreview(title: String, variant: CharacterLookDevelopmentVariant?, characterID: UUID) -> some View {
-        if let variant {
-            AsyncApprovedVariantView(
-                store: store,
-                variant: variant,
-                title: title,
-                width: 92, height: 92,
-                onQuickLook: { openQuickLook(for: [variant.imagePath], startingAt: 0) },
-                onShowInFinder: { showInFinder(at: variant.imagePath) },
-                onCopy: { copyImage(at: variant.imagePath) },
-                onSetAsProfilePic: { store.prepareProfilePicCrop(from: variant.imagePath, for: characterID) }
-            )
-        }
+        CharacterLookDevelopmentSectionView(store: store, character: character)
     }
 
     private func textInfoSummary(for character: AnimationCharacter) -> String {
@@ -955,271 +718,9 @@ struct CharactersPageView: View {
         return "\(filledFields)/4 filled"
     }
 
-    private func collapsiblePane<Content: View, Trailing: View>(
-        title: String,
-        icon: String,
-        counterText: String? = nil,
-        isExpanded: Binding<Bool>,
-        @ViewBuilder trailing: @escaping () -> Trailing,
-        @ViewBuilder content: @escaping () -> Content
-    ) -> some View {
-        DisclosureGroup(isExpanded: isExpanded) {
-            if isExpanded.wrappedValue {
-                VStack(alignment: .leading, spacing: 12) {
-                    content()
-                }
-                .padding(.top, 12)
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Label(title, systemImage: icon)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                if let counterText {
-                    Text(counterText)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-
-                trailing()
-            }
-        }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(OperaChromeTheme.panelBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.05))
-        )
-    }
-
-    private func collapsiblePane<Content: View>(
-        title: String,
-        icon: String,
-        counterText: String? = nil,
-        isExpanded: Binding<Bool>,
-        @ViewBuilder content: @escaping () -> Content
-    ) -> some View {
-        collapsiblePane(
-            title: title,
-            icon: icon,
-            counterText: counterText,
-            isExpanded: isExpanded,
-            trailing: { EmptyView() },
-            content: content
-        )
-    }
-
-    @ViewBuilder
-    private func shotReferenceImagesSection(_ character: AnimationCharacter) -> some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 150, maximum: 170), spacing: 12, alignment: .top)],
-            alignment: .leading,
-            spacing: 16
-        ) {
-            ForEach(character.shotReferenceImages) { reference in
-                shotReferenceImageTile(reference, character: character)
-            }
-
-            shotReferenceAddTile(character)
-        }
-        .dropDestination(for: URL.self) { urls, _ in
-            let imageURLs = urls.filter { ["png", "jpg", "jpeg", "webp", "heic"].contains($0.pathExtension.lowercased()) }
-            guard !imageURLs.isEmpty else { return false }
-            store.importShotReferenceImages(from: imageURLs, for: character.id)
-            return true
-        }
-    }
-
-    private func shotReferenceImageTile(
-        _ reference: CharacterShotReferenceImage,
-        character: AnimationCharacter
-    ) -> some View {
-        let resolvedURL = store.resolvedCharacterAssetURL(for: reference.imagePath)
-
-        return VStack(alignment: .leading, spacing: 8) {
-            UnifiedImageTile(
-                path: reference.imagePath,
-                resolvedPath: resolvedURL?.path,
-                thumbnailSize: 138,
-                sourceLabel: reference.view.displayName,
-                sourceSystemImage: reference.view == .front ? "person.fill" : "person.crop.square",
-                actions: UnifiedImageActions(
-                    onShowInFinder: {
-                        if let resolvedURL {
-                            NSWorkspace.shared.activateFileViewerSelecting([resolvedURL])
-                        }
-                    },
-                    onQuickLook: {
-                        openQuickLook(for: character.shotReferenceImages.map(\.imagePath), startingAt: character.shotReferenceImages.firstIndex(where: { $0.id == reference.id }) ?? 0)
-                    },
-                    onRemoveFromCollection: {
-                        store.removeShotReferenceImage(reference.id, for: character.id)
-                    }
-                ),
-                onDoubleTap: {
-                    openQuickLook(for: character.shotReferenceImages.map(\.imagePath), startingAt: character.shotReferenceImages.firstIndex(where: { $0.id == reference.id }) ?? 0)
-                },
-                topTrailingOverlay: AnyView(
-                    Button {
-                        store.removeShotReferenceImage(reference.id, for: character.id)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white, Color.black.opacity(0.55))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(5)
-                    .help("Remove shot reference")
-                )
-            )
-
-            shotReferencePicker(
-                "Framing",
-                selection: reference.framing,
-                options: CharacterShotReferenceFraming.allCases,
-                characterID: character.id,
-                referenceID: reference.id
-            )
-
-            shotReferencePicker(
-                "Wardrobe",
-                selection: reference.wardrobe,
-                options: CharacterShotReferenceWardrobe.allCases,
-                characterID: character.id,
-                referenceID: reference.id
-            )
-
-            shotReferencePicker(
-                "View",
-                selection: reference.view,
-                options: CharacterShotReferenceView.allCases,
-                characterID: character.id,
-                referenceID: reference.id
-            )
-        }
-        .frame(width: 150, alignment: .topLeading)
-    }
-
-    private func shotReferenceAddTile(_ character: AnimationCharacter) -> some View {
-        Button {
-            showShotReferencePicker = true
-        } label: {
-            VStack(spacing: 10) {
-                Image(systemName: "plus")
-                    .font(.system(size: 26, weight: .semibold))
-                Text("Add")
-                    .font(.caption)
-                    .fontWeight(.medium)
-            }
-            .frame(width: 138, height: 138)
-            .foregroundStyle(.secondary)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(0.035))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
-                    .foregroundStyle(Color.secondary.opacity(0.45))
-            )
-        }
-        .buttonStyle(.plain)
-        .help("Add shot reference images")
-        .frame(width: 150, alignment: .topLeading)
-    }
-
-    private func shotReferencePicker<Option>(
-        _ title: String,
-        selection: Option,
-        options: [Option],
-        characterID: UUID,
-        referenceID: UUID
-    ) -> some View where Option: CaseIterable & Hashable & Identifiable, Option.AllCases == [Option] {
-        Picker(
-            title,
-            selection: Binding<Option>(
-                get: { selection },
-                set: { newValue in
-                    if let framing = newValue as? CharacterShotReferenceFraming {
-                        store.updateShotReferenceImage(referenceID, for: characterID, framing: framing)
-                    } else if let wardrobe = newValue as? CharacterShotReferenceWardrobe {
-                        store.updateShotReferenceImage(referenceID, for: characterID, wardrobe: wardrobe)
-                    } else if let view = newValue as? CharacterShotReferenceView {
-                        store.updateShotReferenceImage(referenceID, for: characterID, view: view)
-                    }
-                }
-            )
-        ) {
-            ForEach(options) { option in
-                Text(shotReferenceOptionLabel(option))
-                    .tag(option)
-            }
-        }
-        .labelsHidden()
-        .pickerStyle(.menu)
-        .controlSize(.small)
-        .frame(width: 138)
-        .help(title)
-    }
-
-    private func shotReferenceOptionLabel<Option>(_ option: Option) -> String {
-        if let framing = option as? CharacterShotReferenceFraming { return framing.displayName }
-        if let wardrobe = option as? CharacterShotReferenceWardrobe { return wardrobe.displayName }
-        if let view = option as? CharacterShotReferenceView { return view.displayName }
-        return String(describing: option)
-    }
-
-    // MARK: - Image Gallery Components
-
-    @ViewBuilder
-    private func emptyStateMessage(icon: String, message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .foregroundStyle(.tertiary)
-            Text(message)
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.vertical, 8)
-    }
-
-    // MARK: - Helpers
-
-    private func importImageURLs(
-        _ urls: [URL],
-        using handler: ([URL]) -> Void
-    ) -> Bool {
-        let allowedExtensions = Set(["png", "jpg", "jpeg", "tif", "tiff", "webp"])
-        let validURLs = urls.filter { allowedExtensions.contains($0.pathExtension.lowercased()) }
-        guard !validURLs.isEmpty else { return false }
-        handler(validURLs)
-        return true
-    }
-
-    private func showPromptPreview(for path: String) {
-        guard let metadata = store.generationMetadata(for: path) else {
-            store.statusMessage = "No prompt metadata saved for this image"
-            return
-        }
-
-        promptPreview = ImagePromptPreview(
-            title: URL(fileURLWithPath: path).lastPathComponent,
-            prompt: metadata.prompt,
-            model: metadata.model,
-            aspectRatio: metadata.aspectRatio,
-            imageSize: metadata.imageSize
-        )
-    }
+    // collapsiblePane is now OperaChromeCollapsibleSection from ProjectKit/OperaChrome.swift
 
     // MARK: - Profile Pic from Context Menu
-
 
     private func openQuickLook(
         for paths: [String],
@@ -1241,15 +742,6 @@ struct CharactersPageView: View {
             urls: resolvedItems.map(\.1),
             startAt: quickLookIndex
         )
-    }
-
-    private func copyImage(at path: String) {
-        guard let url = store.resolvedCharacterAssetURL(for: path),
-              ImageClipboardService.copyImage(at: url) else {
-            store.statusMessage = "Could not copy image"
-            return
-        }
-        store.statusMessage = "Copied image"
     }
 
     private func showInFinder(at path: String) {
@@ -1502,77 +994,7 @@ private struct AsyncReferenceThumbView: View {
 
 /// Look development approved variant preview — loads asynchronously.
 @available(macOS 26.0, *)
-private struct AsyncApprovedVariantView: View {
-    let store: AnimateStore
-    let variant: CharacterLookDevelopmentVariant
-    let title: String
-    let width: CGFloat
-    let height: CGFloat
-    let onQuickLook: () -> Void
-    let onShowInFinder: () -> Void
-    let onCopy: () -> Void
-    let onSetAsProfilePic: () -> Void
-
-    @State private var image: NSImage?
-    @State private var dragURL: URL?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(.quaternary.opacity(0.22))
-                    .frame(width: width, height: height)
-                if let image {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: width, height: height)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .transition(.opacity.animation(.easeIn(duration: 0.15)))
-                } else {
-                    Image(systemName: "photo")
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .frame(width: width, height: height)
-            .onTapGesture(count: 2) { onQuickLook() }
-            .onTapGesture(count: 1) {
-                // Surface this variant in the Inspector Details pane.
-                store.imaginePreviewImagePath = variant.imagePath
-            }
-            .contextMenu {
-                UnifiedImageContextMenuContent(
-                    selectedCount: 0,
-                    isSelected: false,
-                    actions: UnifiedImageActions(
-                        onSetAsProfile: onSetAsProfilePic,
-                        onShowInFinder: onShowInFinder,
-                        onCopy: onCopy,
-                        onFlipHorizontally: {
-                            store.flipImageHorizontallyAndAttachLikeOriginal(path: variant.imagePath)
-                        },
-                        onQuickLook: onQuickLook
-                    )
-                )
-            }
-
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .frame(width: width, alignment: .leading)
-                .lineLimit(2)
-        }
-        .task(id: variant.imagePath) {
-            dragURL = store.resolvedCharacterAssetURL(for: variant.imagePath)
-            image = store.cachedThumbnailImage(for: variant.imagePath, maxSize: max(width, height) * 2)
-            if image != nil { return }
-            let loaded = await store.thumbnailImageAsync(for: variant.imagePath, maxSize: max(width, height) * 2)
-            if !Task.isCancelled { image = loaded }
-        }
-        .modifier(ProjectImageFileDragModifier(url: dragURL))
-    }
-}
-
+// AsyncApprovedVariantView moved to AsyncApprovedVariantView.swift.
 // AsyncSheetThumbnail was removed 2026-04-17 (Pass 4). Gallery sheets now
 // route through UnifiedImageTile → CachedThumbnailView, same pipeline as
 // every main-app grid.
@@ -3371,238 +2793,6 @@ struct ReferenceImagesSheet: View {
 
 @available(macOS 26.0, *)
 typealias CharacterInspirationWardrobe = CharacterWardrobeType
-
-@available(macOS 26.0, *)
-struct CharacterInspirationPromptSpec: Identifiable, Hashable, Sendable {
-    let id: String
-    let title: String
-    let category: String
-    let poseInstruction: String
-}
-
-@available(macOS 26.0, *)
-enum CharacterInspirationGenerationMode: String, Hashable, Sendable {
-    case immediate
-    case batch
-}
-
-@available(macOS 26.0, *)
-enum CharacterInspirationPromptCatalog {
-    static let defaultAspectRatio = "1:1"
-    static let defaultImageSize = "2K"
-
-    /// Trimmed set. Dropped redundant weight-shift / head-tilt / chin-raise
-    /// duplicates that were producing near-identical images within the same
-    /// angle group. Since we're no longer training LORAs off these, 15 varied
-    /// views cover far more ground than 27 portrait micro-variants.
-    static let allSpecs: [CharacterInspirationPromptSpec] = [
-        .init(id: "front_view_neutral", title: "Front Neutral", category: "front_view", poseInstruction: "front facing portrait of the reference character, neutral expression, looking directly at camera, relaxed face, natural upright head position"),
-        .init(id: "front_view_soft_smile_head_tilt", title: "Front Soft Smile", category: "front_view", poseInstruction: "front facing portrait of the reference character, soft natural smile, head slightly tilted to the right, looking directly at camera, relaxed face"),
-        .init(id: "front_view_serious_chin_lowered", title: "Front Serious", category: "front_view", poseInstruction: "front facing portrait of the reference character, serious neutral expression, chin slightly lowered, eyes looking directly at camera, relaxed face"),
-        .init(id: "close_up_neutral", title: "Close-Up Neutral", category: "close_up", poseInstruction: "close up portrait of the reference character, neutral expression, looking directly at camera, upright head position, face fills frame"),
-        .init(id: "close_up_serious_head_turn", title: "Close-Up Serious", category: "close_up", poseInstruction: "close up portrait of the reference character, serious expression, head turned slightly a few degrees to the right while eyes still looking at camera, face fills frame"),
-        .init(id: "full_body_front_straight_posture", title: "Full Body Front Straight", category: "full_body_front", poseInstruction: "full body portrait of the reference character, neutral expression, standing upright, facing camera directly, arms relaxed naturally"),
-        .init(id: "full_body_front_weight_shift", title: "Full Body Front Natural Stance", category: "full_body_front", poseInstruction: "full body portrait of the reference character, neutral expression, standing facing camera, slight natural weight shift to one leg, relaxed believable stance"),
-        .init(id: "full_body_left_upright", title: "Full Body Left Upright", category: "full_body_left", poseInstruction: "full body portrait of the reference character, facing left side, neutral expression, upright posture, arms relaxed naturally"),
-        .init(id: "full_body_right_upright", title: "Full Body Right Upright", category: "full_body_right", poseInstruction: "full body portrait of the reference character, facing right side, neutral expression, upright posture, arms relaxed naturally"),
-        .init(id: "full_body_back_upright", title: "Full Body Back Upright", category: "full_body_back", poseInstruction: "full body portrait of the reference character, facing away from camera, back view, upright posture, arms relaxed naturally"),
-        .init(id: "fortyfive_left_upright", title: "45° Left Upright", category: "fortyfive_left", poseInstruction: "45 degree angle portrait of the reference character facing left, neutral expression, upright head position, eyes looking forward"),
-        .init(id: "fortyfive_right_upright", title: "45° Right Upright", category: "fortyfive_right", poseInstruction: "45 degree angle portrait of the reference character facing right, neutral expression, upright head position, eyes looking forward"),
-        .init(id: "profile_left_upright", title: "Profile Left Upright", category: "profile_left", poseInstruction: "strict side profile portrait of the reference character facing left, neutral expression, upright head position, eyes looking forward"),
-        .init(id: "profile_right_upright", title: "Profile Right Upright", category: "profile_right", poseInstruction: "strict side profile portrait of the reference character facing right, neutral expression, upright head position, eyes looking forward"),
-        .init(id: "walking_toward_camera", title: "Walking Toward Camera", category: "walking", poseInstruction: "medium wide portrait of the reference character walking naturally toward camera, neutral expression, arms relaxed, feet visible, believable gait in an outdoor setting"),
-    ]
-
-    static func prompt(
-        for spec: CharacterInspirationPromptSpec,
-        character: AnimationCharacter,
-        wardrobe: CharacterInspirationWardrobe,
-        specIndex: Int = 0
-    ) -> String {
-        let subject = subjectDescriptor(for: character)
-        let shortSubject = shortSubjectDescriptor(for: character)
-        let environments = CharacterPromptWorldContext.variedEnvironments
-        // Stable per-character offset so two characters of the same wardrobe
-        // don't draw the same environment at the same slot index. Uses the
-        // character ID hash so the offset stays consistent across regenerations
-        // for the same character but differs between characters.
-        let seed = abs(character.id.uuidString.hashValue)
-        let environment = environments[(specIndex + seed) % environments.count]
-        let amiraAnchor = CharacterPromptWorldContext.amiraWorldAnchor
-        return """
-        TASK: Generate a brand-new photorealistic cinematic documentary frame set in the world of Amira. This is a NEW image — do NOT reproduce, edit, or copy any reference image. The reference images are provided ONLY for facial identity lock.
-
-        IDENTITY LOCK (from reference images): Retain the facial identity of \(subject) — same face shape, eyes, nose, mouth, hairline, skin tone, and apparent age as shown in the reference images. Do NOT use the references for composition, background, framing, lighting, crop, pose, clothing details, or any other visual element. The references are identity-only.
-
-        NEW COMPOSITION (this is required — ignore any composition cues from references): \(spec.poseInstruction). The pose, camera angle, framing, background, lighting, and crop must all come from this instruction, NOT from any reference image.
-
-        WARDROBE: \(wardrobePrompt(for: character, wardrobe: wardrobe))
-
-        SETTING (must be clearly visible in the background unless this is a tight face close-up): Place \(shortSubject) in \(environment). This location exists inside the world of Amira — \(amiraAnchor). The background must feel like Amira specifically, not a generic desert military city or a Hollywood war-movie backlot. Vary environmental details (architecture, vegetation, weather, time of day, foreground objects) so this frame does NOT look like the other frames in this batch.
-
-        RENDERING: bright natural daylight, clean true-to-life color, authentic fabric texture, realistic skin pores, sharp face detail, shallow depth of field, well-lit and clear.
-
-        NEGATIVE: no European stone village, no Western movie backlot, no generic "desert warzone" stock look, no identical repeated background across frames, no readable nametag, no gibberish text, no fake patches, no shiny tactical-hero vest, no oversized body armor, no text, no watermark, no copying of the reference image composition or background, no dark moody underexposed lighting.
-        """
-    }
-
-    private static func wardrobePrompt(
-        for character: AnimationCharacter,
-        wardrobe: CharacterInspirationWardrobe
-    ) -> String {
-        let subject = shortSubjectDescriptor(for: character)
-        switch wardrobe {
-        case .soldier:
-            return "\(subject.capitalized) is wearing \(CharacterPromptWorldContext.militaryClothing), with weathered utility layers, sleeves rolled, subtle local scarf or village-fabric detail, grounded and believable, and no tactical-hero styling."
-        case .civilian:
-            return "\(subject.capitalized) is wearing \(CharacterPromptWorldContext.civilianClothing), with practical everyday layers, believable local fabrics, and a modest lived-in silhouette."
-        }
-    }
-
-    private static func subjectDescriptor(for character: AnimationCharacter) -> String {
-        if let age = character.age, age > 0 {
-            return "this \(age)-year-old \(character.genderType.promptNoun)"
-        }
-        return shortSubjectDescriptor(for: character)
-    }
-
-    private static func shortSubjectDescriptor(for character: AnimationCharacter) -> String {
-        "this \(character.genderType.promptNoun)"
-    }
-}
-
-/// 10 Amira-specific action prompts — the character is actively DOING
-/// something in the world of Amira (tending the wounded, hauling supplies,
-/// crossing canals) rather than standing for a portrait. Templatized against
-/// the Amira setting catalog so every frame feels grounded in the specific
-/// story world, not a generic desert warzone.
-@available(macOS 26.0, *)
-enum CharacterActionPromptCatalog {
-    static let defaultAspectRatio = "3:4"
-    static let defaultImageSize = "2K"
-    static let batchTitle = "Amira Action Images"
-    static let batchFolderSlug = "amira-action"
-
-    struct ActionSpec: Identifiable, Hashable, Sendable {
-        let id: String
-        let title: String
-        let actionInstruction: String
-        let environmentHint: String
-    }
-
-    static let allSpecs: [ActionSpec] = [
-        .init(
-            id: "action_clinic_wounded",
-            title: "Tending Wounded at Clinic",
-            actionInstruction: "kneeling beside a patient on a low cot inside a district clinic, leaning forward to apply a fresh gauze bandage to the patient's forearm, focused serious expression, both hands engaged with the bandage, full upper body and hands clearly visible",
-            environmentHint: "the interior of a plaster-walled Afghan district clinic with a narrow window stripe of daylight, a metal IV pole, pale cotton bedding, and a peeling wall"
-        ),
-        .init(
-            id: "action_supply_checkpoint",
-            title: "Loading Supplies at Checkpoint",
-            actionInstruction: "lifting a canvas supply crate off the tailgate of a parked pickup, torso twisted, knees slightly bent, weight clearly carried in both arms, full body visible, mid-action gait",
-            environmentHint: "a concrete-barriered checkpoint road with a metal gate and a dusty pickup truck, bright midday sun and a broad desert horizon behind"
-        ),
-        .init(
-            id: "action_canal_crossing",
-            title: "Crossing Irrigation Canal",
-            actionInstruction: "stepping across a narrow mud-walled irrigation canal on worn wooden planks, one foot mid-step, one hand lightly out for balance, full body clearly visible in three-quarter angle",
-            environmentHint: "a patchwork of green cultivated fields with low mud walls, a clear shallow canal with running water, mountains in the distance, warm late-afternoon light"
-        ),
-        .init(
-            id: "action_well_pump",
-            title: "Pumping Water at Village Well",
-            actionInstruction: "working a hand pump at a village well, arms mid-stroke, a plastic jerrycan on the ground beside the pump catching water, weight on forward leg, full body visible",
-            environmentHint: "a packed-earth village square with mud-brick homes, a low stone wall, laundry lines, and soft morning light"
-        ),
-        .init(
-            id: "action_teach_children",
-            title: "Reading With Children on Rooftop",
-            actionInstruction: "sitting cross-legged on a woven mat beside two small children, holding an open notebook, pointing to a page with one finger, warm open expression, full torso and hands visible",
-            environmentHint: "a flat concrete rooftop overlooking the valley town at golden hour, satellite dishes and water tanks nearby, warm amber light across the scene"
-        ),
-        .init(
-            id: "action_rice_sacks",
-            title: "Carrying Rice Sacks From Truck",
-            actionInstruction: "walking away from an open cargo truck with a heavy burlap rice sack balanced on one shoulder, free hand steadying it, body clearly loaded with weight, full stride, full body visible",
-            environmentHint: "a humanitarian supply depot with stacked pallets under a corrugated metal roof, a dusty open yard, and bright midday sun"
-        ),
-        .init(
-            id: "action_repair_motorcycle",
-            title: "Repairing Motorcycle in Courtyard",
-            actionInstruction: "crouched beside a battered motorcycle, one knee down, wrench in one hand, other hand steadying the frame, focused intent expression, sleeves pushed up, full body visible at three-quarter angle",
-            environmentHint: "a mechanic's dirt-floor yard with oil drums, cinder blocks, scattered parts, and strong shadow lines from a corrugated roof in afternoon sun"
-        ),
-        .init(
-            id: "action_radio_guard_post",
-            title: "Radio Check at Guard Post",
-            actionInstruction: "standing inside a sandbag guard post, handheld radio raised to mouth, free hand resting on the sandbags, head slightly tilted listening, alert calm expression, upper two-thirds of body clearly visible",
-            environmentHint: "a plywood-and-sandbag perimeter guard post with open ground behind, clean early-morning light, a dusty unpaved road beyond"
-        ),
-        .init(
-            id: "action_donkey_cart",
-            title: "Walking Beside Donkey Cart",
-            actionInstruction: "walking alongside a small wooden donkey cart loaded with burlap bundles, one hand loosely on the cart rail, relaxed gait, full body visible in wide frame, believable mid-stride",
-            environmentHint: "a dusty village road between mud-brick homes with hand-painted shop signs, parked bicycles, and bright diffused daylight"
-        ),
-        .init(
-            id: "action_laundry_courtyard",
-            title: "Hanging Laundry in Courtyard",
-            actionInstruction: "reaching up to peg a damp cloth onto a sagging laundry line, body extended, basket of wet laundry at their feet, calm focused expression, full body visible",
-            environmentHint: "a shaded walled courtyard with packed earth, a single tree, dappled sunlight on the ground, and a wooden bench against the wall"
-        ),
-    ]
-
-    static func prompt(
-        for spec: ActionSpec,
-        character: AnimationCharacter,
-        wardrobe: CharacterInspirationWardrobe,
-        specIndex: Int = 0
-    ) -> String {
-        let subject = subjectDescriptor(for: character)
-        let shortSubject = shortSubjectDescriptor(for: character)
-        let amiraAnchor = CharacterPromptWorldContext.amiraWorldAnchor
-        return """
-        TASK: Generate a brand-new photorealistic cinematic documentary frame showing \(shortSubject) actively DOING something within the world of Amira. This is NOT a portrait — \(shortSubject) is mid-action, engaged in the labor or care of daily life in this story world. Do NOT reproduce, edit, or copy any reference image. References are provided ONLY for facial identity lock.
-
-        IDENTITY LOCK (from reference images): Retain the facial identity of \(subject) — same face shape, eyes, nose, mouth, hairline, skin tone, and apparent age as shown in the reference images. Do NOT use the references for composition, background, framing, lighting, crop, pose, clothing details, or any other visual element.
-
-        ACTION (this is required — the character must actively be performing this, not posing): \(spec.actionInstruction). Show clear body mechanics, weight distribution, believable mid-action posture, and hands engaged with the task. The framing must make it obvious the subject is WORKING or ACTING, not standing for a portrait.
-
-        WARDROBE: \(wardrobePrompt(for: character, wardrobe: wardrobe))
-
-        SETTING (must be clearly visible and grounded in Amira): Place \(shortSubject) in \(spec.environmentHint). This location exists inside \(amiraAnchor). The environment must feel Amira-specific — humane, lived-in, quiet dramatic realism — not a generic desert warzone, not a Hollywood backlot, not a sanitized stock location.
-
-        RENDERING: natural daylight matched to the environment hint, clean true-to-life color, authentic fabric texture, believable skin and dust detail, sharp subject focus, soft background depth, well-lit and readable.
-
-        NEGATIVE: no static portrait pose, no character just standing looking at camera, no European stone village, no Western movie backlot, no generic desert-warzone stock look, no readable nametag or patch, no gibberish text, no shiny tactical-hero vest, no oversized body armor, no text, no watermark, no dark moody underexposed lighting, no copying of the reference image composition or background.
-        """
-    }
-
-    private static func wardrobePrompt(
-        for character: AnimationCharacter,
-        wardrobe: CharacterInspirationWardrobe
-    ) -> String {
-        let subject = shortSubjectDescriptor(for: character)
-        switch wardrobe {
-        case .soldier:
-            return "\(subject.capitalized) is wearing \(CharacterPromptWorldContext.militaryClothing), with weathered utility layers, sleeves rolled, subtle local scarf or village-fabric detail, grounded and believable, and no tactical-hero styling."
-        case .civilian:
-            return "\(subject.capitalized) is wearing \(CharacterPromptWorldContext.civilianClothing), with practical everyday layers, believable local fabrics, and a modest lived-in silhouette."
-        }
-    }
-
-    private static func subjectDescriptor(for character: AnimationCharacter) -> String {
-        if let age = character.age, age > 0 {
-            return "this \(age)-year-old \(character.genderType.promptNoun)"
-        }
-        return shortSubjectDescriptor(for: character)
-    }
-
-    private static func shortSubjectDescriptor(for character: AnimationCharacter) -> String {
-        "this \(character.genderType.promptNoun)"
-    }
-}
 
 @available(macOS 26.0, *)
 struct PendingInspirationGenerationPlan: Identifiable, Hashable {

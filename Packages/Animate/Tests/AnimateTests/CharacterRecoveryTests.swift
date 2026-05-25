@@ -1,4 +1,5 @@
 import XCTest
+import ProjectKit
 @testable import AnimateUI
 
 @available(macOS 26.0, *)
@@ -50,7 +51,7 @@ final class CharacterRecoveryTests: XCTestCase {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(character).write(to: url)
     }

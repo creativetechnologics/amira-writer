@@ -240,11 +240,6 @@ let mcpTools: [MCPToolDefinition] = [
         ])
     ),
     MCPToolDefinition(
-        name: "export_suno_chunks",
-        description: "Export Suno-format WAV chunks based on split points",
-        inputSchema: .object(["type": .string("object"), "properties": .object([:])])
-    ),
-    MCPToolDefinition(
         name: "snapshot_version",
         description: "Create a version snapshot of the current song state",
         inputSchema: .object([
@@ -528,10 +523,6 @@ func handleToolCall(name: String, arguments: [String: AnyCodableValue]?) -> Tool
     case "export_wav":
         let body = args.mapValues { $0.anyValue }
         guard let (status, data) = httpPOST("/api/export/wav", json: body) else { return .init(value: errorResult("Failed to connect"), isError: true) }
-        return .init(value: parseJSON(data), isError: status >= 400)
-
-    case "export_suno_chunks":
-        guard let (status, data) = httpPOST("/api/export/suno-chunks") else { return .init(value: errorResult("Failed to connect"), isError: true) }
         return .init(value: parseJSON(data), isError: status >= 400)
 
     case "snapshot_version":

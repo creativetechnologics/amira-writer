@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 // MARK: - Template Model
 
@@ -205,7 +206,7 @@ final class TemplateManager {
         let fileName = name.replacingOccurrences(of: "/", with: "_") + ".json"
         let fileURL = templatesDir.appendingPathComponent(fileName)
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? JSONDecoder().decode(ScoreTemplate.self, from: data)
+        return try? JSONCoders.makeDecoder().decode(ScoreTemplate.self, from: data)
     }
 
     func listTemplates() -> [ScoreTemplate] {
@@ -214,7 +215,7 @@ final class TemplateManager {
         if let files = try? fm.contentsOfDirectory(at: templatesDir, includingPropertiesForKeys: nil) {
             for file in files where file.pathExtension == "json" {
                 if let data = try? Data(contentsOf: file),
-                   let template = try? JSONDecoder().decode(ScoreTemplate.self, from: data) {
+                   let template = try? JSONCoders.makeDecoder().decode(ScoreTemplate.self, from: data) {
                     // Don't duplicate built-ins
                     if !templates.contains(where: { $0.name == template.name }) {
                         templates.append(template)

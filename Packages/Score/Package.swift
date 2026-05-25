@@ -35,8 +35,7 @@ let package = Package(
                 .copy("Resources/hyph-en-us.pat.txt"),
                 .copy("Resources/cmudict.dict"),
                 .copy("Resources/mbrola-us1"),
-                .copy("Resources/mbrola-us2"),
-                .copy("Resources/suno-instrument-prompts.json")
+                .copy("Resources/mbrola-us2")
             ]
         ),
         .target(

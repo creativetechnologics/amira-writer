@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import ProjectKit
 
 // MARK: - APIServer
 
@@ -253,14 +254,14 @@ struct HTTPRequest {
     /// Decode the JSON body into a Decodable type.
     func decodeBody<T: Decodable>(_ type: T.Type) -> T? {
         guard let body else { return nil }
-        return try? JSONDecoder().decode(type, from: body)
+        return try? JSONCoders.makeDecoder().decode(type, from: body)
     }
 
     /// Decode body, returning a descriptive error message on failure.
     func decodeBodyWithError<T: Decodable>(_ type: T.Type) -> (value: T?, errorMessage: String?) {
         guard let body else { return (nil, "Empty request body") }
         do {
-            return (try JSONDecoder().decode(type, from: body), nil)
+            return (try JSONCoders.makeDecoder().decode(type, from: body), nil)
         } catch let error as DecodingError {
             let msg: String
             switch error {
@@ -288,7 +289,7 @@ struct HTTPRequest {
         guard let body else {
             throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Empty request body"))
         }
-        return try JSONDecoder().decode(type, from: body)
+        return try JSONCoders.makeDecoder().decode(type, from: body)
     }
 
     /// Parse body as raw JSON dictionary.
@@ -310,7 +311,7 @@ struct HTTPResponse {
     }
 
     static func ok<T: Encodable>(_ value: T) -> HTTPResponse {
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         do {
@@ -326,7 +327,7 @@ struct HTTPResponse {
     static func error(_ status: Int, _ message: String) -> HTTPResponse {
         // Use JSONEncoder to ensure proper escaping of all special characters
         let payload = ["error": message]
-        if let data = try? JSONEncoder().encode(payload), let json = String(data: data, encoding: .utf8) {
+        if let data = try? JSONCoders.makeEncoder().encode(payload), let json = String(data: data, encoding: .utf8) {
             return HTTPResponse(status: status, body: json)
         }
         // Ultimate fallback — should never happen for a simple String dict

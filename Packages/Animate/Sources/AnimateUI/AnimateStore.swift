@@ -5792,7 +5792,7 @@ hydrateRunPodSettings()
             case ProjectDatabaseBridge.animateMetadataPath:
                 let fileURL = projectURL.appendingPathComponent(path)
                 let decoded = (try? Data(contentsOf: fileURL))
-                    .flatMap { try? JSONDecoder().decode(AnimateMetadata.self, from: $0) }
+                    .flatMap { try? JSONCoders.makeDecoder().decode(AnimateMetadata.self, from: $0) }
                 await MainActor.run {
                     if let decoded {
                         self.animateMetadata = decoded
@@ -7132,7 +7132,7 @@ hydrateRunPodSettings()
         let url = imageLibraryOrganizeManifestURL(in: animateDir)
         guard let data = try? Data(contentsOf: url) else { return [] }
         do {
-            let decoder = JSONDecoder()
+            let decoder = JSONCoders.makeDecoder()
             decoder.dateDecodingStrategy = .iso8601
             return try decoder.decode(ImageLibraryOrganizeManifest.self, from: data).items
         } catch {
@@ -7146,7 +7146,7 @@ hydrateRunPodSettings()
             try? FileManager.default.removeItem(at: imageLibraryOrganizeManifestURL(in: animateDir))
             return
         }
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let manifest = ImageLibraryOrganizeManifest(items: imageLibraryOrganizeItems)
@@ -7236,7 +7236,7 @@ hydrateRunPodSettings()
 
         do {
             let fm = FileManager.default
-            let encoder = JSONEncoder()
+            let encoder = JSONCoders.makeEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
             // Ensure Animate/ exists
@@ -7686,7 +7686,7 @@ hydrateRunPodSettings()
 
         do {
             try FileManager.default.createDirectory(at: charDir, withIntermediateDirectories: true)
-            let encoder = JSONEncoder()
+            let encoder = JSONCoders.makeEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(persistedCharacter(character))
             try data.write(to: charPaths.characterRigJSON(slug: character.assetFolderSlug))
@@ -14647,7 +14647,7 @@ hydrateRunPodSettings()
 
     private static func loadVertexImageGenerationAttemptLedger() -> [VertexImageGenerationAttemptRecord] {
         guard let data = UserDefaults.standard.data(forKey: vertexImageGenerationAttemptLedgerKey),
-              let decoded = try? JSONDecoder().decode([VertexImageGenerationAttemptRecord].self, from: data) else {
+              let decoded = try? JSONCoders.makeDecoder().decode([VertexImageGenerationAttemptRecord].self, from: data) else {
             return []
         }
         return decoded
@@ -14657,7 +14657,7 @@ hydrateRunPodSettings()
         _ ledger: [VertexImageGenerationAttemptRecord]
     ) {
         let bounded = Array(ledger.prefix(vertexImageGenerationAttemptLedgerMaxEntries))
-        if let data = try? JSONEncoder().encode(bounded) {
+        if let data = try? JSONCoders.makeEncoder().encode(bounded) {
             UserDefaults.standard.set(data, forKey: vertexImageGenerationAttemptLedgerKey)
             NotificationCenter.default.post(
                 name: vertexImageGenerationAttemptLedgerDidChangeNotification,
@@ -16992,7 +16992,7 @@ hydrateRunPodSettings()
     private func decodedPlacesManifest(at url: URL) throws -> [BackgroundPlate] {
         let data = try Data(contentsOf: url)
         do {
-            return try JSONDecoder().decode([BackgroundPlate].self, from: data)
+            return try JSONCoders.makeDecoder().decode([BackgroundPlate].self, from: data)
         } catch {
             let recovered = recoveredPlacesManifest(from: data, sourceURL: url, primaryError: error)
             if !recovered.isEmpty {
@@ -17031,7 +17031,7 @@ hydrateRunPodSettings()
             return []
         }
 
-        let decoder = JSONDecoder()
+        let decoder = JSONCoders.makeDecoder()
         var recovered: [BackgroundPlate] = []
         var failureSummaries: [String] = []
 
@@ -17136,7 +17136,7 @@ hydrateRunPodSettings()
     private func validatePlacesManifestWrite(newData: Data, to url: URL) throws {
         let replacement: [BackgroundPlate]
         do {
-            replacement = try JSONDecoder().decode([BackgroundPlate].self, from: newData)
+            replacement = try JSONCoders.makeDecoder().decode([BackgroundPlate].self, from: newData)
         } catch {
             throw PlacesManifestLoadError.unreadable(url, error)
         }
@@ -17239,7 +17239,7 @@ hydrateRunPodSettings()
         } else {
             data = nil
         }
-        guard let data, var decoded = try? JSONDecoder().decode(PlacesWorkflowLibrary.self, from: data) else {
+        guard let data, var decoded = try? JSONCoders.makeDecoder().decode(PlacesWorkflowLibrary.self, from: data) else {
             return .init()
         }
 
@@ -17266,7 +17266,7 @@ hydrateRunPodSettings()
         let canonicalURL = paths.placesWorldContextJSON
         if FileManager.default.fileExists(atPath: canonicalURL.path),
            let data = try? Data(contentsOf: canonicalURL),
-           let decoded = try? JSONDecoder().decode(PlacesWorldContextBlocks.self, from: data) {
+           let decoded = try? JSONCoders.makeDecoder().decode(PlacesWorldContextBlocks.self, from: data) {
             return decoded
         }
 
@@ -17276,7 +17276,7 @@ hydrateRunPodSettings()
         let legacyURL = paths.animate.appendingPathComponent("places-world-context.json")
         guard FileManager.default.fileExists(atPath: legacyURL.path),
               let data = try? Data(contentsOf: legacyURL),
-              let decoded = try? JSONDecoder().decode(PlacesWorldContextBlocks.self, from: data) else {
+              let decoded = try? JSONCoders.makeDecoder().decode(PlacesWorldContextBlocks.self, from: data) else {
             return .init()
         }
         return decoded
@@ -17346,7 +17346,7 @@ hydrateRunPodSettings()
         let url = placesScriptIndexCacheURL(in: animateDir)
         guard FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(PersistedPlacesScriptIndexCache.self, from: data) else {
+              let decoded = try? JSONCoders.makeDecoder().decode(PersistedPlacesScriptIndexCache.self, from: data) else {
             return nil
         }
 
@@ -17395,7 +17395,7 @@ hydrateRunPodSettings()
 
         guard songs.count == requirements.count else { return }
 
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let cache = PersistedPlacesScriptIndexCache(songs: songs)
         guard let data = try? encoder.encode(cache) else { return }
@@ -17409,7 +17409,7 @@ hydrateRunPodSettings()
         let url = generatedBackgroundLibraryScanCacheURL(in: animateDir)
         guard FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(PersistedGeneratedBackgroundLibraryScanCache.self, from: data) else {
+              let decoded = try? JSONCoders.makeDecoder().decode(PersistedGeneratedBackgroundLibraryScanCache.self, from: data) else {
             return nil
         }
         return decoded.scan
@@ -17419,7 +17419,7 @@ hydrateRunPodSettings()
         _ scan: GeneratedBackgroundLibraryScan,
         in animateDir: URL
     ) {
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let cache = PersistedGeneratedBackgroundLibraryScanCache(scan: scan)
         guard let data = try? encoder.encode(cache) else { return }
@@ -17528,7 +17528,7 @@ hydrateRunPodSettings()
             data = nil
         }
         guard let data,
-              let decoded = try? JSONDecoder().decode(GeneratedBackgroundReviewStateLibrary.self, from: data) else {
+              let decoded = try? JSONCoders.makeDecoder().decode(GeneratedBackgroundReviewStateLibrary.self, from: data) else {
             return .init()
         }
         return hydratedGeneratedBackgroundReviewStateLibrary(decoded)
@@ -17613,7 +17613,7 @@ hydrateRunPodSettings()
                 )
             }
         }
-        if let decoded = try? JSONDecoder().decode(PlacesWorldMapCanonLibrary.self, from: data) {
+        if let decoded = try? JSONCoders.makeDecoder().decode(PlacesWorldMapCanonLibrary.self, from: data) {
             placesWorldMapCanonRawPayload = [:]
             return hydratedPlacesWorldMapCanonLibrary(decoded)
         }
@@ -17908,7 +17908,7 @@ hydrateRunPodSettings()
             existing: placesGeneratedReviewStateLibrary
         )
         let normalizedReviewStateLibrary = persistedGeneratedBackgroundReviewStateLibrary(reviewStateLibrary)
-        guard let data = try? JSONEncoder().encode(normalizedReviewStateLibrary) else { return }
+        guard let data = try? JSONCoders.makeEncoder().encode(normalizedReviewStateLibrary) else { return }
         do {
             try writeProtectedData(data, to: placesGeneratedReviewStateURL(in: animateDir))
             placesGeneratedReviewStateLibrary = reviewStateLibrary
@@ -18818,7 +18818,7 @@ hydrateRunPodSettings()
     }
 
     private func writeMigratedCharacterRig(_ character: AnimationCharacter, to rigURL: URL) throws {
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(persistedCharacter(character))
         try data.write(to: rigURL, options: .atomic)
@@ -18834,7 +18834,7 @@ hydrateRunPodSettings()
         }
 
         do {
-            let decoded = try JSONDecoder().decode(AnimationCharacter.self, from: rigData)
+            let decoded = try JSONCoders.makeDecoder().decode(AnimationCharacter.self, from: rigData)
             let normalized = normalizedPersistedCharacterState(decoded, fallbackSlug: fallbackSlug)
             let originalSchemaVersion = schemaVersionForCharacterRigData(rigData)
 
@@ -18898,7 +18898,7 @@ hydrateRunPodSettings()
                 group.addTask(priority: .userInitiated) {
                     guard FileManager.default.fileExists(atPath: rigURL.path),
                           let data = try? Data(contentsOf: rigURL),
-                          let decoded = try? JSONDecoder().decode(AnimationCharacter.self, from: data) else {
+                          let decoded = try? JSONCoders.makeDecoder().decode(AnimationCharacter.self, from: data) else {
                         return nil
                     }
                     return RawRig(
@@ -19583,7 +19583,7 @@ hydrateRunPodSettings()
 
         let songURL = owpURL.appendingPathComponent(songPath)
         guard let data = try? Data(contentsOf: songURL),
-              let songData = try? JSONDecoder().decode(OWSSongData.self, from: data)
+              let songData = try? JSONCoders.makeDecoder().decode(OWSSongData.self, from: data)
         else {
             statusMessage = "Could not load song data from \(songPath)"
             return
@@ -20414,77 +20414,4 @@ extension AnimateStore {
         geminiMasterSwitch
     }
 
-    // MARK: - Canvas Persistence
-
-    private var canvasDir: URL? {
-        animateURL.map { ProjectPaths(root: $0.deletingLastPathComponent()).animateCanvasDir }
-    }
-
-    private var canvasIndexURL: URL? {
-        animateURL.map { ProjectPaths(root: $0.deletingLastPathComponent()).animateCanvasIndexJSON }
-    }
-
-    /// Reads `_index.json` from the canvas directory and populates `canvasGenerations`.
-    /// Called during project load. Silently skips if the file does not exist yet.
-    func loadCanvasGenerations() {
-        guard let indexURL = canvasIndexURL else {
-            canvasGenerations = []
-            return
-        }
-        let projectPath = fileOWPURL?.path
-        canvasGenerations = []
-        Task { [weak self, indexURL, projectPath] in
-            let generations = await Task.detached(priority: .utility) { () -> [CanvasGeneration] in
-                guard FileManager.default.fileExists(atPath: indexURL.path),
-                      let data = try? Data(contentsOf: indexURL) else {
-                    return []
-                }
-                return (try? JSONDecoder().decode([CanvasGeneration].self, from: data)) ?? []
-            }.value
-
-            guard let self else { return }
-            guard self.fileOWPURL?.path == projectPath else { return }
-            self.canvasGenerations = generations
-        }
-    }
-
-    /// Appends a new generation record and rewrites `_index.json`.
-    func appendCanvasGeneration(_ gen: CanvasGeneration) {
-        canvasGenerations.append(gen)
-        persistCanvasIndex()
-        registerImageAsset(
-            path: gen.imagePath,
-            linkKind: .canvasGeneration,
-            ownerID: gen.id.uuidString,
-            context: [
-                "prompt": gen.prompt,
-                "model": gen.model.rawValue,
-                "aspectRatio": gen.aspectRatio,
-                "imageSize": gen.imageSize
-            ],
-            analysisMode: .immediate
-        )
-    }
-
-    /// Removes a generation record by id, deletes the image file, and rewrites `_index.json`.
-    func deleteCanvasGeneration(_ id: UUID) {
-        guard let idx = canvasGenerations.firstIndex(where: { $0.id == id }) else { return }
-        let gen = canvasGenerations[idx]
-        canvasGenerations.remove(at: idx)
-        let fm = FileManager.default
-        if fm.fileExists(atPath: gen.imagePath) {
-            try? fm.removeItem(atPath: gen.imagePath)
-        }
-        persistCanvasIndex()
-    }
-
-    private func persistCanvasIndex() {
-        guard let dir = canvasDir, let indexURL = canvasIndexURL else { return }
-        let fm = FileManager.default
-        if !fm.fileExists(atPath: dir.path) {
-            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        }
-        guard let data = try? JSONEncoder().encode(canvasGenerations) else { return }
-        try? data.write(to: indexURL, options: .atomic)
-    }
 }

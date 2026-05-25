@@ -766,4 +766,99 @@ public struct OperaChromeCompactSaveIndicator: View {
         .animation(.easeInOut(duration: 0.2), value: state)
     }
 }
+
+// MARK: - Collapsible Section
+
+@available(macOS 26.0, *)
+public struct OperaChromeCollapsibleSection<Trailing: View, Content: View>: View {
+    private let title: String
+    private let subtitle: String?
+    private let icon: String
+    private let counterText: String?
+    @Binding private var isExpanded: Bool
+    private let trailing: Trailing
+    private let content: Content
+
+    public init(
+        title: String,
+        subtitle: String? = nil,
+        icon: String,
+        counterText: String? = nil,
+        isExpanded: Binding<Bool>,
+        @ViewBuilder trailing: @escaping () -> Trailing,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.icon = icon
+        self.counterText = counterText
+        self._isExpanded = isExpanded
+        self.trailing = trailing()
+        self.content = content()
+    }
+
+    public var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 12) {
+                    content
+                }
+                .padding(.top, 12)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Label(title, systemImage: icon)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                Spacer()
+
+                if let counterText {
+                    Text(counterText)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+
+                trailing
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(OperaChromeTheme.panelBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.05))
+        )
+    }
+}
+
+@available(macOS 26.0, *)
+public extension OperaChromeCollapsibleSection where Trailing == EmptyView {
+    init(
+        title: String,
+        subtitle: String? = nil,
+        icon: String,
+        counterText: String? = nil,
+        isExpanded: Binding<Bool>,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.init(
+            title: title,
+            subtitle: subtitle,
+            icon: icon,
+            counterText: counterText,
+            isExpanded: isExpanded,
+            trailing: { EmptyView() },
+            content: content
+        )
+    }
+}
 #endif

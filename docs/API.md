@@ -67,7 +67,6 @@ All of these operate on the currently selected song. Use `POST /api/song/select`
 | `GET` | `/api/song/markers` | — | Rehearsal markers |
 | `GET` | `/api/song/annotations` | — | Score annotations (dynamics, tempo text, expression, rehearsal) |
 | `GET` | `/api/song/audio-clips` | — | Audio clips attached to the piano roll |
-| `GET` | `/api/song/suno-splits` | — | Suno split ticks + computed chunk boundaries |
 | `GET` | `/api/song/versions` | — | Version history of the current song |
 
 #### Song content (write)
@@ -83,7 +82,6 @@ All of these operate on the currently selected song. Use `POST /api/song/select`
 | `POST` | `/api/song/tracks/rename` | `{ "trackIndex": N, "name": "..." }` | Name clipped to 256 chars. |
 | `POST` | `/api/song/instruments/set` | `APISetInstrumentRequest` | See source for full shape; validates SF2 extension + path traversal. |
 | `POST` | `/api/song/tempo/set` | `APISetTempoRequest` | BPM 10-500, ticksPerQuarter 1-960, time-signature denominator must be a power of 2, key-sig sharpsFlats -7..7. |
-| `POST` | `/api/song/suno-splits/set` | `{ "splitTicks": [N, ...] }` | Ticks ≥ 0. Sorted on save. |
 | `POST` | `/api/song/markers/add` | `{ "tick": N, "name": "...", "colorHex": "..." }` | |
 | `POST` | `/api/song/markers/delete` | `{ "id": "<uuid>" }` | |
 | `POST` | `/api/song/annotations/add` | `{ "tick": N, "text": "...", "kind": "dynamic\|tempo\|expression\|rehearsal", "trackIndex": N? }` | |
@@ -121,14 +119,13 @@ All of these operate on the currently selected song. Use `POST /api/song/select`
 
 #### Export — short renders
 
-**Use these for programmatic clip renders, NOT for full-song WAVs.** Full-song full-mix WAVs should use the [headless env-var interface](#2-headless-full-mix-wav-export-env-var-interface) so the app bundle can be launched fresh and terminate when done.
+**Use these for programmatic clip renders and full-song WAVs through the running app.** For full-song exports, select the target song first, then call `/api/export/wav` with an output path.
 
 | Method | Path | Body |
 |--------|------|------|
 | `POST` | `/api/export/wav` | `{ "outputPath": "...", "startTick": N?, "endTick": N?, "overrideSF2Path": "...?" }` — path must not contain `..`; SF2 must have `.sf2/.sf3/.dls` extension. |
 | `POST` | `/api/export/rehearsal` | `{ "outputPath": "...", "accompanimentAttenuationDB": -12.0? }` |
 | `POST` | `/api/export/stems` | `{ "outputDir": "..." }` |
-| `POST` | `/api/export/suno-chunks` | `{}` — exports to `~/Desktop` (custom `outputDir` returns 501 for now) |
 | `POST` | `/api/import/musicxml` | `{ "filePath": "/path/to/file.xml" }` |
 
 #### Mixer

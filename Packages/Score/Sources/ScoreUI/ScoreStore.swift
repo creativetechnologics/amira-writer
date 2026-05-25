@@ -127,10 +127,6 @@ private struct HostedAudioUnitQualificationArtifactRecord: Codable, Sendable {
 
 // MARK: - Types Not in OPWModels
 
-enum VersionSaveType: String, Codable, Sendable {
-    case manual, autosave, snapshot, imported
-}
-
 struct TimeSignatureEvent: Codable, Hashable, Sendable {
     var tick: Int
     var numerator: Int
@@ -385,7 +381,7 @@ struct OWSSongDocument: Identifiable, Codable, @unchecked Sendable {
         let updatedAt = parseDate(root["updatedAt"])
         let activeVersionID = parseUUID(root["activeVersionID"])
 
-        let decoder = JSONDecoder()
+        let decoder = JSONCoders.makeDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
         // Parse instrument mappings from top-level
@@ -460,7 +456,7 @@ struct OWSSongDocument: Identifiable, Codable, @unchecked Sendable {
             throw NSError(domain: "OWSSongDocument", code: 2, userInfo: [NSLocalizedDescriptionKey: "Cannot parse OWS for patching"])
         }
 
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
 
@@ -692,7 +688,7 @@ enum OWPProjectIO {
     private static func workspaceSceneDocumentObject(from document: OWSSongDocument, playback: OWSPlaybackSnapshot?) -> [String: Any] {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         let playbackObject: Any? = playback.flatMap { snapshot in
@@ -979,7 +975,6 @@ enum OWPProjectIO {
     | `get_instruments` | Current instrument mappings and channel key map | — |
     | `set_instrument` | Change instrument for a mapping key | `mappingKey` (required), `sf2Path`, `program`, `bankMSB`, `bankLSB`, `gainDB`, `muted`, `displayName` |
     | `export_wav` | Render song to WAV file | `outputPath` (required), `startTick`, `endTick`, `overrideSF2Path` |
-    | `export_suno_chunks` | Export Suno-format WAV chunks from split points | — |
     | `snapshot_version` | Create a version snapshot | `label` (optional) |
     | `rollback_version` | Restore a previous version | `versionID` (required, UUID) |
     | `get_versions` | List version history for selected song | — |
@@ -999,7 +994,6 @@ enum OWPProjectIO {
     - `/api/song/lyrics` — Lyrics/text events
     - `/api/song/markers` — Marker events
     - `/api/song/audio-clips` — Audio clip references
-    - `/api/song/suno-splits` — Suno split points
     - `/api/song/versions` — Version history
     - `/api/soundfonts` — Available soundfont files
 
@@ -1011,7 +1005,6 @@ enum OWPProjectIO {
     - `/api/song/tracks/rename` — Rename track: `{"trackIndex":0, "name":"Lead"}`
     - `/api/song/instruments/set` — Set instrument: `{"mappingKey":"tr0-ch0", "program":1}`
     - `/api/song/tempo/set` — Set tempo: `{"bpm":120}`
-    - `/api/song/suno-splits/set` — Set Suno splits: `{"ticks":[1920, 3840]}`
     - `/api/song/select` — Select song: `{"id":"uuid"}`
 
     ### Actions (POST)
@@ -1019,7 +1012,6 @@ enum OWPProjectIO {
     - `/api/playback/stop` — Stop playback
     - `/api/playback/seek` — Seek: `{"tick":960}`
     - `/api/export/wav` — Export WAV: `{"outputPath":"/path/to/out.wav"}`
-    - `/api/export/suno-chunks` — Deprecated; use Export with auto-upload enabled
     - `/api/project/save` — Save project
     - `/api/project/open` — Open project: `{"path":"/path/to/project.owp"}`
 
@@ -1043,8 +1035,6 @@ enum OWPProjectIO {
 
     ### Export audio
     1. `export_wav` with `outputPath` → render to WAV
-    2. Or `export_suno_chunks` → render split-based chunks for Suno
-
     ## File Structure
 
     - `Metadata/project.json` — Project metadata (name, tempo, time sig, etc.)
@@ -1289,407 +1279,6 @@ final class ScoreStore {
     /// Posted when a song is successfully exported to Mix/exports/.
     /// UserInfo keys: "wavURL" (URL), "songRelativePath" (String).
     nonisolated static let didExportSongToMix = Notification.Name("amira.score.didExportSongToMix")
-
-    // MARK: - Suno Export
-    var sunoSplitTicks: [Int] = []
-    var sunoExportProgress: Double = 0
-    var sunoExportStatus: String = ""
-    var isExportingSunoChunks: Bool = false
-    var sunoSingleSFOverride: Bool = false
-    var sunoSingleSFPath: String = ""      // relative path into sample library
-
-    // MARK: - Suno API Integration (CLI)
-    @ObservationIgnored let sunoCLI = SunoCLIRunner()
-
-    // Mirror for UI (SunoCLIRunner is @ObservationIgnored)
-    var sunoCLIIsInstalled: Bool { sunoCLI.isInstalled }
-    var sunoCLILastSelftest: SunoSelftestResult?
-    var sunoCLIErrorMessage: String?
-    var sunoCLIStatusMessage: String?
-    var sunoAutoUploadExportedWavs: Bool = UserDefaults.standard.bool(forKey: "sunoAutoUploadExportedWavs") {
-        didSet { UserDefaults.standard.set(sunoAutoUploadExportedWavs, forKey: "sunoAutoUploadExportedWavs") }
-    }
-    var sunoIsUploading: Bool = false
-    var sunoUploadStatus: String = ""
-    var sunoUploadQueueCount: Int { sunoUploadQueue.count }
-    @ObservationIgnored private var sunoUploadWorkerTask: Task<Void, Never>?
-    private var sunoUploadQueue: [SunoUploadQueueItem] = []
-
-    var sunoRequestMode: SunoRequestMode = {
-        let raw = UserDefaults.standard.string(forKey: "sunoRequestMode") ?? SunoRequestMode.cover.rawValue
-        return SunoRequestMode(rawValue: raw) ?? .cover
-    }() {
-        didSet { UserDefaults.standard.set(sunoRequestMode.rawValue, forKey: "sunoRequestMode") }
-    }
-    var sunoCoverPreset: SunoCoverPreset = {
-        let raw = UserDefaults.standard.string(forKey: "sunoCoverPreset") ?? SunoCoverPreset.orchestralInstrumental.rawValue
-        return SunoCoverPreset(rawValue: raw) ?? .orchestralInstrumental
-    }() {
-        didSet { UserDefaults.standard.set(sunoCoverPreset.rawValue, forKey: "sunoCoverPreset") }
-    }
-    var sunoGenerations: [SunoGeneration] = []
-    var sunoIsGenerating: Bool = false
-    var sunoGenerateStatus: String = ""
-    var sunoSongPrompt: String = UserDefaults.standard.string(forKey: "sunoSongPrompt") ?? "" {
-        didSet { UserDefaults.standard.set(sunoSongPrompt, forKey: "sunoSongPrompt") }
-    }
-    var sunoPreviewingGenerationID: UUID?
-    private var sunoPreviewPlayer: AVAudioPlayer?
-
-    // MARK: - Suno Pipeline State
-
-    /// Current chunk plan (nil until user generates one)
-    var activeChunkPlan: SunoChunkPlan?
-    /// Active render session
-    var activeRenderSession: SunoRenderSession?
-    /// All completed render sessions
-    var sunoRenderSessions: [SunoRenderSession] = []
-    /// Generation config
-    var sunoConfig = SunoChunkConfig()
-    /// How Suno planning should split the song before rendering.
-    var sunoSplitMode: SunoSplitMode = {
-        let raw = UserDefaults.standard.string(forKey: "sunoSplitMode") ?? SunoSplitMode.structural.rawValue
-        return SunoSplitMode(rawValue: raw) ?? .structural
-    }() {
-        didSet { UserDefaults.standard.set(sunoSplitMode.rawValue, forKey: "sunoSplitMode") }
-    }
-    /// Suno audio render layer (initialized lazily when first render completes)
-    var sunoRenderLayer: SunoRenderLayer?
-    /// Whether the chunk plan is stale (score edited after planning)
-    var isChunkPlanStale: Bool = false
-    /// Selected preset for the editable Suno style template.
-    var sunoStylePreset: SunoStylePreset = {
-        let raw = UserDefaults.standard.string(forKey: "sunoStylePreset") ?? SunoStylePreset.orchestraFidelity.rawValue
-        return SunoStylePreset(rawValue: raw) ?? .orchestraFidelity
-    }() {
-        didSet { UserDefaults.standard.set(sunoStylePreset.rawValue, forKey: "sunoStylePreset") }
-    }
-    /// Global style template for Suno prompts (user-editable per song)
-    var sunoStyleTemplate: String = UserDefaults.standard.string(forKey: "sunoStyleTemplate")
-        ?? "orchestra, instrumental, same tempo, same structure, restrained dynamics, same key, same keychanges, same melodies" {
-        didSet {
-            UserDefaults.standard.set(sunoStyleTemplate, forKey: "sunoStyleTemplate")
-            syncSunoStylePresetFromTemplate()
-        }
-    }
-    /// Default exclude styles for Suno Cover mode.
-    var sunoExcludeStyles: String = UserDefaults.standard.string(forKey: "sunoExcludeStyles")
-        ?? "drums, percussion, cymbals, snare, kick" {
-        didSet { UserDefaults.standard.set(sunoExcludeStyles, forKey: "sunoExcludeStyles") }
-    }
-    /// Default Suno Cover mode weirdness slider (0-100).
-    var sunoCoverWeirdness: Int = {
-        let stored = UserDefaults.standard.object(forKey: "sunoCoverWeirdness") as? Int
-        return min(100, max(0, stored ?? 0))
-    }() {
-        didSet { UserDefaults.standard.set(sunoCoverWeirdness, forKey: "sunoCoverWeirdness") }
-    }
-    /// Default Suno Cover mode style influence slider (0-100).
-    var sunoCoverStyleInfluence: Int = {
-        let stored = UserDefaults.standard.object(forKey: "sunoCoverStyleInfluence") as? Int
-        return min(100, max(0, stored ?? 30))
-    }() {
-        didSet { UserDefaults.standard.set(sunoCoverStyleInfluence, forKey: "sunoCoverStyleInfluence") }
-    }
-    /// Default Suno Cover mode audio influence slider (0-100).
-    var sunoCoverAudioInfluence: Int = {
-        let stored = UserDefaults.standard.object(forKey: "sunoCoverAudioInfluence") as? Int
-        return min(100, max(0, stored ?? 95))
-    }() {
-        didSet { UserDefaults.standard.set(sunoCoverAudioInfluence, forKey: "sunoCoverAudioInfluence") }
-    }
-    /// Whether cover generation targets the current song or a multi-song checklist.
-    var sunoCoverSourceMode: SunoCoverSourceMode = {
-        let raw = UserDefaults.standard.string(forKey: "sunoCoverSourceMode") ?? SunoCoverSourceMode.currentSong.rawValue
-        return SunoCoverSourceMode(rawValue: raw) ?? .currentSong
-    }() {
-        didSet { UserDefaults.standard.set(sunoCoverSourceMode.rawValue, forKey: "sunoCoverSourceMode") }
-    }
-    /// Transient set of song relative paths selected for multi-song cover generation.
-    var sunoCoverSelectedSongPaths: Set<String> = []
-    /// Number of queued Suno cover submissions per target song.
-    var sunoCoverIterations: Int = {
-        let stored = UserDefaults.standard.object(forKey: "sunoCoverIterations") as? Int
-        return min(12, max(1, stored ?? 1))
-    }() {
-        didSet { UserDefaults.standard.set(sunoCoverIterations, forKey: "sunoCoverIterations") }
-    }
-    /// Optional prompt override for Cover mode (empty string = use preset prompt).
-    var sunoCoverPromptOverride: String = UserDefaults.standard.string(forKey: "sunoCoverPromptOverride") ?? "" {
-        didSet { UserDefaults.standard.set(sunoCoverPromptOverride, forKey: "sunoCoverPromptOverride") }
-    }
-    /// Optional lyrics override for Cover mode (empty string = use Lyrics tab).
-    var sunoCoverLyricsOverride: String = UserDefaults.standard.string(forKey: "sunoCoverLyricsOverride") ?? "" {
-        didSet { UserDefaults.standard.set(sunoCoverLyricsOverride, forKey: "sunoCoverLyricsOverride") }
-    }
-    /// User-saved cover prompt presets.
-    var sunoCoverPromptPresets: [SunoCoverPromptPreset] = {
-        guard let data = UserDefaults.standard.data(forKey: "sunoCoverPromptPresets"),
-              let decoded = try? JSONDecoder().decode([SunoCoverPromptPreset].self, from: data) else {
-            return []
-        }
-        return decoded
-    }() {
-        didSet {
-            if let data = try? JSONEncoder().encode(sunoCoverPromptPresets) {
-                UserDefaults.standard.set(data, forKey: "sunoCoverPromptPresets")
-            }
-        }
-    }
-    /// ID of the currently-selected cover prompt preset (nil = none selected).
-    var sunoSelectedPromptPresetID: UUID? = {
-        guard let raw = UserDefaults.standard.string(forKey: "sunoSelectedPromptPresetID") else { return nil }
-        return UUID(uuidString: raw)
-    }() {
-        didSet {
-            if let id = sunoSelectedPromptPresetID {
-                UserDefaults.standard.set(id.uuidString, forKey: "sunoSelectedPromptPresetID")
-            } else {
-                UserDefaults.standard.removeObject(forKey: "sunoSelectedPromptPresetID")
-            }
-        }
-    }
-
-    var formattedSunoLyrics: String {
-        SunoLyricsFormatter.format(
-            librettoText: selectedLibrettoFile?.content,
-            speakerGenderHints: sunoSpeakerGenderHints
-        ).formattedText
-    }
-
-    var hasFormattedSunoLyrics: Bool {
-        !formattedSunoLyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var sunoResolvedCoverTargetPaths: [String] {
-        switch sunoCoverSourceMode {
-        case .currentSong:
-            guard let selectedSong = selectedMidiAsset else { return [] }
-            return [selectedSong.relativePath]
-        case .selectedSongs:
-            return songAssets.map(\.relativePath).filter { sunoCoverSelectedSongPaths.contains($0) }
-        }
-    }
-
-    var sunoCoverTargetCount: Int {
-        sunoResolvedCoverTargetPaths.count
-    }
-
-    var sunoCoverTotalSubmissionCount: Int {
-        sunoCoverTargetCount * max(1, sunoCoverIterations)
-    }
-
-    var sunoCoverExpectedOutputCount: Int {
-        sunoCoverTotalSubmissionCount * 2
-    }
-
-    var sunoRunCanonicalCoverButtonTitle: String {
-        let iterations = max(1, sunoCoverIterations)
-        return iterations == 1 ? "Run Canonical Cover" : "Run Canonical Cover ×\(iterations)"
-    }
-
-    var sunoCoverQueueSummary: String {
-        let targetCount = sunoCoverTargetCount
-        let iterations = max(1, sunoCoverIterations)
-        let submitCount = targetCount * iterations
-        let expectedOutputs = submitCount * 2
-
-        switch (targetCount, iterations) {
-        case (0, _):
-            return "No songs queued yet."
-        case (1, 1):
-            return "1 submit → about 2 outputs"
-        case (1, _):
-            return "\(iterations) submits → about \(expectedOutputs) outputs"
-        default:
-            return "\(iterations) cycles × \(targetCount) songs → \(submitCount) submits / about \(expectedOutputs) outputs"
-        }
-    }
-
-    var sunoCoverQueueDelaySummary: String {
-        "Queue spacing is humanized with randomized 5–10 minute cooldowns between submits."
-    }
-
-    var sunoCanRunCanonicalCover: Bool {
-        effectiveSunoCoverLyrics() != nil && !sunoResolvedCoverTargetPaths.isEmpty
-    }
-
-    var selectedSunoGenerations: [SunoGeneration] {
-        guard let selectedPath = selectedMidiAsset?.relativePath else { return [] }
-        return sunoGenerations.filter { $0.songPath == selectedPath }
-    }
-
-    var sunoResolvedCoverPrompt: String {
-        sunoCoverPreset.prompt
-    }
-
-    var sunoCoverRequiresLyrics: Bool {
-        sunoCoverPreset.requiresLyrics
-    }
-
-    var sunoHasVocalTracks: Bool {
-        instrumentMappings.values.contains { $0.trackRole == .vocal }
-    }
-
-    var sunoResolvedVocalGenderArgument: String {
-        guard sunoCoverPreset.isVocal else { return "" }
-        let genders = Set(
-            instrumentMappings.values
-                .filter { $0.trackRole == .vocal }
-                .map { $0.resolvedVocalGender.rawValue }
-        )
-        guard genders.count == 1, let gender = genders.first else { return "" }
-        return gender
-    }
-
-    var selectedSunoBaseTitle: String? {
-        guard let relativePath = selectedMidiAsset?.relativePath else { return nil }
-        return Self.sunoBaseTitle(from: relativePath)
-    }
-
-    // MARK: - Cover Prompt Preset Management
-
-    /// Snapshot current cover-pane state into a new preset with the given name.
-    func sunoSavePromptPreset(name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let preset = SunoCoverPromptPreset(
-            name: trimmed,
-            promptOverride: sunoCoverPromptOverride.isEmpty ? nil : sunoCoverPromptOverride,
-            lyricsOverride: sunoCoverLyricsOverride.isEmpty ? nil : sunoCoverLyricsOverride,
-            excludeStyles: sunoExcludeStyles,
-            weirdness: sunoCoverWeirdness,
-            styleInfluence: sunoCoverStyleInfluence,
-            audioInfluence: sunoCoverAudioInfluence
-        )
-        var presets = sunoCoverPromptPresets
-        // Replace existing preset with the same name, else append.
-        if let idx = presets.firstIndex(where: { $0.name == trimmed }) {
-            var replacement = preset
-            replacement.id = presets[idx].id
-            presets[idx] = replacement
-            sunoSelectedPromptPresetID = replacement.id
-        } else {
-            presets.append(preset)
-            sunoSelectedPromptPresetID = preset.id
-        }
-        sunoCoverPromptPresets = presets
-    }
-
-    func sunoDeletePromptPreset(id: UUID) {
-        sunoCoverPromptPresets.removeAll { $0.id == id }
-        if sunoSelectedPromptPresetID == id {
-            sunoSelectedPromptPresetID = nil
-        }
-    }
-
-    func sunoApplyPromptPreset(id: UUID) {
-        guard let preset = sunoCoverPromptPresets.first(where: { $0.id == id }) else { return }
-        sunoCoverPromptOverride = preset.promptOverride ?? ""
-        sunoCoverLyricsOverride = preset.lyricsOverride ?? ""
-        sunoExcludeStyles = preset.excludeStyles
-        sunoCoverWeirdness = preset.weirdness
-        sunoCoverStyleInfluence = preset.styleInfluence
-        sunoCoverAudioInfluence = preset.audioInfluence
-        sunoSelectedPromptPresetID = preset.id
-    }
-
-    /// Returns the Mix export WAV URL and modification date for a song, or nil if it doesn't exist.
-    /// Mirrors `mixExportURL(for:)` exactly — same project root, same `Mix/exports/` dir, same
-    /// displayName-based sanitizer (`[^A-Za-z0-9_-]+` → `_`, trimmed of leading/trailing `_`).
-    func sunoMixExportInfo(for relativePath: String) -> (url: URL, modifiedAt: Date)? {
-        guard let projectRoot = workingProjectURL ?? projectURL else { return nil }
-        guard let asset = songAssets.first(where: { $0.relativePath == relativePath }) else {
-            return nil
-        }
-        let raw = asset.displayName
-            .replacingOccurrences(of: "[^A-Za-z0-9_-]+", with: "_", options: .regularExpression)
-        let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
-        let safeName = trimmed.isEmpty ? "untitled" : trimmed
-        let wavURL = ProjectPaths(root: projectRoot).mixExports
-            .appendingPathComponent("\(safeName).wav")
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: wavURL.path),
-              let attrs = try? fm.attributesOfItem(atPath: wavURL.path),
-              let modDate = attrs[.modificationDate] as? Date else {
-            return nil
-        }
-        return (wavURL, modDate)
-    }
-
-    /// Returns the songs eligible for Suno batch-selection: only assets with playable score data.
-    var sunoBatchSelectableSongPaths: [(relativePath: String, displayName: String)] {
-        songAssets
-            .filter(\.hasPlayableScoreData)
-            .map { asset in
-                (relativePath: asset.relativePath, displayName: asset.displayName)
-            }
-    }
-
-    /// Returns every song in the current project for the multi-song picker UI.
-    func sunoAvailableSongPaths() -> [(relativePath: String, displayName: String)] {
-        songAssets.map { asset in
-            (relativePath: asset.relativePath, displayName: asset.displayName)
-        }
-    }
-
-    private var sunoSpeakerGenderHints: [String: SunoLyricsFormatter.SpeakerGender] {
-        var hints: [String: SunoLyricsFormatter.SpeakerGender] = [:]
-
-        for mapping in instrumentMappings.values where mapping.trackRole == .vocal {
-            let name = mapping.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty else { continue }
-
-            let gender: SunoLyricsFormatter.SpeakerGender
-            switch mapping.inferredVocalGender {
-            case .male?:
-                gender = .male
-            case .female?:
-                gender = .female
-            case nil:
-                gender = .unknown
-            }
-
-            let normalized = name
-                .lowercased()
-                .replacingOccurrences(of: #"[^\p{L}\p{N} ]+"#, with: " ", options: .regularExpression)
-                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            guard !normalized.isEmpty else { continue }
-            hints[normalized] = gender
-
-            if let firstToken = normalized.split(separator: " ").first {
-                hints[String(firstToken)] = gender
-            }
-        }
-
-        return hints
-    }
-    /// UI flag for prompt editor sheet
-    var showInstrumentPromptEditor: Bool = false
-    /// Suno pipeline status log (newest first, capped at 100 entries)
-    var sunoStatusLog: [SunoLogEntry] = []
-
-    struct SunoLogEntry: Identifiable {
-        let id = UUID()
-        let timestamp = Date()
-        let message: String
-        let level: Level
-        enum Level: String { case info, warning, error, success }
-    }
-
-    private struct SunoUploadQueueItem: Identifiable {
-        let id = UUID()
-        let fileURL: URL
-        let displayName: String
-        let queuedAt = Date()
-    }
-
-    func appendSunoLog(_ message: String, level: SunoLogEntry.Level = .info) {
-        sunoStatusLog.insert(SunoLogEntry(message: message, level: level), at: 0)
-        if sunoStatusLog.count > 100 { sunoStatusLog.removeLast(sunoStatusLog.count - 100) }
-    }
 
     // MARK: - API Server
 
@@ -2095,7 +1684,7 @@ final class ScoreStore {
         isDirty = true
     }
 
-    /// Stop the Suno server when the app terminates to prevent orphaned processes.
+    /// Stop app-managed services when the app terminates to prevent orphaned processes.
     private var terminationObserver: (any NSObjectProtocol)?
 
     private func setupAppTerminationHandler() {
@@ -3568,13 +3157,6 @@ final class ScoreStore {
         playbackRenderMode = mode
     }
 
-    // MARK: - Audio Devices
-
-    func setAudioBufferFrames(_ frames: UInt32) {
-        selectedAudioBufferFrames = frames
-        playbackEngine.setPreferredBufferFrames(frames)
-    }
-
     // MARK: - Instrument Mapping Methods
 
     func mapping(for profile: ProjectChannelProfile) -> InstrumentMapping {
@@ -4998,32 +4580,6 @@ final class ScoreStore {
         return seconds
     }
 
-    // MARK: - Suno Chunk Grouping
-
-    /// Legacy compatibility: compute chunks using the new SunoChunkPlanner.
-    /// Returns simplified chunk data for API endpoints.
-    func computeSunoChunks() -> [(startTick: Int, endTick: Int)] {
-        let trackChannelMap = buildTrackChannelToMappingKey()
-        guard let songID = selectedMidiID else { return [] }
-        let plan = SunoChunkPlanner.plan(
-            notes: pianoRollNotes,
-            mappings: instrumentMappings,
-            trackChannelToMappingKey: trackChannelMap,
-            tempoEvents: pianoRollTempoEvents,
-            timeSignatures: pianoRollTimeSignatures,
-            markers: pianoRollMarkers,
-            autoDetectedSections: currentStructuralAnalysis?.sections ?? [],
-            manualSplitTicks: sunoSplitTicks,
-            ticksPerQuarter: ticksPerQuarter,
-            songLengthTicks: pianoRollLengthTicks,
-            songID: songID,
-            config: sunoConfig,
-            splitMode: sunoSplitMode,
-            styleTemplate: sunoStyleTemplate
-        )
-        return plan.chunks.map { (startTick: $0.tickStart, endTick: $0.tickEnd) }
-    }
-
     // MARK: - Offline WAV Renderer
 
     enum ChunkExportError: LocalizedError {
@@ -5159,8 +4715,8 @@ final class ScoreStore {
                 }
             }
         }
-        let reportWarning: @Sendable (String) -> Void = { [weak self] msg in
-            Task { @MainActor in self?.appendSunoLog(msg, level: .warning) }
+        let reportWarning: @Sendable (String) -> Void = { msg in
+            NSLog("[OfflineExport] %@", msg)
         }
 
         let neededMappingKeys = Set(dynamicsApplied.map { note in
@@ -6780,7 +6336,7 @@ final class ScoreStore {
             var loaded = false
 
             if FileManager.default.fileExists(atPath: sf2URL.path) {
-                NSLog("[SunoExport] Loading override SF2: %@", sf2URL.lastPathComponent)
+                NSLog("[OfflineExport] Loading override SF2: %@", sf2URL.lastPathComponent)
 
                 do {
                     try sampler.loadSoundBankInstrument(at: sf2URL, program: 0, bankMSB: 0, bankLSB: 0)
@@ -6799,16 +6355,16 @@ final class ScoreStore {
                     }
                 }
             } else {
-                NSLog("[SunoExport] Override SF2 not found: %@", overridePath)
+                NSLog("[OfflineExport] Override SF2 not found: %@", overridePath)
             }
 
             if !loaded {
-                NSLog("[SunoExport] FAILED to load override SF2 — sampler will use default sound")
+                NSLog("[OfflineExport] FAILED to load override SF2 — sampler will use default sound")
             }
         } else {
             for (mappingKey, sampler) in samplers {
                 guard let mapping = resolvedMappings[mappingKey] else {
-                    NSLog("[SunoExport] No mapping for key: %@", mappingKey)
+                    NSLog("[OfflineExport] No mapping for key: %@", mappingKey)
                     continue
                 }
 
@@ -6818,16 +6374,16 @@ final class ScoreStore {
 
                 guard let sf2Path = mapping.sf2Path?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !sf2Path.isEmpty else {
-                    NSLog("[SunoExport] No sf2Path for %@", mappingKey)
+                    NSLog("[OfflineExport] No sf2Path for %@", mappingKey)
                     continue
                 }
                 let sf2URL = URL(fileURLWithPath: sf2Path)
                 guard FileManager.default.fileExists(atPath: sf2URL.path) else {
-                    NSLog("[SunoExport] SF2 not found: %@", sf2Path)
+                    NSLog("[OfflineExport] SF2 not found: %@", sf2Path)
                     continue
                 }
 
-                NSLog("[SunoExport] Loading %@ for %@ (prog=%d bank=%d/%d)",
+                NSLog("[OfflineExport] Loading %@ for %@ (prog=%d bank=%d/%d)",
                       sf2URL.lastPathComponent, mappingKey, resolvedProgram, resolvedBankMSB, bankLSB)
 
                 var loaded = false
@@ -6885,7 +6441,7 @@ final class ScoreStore {
                 }
 
                 if loaded {
-                    NSLog("[SunoExport] Loaded instrument for %@", mappingKey)
+                    NSLog("[OfflineExport] Loaded instrument for %@", mappingKey)
                     let effectiveGain = gainOverrides?[mappingKey] ?? mapping.gainDB
                     if let gainParam = sampler.auAudioUnit.parameterTree?.parameter(
                         withAddress: AUParameterAddress(kAUSamplerParam_Gain)
@@ -6893,7 +6449,7 @@ final class ScoreStore {
                         gainParam.value = Float(effectiveGain)
                     }
                 } else {
-                    NSLog("[SunoExport] FAILED to load instrument for %@ — muting", mappingKey)
+                    NSLog("[OfflineExport] FAILED to load instrument for %@ — muting", mappingKey)
                     sampler.volume = 0
                 }
             }
@@ -7541,7 +7097,7 @@ final class ScoreStore {
                 files: copiedFiles.sorted()
             )
             let metadataURL = destination.appendingPathComponent("metadata.json")
-            let encoder = JSONEncoder()
+            let encoder = JSONCoders.makeEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
             try encoder.encode(metadata).write(to: metadataURL, options: .atomic)
@@ -7581,7 +7137,7 @@ final class ScoreStore {
         }
 
         do {
-            let decoded = try JSONDecoder().decode([String: HostedAudioUnitOfflineQualification].self, from: data)
+            let decoded = try JSONCoders.makeDecoder().decode([String: HostedAudioUnitOfflineQualification].self, from: data)
             return prunedHostedAudioUnitOfflineQualificationCache(decoded)
         } catch {
             NSLog("[OfflineExport] Failed to decode hosted-AU qualification cache: %@", error.localizedDescription)
@@ -7598,7 +7154,7 @@ final class ScoreStore {
 
         Task.detached(priority: .utility) {
             do {
-                let encoder = JSONEncoder()
+                let encoder = JSONCoders.makeEncoder()
                 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 let data = try encoder.encode(snapshotToWrite)
                 let directory = cacheURL.deletingLastPathComponent()
@@ -8401,7 +7957,6 @@ final class ScoreStore {
             await self.exportSongWav(
                 outputURL: outputURL,
                 instrumentalOnly: instrumentalOnly,
-                autoUploadToSuno: true,
                 alreadyMarkedExporting: true
             )
         }
@@ -8466,18 +8021,17 @@ final class ScoreStore {
 
     /// Render the full song to a WAV file at the given URL.
     func exportFullMixToWav(outputURL: URL) async {
-        await exportSongWav(outputURL: outputURL, instrumentalOnly: false, autoUploadToSuno: true)
+        await exportSongWav(outputURL: outputURL, instrumentalOnly: false)
     }
 
     /// Render the current song to a WAV file with vocal-tagged tracks omitted.
     func exportInstrumentalMixToWav(outputURL: URL) async {
-        await exportSongWav(outputURL: outputURL, instrumentalOnly: true, autoUploadToSuno: true)
+        await exportSongWav(outputURL: outputURL, instrumentalOnly: true)
     }
 
     private func exportSongWav(
         outputURL: URL,
         instrumentalOnly: Bool,
-        autoUploadToSuno: Bool,
         alreadyMarkedExporting: Bool = false
     ) async {
         let plan: SongWavExportPlan
@@ -8535,9 +8089,6 @@ final class ScoreStore {
                   instrumentalOnly ? "InstrumentalMix" : "FullMix",
                   exportedBytes,
                   outputURL.path)
-            if autoUploadToSuno {
-                enqueueSunoUploadIfEnabled(outputURL: outputURL)
-            }
         } catch {
             fullMixExportStatus = "Export failed: \(error.localizedDescription)"
             fullMixExportDetailStatus = ""
@@ -8622,7 +8173,6 @@ final class ScoreStore {
             fullMixExportStatus = "Rehearsal track exported to \(outputURL.lastPathComponent)"
             fullMixExportDetailStatus = ""
             NSLog("[Rehearsal] Exported rehearsal track to %@", outputURL.path)
-            enqueueSunoUploadIfEnabled(outputURL: outputURL)
         } catch {
             fullMixExportStatus = "Export failed: \(error.localizedDescription)"
             fullMixExportDetailStatus = ""
@@ -8702,7 +8252,6 @@ final class ScoreStore {
                     outputURL: outputURL
                 )
                 exported += 1
-                enqueueSunoUploadIfEnabled(outputURL: outputURL)
             } catch {
                 NSLog("[Stems] Failed to export stem for %@: %@", trackName, error.localizedDescription)
             }
@@ -8764,7 +8313,7 @@ final class ScoreStore {
                 fullMixExportStatus = "Could not create Mix/exports/: \(error.localizedDescription)"
                 return
             }
-            await exportSongWav(outputURL: outputURL, instrumentalOnly: false, autoUploadToSuno: false)
+            await exportSongWav(outputURL: outputURL, instrumentalOnly: false)
             if fullMixExportStatus.hasPrefix("Exported") {
                 NotificationCenter.default.post(
                     name: ScoreStore.didExportSongToMix,
@@ -8992,7 +8541,6 @@ final class ScoreStore {
                       instrumentalOnly ? "BatchInstrumentalWAV" : "BatchWAV",
                       asset.displayName,
                       outputURL.path)
-                enqueueSunoUploadIfEnabled(outputURL: outputURL)
             } catch {
                 NSLog("[%@] Failed %@: %@",
                       instrumentalOnly ? "BatchInstrumentalWAV" : "BatchWAV",
@@ -9116,703 +8664,6 @@ final class ScoreStore {
         isBatchExporting = false
     }
 
-    // MARK: - Suno Export Pipeline
-
-    /// Export song in chunks as WAV files for Suno cover input.
-    /// Chunks are defined by manual Suno split points placed on the ruler.
-    func exportSunoChunks() async {
-        guard !pianoRollNotes.isEmpty else {
-            sunoExportStatus = "No notes to export."
-            return
-        }
-
-        var chunks = computeSunoChunks()
-        if chunks.isEmpty {
-            // No splits — export the entire song as a single chunk
-            let songEnd = pianoRollNotes.map { $0.startTick + $0.duration }.max() ?? 0
-            guard songEnd > 0 else {
-                sunoExportStatus = "No notes to export."
-                return
-            }
-            chunks = [(startTick: 0, endTick: songEnd)]
-        }
-
-        isExportingSunoChunks = true
-        sunoExportProgress = 0
-        sunoExportStatus = "Preparing export..."
-
-        let songName = selectedMidiAsset?.displayName ?? "Untitled"
-        let safeName = songName.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "_", options: .regularExpression)
-
-        let exportDir = Self.legacyDesktopExportDirectory()
-            .appendingPathComponent(safeName)
-
-        do {
-            try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
-        } catch {
-            sunoExportStatus = "Failed to create export directory: \(error.localizedDescription)"
-            isExportingSunoChunks = false
-            return
-        }
-
-        let overridePath: String? = sunoSingleSFOverride ? resolvedSunoOverrideSF2Path() : nil
-
-        for (idx, chunk) in chunks.enumerated() {
-            let filename = String(format: "%@_Chunk%02d.wav", safeName, idx + 1)
-            let outputURL = exportDir.appendingPathComponent(filename)
-
-            sunoExportStatus = "Rendering chunk \(idx + 1)/\(chunks.count)..."
-            sunoExportProgress = Double(idx) / Double(chunks.count)
-
-            do {
-                try await renderChunkToWav(
-                    notes: pianoRollNotes,
-                    startTick: chunk.startTick,
-                    endTick: chunk.endTick,
-                    outputURL: outputURL,
-                    overrideSF2Path: overridePath
-                )
-                NSLog("[SunoExport] Exported: %@", filename)
-            } catch {
-                NSLog("[SunoExport] Failed chunk %d: %@", idx + 1, error.localizedDescription)
-                sunoExportStatus = "Failed chunk \(idx + 1): \(error.localizedDescription)"
-            }
-        }
-
-        sunoExportProgress = 1.0
-        sunoExportStatus = "Exported \(chunks.count) chunks to Desktop/\(Self.legacyDesktopExportDirectory().lastPathComponent)/\(safeName)"
-        isExportingSunoChunks = false
-
-        // Open in Finder
-        #if canImport(AppKit)
-        NSWorkspace.shared.open(exportDir)
-        #endif
-    }
-
-    private func resolvedSunoOverrideSF2Path() -> String? {
-        let path = sunoSingleSFPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty else { return nil }
-        if path.hasPrefix("/") { return path }
-        guard !sampleRootDirectoryPath.isEmpty else { return nil }
-        return (sampleRootDirectoryPath as NSString).appendingPathComponent(path)
-    }
-
-    // MARK: - Suno MCP Methods
-
-    func enqueueSunoUploadIfEnabled(outputURL: URL) {
-        guard sunoAutoUploadExportedWavs else { return }
-        guard outputURL.pathExtension.lowercased() == "wav" else { return }
-        guard FileManager.default.fileExists(atPath: outputURL.path) else {
-            appendSunoLog("Skipped Suno upload because the WAV is missing: \(outputURL.lastPathComponent)", level: .warning)
-            return
-        }
-        guard sunoCLI.isInstalled else {
-            sunoUploadStatus = "Suno CLI not found. Export saved, upload skipped."
-            appendSunoLog("Suno CLI not found; upload skipped for \(outputURL.lastPathComponent)", level: .error)
-            return
-        }
-
-        let item = SunoUploadQueueItem(
-            fileURL: outputURL,
-            displayName: outputURL.lastPathComponent
-        )
-        sunoUploadQueue.append(item)
-        sunoUploadStatus = "Queued \(item.displayName) for Suno upload."
-        appendSunoLog("Queued Suno upload: \(item.displayName)")
-        startSunoUploadWorkerIfNeeded()
-    }
-
-    private func startSunoUploadWorkerIfNeeded() {
-        guard sunoUploadWorkerTask == nil else { return }
-        sunoUploadWorkerTask = Task { @MainActor [weak self] in
-            await self?.processSunoUploadQueue()
-            self?.sunoUploadWorkerTask = nil
-        }
-    }
-
-    private func processSunoUploadQueue() async {
-        guard !sunoIsUploading else { return }
-
-        while !sunoUploadQueue.isEmpty {
-            let item = sunoUploadQueue.removeFirst()
-            sunoIsUploading = true
-            sunoUploadStatus = "Uploading \(item.displayName) to Suno..."
-            appendSunoLog("Uploading to Suno: \(item.displayName)")
-
-            do {
-                let result = try await sunoCLI.uploadAudio(filePath: item.fileURL.path, headless: true)
-                let workspace = result.workspace ?? "Amira"
-                if let songID = result.songID {
-                    sunoUploadStatus = "Uploaded \(item.displayName) to Suno workspace \(workspace) (\(songID))."
-                    appendSunoLog("Uploaded \(item.displayName) to Suno workspace \(workspace): \(songID)", level: .success)
-                } else {
-                    sunoUploadStatus = "Uploaded \(item.displayName) to Suno workspace \(workspace)."
-                    appendSunoLog("Uploaded \(item.displayName) to Suno workspace \(workspace).", level: .success)
-                }
-            } catch {
-                sunoUploadStatus = "Suno upload failed for \(item.displayName): \(error.localizedDescription)"
-                appendSunoLog("Suno upload failed for \(item.displayName): \(error.localizedDescription)", level: .error)
-            }
-
-            sunoIsUploading = false
-        }
-    }
-
-    func runSunoSelftest() async {
-        sunoCLIErrorMessage = nil
-        sunoCLIStatusMessage = nil
-        do {
-            let result = try await sunoCLI.selftest()
-            sunoCLILastSelftest = result
-            sunoCLIStatusMessage = result.loggedIn
-                ? "Suno login is active for the persistent CLI profile."
-                : "Suno is not logged in yet. Use Open Suno Login, sign in once, then rerun Selftest."
-        } catch {
-            sunoCLIErrorMessage = error.localizedDescription
-        }
-    }
-
-    func openSunoLoginBrowser() async {
-        sunoCLIErrorMessage = nil
-        do {
-            let browserName = try await sunoCLI.openLoginBrowser()
-            sunoCLIStatusMessage = "Opened \(browserName) with the Suno CLI profile. Sign in once; the cookies stay in this profile until Suno expires them."
-            appendSunoLog("Opened Suno login browser using persistent profile at \(sunoCLI.profileDir)")
-        } catch {
-            sunoCLIErrorMessage = error.localizedDescription
-            sunoCLIStatusMessage = nil
-        }
-    }
-
-    func revealSunoProfileDirectory() {
-        #if canImport(AppKit)
-        let profileURL = URL(fileURLWithPath: sunoCLI.profileDir, isDirectory: true)
-        try? FileManager.default.createDirectory(at: profileURL, withIntermediateDirectories: true, attributes: nil)
-        NSWorkspace.shared.activateFileViewerSelecting([profileURL])
-        sunoCLIStatusMessage = "Revealed the persistent Suno profile folder in Finder."
-        #else
-        sunoCLIStatusMessage = "The Suno profile folder can only be revealed on macOS."
-        #endif
-    }
-
-    func sunoGenerateOriginalSong() async {
-        sunoGenerateStatus = "Original-song Suno generation is deprecated. Use the canonical cover workflow instead."
-    }
-
-    /// Generate a track via the Suno CLI.
-    /// This blocks until the track is generated (can take several minutes).
-    func sunoGenerateTrack(
-        prompt: String,
-        style: String? = nil,
-        excludeStyles: String? = nil,
-        lyrics: String? = nil
-    ) async {
-        let resolvedStyle = (style?.isEmpty == false ? style! : sunoStyleTemplate)
-        guard !resolvedStyle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            sunoGenerateStatus = "Set a Suno style before generating."
-            return
-        }
-
-        sunoIsGenerating = true
-        sunoGenerateStatus = "Generating track..."
-        defer { sunoIsGenerating = false }
-        let songPath = selectedMidiAsset?.relativePath
-
-        // Create a local generation entry
-        let generation = SunoGeneration(
-            songPath: songPath,
-            prompt: prompt,
-            style: resolvedStyle,
-            excludeStyles: excludeStyles,
-            lyrics: lyrics,
-            status: .generating
-        )
-        sunoGenerations.insert(generation, at: 0)
-        let genID = generation.id
-
-        do {
-            let result = try await sunoCLI.generateOriginal(
-                prompt: prompt,
-                style: resolvedStyle,
-                lyrics: lyrics,
-                wait: true
-            )
-            if let idx = sunoGenerations.firstIndex(where: { $0.id == genID }) {
-                let trackID = result.songIDs.first
-                sunoGenerations[idx].trackID = trackID
-                sunoGenerations[idx].status = trackID == nil ? .submitted : .ready
-                sunoGenerations[idx].resultMessage = result.message
-            }
-            sunoGenerateStatus = result.songIDs.first == nil
-                ? "Track submitted in Suno"
-                : "Track ready"
-            NSLog("[SunoCLI] Generate succeeded: %@", result.message)
-        } catch {
-            if let idx = sunoGenerations.firstIndex(where: { $0.id == genID }) {
-                sunoGenerations[idx].status = .error
-                sunoGenerations[idx].errorMessage = error.localizedDescription
-            }
-            sunoGenerateStatus = "Generation failed: \(error.localizedDescription)"
-            NSLog("[SunoCLI] Generate failed: %@", error.localizedDescription)
-        }
-    }
-
-    private func parsedSunoTrackID(from resultMessage: String?) -> String? {
-        guard let resultMessage, !resultMessage.isEmpty else { return nil }
-        if let uuidRange = resultMessage.range(
-            of: #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"#,
-            options: .regularExpression
-        ) {
-            return String(resultMessage[uuidRange])
-        }
-        return nil
-    }
-
-    /// Download a generated track to disk and optionally add to Audio pane.
-    func sunoDownloadTrack(_ generationID: UUID) async {
-        guard let idx = sunoGenerations.firstIndex(where: { $0.id == generationID }) else {
-            sunoGenerateStatus = "Generation not found."
-            return
-        }
-
-        sunoStopPreview()
-        sunoGenerations[idx].status = .downloading
-        sunoGenerateStatus = "Downloading..."
-        let downloadStartedAt = Date()
-
-        do {
-            guard let trackID = sunoGenerations[idx].trackID ?? parsedSunoTrackID(from: sunoGenerations[idx].resultMessage) else {
-                throw SunoCLIError.runtime(message: "No Suno track ID found in generation result.")
-            }
-            sunoGenerations[idx].trackID = trackID
-            let downloadDir = sunoDownloadDirectory()
-            let download = try await sunoCLI.downloadSong(
-                songID: trackID,
-                format: "mp3",
-                out: downloadDir.path
-            )
-
-            NSLog("[SunoCLI] Download result: %@", download.path)
-
-            // Find the downloaded file — look for the newest file in the download directory
-            let files = try FileManager.default.contentsOfDirectory(
-                at: downloadDir,
-                includingPropertiesForKeys: [.creationDateKey],
-                options: .skipsHiddenFiles
-            )
-            let audioFiles = files.filter { url in
-                let ext = url.pathExtension.lowercased()
-                return ext == "mp3" || ext == "wav" || ext == "m4a"
-            }
-            .filter { url in
-                let created = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
-                return created >= downloadStartedAt.addingTimeInterval(-2)
-            }
-            .sorted { a, b in
-                let dateA = (try? a.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
-                let dateB = (try? b.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
-                return dateA > dateB
-            }
-
-            guard let downloadedFile = audioFiles.first else {
-                throw SunoCLIError.runtime(message: "No audio file found in downloads directory.")
-            }
-
-            // Convert to WAV if not already
-            let wavURL: URL
-            if downloadedFile.pathExtension.lowercased() == "wav" {
-                wavURL = downloadedFile
-            } else {
-                let safeName = sunoGenerations[idx].displayTitle
-                    .replacingOccurrences(of: "/", with: "-")
-                    .replacingOccurrences(of: ":", with: "-")
-                wavURL = downloadDir.appendingPathComponent("\(safeName).wav")
-                try convertAudioToWAV(input: downloadedFile, output: wavURL)
-            }
-
-            // Compute duration in ticks
-            let audioFile = try AVAudioFile(forReading: wavURL)
-            let durationSec = Double(audioFile.length) / audioFile.fileFormat.sampleRate
-            let tpq = max(1, ticksPerQuarter)
-            let bpm = max(20, tempoBPM)
-            let durationTicks = max(tpq, Int(durationSec * Double(tpq) * (bpm / 60.0)))
-
-            // Create AudioClip at playhead
-            let startTick = max(0, livePlayheadTick)
-            let clip = AudioClip(
-                displayName: sunoGenerations[idx].displayTitle,
-                filePath: wavURL.path,
-                startTick: startTick,
-                durationTicks: durationTicks
-            )
-            pianoRollAudioClips.append(clip)
-            pianoRollAudioClips.sort { $0.startTick < $1.startTick }
-            isDirty = true
-
-            // Update generation
-            sunoGenerations[idx].status = .downloaded
-            sunoGenerations[idx].downloadedFilePath = wavURL.path
-            sunoGenerateStatus = "Added '\(clip.displayName)' to Audio pane"
-            statusMessage = "Downloaded Suno track to Audio pane"
-            NSLog("[SunoMCP] Downloaded and added clip: %@ (%d ticks)", clip.displayName, durationTicks)
-        } catch {
-            if sunoGenerations.indices.contains(idx) {
-                sunoGenerations[idx].status = .error
-                sunoGenerations[idx].errorMessage = error.localizedDescription
-            }
-            sunoGenerateStatus = "Download failed: \(error.localizedDescription)"
-            NSLog("[SunoMCP] Download failed: %@", error.localizedDescription)
-        }
-    }
-
-    /// Preview a downloaded Suno track by playing its audio file.
-    func sunoPreviewTrack(_ generationID: UUID) {
-        sunoStopPreview()
-
-        guard let gen = sunoGenerations.first(where: { $0.id == generationID }),
-              let filePath = gen.resolvedDownloadedFilePaths.first else {
-            sunoGenerateStatus = "No downloaded file to preview."
-            return
-        }
-
-        previewSunoFile(at: filePath, generationID: generationID)
-    }
-
-    func sunoPreviewDownloadedFile(_ filePath: String, generationID: UUID? = nil) {
-        previewSunoFile(at: filePath, generationID: generationID)
-    }
-
-    private func previewSunoFile(at filePath: String, generationID: UUID?) {
-        sunoStopPreview()
-
-        let fileURL = URL(fileURLWithPath: filePath)
-        guard FileManager.default.fileExists(atPath: filePath) else {
-            sunoGenerateStatus = "File not found: \(filePath)"
-            return
-        }
-
-        do {
-            sunoPreviewingGenerationID = generationID
-            sunoPreviewPlayer = try AVAudioPlayer(contentsOf: fileURL)
-            sunoPreviewPlayer?.play()
-            sunoGenerateStatus = "Playing preview..."
-            if let generationID {
-                NSLog("[SunoMCP] Playing preview for %@", generationID.uuidString)
-            } else {
-                NSLog("[SunoMCP] Playing preview for %@", filePath)
-            }
-        } catch {
-            sunoPreviewingGenerationID = nil
-            sunoGenerateStatus = "Preview failed: \(error.localizedDescription)"
-        }
-    }
-
-    /// Stop any currently playing Suno preview.
-    func sunoStopPreview() {
-        sunoPreviewPlayer?.stop()
-        sunoPreviewPlayer = nil
-        sunoPreviewingGenerationID = nil
-    }
-
-    /// Remove a generation from the list.
-    func sunoRemoveGeneration(_ generationID: UUID) {
-        sunoGenerations.removeAll { $0.id == generationID }
-    }
-
-    /// Close any orphan Playwright browsers from prior CLI invocations.
-    func sunoCloseBrowser() async {
-        do {
-            try await sunoCLI.browserClose()
-        } catch {
-            NSLog("[SunoCLI] browserClose failed: %@", error.localizedDescription)
-        }
-    }
-
-    // MARK: - Suno Pipeline
-
-    /// Generate a chunk plan from the current song data.
-    func generateSunoChunkPlan() {
-        guard let songID = selectedMidiID else {
-            appendSunoLog("No song selected — cannot generate chunk plan", level: .warning)
-            return
-        }
-        appendSunoLog("Generating chunk plan for \(pianoRollNotes.count) notes...")
-        let trackChannelMap = buildTrackChannelToMappingKey()
-        appendSunoLog("Track-channel map: \(trackChannelMap.count) entries, \(instrumentMappings.count) mappings")
-        activeChunkPlan = SunoChunkPlanner.plan(
-            notes: pianoRollNotes,
-            mappings: instrumentMappings,
-            trackChannelToMappingKey: trackChannelMap,
-            tempoEvents: pianoRollTempoEvents,
-            timeSignatures: pianoRollTimeSignatures,
-            markers: pianoRollMarkers,
-            autoDetectedSections: currentStructuralAnalysis?.sections ?? [],
-            manualSplitTicks: sunoSplitTicks,
-            ticksPerQuarter: ticksPerQuarter,
-            songLengthTicks: pianoRollLengthTicks,
-            songID: songID,
-            config: sunoConfig,
-            splitMode: sunoSplitMode,
-            styleTemplate: sunoStyleTemplate
-        )
-        isChunkPlanStale = false
-        if let plan = activeChunkPlan {
-            appendSunoLog("Plan ready: \(plan.chunks.count) chunks", level: .success)
-            for (i, chunk) in plan.chunks.enumerated() {
-                appendSunoLog("  Chunk \(i+1): \(chunk.groupLabel) [\(String(format: "%.1f", chunk.timeStart))s–\(String(format: "%.1f", chunk.timeEnd))s] \(chunk.density.rawValue)")
-            }
-        } else {
-            appendSunoLog("Plan generation produced no chunks", level: .warning)
-        }
-    }
-
-    /// Build mapping from "TrackNChM" format (used by SunoChunkPlanner) to instrument mapping key.
-    private func buildTrackChannelToMappingKey() -> [String: String] {
-        var map: [String: String] = [:]
-        for (pairKey, mappingKey) in pianoRollChannelKeyByTrackChannel {
-            // pairKey is "trackIndex:channel", convert to "TrackNChM" format
-            let parts = pairKey.split(separator: ":")
-            if parts.count == 2 {
-                let tcKey = "Track\(parts[0])Ch\(parts[1])"
-                map[tcKey] = mappingKey
-            }
-        }
-        return map
-    }
-
-    func applySunoStylePreset(_ preset: SunoStylePreset) {
-        sunoStylePreset = preset
-        if let template = preset.template {
-            sunoStyleTemplate = template
-        }
-    }
-
-    private func syncSunoStylePresetFromTemplate() {
-        if sunoStyleTemplate == SunoStylePreset.orchestraFidelity.template {
-            sunoStylePreset = .orchestraFidelity
-        } else if sunoStyleTemplate == SunoStylePreset.chamberFidelity.template {
-            sunoStylePreset = .chamberFidelity
-        } else {
-            sunoStylePreset = .custom
-        }
-    }
-
-    /// Start an automated Suno render session.
-    func startSunoRender() async {
-        guard let plan = activeChunkPlan else {
-            appendSunoLog("No chunk plan — generate one first", level: .warning)
-            return
-        }
-        guard sunoCLI.isInstalled else {
-            appendSunoLog("Suno CLI not installed at \(sunoCLI.cliPath) — configure path in Suno > Settings", level: .error)
-            statusMessage = "Suno CLI not installed"
-            return
-        }
-        appendSunoLog("Starting render session with \(plan.chunks.count) chunks...")
-        let session = SunoRenderSession(plan: plan, qcMode: .curated)
-        activeRenderSession = session
-        let orchestrator = SunoRenderOrchestrator(store: self, session: session)
-        await orchestrator.setProgressCallback { [weak self] completed, total, msg in
-            Task { @MainActor in
-                self?.appendSunoLog("[\(completed)/\(total)] \(msg)")
-            }
-        }
-        await orchestrator.setErrorCallback { [weak self] chunk, error in
-            Task { @MainActor in
-                self?.appendSunoLog("Chunk \(chunk.groupLabel) failed: \(error.localizedDescription)", level: .error)
-            }
-        }
-        do {
-            let result = try await orchestrator.execute()
-            activeRenderSession = result
-            sunoRenderSessions.append(result)
-            appendSunoLog("Render session complete — \(result.status.rawValue)", level: .success)
-        } catch {
-            appendSunoLog("Render failed: \(error.localizedDescription)", level: .error)
-            statusMessage = "Suno render failed: \(error.localizedDescription)"
-        }
-    }
-
-    /// Export for manual Suno generation.
-    func exportForManualSuno() {
-        guard let plan = activeChunkPlan else {
-            appendSunoLog("No chunk plan — generate one first", level: .warning)
-            return
-        }
-        appendSunoLog("Exporting \(plan.chunks.count) chunks for manual generation...")
-        let session = SunoRenderSession(plan: plan, qcMode: .curated)
-        let outputDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("suno-manual-\(UUID().uuidString)")
-        do {
-            try SunoManualFallback.exportForManualGeneration(
-                session: session, outputDirectory: outputDir
-            )
-            appendSunoLog("Exported to \(outputDir.path)", level: .success)
-            statusMessage = "Exported \(plan.chunks.count) chunks for manual generation"
-        } catch {
-            appendSunoLog("Export failed: \(error.localizedDescription)", level: .error)
-            statusMessage = "Export failed: \(error.localizedDescription)"
-        }
-    }
-
-    /// Re-roll a specific chunk (generate new take).
-    func rerollChunk(_ chunkID: UUID) async {
-        statusMessage = "Re-roll not yet implemented"
-    }
-
-    /// Cycle through Suno A/B playback modes.
-    func cycleSunoPlaybackMode() {
-        guard let layer = sunoRenderLayer else { return }
-        switch layer.playbackMode {
-        case .midiOnly: layer.playbackMode = .sunoOnly
-        case .sunoOnly: layer.playbackMode = .blended
-        case .blended: layer.playbackMode = .midiOnly
-        }
-    }
-
-    /// Apply a Suno-extracted tempo map to the MIDI timeline.
-    func applySunoTempoMap(_ tempoMap: [TempoPoint]) {
-        pushUndoState()
-        pianoRollTempoEvents = tempoMap
-        isDirty = true
-    }
-
-    /// Save a Suno render session to the OWP bundle.
-    func saveSunoRenderSession(_ session: SunoRenderSession, owpURL: URL) throws {
-        let renderDir = ProjectPaths(root: owpURL)
-            .sunoRenderDir(renderID: session.id.uuidString)
-        try FileManager.default.createDirectory(at: renderDir, withIntermediateDirectories: true)
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(session)
-        try data.write(to: renderDir.appendingPathComponent("manifest.json"))
-    }
-
-    /// Import downloaded Suno takes from a render session into the Audio pane.
-    /// This gives the user a clip-based review surface aligned to the original
-    /// chunk structure while we build richer multi-take editing tools.
-    func importSunoSessionToAudioPane(_ sessionID: UUID, selectedOnly: Bool) {
-        let session: SunoRenderSession? = {
-            if activeRenderSession?.id == sessionID { return activeRenderSession }
-            return sunoRenderSessions.first(where: { $0.id == sessionID })
-        }()
-
-        guard let session else {
-            appendSunoLog("Import failed: render session not found", level: .error)
-            statusMessage = "Suno session not found"
-            return
-        }
-
-        var imported = 0
-        for (chunkIndex, chunk) in session.plan.chunks.enumerated() {
-            let takeIndices: [Int]
-            if selectedOnly {
-                takeIndices = chunk.selectedTakeIndex.map { [$0] } ?? []
-            } else {
-                takeIndices = Array(chunk.takes.indices)
-            }
-
-            for takeIndex in takeIndices {
-                guard chunk.takes.indices.contains(takeIndex) else { continue }
-                let take = chunk.takes[takeIndex]
-                guard let path = take.alignedFilePath ?? take.downloadedFilePath,
-                      !path.isEmpty,
-                      FileManager.default.fileExists(atPath: path)
-                else { continue }
-
-                let durationTicks = max(1, chunk.tickEnd - chunk.tickStart)
-                let scoreSuffix = take.similarityScore.map { String(format: " %.3f", $0) } ?? ""
-                let namePrefix = selectedOnly ? "Selected" : "Take \(takeIndex + 1)"
-                let clipName = "Suno C\(chunkIndex + 1) \(namePrefix)\(scoreSuffix)"
-
-                let clip = AudioClip(
-                    displayName: clipName,
-                    filePath: path,
-                    startTick: chunk.tickStart,
-                    durationTicks: durationTicks
-                )
-                pianoRollAudioClips.append(clip)
-                imported += 1
-            }
-        }
-
-        guard imported > 0 else {
-            appendSunoLog("No Suno takes were available to import", level: .warning)
-            statusMessage = "No Suno takes available to import"
-            return
-        }
-
-        pianoRollAudioClips.sort { $0.startTick < $1.startTick }
-        isDirty = true
-        appendSunoLog(
-            "Imported \(imported) \(selectedOnly ? "selected" : "all") Suno takes into Audio Clips",
-            level: .success
-        )
-        statusMessage = "Imported \(imported) Suno takes into Audio pane"
-    }
-
-    // MARK: - Suno Audio Helpers
-
-    /// Directory for downloaded Suno WAV files.
-    private func sunoDownloadDirectory() -> URL {
-        let desktop = Self.legacyDesktopExportDirectory()
-            .appendingPathComponent("Suno Downloads")
-        try? FileManager.default.createDirectory(at: desktop, withIntermediateDirectories: true)
-        return desktop
-    }
-
-    /// Convert an audio file (MP3, M4A, etc.) to 44.1kHz 16-bit stereo WAV.
-    private func convertAudioToWAV(input: URL, output: URL) throws {
-        let inputFile = try AVAudioFile(forReading: input)
-        let inputFormat = inputFile.processingFormat
-
-        // Target format: 44.1kHz, 16-bit, stereo, interleaved
-        guard let outputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatInt16,
-            sampleRate: 44100,
-            channels: 2,
-            interleaved: true
-        ) else {
-            throw SunoCLIError.runtime(message: "Cannot create output audio format")
-        }
-
-        let outputFile = try AVAudioFile(forWriting: output, settings: outputFormat.settings)
-
-        // Read in chunks and write — use the processing format for the buffer
-        let bufferSize: AVAudioFrameCount = 65536
-        guard let readBuffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: bufferSize) else {
-            throw SunoCLIError.runtime(message: "Cannot create read buffer")
-        }
-
-        // Always use converter — inputFormat is float32 (AVAudioFile processingFormat)
-        // but output is int16, so direct copy would write wrong sample format.
-        guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
-            throw SunoCLIError.runtime(message: "Cannot create audio converter")
-        }
-        guard let writeBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: bufferSize) else {
-            throw SunoCLIError.runtime(message: "Cannot create write buffer")
-        }
-
-        while true {
-            writeBuffer.frameLength = 0
-            let status = converter.convert(to: writeBuffer, error: nil) { _, outStatus in
-                do {
-                    try inputFile.read(into: readBuffer)
-                    outStatus.pointee = readBuffer.frameLength > 0 ? .haveData : .endOfStream
-                    return readBuffer
-                } catch {
-                    outStatus.pointee = .endOfStream
-                    return nil
-                }
-            }
-            if writeBuffer.frameLength == 0 || status == .endOfStream || status == .error {
-                break
-            }
-            try outputFile.write(from: writeBuffer)
-        }
-    }
 }
 
 // MARK: - Track Freeze / Bounce
@@ -9956,334 +8807,6 @@ extension ScoreStore {
     static func ensureAppSupportDirectory() {
         let dir = preferredAppSupportDirectory()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    }
-}
-
-// MARK: - Canonical Suno Cover Workflow
-
-@available(macOS 26.0, *)
-extension ScoreStore {
-
-    private static let sunoCoverQueueDelayRangeSeconds = 300...600
-
-    /// The prompt actually sent to the CLI: user override wins, else the enum preset's prompt.
-    func effectiveSunoCoverPrompt() -> String {
-        let override = sunoCoverPromptOverride.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !override.isEmpty { return override }
-        return sunoResolvedCoverPrompt
-    }
-
-    /// The lyrics actually sent to the CLI. Returns nil if the preset needs vocals
-    /// but no lyrics are available (caller should refuse to run).
-    func effectiveSunoCoverLyrics() -> String? {
-        let override = sunoCoverLyricsOverride.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !override.isEmpty { return override }
-        if !sunoCoverPreset.requiresLyrics { return "[Instrumental]" }
-        let fromTab = formattedSunoLyrics.trimmingCharacters(in: .whitespacesAndNewlines)
-        return fromTab.isEmpty ? nil : fromTab
-    }
-
-    func sunoRunCanonicalCover() async {
-        guard !sunoIsGenerating else {
-            sunoGenerateStatus = "Already running."
-            return
-        }
-        guard let projectRoot = resolvedSunoProjectRoot() else {
-            sunoGenerateStatus = "Open the full opera project before running Suno."
-            appendSunoLog("Could not resolve the opera project root for Suno export", level: .error)
-            return
-        }
-
-        let targetPaths = sunoResolvedCoverTargetPaths
-        switch sunoCoverSourceMode {
-        case .currentSong where targetPaths.isEmpty:
-            sunoGenerateStatus = "Select a song before running Suno."
-            appendSunoLog("No song selected for Suno cover generation", level: .warning)
-            return
-        case .selectedSongs where targetPaths.isEmpty:
-            sunoGenerateStatus = "Check at least one song before running Suno."
-            appendSunoLog("No songs checked for Suno cover batch", level: .warning)
-            return
-        default:
-            break
-        }
-
-        let lyrics = effectiveSunoCoverLyrics()
-        guard sunoCanRunCanonicalCover, let lyrics else {
-            sunoGenerateStatus = "This preset needs real lyrics (Lyrics tab or Lyrics Override)."
-            appendSunoLog("Preset \(sunoCoverPreset.title) requires real lyrics", level: .warning)
-            return
-        }
-
-        let prompt = effectiveSunoCoverPrompt()
-        let negativePrompt = normalizedSunoExcludeStyles()
-        let iterations = max(1, sunoCoverIterations)
-
-        var runnableTargets: [(path: String, mixInfo: (url: URL, modifiedAt: Date))] = []
-        for path in targetPaths {
-            let baseTitle = Self.sunoBaseTitle(from: path)
-            guard let mixInfo = sunoMixExportInfo(for: path) else {
-                appendSunoLog("[\(baseTitle)] No Mix flat WAV found — skipping (export song to Mix first)", level: .error)
-                continue
-            }
-            runnableTargets.append((path: path, mixInfo: mixInfo))
-        }
-
-        guard !runnableTargets.isEmpty else {
-            sunoGenerateStatus = "No Mix exports found for the queued Suno cover submissions."
-            appendSunoLog("No runnable Suno cover targets had a Mix export available", level: .error)
-            return
-        }
-
-        sunoStopPreview()
-        sunoIsGenerating = true
-        defer { sunoIsGenerating = false }
-
-        let totalSubmissions = runnableTargets.count * iterations
-        var completedSubmissions = 0
-        var successfulSubmissions = 0
-        var totalWAVs = 0
-
-        for (targetIndex, target) in runnableTargets.enumerated() {
-            let path = target.path
-            let mixInfo = target.mixInfo
-            let baseTitle = Self.sunoBaseTitle(from: path)
-            let outputRoot = ProjectPaths(root: projectRoot).suno
-
-            for iteration in 1...iterations {
-                completedSubmissions += 1
-                let version = nextSunoVersion(
-                    for: baseTitle,
-                    mixExportURL: mixInfo.url,
-                    outputRoot: outputRoot
-                )
-                let submissionTitle = String(format: "%@ v%03d", baseTitle, version)
-
-                let generation = SunoGeneration(
-                    songPath: path,
-                    baseTitle: baseTitle,
-                    version: version,
-                    coverTitle: submissionTitle,
-                    submissionIndex: iteration,
-                    submissionCount: iterations,
-                    prompt: prompt,
-                    style: prompt,
-                    excludeStyles: negativePrompt,
-                    lyrics: lyrics,
-                    status: .submitting
-                )
-                sunoGenerations.insert(generation, at: 0)
-                let generationID = generation.id
-
-                sunoGenerateStatus = "[\(baseTitle)] Submitting cover \(completedSubmissions)/\(totalSubmissions) (song \(targetIndex + 1)/\(runnableTargets.count), iteration \(iteration)/\(iterations))..."
-                appendSunoLog("[\(baseTitle)] Iteration \(iteration)/\(iterations) submitting from Mix WAV: \(mixInfo.url.lastPathComponent)")
-
-                do {
-                    let result = try await sunoCLI.generateCover(
-                        source: mixInfo.url.path,
-                        style: prompt,
-                        title: submissionTitle,
-                        lyrics: lyrics,
-                        excludeStyles: negativePrompt,
-                        weirdness: sunoCoverWeirdness,
-                        styleInfluence: sunoCoverStyleInfluence,
-                        audioInfluence: sunoCoverAudioInfluence,
-                        headless: false,
-                        wait: true
-                    )
-
-                    let primarySongIDs = sunoDeduplicateSongIDs(result.songIDs)
-                    let fallbackSongIDs = sunoDeduplicateSongIDs(result.allCapturedSongIDs)
-                    let capturedSongIDs = primarySongIDs.count >= 2 ? primarySongIDs : fallbackSongIDs
-                    guard capturedSongIDs.count >= 2 else {
-                        throw SunoCLIError.runtime(message: "Suno returned \(capturedSongIDs.count) cover song ID(s) for \(submissionTitle); expected 2.")
-                    }
-                    let resolvedTitle = result.title ?? submissionTitle
-
-                    updateSunoGeneration(
-                        generationID,
-                        status: .downloading,
-                        songIDs: capturedSongIDs,
-                        coverTitle: resolvedTitle,
-                        resultMessage: result.message,
-                        trackID: capturedSongIDs.first
-                    )
-                    appendSunoLog("[\(baseTitle)] Captured \(capturedSongIDs.count) output IDs for \(resolvedTitle): \(capturedSongIDs.joined(separator: ", "))", level: .success)
-
-                    sunoGenerateStatus = "[\(baseTitle)] Downloading \(capturedSongIDs.count) WAV output(s)..."
-                    appendSunoLog("[\(baseTitle)] Downloading \(capturedSongIDs.count) WAV(s) into \(outputRoot.path)")
-
-                    var downloadedPaths: [String] = []
-                    for songID in capturedSongIDs {
-                        let download = try await sunoCLI.downloadSong(songID: songID, format: "wav", out: outputRoot.path)
-                        downloadedPaths.append(download.path)
-                    }
-
-                    for wavPath in downloadedPaths {
-                        NotificationCenter.default.post(
-                            name: ScoreStore.didExportSongToMix,
-                            object: nil,
-                            userInfo: [
-                                "wavURL": URL(fileURLWithPath: wavPath),
-                                "songRelativePath": path
-                            ]
-                        )
-                    }
-
-                    updateSunoGeneration(
-                        generationID,
-                        status: .downloaded,
-                        songIDs: capturedSongIDs,
-                        coverTitle: resolvedTitle,
-                        downloadedFilePaths: downloadedPaths,
-                        downloadedFilePath: downloadedPaths.first,
-                        trackID: capturedSongIDs.first
-                    )
-                    appendSunoLog("[\(baseTitle)] Finished iteration \(iteration)/\(iterations) — \(downloadedPaths.count) WAV(s) downloaded", level: .success)
-                    successfulSubmissions += 1
-                    totalWAVs += downloadedPaths.count
-                } catch {
-                    updateSunoGeneration(generationID, status: .error, errorMessage: error.localizedDescription)
-                    appendSunoLog("[\(baseTitle)] Iteration \(iteration)/\(iterations) failed: \(error.localizedDescription)", level: .error)
-                }
-
-                let remainingSubmissions = totalSubmissions - completedSubmissions
-                guard remainingSubmissions > 0 else { continue }
-
-                let delaySeconds = nextSunoQueueDelaySeconds()
-                let delayDescription = formattedSunoQueueDelay(seconds: delaySeconds)
-                sunoGenerateStatus = "Queue cooldown: waiting \(delayDescription) before the next Suno submit (\(remainingSubmissions) remaining)."
-                appendSunoLog("Queue cooldown: waiting \(delayDescription) before the next submit", level: .info)
-                do {
-                    try await Task.sleep(nanoseconds: UInt64(delaySeconds) * 1_000_000_000)
-                } catch {
-                    appendSunoLog("Queue cooldown interrupted: \(error.localizedDescription)", level: .warning)
-                    sunoGenerateStatus = "Queue interrupted: \(error.localizedDescription)"
-                    return
-                }
-            }
-        }
-
-        sunoGenerateStatus = "Completed Suno cover queue: \(successfulSubmissions)/\(totalSubmissions) submits succeeded, \(totalWAVs) WAV(s) downloaded."
-    }
-
-    func sunoRevealGenerationDownloads(_ generationID: UUID) {
-        guard let generation = sunoGenerations.first(where: { $0.id == generationID }) else { return }
-        let paths = generation.resolvedDownloadedFilePaths
-        guard !paths.isEmpty else { return }
-        #if canImport(AppKit)
-        NSWorkspace.shared.activateFileViewerSelecting(paths.map(URL.init(fileURLWithPath:)))
-        #endif
-    }
-
-    private func resolvedSunoProjectRoot() -> URL? {
-        let sourceURL = workingProjectURL ?? projectURL
-        guard let sourceURL else { return nil }
-        if sourceURL.pathExtension.lowercased() == "ows" {
-            let songsDirectory = sourceURL.deletingLastPathComponent()
-            if songsDirectory.lastPathComponent == "Songs" {
-                return songsDirectory.deletingLastPathComponent()
-            }
-            return songsDirectory
-        }
-        return sourceURL
-    }
-
-    private func normalizedSunoExcludeStyles() -> String {
-        let trimmed = sunoExcludeStyles.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return "drums, percussion, cymbals, snare, kick"
-        }
-        let parts = trimmed.split(separator: ",").map {
-            var token = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-            while token.hasPrefix("-") {
-                token.removeFirst()
-                token = token.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            return token
-        }
-        return parts.filter { !$0.isEmpty }.joined(separator: ", ")
-    }
-
-    private func nextSunoVersion(for baseTitle: String, mixExportURL: URL, outputRoot: URL) -> Int {
-        let candidateDirectoryNames = Set([
-            baseTitle,
-            mixExportURL.deletingPathExtension().lastPathComponent
-        ]).filter { !$0.isEmpty }
-
-        var highest = 0
-        for directoryName in candidateDirectoryNames {
-            let songDirectory = outputRoot.appendingPathComponent(directoryName, isDirectory: true)
-            let files = (try? FileManager.default.contentsOfDirectory(at: songDirectory, includingPropertiesForKeys: nil)) ?? []
-            for file in files {
-                let name = file.lastPathComponent
-                guard let match = name.range(of: #" v(\d{3})(?:-[A-Za-z]+)?\.wav$"#, options: .regularExpression) else {
-                    continue
-                }
-                let versionText = name[match]
-                    .replacingOccurrences(of: " v", with: "")
-                    .components(separatedBy: "-")
-                    .first?
-                    .replacingOccurrences(of: ".wav", with: "") ?? ""
-                if let version = Int(versionText) {
-                    highest = max(highest, version)
-                }
-            }
-        }
-        return highest + 1
-    }
-
-    private func sunoDeduplicateSongIDs(_ ids: [String]) -> [String] {
-        var seen: Set<String> = []
-        var deduped: [String] = []
-        for id in ids {
-            let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard !normalized.isEmpty, seen.insert(normalized).inserted else { continue }
-            deduped.append(normalized)
-        }
-        return deduped
-    }
-
-    private func nextSunoQueueDelaySeconds() -> Int {
-        Int.random(in: Self.sunoCoverQueueDelayRangeSeconds)
-    }
-
-    private func formattedSunoQueueDelay(seconds: Int) -> String {
-        let minutes = seconds / 60
-        let remainingSeconds = seconds % 60
-        if remainingSeconds == 0 {
-            return "\(minutes)m"
-        }
-        return "\(minutes)m \(remainingSeconds)s"
-    }
-
-    private func updateSunoGeneration(
-        _ generationID: UUID,
-        status: SunoGenerationStatus,
-        songIDs: [String]? = nil,
-        coverTitle: String? = nil,
-        resultMessage: String? = nil,
-        downloadedFilePaths: [String]? = nil,
-        downloadedFilePath: String? = nil,
-        trackID: String? = nil,
-        errorMessage: String? = nil
-    ) {
-        guard let index = sunoGenerations.firstIndex(where: { $0.id == generationID }) else { return }
-        sunoGenerations[index].status = status
-        if let songIDs { sunoGenerations[index].songIDs = songIDs }
-        if let coverTitle { sunoGenerations[index].coverTitle = coverTitle }
-        if let resultMessage { sunoGenerations[index].resultMessage = resultMessage }
-        if let downloadedFilePaths { sunoGenerations[index].downloadedFilePaths = downloadedFilePaths }
-        if let downloadedFilePath { sunoGenerations[index].downloadedFilePath = downloadedFilePath }
-        if let trackID { sunoGenerations[index].trackID = trackID }
-        if let errorMessage { sunoGenerations[index].errorMessage = errorMessage }
-    }
-
-    static func sunoBaseTitle(from relativePath: String) -> String {
-        let stem = URL(fileURLWithPath: relativePath).deletingPathExtension().lastPathComponent
-        let parts = stem.components(separatedBy: " - ")
-        guard parts.count >= 2 else { return stem }
-        return parts[0] + " " + parts.dropFirst().joined(separator: " - ")
     }
 }
 

@@ -1,22 +1,31 @@
 import Foundation
 import ProjectKit
 import SwiftUI
-#if canImport(AppKit)
-import AppKit
-#endif
 
 // MARK: - Debug Logging
 
 private func amiraDebugLog(_ message: String) {
     let ts = ISO8601DateFormatter().string(from: Date())
     let line = "[\(ts)] [Write] \(message)\n"
-    let url = URL(fileURLWithPath: "/tmp/write-debug.log")
-    if let fh = try? FileHandle(forWritingTo: url) {
-        fh.seekToEndOfFile()
-        fh.write(Data(line.utf8))
-        fh.closeFile()
-    } else {
-        try? line.write(to: url, atomically: false, encoding: .utf8)
+    if let data = line.data(using: .utf8),
+       let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: "/tmp/write-debug.log")) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        try? handle.close()
+    }
+}
+
+// MARK: - Write-Only Models (not shared via ProjectKit)
+
+struct SongLyricIterationFile: Identifiable, Hashable, Sendable {
+    let id: UUID
+    var songRelativePath: String
+    var slot: Int
+    var relativePath: String
+    var content: String
+
+    var hasContent: Bool {
+        !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
@@ -64,213 +73,10 @@ enum ScriptMarkupPalette {
     }
 }
 
-// MARK: - Model Types (self-contained, matching OperaWriter formats)
-
-struct ProjectMetadata: Codable, Sendable {
-    var name: String
-    var createdAt: Date
-    var updatedAt: Date
-    var notes: String
-    var projectVersions: [ProjectVersionEntry]
-
-    private enum CodingKeys: String, CodingKey {
-        case name, createdAt, updatedAt, notes, projectVersions
-    }
-
-    init(name: String = "Untitled", createdAt: Date = Date(), updatedAt: Date = Date(), notes: String = "", projectVersions: [ProjectVersionEntry] = []) {
-        self.name = name
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-        self.notes = notes
-        self.projectVersions = projectVersions
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        name = try container.decode(String.self, forKey: .name)
-        createdAt = try container.decode(Date.self, forKey: .createdAt)
-        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
-        notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
-        projectVersions = try container.decodeIfPresent([ProjectVersionEntry].self, forKey: .projectVersions) ?? []
-    }
-
-    static func fresh(named name: String) -> ProjectMetadata {
-        .init(name: name, createdAt: Date(), updatedAt: Date(), notes: "")
-    }
-}
-
-struct ProjectVersionEntry: Identifiable, Codable, Hashable, Sendable {
-    var id: UUID
-    var label: String
-    var userLabel: String?
-    var saveType: VersionSaveType
-    var isBookmarked: Bool
-    var createdAt: Date
-    var updatedAt: Date
-    var songVersionMap: [String: UUID]
-
-    private enum CodingKeys: String, CodingKey {
-        case id, label, userLabel, saveType, isBookmarked, createdAt, updatedAt, songVersionMap
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let now = Date()
-        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        label = try container.decodeIfPresent(String.self, forKey: .label) ?? "Version"
-        userLabel = try container.decodeIfPresent(String.self, forKey: .userLabel)
-        saveType = try container.decodeIfPresent(VersionSaveType.self, forKey: .saveType) ?? .manual
-        isBookmarked = try container.decodeIfPresent(Bool.self, forKey: .isBookmarked) ?? false
-        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? now
-        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? now
-        songVersionMap = try container.decodeIfPresent([String: UUID].self, forKey: .songVersionMap) ?? [:]
-    }
-}
-
-enum VersionSaveType: String, Codable, Sendable {
-    case manual
-    case autosave
-    case snapshot
-    case imported
-}
-
-struct ProjectTextFile: Identifiable, Hashable, Sendable {
-    let id: UUID
-    var relativePath: String
-    var content: String
-
-    var displayName: String {
-        let url = URL(fileURLWithPath: relativePath)
-        let withoutExtension = url.deletingPathExtension().lastPathComponent
-        return withoutExtension.isEmpty ? url.lastPathComponent : withoutExtension
-    }
-}
-
-struct SongLyricIterationFile: Identifiable, Hashable, Sendable {
-    let id: UUID
-    var songRelativePath: String
-    var slot: Int
-    var relativePath: String
-    var content: String
-
-    var hasContent: Bool {
-        !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-}
-
-struct MidiAsset: Identifiable, Hashable, Sendable {
-    let id: UUID
-    var relativePath: String
-    var data: Data
-
-    var displayName: String {
-        let url = URL(fileURLWithPath: relativePath)
-        let withoutExtension = url.deletingPathExtension().lastPathComponent
-        let name = withoutExtension.isEmpty ? url.lastPathComponent : withoutExtension
-        return name.toTitleCase()
-    }
-}
-
-struct SongStub: Identifiable, Sendable {
-    let id: UUID
-    let fileURL: URL
-    let relativePath: String
-    let fileSize: Int64
-    let title: String?
-    let canonicalTitle: String?
-
-    init(
-        id: UUID,
-        fileURL: URL,
-        relativePath: String,
-        fileSize: Int64,
-        title: String? = nil,
-        canonicalTitle: String? = nil
-    ) {
-        self.id = id
-        self.fileURL = fileURL
-        self.relativePath = relativePath
-        self.fileSize = fileSize
-        self.title = title
-        self.canonicalTitle = canonicalTitle
-    }
-
-    var displayName: String {
-        let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedTitle.isEmpty {
-            return trimmedTitle
-        }
-        let url = URL(fileURLWithPath: relativePath)
-        let withoutExtension = url.deletingPathExtension().lastPathComponent
-        return withoutExtension.isEmpty ? url.lastPathComponent : withoutExtension
-    }
-}
-
-struct OPWCharacterImage: Identifiable, Codable, Hashable, Sendable {
-    var id: UUID
-    var filename: String
-    var category: String
-
-    init(id: UUID = UUID(), filename: String, category: String) {
-        self.id = id
-        self.filename = filename
-        self.category = category
-    }
-}
-
-struct OPWCharacter: Identifiable, Codable, Hashable, Sendable {
-    var id: UUID
-    var name: String
-    var description: String
-    var associatedChannelKeys: [String]
-    var galleryCategories: [String]
-    var images: [OPWCharacterImage]
-    var colorHex: String?
-    var loraFilename: String?
-    var loraWeight: Double?
-    var loraTriggerWord: String?
-
-    init(
-        id: UUID = UUID(),
-        name: String,
-        description: String = "",
-        associatedChannelKeys: [String] = [],
-        galleryCategories: [String] = [],
-        images: [OPWCharacterImage] = [],
-        colorHex: String? = nil,
-        loraFilename: String? = nil,
-        loraWeight: Double? = nil,
-        loraTriggerWord: String? = nil
-    ) {
-        self.id = id
-        self.name = name
-        self.description = description
-        self.associatedChannelKeys = associatedChannelKeys
-        self.galleryCategories = galleryCategories
-        self.images = images
-        self.colorHex = colorHex
-        self.loraFilename = loraFilename
-        self.loraWeight = loraWeight
-        self.loraTriggerWord = loraTriggerWord
-    }
-
-    var directoryName: String {
-        let safe = name.lowercased()
-            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return safe.isEmpty ? id.uuidString : safe
-    }
-}
-
-struct OPWCharactersFile: Codable, Sendable {
-    var version: Int
-    var characters: [OPWCharacter]
-
-    init(version: Int = 1, characters: [OPWCharacter] = []) {
-        self.version = version
-        self.characters = characters
-    }
-}
+// MARK: - Model Types (shared types are now in ProjectKit/OWPModels.swift)
+// SongLyricIterationFile is WriteUI-only — kept here.
+// All other shared types (ProjectMetadata, SongStub, OPWCharacter, etc.)
+// are imported from ProjectKit.
 
 // MARK: - OWS Lightweight Types (ScriptWriter only holds what it needs)
 
@@ -554,21 +360,6 @@ enum SaveConflictError: LocalizedError {
             let joined = paths.joined(separator: ", ")
             return "Newer disk changes were detected for \(joined)."
         }
-    }
-}
-
-// MARK: - String Extension
-
-extension String {
-    func toTitleCase() -> String {
-        let words = self.split(separator: " ")
-        return words.map { word in
-            let s = String(word)
-            if s.allSatisfy(\.isNumber) { return s }
-            // Preserve all-uppercase words (Roman numerals, acronyms like II, III, ACT)
-            if s.count > 1 && s == s.uppercased() && s.allSatisfy(\.isLetter) { return s }
-            return s.prefix(1).uppercased() + s.dropFirst().lowercased()
-        }.joined(separator: " ")
     }
 }
 

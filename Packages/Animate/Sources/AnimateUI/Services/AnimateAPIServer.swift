@@ -2404,7 +2404,7 @@ final class AnimateAPIRouter {
         directory: URL,
         stem: String
     ) throws {
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(record)
@@ -2570,7 +2570,7 @@ struct AnimateHTTPResponse {
     }
 
     static func okCodable<T: Encodable>(_ value: T) -> AnimateHTTPResponse {
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(value),
@@ -2582,7 +2582,7 @@ struct AnimateHTTPResponse {
 
     static func error(_ status: Int, _ message: String) -> AnimateHTTPResponse {
         let payload = ["error": message]
-        if let data = try? JSONEncoder().encode(payload),
+        if let data = try? JSONCoders.makeEncoder().encode(payload),
            let json = String(data: data, encoding: .utf8) {
             return AnimateHTTPResponse(status: status, body: json)
         }

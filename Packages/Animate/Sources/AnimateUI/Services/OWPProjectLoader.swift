@@ -78,13 +78,13 @@ struct OWPProjectLoader: Sendable {
 
                 // Decode tempo events
                 if let tempoData = try? JSONSerialization.data(withJSONObject: snapshot["tempoEvents"] ?? []),
-                   let tempoEvents = try? JSONDecoder().decode([OWPTempoPoint].self, from: tempoData) {
+                   let tempoEvents = try? JSONCoders.makeDecoder().decode([OWPTempoPoint].self, from: tempoData) {
                     songData.tempoEvents = tempoEvents
                 }
 
                 // Decode notes (for timing reference)
                 if let notesData = try? JSONSerialization.data(withJSONObject: snapshot["notes"] ?? []),
-                   let notes = try? JSONDecoder().decode([OWPNote].self, from: notesData) {
+                   let notes = try? JSONCoders.makeDecoder().decode([OWPNote].self, from: notesData) {
                     songData.notes = notes
                     if let maxEnd = notes.map({ $0.startTick + $0.duration }).max() {
                         songData.lengthTicks = maxEnd
@@ -102,7 +102,7 @@ struct OWPProjectLoader: Sendable {
 
                 // Decode lyric alignments
                 if let alignData = try? JSONSerialization.data(withJSONObject: snapshot["lyricAlignments"] ?? []),
-                   let alignments = try? JSONDecoder().decode([OWPLyricAlignment].self, from: alignData) {
+                   let alignments = try? JSONCoders.makeDecoder().decode([OWPLyricAlignment].self, from: alignData) {
                     songData.lyricAlignments = alignments
                 }
 
@@ -138,7 +138,7 @@ struct OWPProjectLoader: Sendable {
         for charactersURL in [owpPaths.charactersJSON, owpPaths.legacyCharactersJSON] {
             guard fm.fileExists(atPath: charactersURL.path) else { continue }
             let data = try Data(contentsOf: charactersURL)
-            let file = try JSONDecoder().decode(OPWCharactersFile.self, from: data)
+            let file = try JSONCoders.makeDecoder().decode(OPWCharactersFile.self, from: data)
             return file.characters
         }
         return []
@@ -148,7 +148,7 @@ struct OWPProjectLoader: Sendable {
         let indexURL = ProjectPaths(root: projectURL).indexJSON
         guard fm.fileExists(atPath: indexURL.path) else { return nil }
         let data = try Data(contentsOf: indexURL)
-        return try JSONDecoder().decode(OWPIndexFile.self, from: data)
+        return try JSONCoders.makeDecoder().decode(OWPIndexFile.self, from: data)
     }
 
     private func discoverSongs(in projectURL: URL, fm: FileManager) throws -> [OWPSongStub] {
@@ -188,14 +188,5 @@ struct OWPProjectLoader: Sendable {
 }
 
 // MARK: - String Helper
-
-extension String {
-    func toTitleCase() -> String {
-        let words = self.split(separator: " ")
-        return words.map { word in
-            let s = String(word)
-            if s.allSatisfy(\.isNumber) { return s }
-            return s.prefix(1).uppercased() + s.dropFirst().lowercased()
-        }.joined(separator: " ")
-    }
-}
+// String.toTitleCase() is now defined in ProjectKit/OWPModels.swift.
+// Import ProjectKit where needed.

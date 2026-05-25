@@ -13,36 +13,6 @@ public enum ScoreBootstrap {
 
     @MainActor
     public static func main(arguments: [String] = CommandLine.arguments) {
-        if arguments.contains("--self-test") {
-            let code = LyricsSyncSelfTest.run()
-            fflush(stdout)
-            fflush(stderr)
-            Darwin.exit(code)
-        }
-
-        if arguments.contains("--test-engine") {
-            let code = MusicEngineTests.run()
-            fflush(stdout)
-            fflush(stderr)
-            Darwin.exit(code)
-        }
-
-        if arguments.contains("--debug") {
-            let code = CLIDebugHarness.run()
-            fflush(stdout)
-            fflush(stderr)
-            Darwin.exit(code)
-        }
-
-        #if canImport(MLXLLM)
-        if arguments.contains("--test-llm-load") {
-            let code = LLMLoadTest.run()
-            fflush(stdout)
-            fflush(stderr)
-            Darwin.exit(code)
-        }
-        #endif
-
         if arguments.contains("--api-only") {
             let port = parseAPIPort(arguments: arguments) ?? 19847
             let store = ScoreStore()
@@ -675,11 +645,6 @@ struct ScoreApp: App {
                 if store.isPlaying { store.stopPlayback() } else { store.playPianoRoll(startTick: 0) }
             }
             .keyboardShortcut(.return, modifiers: .command)
-
-            Button("Cycle Suno A/B Mode") {
-                store.cycleSunoPlaybackMode()
-            }
-            .keyboardShortcut("u", modifiers: [.command, .shift])
         }
     }
 

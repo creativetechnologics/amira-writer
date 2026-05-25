@@ -244,7 +244,7 @@ struct ShotFrameGenerationDryRunPlanner {
             .appendingPathComponent("Imagine/DryRuns", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("shot-frame-generation-latest.json")
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(report).write(to: url, options: .atomic)

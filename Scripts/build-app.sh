@@ -42,32 +42,6 @@ USAGE
     shift
 done
 
-find_suno_runtime_root() {
-    local candidates=(
-        "/Volumes/Storage VIII/Programming/SunoSkill"
-        "/Volumes/Programming/SunoSkill"
-    )
-    local candidate
-    for candidate in "${candidates[@]}"; do
-        if [[ -d "$candidate/suno_cli/.venv" && -d "$candidate/suno_cli/src" && -d "$candidate/.ms-playwright" && -d "$candidate/python-installs" ]]; then
-            printf '%s' "$candidate"
-            return 0
-        fi
-    done
-    return 1
-}
-
-relative_path() {
-    python3 - <<'PY' "$1" "$2"
-import os
-import sys
-
-target = os.path.abspath(sys.argv[1])
-start = os.path.abspath(sys.argv[2])
-print(os.path.relpath(target, start))
-PY
-}
-
 echo "=== Building $APP_NAME ($BUILD_CONFIG) ==="
 echo "Install target: $INSTALL_DIR"
 
@@ -183,49 +157,6 @@ if [[ -d "$PROJECT_DIR/Packages/Animate/Sources/AnimateUI/Resources/previs-web" 
     cp -R "$PROJECT_DIR/Packages/Animate/Sources/AnimateUI/Resources/previs-web" "$RESOURCES_DIR/previs-web"
     echo "Embedded 3D previs viewer: $RESOURCES_DIR/previs-web"
 fi
-
-# Embed the Suno CLI runtime so the synced app works on device-local machines
-# without depending on a server-only absolute path.
-SUNO_RUNTIME_ROOT="$(find_suno_runtime_root)" || {
-    echo "ERROR: Could not find Suno runtime root in /Volumes/Storage VIII/Programming/SunoSkill or /Volumes/Programming/SunoSkill"
-    exit 1
-}
-SUNO_BUNDLE_ROOT="$RESOURCES_DIR/SunoCLI"
-SUNO_BUNDLE_CLI_ROOT="$SUNO_BUNDLE_ROOT/suno_cli"
-SUNO_BUNDLE_VENV="$SUNO_BUNDLE_CLI_ROOT/.venv"
-SUNO_BUNDLE_SITE_PACKAGES="$SUNO_BUNDLE_VENV/lib/python3.13/site-packages"
-
-echo "Embedding Suno runtime from: $SUNO_RUNTIME_ROOT"
-rm -rf "$SUNO_BUNDLE_ROOT"
-mkdir -p "$SUNO_BUNDLE_CLI_ROOT"
-ditto "$SUNO_RUNTIME_ROOT/.ms-playwright" "$SUNO_BUNDLE_ROOT/.ms-playwright"
-rsync -a "$SUNO_RUNTIME_ROOT/python-installs" "$SUNO_BUNDLE_ROOT/"
-rsync -a "$SUNO_RUNTIME_ROOT/suno_cli/src" "$SUNO_BUNDLE_CLI_ROOT/"
-rsync -a "$SUNO_RUNTIME_ROOT/suno_cli/.venv" "$SUNO_BUNDLE_CLI_ROOT/"
-
-EMBEDDED_PYTHON="$(find "$SUNO_BUNDLE_ROOT/python-installs" -maxdepth 3 -path '*/bin/python3' | head -1)"
-if [[ -z "$EMBEDDED_PYTHON" ]]; then
-    echo "ERROR: Bundled Suno runtime is missing python3 in $SUNO_BUNDLE_ROOT/python-installs"
-    exit 1
-fi
-
-EMBEDDED_BIN_DIR="$SUNO_BUNDLE_VENV/bin"
-EMBEDDED_PY_REL="$(relative_path "$EMBEDDED_PYTHON" "$EMBEDDED_BIN_DIR")"
-rm -f "$EMBEDDED_BIN_DIR/python" "$EMBEDDED_BIN_DIR/python3" "$EMBEDDED_BIN_DIR/python3.13"
-ln -s "$EMBEDDED_PY_REL" "$EMBEDDED_BIN_DIR/python"
-ln -s python "$EMBEDDED_BIN_DIR/python3"
-ln -s python "$EMBEDDED_BIN_DIR/python3.13"
-
-if [[ -f "$SUNO_BUNDLE_SITE_PACKAGES/_editable_impl_suno_cli.pth" ]]; then
-    printf '../../../../src\n' > "$SUNO_BUNDLE_SITE_PACKAGES/_editable_impl_suno_cli.pth"
-fi
-
-if ! PLAYWRIGHT_BROWSERS_PATH="$SUNO_BUNDLE_ROOT/.ms-playwright" \
-    "$SUNO_BUNDLE_VENV/bin/suno" --json browser status >/dev/null; then
-    echo "ERROR: Bundled Suno runtime smoke test failed"
-    exit 1
-fi
-echo "Embedded Suno runtime: $SUNO_BUNDLE_ROOT"
 
 # 3. Code sign
 # Prefer Developer ID when available. If that fails or is unavailable, fall back

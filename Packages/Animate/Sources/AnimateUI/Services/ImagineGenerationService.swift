@@ -306,7 +306,7 @@ private extension ImagineGenerationService {
 
             if let plan {
                 let planURL = imageURL.deletingPathExtension().appendingPathExtension("plan.json")
-                let encoder = JSONEncoder()
+                let encoder = JSONCoders.makeEncoder()
                 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 encoder.dateEncodingStrategy = .iso8601
                 let data = try encoder.encode(

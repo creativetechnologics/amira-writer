@@ -60,27 +60,6 @@ public struct ProjectPaths: Sendable {
         root.appendingPathComponent("Mixes", isDirectory: true)
     }
 
-    /// `<project>/Suno/`  (canonical Suno generation output)
-    public var suno: URL {
-        root.appendingPathComponent("Suno", isDirectory: true)
-    }
-
-    /// `<project>/Suno/covers/`  (Wave E target for cover WAV routing)
-    public var sunoCovers: URL {
-        suno.appendingPathComponent("covers", isDirectory: true)
-    }
-
-    /// `<project>/Suno/logs/`  (Wave E target for Suno CLI log output)
-    public var sunoLogs: URL {
-        suno.appendingPathComponent("logs", isDirectory: true)
-    }
-
-    /// `<project>/SunoRenders/`  (legacy; dead after Wave D — use `sunoCovers` for new work)
-    @available(*, deprecated, message: "Use sunoCovers. SunoRenders/ was unused on disk at Wave D.")
-    public var sunoRenders: URL {
-        root.appendingPathComponent("SunoRenders", isDirectory: true)
-    }
-
     /// `<project>/Scenes/`  (scenes.json + imagine/ — Wave D target)
     public var scenes: URL {
         root.appendingPathComponent("Scenes", isDirectory: true)
@@ -255,18 +234,6 @@ public struct ProjectPaths: Sendable {
     /// truth for everything else previously expressed as bracket markup.
     public var scriptCardsJSON: URL {
         metadata.appendingPathComponent("script-cards.json")
-    }
-
-    // MARK: - Suno per-song directory
-
-    /// `<project>/Suno/<baseTitle>/`
-    public func sunoSongDir(baseTitle: String) -> URL {
-        suno.appendingPathComponent(baseTitle, isDirectory: true)
-    }
-
-    /// `<project>/SunoRenders/render-<uuid>/`
-    public func sunoRenderDir(renderID: String) -> URL {
-        sunoRenders.appendingPathComponent("render-\(renderID)", isDirectory: true)
     }
 
     // MARK: - Animate top-level files

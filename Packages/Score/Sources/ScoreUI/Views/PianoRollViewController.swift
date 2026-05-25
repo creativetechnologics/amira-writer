@@ -1099,13 +1099,6 @@ final class PianoRollViewController: NSViewController {
             self?.renameMarker(id: id, newName: name)
         }
 
-        // Suno split callbacks
-        editor.onAddSunoSplit = { [weak self] tick in
-            self?.addSunoSplit(at: tick)
-        }
-        editor.onDeleteSunoSplit = { [weak self] tick in
-            self?.deleteSunoSplit(at: tick)
-        }
     }
 
     // MARK: - Lane Callbacks
@@ -1615,8 +1608,6 @@ final class PianoRollViewController: NSViewController {
             : snap.tickSpan(ticksPerQuarter: tpq)
         editor.timeSignatures = store.pianoRollTimeSignatures
         editor.markers = store.pianoRollMarkers
-        editor.sunoSplits = store.sunoSplitTicks
-
         // Filter notes by active track selection
         let activeFilter = activeTrackSelection
         let visibleNotes: [PianoRollNote]
@@ -5023,25 +5014,6 @@ final class PianoRollViewController: NSViewController {
         if let prev = markers.last(where: { $0.tick < playheadTick }) {
             setPlayhead(tick: prev.tick)
         }
-    }
-
-    // MARK: - Suno Splits
-
-    private func addSunoSplit(at tick: Int) {
-        // Don't add duplicate splits (within 1 beat tolerance)
-        let tpq = max(1, store.ticksPerQuarter)
-        let tooClose = store.sunoSplitTicks.contains { abs($0 - tick) < tpq }
-        guard !tooClose else { return }
-        store.sunoSplitTicks.append(tick)
-        store.sunoSplitTicks.sort()
-        store.isDirty = true
-        pushDataToEditor()
-    }
-
-    private func deleteSunoSplit(at tick: Int) {
-        store.sunoSplitTicks.removeAll { $0 == tick }
-        store.isDirty = true
-        pushDataToEditor()
     }
 
     // MARK: - Helpers

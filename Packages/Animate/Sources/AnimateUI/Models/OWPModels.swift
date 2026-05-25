@@ -1,66 +1,10 @@
 import Foundation
+import ProjectKit
 
 // MARK: - OWP Models (adapted from Novotro Score)
-// Only includes types needed for animation: characters, lyrics, tempo, timing.
-
-// MARK: - Characters
-
-struct OPWCharacterImage: Identifiable, Codable, Hashable, Sendable {
-    var id: UUID
-    var filename: String
-    var category: String
-
-    init(id: UUID = UUID(), filename: String, category: String) {
-        self.id = id
-        self.filename = filename
-        self.category = category
-    }
-}
-
-struct OPWCharacter: Identifiable, Codable, Hashable, Sendable {
-    var id: UUID
-    var name: String
-    var description: String?
-    var associatedChannelKeys: [String]
-    var galleryCategories: [String]
-    var images: [OPWCharacterImage]
-    var colorHex: String?
-
-    init(
-        id: UUID = UUID(),
-        name: String,
-        description: String? = nil,
-        associatedChannelKeys: [String] = [],
-        galleryCategories: [String] = [],
-        images: [OPWCharacterImage] = [],
-        colorHex: String? = nil
-    ) {
-        self.id = id
-        self.name = name
-        self.description = description
-        self.associatedChannelKeys = associatedChannelKeys
-        self.galleryCategories = galleryCategories
-        self.images = images
-        self.colorHex = colorHex
-    }
-
-    var directoryName: String {
-        let safe = name.lowercased()
-            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return safe.isEmpty ? id.uuidString : safe
-    }
-}
-
-struct OPWCharactersFile: Codable, Sendable {
-    var version: Int
-    var characters: [OPWCharacter]
-
-    init(version: Int = 1, characters: [OPWCharacter] = []) {
-        self.version = version
-        self.characters = characters
-    }
-}
+// Only includes types needed for animation: lyrics, tempo, timing.
+// Character types (OPWCharacter, OPWCharacterImage, OPWCharactersFile) are
+// now defined in ProjectKit/OWPModels.swift — shared with WriteUI and ScoreUI.
 
 // MARK: - Tempo
 

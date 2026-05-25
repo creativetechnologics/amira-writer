@@ -1,4 +1,5 @@
 import XCTest
+import ProjectKit
 @testable import AnimateUI
 
 @available(macOS 26.0, *)
@@ -86,11 +87,11 @@ final class PlacesPersistenceTests: XCTestCase {
         store.save(writePlaces: true)
 
         let placesData = try Data(contentsOf: placesDir.appendingPathComponent("places.json"))
-        let decodedPlaces = try JSONDecoder().decode([BackgroundPlate].self, from: placesData)
+        let decodedPlaces = try JSONCoders.makeDecoder().decode([BackgroundPlate].self, from: placesData)
         XCTAssertEqual(decodedPlaces.map(\.id), [placeID])
 
         let workflowData = try Data(contentsOf: placesDir.appendingPathComponent("places-workflow.json"))
-        let workflow = try JSONDecoder().decode(PlacesWorkflowLibrary.self, from: workflowData)
+        let workflow = try JSONCoders.makeDecoder().decode(PlacesWorkflowLibrary.self, from: workflowData)
         XCTAssertEqual(workflow.masterMapImagePath, "Animate/backgrounds/master-map.png")
     }
 
@@ -118,8 +119,8 @@ final class PlacesPersistenceTests: XCTestCase {
                 approvedImagePath: nil
             )
         }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let encoder = JSONCoders.makeEncoder()
+        encoder.outputFormatting.insert(.sortedKeys)
         try encoder.encode(existingPlaces)
             .write(to: placesDir.appendingPathComponent("places.json"))
 
@@ -138,7 +139,7 @@ final class PlacesPersistenceTests: XCTestCase {
         store.save(writePlaces: true)
 
         let placesData = try Data(contentsOf: placesDir.appendingPathComponent("places.json"))
-        let decodedPlaces = try JSONDecoder().decode([BackgroundPlate].self, from: placesData)
+        let decodedPlaces = try JSONCoders.makeDecoder().decode([BackgroundPlate].self, from: placesData)
         XCTAssertEqual(decodedPlaces.count, 12)
         XCTAssertTrue(
             store.statusMessage.contains("Refusing to overwrite"),
@@ -179,7 +180,7 @@ final class PlacesPersistenceTests: XCTestCase {
         ]
         """
 
-        let decoded = try JSONDecoder().decode([BackgroundPlate].self, from: Data(payload.utf8))
+        let decoded = try JSONCoders.makeDecoder().decode([BackgroundPlate].self, from: Data(payload.utf8))
 
         XCTAssertEqual(decoded.count, 1)
         XCTAssertNil(decoded[0].imageRatings["Animate/backgrounds/places/road/candidate.png"])
@@ -410,7 +411,7 @@ final class PlacesPersistenceTests: XCTestCase {
         store.save(writePlaces: true)
 
         let placesData = try Data(contentsOf: placesDir.appendingPathComponent("places.json"))
-        let persistedPlaces = try JSONDecoder().decode([BackgroundPlate].self, from: placesData)
+        let persistedPlaces = try JSONCoders.makeDecoder().decode([BackgroundPlate].self, from: placesData)
         let persistedAngleImage = try XCTUnwrap(persistedPlaces.first?.angleImages.first)
         XCTAssertEqual(persistedAngleImage.id, angleImageID)
         XCTAssertEqual(persistedAngleImage.imagePath, angleImagePath)
@@ -423,7 +424,7 @@ final class PlacesPersistenceTests: XCTestCase {
         XCTAssertEqual(persistedAngleImage.canonStatus, .canon)
 
         let workflowData = try Data(contentsOf: placesDir.appendingPathComponent("places-workflow.json"))
-        let persistedWorkflow = try JSONDecoder().decode(PlacesWorkflowLibrary.self, from: workflowData)
+        let persistedWorkflow = try JSONCoders.makeDecoder().decode(PlacesWorkflowLibrary.self, from: workflowData)
         XCTAssertEqual(persistedWorkflow.masterMapImagePath, masterMapPath)
         XCTAssertEqual(persistedWorkflow.landmarkReferences.first?.imagePath, landmarkPath)
 
@@ -582,7 +583,7 @@ final class PlacesPersistenceTests: XCTestCase {
         store.save(writePlaces: true)
 
         let workflowData = try Data(contentsOf: placesDir.appendingPathComponent("places-workflow.json"))
-        let persistedWorkflow = try JSONDecoder().decode(PlacesWorkflowLibrary.self, from: workflowData)
+        let persistedWorkflow = try JSONCoders.makeDecoder().decode(PlacesWorkflowLibrary.self, from: workflowData)
         let persistedRecord = try XCTUnwrap(persistedWorkflow.generatedImageRecords.first(where: { $0.activePath == storedPath }))
         XCTAssertEqual(persistedRecord.linkedPlaceID, placeID)
         XCTAssertEqual(persistedRecord.routeID, routeID)

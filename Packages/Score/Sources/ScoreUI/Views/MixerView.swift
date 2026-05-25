@@ -48,11 +48,6 @@ struct MixerView: View {
                     }
                 }
 
-                // Suno render bus strip
-                if store.sunoRenderLayer != nil {
-                    SunoChannelStripView(store: store)
-                }
-
                 Divider()
                     .frame(height: 300)
 
@@ -393,85 +388,4 @@ private struct VerticalSlider: View {
     }
 }
 
-// MARK: - Suno Channel Strip
-
-@available(macOS 26.0, *)
-private struct SunoChannelStripView: View {
-    @Bindable var store: ScoreStore
-
-    var body: some View {
-        VStack(spacing: 4) {
-            // Label
-            Text("SUNO")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 64, height: 28)
-                .background(Color.purple.opacity(0.6))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-
-            // Gain fader
-            if let layer = store.sunoRenderLayer {
-                VStack(spacing: 0) {
-                    Text(String(format: "%.0f%%", layer.gain * 100))
-                        .font(.system(size: 8, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44)
-
-                    VerticalSlider(value: Binding(
-                        get: { Double(layer.gain) },
-                        set: { layer.gain = Float($0) }
-                    ), range: 0...1.5)
-                        .frame(width: 30, height: 180)
-                }
-
-                // Mode indicator
-                Text(layer.playbackMode.rawValue)
-                    .font(.system(size: 8, design: .monospaced))
-                    .foregroundStyle(.purple)
-                    .frame(width: 50)
-
-                // Mute button
-                Button {
-                    layer.isMuted.toggle()
-                } label: {
-                    Text("M")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(layer.isMuted ? .white : .secondary)
-                        .frame(width: 22, height: 18)
-                        .background(layer.isMuted ? Color.red : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 3)
-                                .stroke(Color.secondary.opacity(0.5), lineWidth: 0.5)
-                        )
-                }
-                .buttonStyle(.plain)
-
-                // A/B cycle button
-                Button {
-                    store.cycleSunoPlaybackMode()
-                } label: {
-                    Text("A/B")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.purple)
-                        .frame(width: 50, height: 18)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-            }
-
-            // Purple indicator bar
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.purple)
-                .frame(width: 50, height: 4)
-        }
-        .frame(width: 70)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-    }
-}
 #endif
-

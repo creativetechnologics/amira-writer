@@ -1,140 +1,17 @@
 import AudioToolbox
 import Foundation
+import ProjectKit
 
-// MARK: - Helpers
+// Shared types (SongStub, ProjectMetadata, ProjectVersionEntry, ProjectTextFile,
+// MidiAsset, VersionSaveType, String.toTitleCase) are now defined in ProjectKit/OWPModels.swift.
+// They are re-exported here for backward compatibility within the ScoreUI module.
 
-extension String {
-    /// Converts an ALL-CAPS or mixed-case string to Title Case,
-    /// preserving leading numeric prefixes (e.g. "01 OVERTURE" → "01 Overture").
-    func toTitleCase() -> String {
-        let words = self.split(separator: " ")
-        return words.map { word in
-            let s = String(word)
-            // Keep purely numeric tokens as-is (e.g. "01", "2025")
-            if s.allSatisfy(\.isNumber) { return s }
-            return s.prefix(1).uppercased() + s.dropFirst().lowercased()
-        }.joined(separator: " ")
-    }
-}
-
-// MARK: - Song Stub (lightweight placeholder for progressive loading)
-
-struct SongStub: Identifiable {
-    let id: UUID
-    let fileURL: URL
-    let relativePath: String
-    let fileSize: Int64
-    let title: String?
-    let canonicalTitle: String?
-
-    init(
-        id: UUID,
-        fileURL: URL,
-        relativePath: String,
-        fileSize: Int64,
-        title: String? = nil,
-        canonicalTitle: String? = nil
-    ) {
-        self.id = id
-        self.fileURL = fileURL
-        self.relativePath = relativePath
-        self.fileSize = fileSize
-        self.title = title
-        self.canonicalTitle = canonicalTitle
-    }
-
-    var displayName: String {
-        let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedTitle.isEmpty {
-            return trimmedTitle
-        }
-        let url = URL(fileURLWithPath: relativePath)
-        let withoutExtension = url.deletingPathExtension().lastPathComponent
-        return withoutExtension.isEmpty ? url.lastPathComponent : withoutExtension
-    }
-}
-
-// MARK: - Project Metadata
-
-struct ProjectMetadata: Codable {
-    var name: String
-    var createdAt: Date
-    var updatedAt: Date
-    var notes: String
-    var projectVersions: [ProjectVersionEntry]
-
-    private enum CodingKeys: String, CodingKey {
-        case name, createdAt, updatedAt, notes, projectVersions
-    }
-
-    init(name: String, createdAt: Date, updatedAt: Date, notes: String, projectVersions: [ProjectVersionEntry] = []) {
-        self.name = name
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-        self.notes = notes
-        self.projectVersions = projectVersions
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        name = try container.decode(String.self, forKey: .name)
-        createdAt = try container.decode(Date.self, forKey: .createdAt)
-        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
-        notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
-        projectVersions = try container.decodeIfPresent([ProjectVersionEntry].self, forKey: .projectVersions) ?? []
-    }
-
-    static func fresh(named name: String) -> ProjectMetadata {
-        .init(name: name, createdAt: Date(), updatedAt: Date(), notes: "")
-    }
-}
-
-// MARK: - Project-Level Version History
-
-struct ProjectVersionEntry: Identifiable, Codable, Hashable, Sendable {
-    var id: UUID
-    var label: String
-    var userLabel: String?
-    var saveType: VersionSaveType
-    var isBookmarked: Bool
-    var createdAt: Date
-    var updatedAt: Date
-    var songVersionMap: [String: UUID]  // songRelativePath -> OWSVersionPayload.id
-
-    var displayName: String {
-        userLabel ?? label
-    }
-}
-
-struct ProjectTextFile: Identifiable, Hashable {
-    let id: UUID
-    var relativePath: String
-    var content: String
-
-    var displayName: String {
-        let url = URL(fileURLWithPath: relativePath)
-        let withoutExtension = url.deletingPathExtension().lastPathComponent
-        return withoutExtension.isEmpty ? url.lastPathComponent : withoutExtension
-    }
-}
-
-struct MidiAsset: Identifiable, Hashable {
-    let id: UUID
-    var relativePath: String
-    var data: Data
-    var title: String? = nil
-
-    var displayName: String {
-        let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedTitle.isEmpty {
-            return trimmedTitle
-        }
-        let url = URL(fileURLWithPath: relativePath)
-        let withoutExtension = url.deletingPathExtension().lastPathComponent
-        let name = withoutExtension.isEmpty ? url.lastPathComponent : withoutExtension
-        return name.toTitleCase()
-    }
-}
+typealias SongStub = ProjectKit.SongStub
+typealias ProjectMetadata = ProjectKit.ProjectMetadata
+typealias ProjectVersionEntry = ProjectKit.ProjectVersionEntry
+typealias ProjectTextFile = ProjectKit.ProjectTextFile
+typealias MidiAsset = ProjectKit.MidiAsset
+typealias VersionSaveType = ProjectKit.VersionSaveType
 
 struct CueMapping: Identifiable, Codable, Hashable {
     let id: UUID

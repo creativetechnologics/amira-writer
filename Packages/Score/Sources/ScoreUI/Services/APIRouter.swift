@@ -1,5 +1,6 @@
 import AudioToolbox
 import Foundation
+import ProjectKit
 
 // MARK: - APIRouter
 
@@ -41,12 +42,10 @@ final class APIRouter {
         case ("POST", "/api/song/annotations/add"):  return addAnnotation(request)
         case ("POST", "/api/song/annotations/delete"): return deleteAnnotation(request)
         case ("GET", "/api/song/audio-clips"): return getAudioClips(request)
-        case ("GET", "/api/song/suno-splits"): return getSunoSplits(request)
         case ("GET", "/api/song/versions"):  return getVersions(request)
         case ("GET", "/api/soundfonts"):     return getSoundfonts(request)
         case ("GET", "/api/audio-units"):    return getAudioUnits(request)
         case ("GET", "/api/audio-units/state"): return await getAudioUnitState(request)
-        case ("GET", "/api/suno/status"):    return getSunoStatus(request)
 
         // Write endpoints
         case ("POST", "/api/song/notes/add"):         return addNotes(request)
@@ -56,7 +55,6 @@ final class APIRouter {
         case ("POST", "/api/song/tracks/rename"):     return renameTrack(request)
         case ("POST", "/api/song/instruments/set"):   return setInstrument(request)
         case ("POST", "/api/song/tempo/set"):         return setTempo(request)
-        case ("POST", "/api/song/suno-splits/set"):   return setSunoSplits(request)
         case ("POST", "/api/song/select"):            return selectSong(request)
         case ("POST", "/api/song/undo"):               return undoAction(request)
         case ("POST", "/api/song/redo"):               return redoAction(request)
@@ -79,12 +77,9 @@ final class APIRouter {
         case ("POST", "/api/export/wav"):     return await exportWav(request)
         case ("POST", "/api/export/rehearsal"): return await exportRehearsalTrack(request)
         case ("POST", "/api/export/stems"):    return await exportStems(request)
-        case ("POST", "/api/export/suno-chunks"): return await exportSunoChunks(request)
         case ("POST", "/api/import/musicxml"): return importMusicXML(request)
         case ("POST", "/api/project/save"):   return projectSave(request)
         case ("POST", "/api/project/open"):   return await projectOpen(request)
-        case ("POST", "/api/suno/run-cover"): return runSunoCover(request)
-
         // Version endpoints
         case ("POST", "/api/song/versions/snapshot"): return snapshotVersion(request)
         case ("POST", "/api/song/versions/rollback"): return rollbackVersion(request)
@@ -291,18 +286,6 @@ final class APIRouter {
         return .ok(APIAudioClipsResponse(clips: store.pianoRollAudioClips))
     }
 
-    private func getSunoSplits(_ req: HTTPRequest) -> HTTPResponse {
-        guard let store = requireStore() else { return .error(500, "Store unavailable") }
-        let chunks = store.computeSunoChunks().map { chunk in
-            APISunoChunkInfo(
-                startTick: chunk.startTick,
-                endTick: chunk.endTick,
-                durationSeconds: store.ticksToSeconds(chunk.endTick) - store.ticksToSeconds(chunk.startTick)
-            )
-        }
-        return .ok(APISunoSplitsResponse(splitTicks: store.sunoSplitTicks, chunks: chunks))
-    }
-
     private func getVersions(_ req: HTTPRequest) -> HTTPResponse {
         guard let (store, songPath) = requireSong() else { return .error(400, "No song selected") }
         let versions = store.versionHistory(for: songPath)
@@ -327,68 +310,6 @@ final class APIRouter {
             .filter { ["sf2", "sf3", "dls"].contains($0.fileExtension.lowercased()) }
             .map { APISoundfontEntry(relativePath: $0.relativePath, fileName: $0.fileName, fileSize: $0.fileSize) }
         return .ok(APISoundfontsResponse(entries: entries))
-    }
-
-    private func getSunoStatus(_ req: HTTPRequest) -> HTTPResponse {
-        guard let store = requireStore() else { return .error(500, "Store unavailable") }
-
-        struct SunoGenerationSummary: Encodable {
-            let id: String
-            let songPath: String?
-            let trackID: String?
-            let songIDs: [String]
-            let baseTitle: String?
-            let coverTitle: String?
-            let status: String
-            let resultMessage: String?
-            let downloadedFilePath: String?
-            let downloadedFilePaths: [String]
-            let errorMessage: String?
-            let createdAt: Date
-            let submissionIndex: Int?
-            let submissionCount: Int?
-        }
-
-        struct SunoStatusResponse: Encodable {
-            let isGenerating: Bool
-            let status: String
-            let autoUploadEnabled: Bool
-            let isUploading: Bool
-            let uploadStatus: String
-            let uploadQueueCount: Int
-            let selectedSongPath: String?
-            let generations: [SunoGenerationSummary]
-        }
-
-        let generations = store.sunoGenerations.prefix(20).map { generation in
-            SunoGenerationSummary(
-                id: generation.id.uuidString,
-                songPath: generation.songPath,
-                trackID: generation.trackID,
-                songIDs: generation.songIDs,
-                baseTitle: generation.baseTitle,
-                coverTitle: generation.coverTitle,
-                status: generation.status.rawValue,
-                resultMessage: generation.resultMessage,
-                downloadedFilePath: generation.downloadedFilePath,
-                downloadedFilePaths: generation.downloadedFilePaths,
-                errorMessage: generation.errorMessage,
-                createdAt: generation.createdAt,
-                submissionIndex: generation.submissionIndex,
-                submissionCount: generation.submissionCount
-            )
-        }
-
-        return .ok(SunoStatusResponse(
-            isGenerating: store.sunoIsGenerating,
-            status: store.sunoGenerateStatus,
-            autoUploadEnabled: store.sunoAutoUploadExportedWavs,
-            isUploading: store.sunoIsUploading,
-            uploadStatus: store.sunoUploadStatus,
-            uploadQueueCount: store.sunoUploadQueueCount,
-            selectedSongPath: store.selectedMidiAsset?.relativePath,
-            generations: Array(generations)
-        ))
     }
 
     private func getAudioUnits(_ req: HTTPRequest) -> HTTPResponse {
@@ -739,19 +660,6 @@ final class APIRouter {
         if let ks = body.keySignatures { store.pianoRollKeySignatures = ks; changed = true }
         if changed { store.isDirty = true }
         return .ok(APISuccessResponse("Tempo updated"))
-    }
-
-    private func setSunoSplits(_ req: HTTPRequest) -> HTTPResponse {
-        guard let store = requireStore() else { return .error(500, "Store unavailable") }
-        guard let body = req.decodeBody(APISetSunoSplitsRequest.self) else {
-            return .error(400, "Invalid request body. Expected {\"splitTicks\": [...]}")
-        }
-        if let negative = body.splitTicks.first(where: { $0 < 0 }) {
-            return .error(400, "splitTicks must be >= 0, got \(negative)")
-        }
-        store.sunoSplitTicks = body.splitTicks.sorted()
-        store.isDirty = true
-        return .ok(APISuccessResponse("Set \(store.sunoSplitTicks.count) suno split points"))
     }
 
     private func selectSong(_ req: HTTPRequest) -> HTTPResponse {
@@ -1111,11 +1019,6 @@ final class APIRouter {
         return .ok(APISuccessResponse(store.fullMixExportStatus))
     }
 
-    private func exportSunoChunks(_ req: HTTPRequest) async -> HTTPResponse {
-        _ = req
-        return .error(410, "Suno chunk export is deprecated. Use Export with auto-upload enabled to send WAVs to Suno.")
-    }
-
     private func importMusicXML(_ req: HTTPRequest) -> HTTPResponse {
         guard let store = requireStore() else { return .error(500, "Store unavailable") }
         struct Request: Codable { var filePath: String }
@@ -1158,11 +1061,6 @@ final class APIRouter {
 
         await store.loadProject(url: url)
         return .ok(APISuccessResponse("Opened project: \(body.path)"))
-    }
-
-    private func runSunoCover(_ req: HTTPRequest) -> HTTPResponse {
-        _ = req
-        return .error(410, "Suno cover generation is deprecated. Use Export with auto-upload enabled to send WAVs to Suno.")
     }
 
     // MARK: - Version Endpoints
@@ -1332,7 +1230,7 @@ final class APIRouter {
             var mode: String  // "soundFont" or "audioUnit"
         }
         guard let body = req.body,
-              let parsed = try? JSONDecoder().decode(ModeRequest.self, from: body) else {
+              let parsed = try? JSONCoders.makeDecoder().decode(ModeRequest.self, from: body) else {
             return .error(400, "Expected JSON body with 'mode': 'soundFont' or 'audioUnit'")
         }
         let newMode: InstrumentSourceType

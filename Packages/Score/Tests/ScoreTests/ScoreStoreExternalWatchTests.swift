@@ -118,7 +118,7 @@ struct ScoreStoreExternalWatchTests {
             return
         }
 
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.dateEncodingStrategy = .iso8601
         scene.versions[versionIndex].playbackJSON = try encoder.encode(OWSPlaybackSnapshot())
         scene.versions[versionIndex].noteCount = 0
@@ -241,7 +241,7 @@ private func waitUntil(
 private struct WatchTestTimeoutError: Error {}
 
 private func scoreMetadataEncoder() -> JSONEncoder {
-    let encoder = JSONEncoder()
+    let encoder = JSONCoders.makeEncoder()
     encoder.dateEncodingStrategy = .iso8601
     return encoder
 }

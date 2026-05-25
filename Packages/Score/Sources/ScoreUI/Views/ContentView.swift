@@ -354,7 +354,7 @@ struct ScoreSidebarView: View {
 
 @available(macOS 26.0, *)
 enum InspectorSectionID: String, CaseIterable, Identifiable {
-    case instruments, export, libretto, versions, files, suno
+    case instruments, export, libretto, versions, files
 
     var id: String { rawValue }
 
@@ -365,7 +365,6 @@ enum InspectorSectionID: String, CaseIterable, Identifiable {
         case .versions: return "Versions"
         case .files: return "Files"
         case .export: return "Export"
-        case .suno: return "Suno"
         }
     }
 
@@ -376,7 +375,6 @@ enum InspectorSectionID: String, CaseIterable, Identifiable {
         case .versions: return "clock.arrow.circlepath"
         case .files: return "folder"
         case .export: return "square.and.arrow.up"
-        case .suno: return "sparkles"
         }
     }
 }
@@ -386,7 +384,7 @@ struct ScoreInspectorView: View {
     @Bindable var store: ScoreStore
 
     @AppStorage("amira.score.inspector.activeSection") private var activeSection: String = "instruments"
-    private let tabOrder: [InspectorSectionID] = [.instruments, .export, .libretto, .versions, .files, .suno]
+    private let tabOrder: [InspectorSectionID] = [.instruments, .export, .libretto, .versions, .files]
 
     private var selectedSection: Binding<InspectorSectionID> {
         Binding(
@@ -427,8 +425,6 @@ struct ScoreInspectorView: View {
             FilesInspectorView(store: store)
         case .export:
             ExportInspectorView(store: store)
-        case .suno:
-            SunoInspectorView(store: store)
         }
     }
 
@@ -457,7 +453,6 @@ struct ScoreInspectorView: View {
         }
     }
 
-    // Legacy Suno UI removed — replaced by SunoInspectorView
 }
 
 // MARK: - Status Bar

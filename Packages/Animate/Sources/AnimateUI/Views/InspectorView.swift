@@ -1686,71 +1686,6 @@ struct InspectorView: View {
         )
     }
 
-    @ViewBuilder
-    private func labeledTextField(
-        _ title: String,
-        text: Binding<String>,
-        axis: Axis = .horizontal
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            TextField(title, text: text, axis: axis)
-                .textFieldStyle(.roundedBorder)
-        }
-    }
-
-    @ViewBuilder
-    private func labeledIntegerField(
-        _ title: String,
-        value: Binding<Int>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        TextField(title, value: value, format: IntegerFormatStyle<Int>().grouping(.never))
-                .textFieldStyle(.roundedBorder)
-        }
-    }
-
-    @ViewBuilder
-    private func labeledOptionalIntegerField(
-        _ title: String,
-        value: Binding<Int?>
-    ) -> some View {
-        let stringBinding = Binding<String>(
-            get: { value.wrappedValue.map(String.init) ?? "" },
-            set: { newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                value.wrappedValue = trimmed.isEmpty ? nil : Int(trimmed)
-            }
-        )
-
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            TextField(title, text: stringBinding)
-                .textFieldStyle(.roundedBorder)
-        }
-    }
-
-    @ViewBuilder
-    private func labeledDoubleField(
-        _ title: String,
-        value: Binding<Double>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            TextField(title, value: value, format: .number.precision(.fractionLength(1...2)))
-                .textFieldStyle(.roundedBorder)
-        }
-    }
-
     private func importBackground() {
         let panel = NSOpenPanel()
         panel.title = "Import Background Image"
@@ -1886,15 +1821,6 @@ struct InspectorView: View {
         }
 
         return (total, withPlacement, withPivot)
-    }
-
-    private func statusCapsule(title: String, color: Color) -> some View {
-        Text(title)
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(color.opacity(0.12), in: Capsule())
-            .foregroundStyle(color)
     }
 
 }

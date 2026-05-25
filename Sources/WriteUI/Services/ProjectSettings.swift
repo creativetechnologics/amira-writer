@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 /// Project-level settings stored inside the OWP bundle as JSON.
 /// Syncs between machines via SyncThing alongside the project data.
@@ -31,7 +32,7 @@ enum ProjectSettingsPersistence {
     static func load(from projectURL: URL) -> ProjectSettingsData {
         let url = settingsURL(for: projectURL)
         guard let data = try? Data(contentsOf: url) else { return ProjectSettingsData() }
-        return (try? JSONDecoder().decode(ProjectSettingsData.self, from: data)) ?? ProjectSettingsData()
+        return (try? JSONCoders.makeDecoder().decode(ProjectSettingsData.self, from: data)) ?? ProjectSettingsData()
     }
 
     static func save(_ settings: ProjectSettingsData, to projectURL: URL) {

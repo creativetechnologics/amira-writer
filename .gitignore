@@ -42,3 +42,4 @@ Packages/ProjectKit/.tmp-tests/
 # Stray Chromium profile data accidentally created at repo root
 /Default/
 /Local State
+.commandcode/

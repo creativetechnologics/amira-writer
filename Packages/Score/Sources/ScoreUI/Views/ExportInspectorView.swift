@@ -47,37 +47,6 @@ struct ExportInspectorView: View {
                 .disabled(store.pianoRollNotes.isEmpty || store.isExportingFullMix || store.isPresentingFullMixExportPanel)
             }
 
-            Toggle(isOn: Binding(
-                get: { store.sunoAutoUploadExportedWavs },
-                set: { store.sunoAutoUploadExportedWavs = $0 }
-            )) {
-                Label("Auto-upload exported WAVs to Suno", systemImage: "arrow.up.circle")
-                    .font(.caption)
-            }
-            .toggleStyle(.checkbox)
-            .disabled(store.isExportingFullMix || store.isBatchExporting)
-
-            if store.sunoIsUploading || store.sunoUploadQueueCount > 0 {
-                HStack(spacing: 6) {
-                    if store.sunoIsUploading {
-                        ProgressView()
-                            .controlSize(.mini)
-                    }
-                    Text(store.sunoUploadQueueCount > 0
-                         ? "\(store.sunoUploadStatus) \(store.sunoUploadQueueCount) queued."
-                         : store.sunoUploadStatus)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            } else if !store.sunoUploadStatus.isEmpty {
-                Text(store.sunoUploadStatus)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(2)
-            }
-
             if store.isExportingFullMix {
                 VStack(alignment: .leading, spacing: 3) {
                     ProgressView(value: store.fullMixExportProgress)

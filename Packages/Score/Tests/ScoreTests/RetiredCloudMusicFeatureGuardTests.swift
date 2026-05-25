@@ -43,11 +43,13 @@ struct RetiredCloudMusicFeatureGuardTests {
         #expect(found.isEmpty, "Retired cloud-music caches must stay removed: \(found)")
     }
 
-    @Test func packageResourcesStaySunoOnly() throws {
+    @Test func packageResourcesStayFreeOfRetiredCloudMusicHooks() throws {
         let packageText = try String(contentsOf: repoRoot.appendingPathComponent("Package.swift"))
         #expect(!packageText.contains("ace-step"))
         #expect(!packageText.contains("songbloom"))
         #expect(!packageText.contains("RunPod"))
         #expect(!packageText.contains("runpod"))
+        #expect(!packageText.contains("suno"))
+        #expect(!packageText.contains("Suno"))
     }
 }

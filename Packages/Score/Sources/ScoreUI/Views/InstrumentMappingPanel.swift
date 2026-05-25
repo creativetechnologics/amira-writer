@@ -241,30 +241,11 @@ struct ScoreInstrumentSummaryPanel: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Playback Engine")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .tracking(1.2)
-                        .foregroundStyle(OperaChromeTheme.textTertiary)
-
-                    HStack(spacing: 6) {
-                        OperaChromeActionButton(
-                            title: "Lightweight",
-                            systemImage: "leaf",
-                            isSelected: store.masterInstrumentMode == .soundFont
-                        ) {
-                            store.setMasterInstrumentMode(.soundFont)
-                        }
-                        OperaChromeActionButton(
-                            title: "Heavyweight",
-                            systemImage: "waveform",
-                            isSelected: store.masterInstrumentMode == .audioUnit
-                        ) {
-                            store.setMasterInstrumentMode(.audioUnit)
-                        }
-                    }
-                    .help(masterToggleHelp)
-                }
+                PlaybackEngineSelectorView(
+                    masterInstrumentMode: store.masterInstrumentMode,
+                    helpText: masterToggleHelp,
+                    onSelectMode: store.setMasterInstrumentMode
+                )
 
                 Button {
                     selectedTrackFilter.removeAll()
@@ -816,61 +797,15 @@ struct InstrumentMappingPanel: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Playback Engine")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .tracking(1.2)
-                        .foregroundStyle(OperaChromeTheme.textTertiary)
-
-                    HStack(spacing: 6) {
-                        OperaChromeActionButton(
-                            title: "Lightweight",
-                            systemImage: "leaf",
-                            isSelected: store.masterInstrumentMode == .soundFont
-                        ) {
-                            store.setMasterInstrumentMode(.soundFont)
-                        }
-                        OperaChromeActionButton(
-                            title: "Heavyweight",
-                            systemImage: "waveform",
-                            isSelected: store.masterInstrumentMode == .audioUnit
-                        ) {
-                            store.setMasterInstrumentMode(.audioUnit)
-                        }
-                    }
-                    .help(masterToggleHelp)
-                }
+                PlaybackEngineSelectorView(
+                    masterInstrumentMode: store.masterInstrumentMode,
+                    helpText: masterToggleHelp,
+                    onSelectMode: store.setMasterInstrumentMode
+                )
                 .padding(.bottom, 6)
 
                 VStack(spacing: 2) {
-                    HStack(spacing: 6) {
-                        // Placeholder for volume knob column
-                        Image(systemName: "circle.grid.cross")
-                            .foregroundStyle(Color.white.opacity(0.55))
-                            .frame(width: 18)
-
-                        Text("All Tracks")
-                            .font(.caption)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        Spacer(minLength: 8)
-
-                        // Placeholder for speaker icon column (matches instrument rows)
-                        Image(systemName: "speaker.wave.2.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.clear)
-                            .padding(.leading, 4)
-                            .padding(.trailing, 1)
-                    }
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(selectedTrackFilter.isEmpty ? Color.white.opacity(0.10) : Color.clear)
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture {
+                    AllTracksFilterRow(isSelected: selectedTrackFilter.isEmpty) {
                         selectedTrackFilter.removeAll()
                         store.clearSolo()
                         selectedEntryID = nil
@@ -1019,24 +954,15 @@ struct InstrumentMappingPanel: View {
                     hasChangedLocation: $hasChangedLocation
                 ))
 
-            // Quick action buttons
-            HStack(spacing: 6) {
-                Button(action: { activeSheet = .expressionMapEditor }) {
-                    Label("Expr Map", systemImage: "music.note.list")
-                }
-                .controlSize(.small)
-
-                if let entry = currentSelectedEntry, let key = entry.mappingKeys.first {
-                    Button(action: {
+            InstrumentMappingQuickActionsView(
+                canOpenFX: currentSelectedEntry?.mappingKeys.first != nil,
+                onOpenExpressionMap: { activeSheet = .expressionMapEditor },
+                onOpenFX: {
+                    if let key = currentSelectedEntry?.mappingKeys.first {
                         activeSheet = .fxChain(channelKey: key)
-                    }) {
-                        Label("FX", systemImage: "waveform.path.ecg")
                     }
-                    .controlSize(.small)
                 }
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            )
 
             if let selectedEntry = currentSelectedEntry {
                 mappingEditor(entry: selectedEntry)
@@ -1178,7 +1104,10 @@ struct InstrumentMappingPanel: View {
                     .pickerStyle(.segmented)
 
                     if store.mapping(for: profile).trackRole == .vocal {
-                        voiceConfigSection(profile: profile, keyTargets: keyTargets)
+                        VoiceConfigSectionView(
+                            gender: store.mapping(for: profile).resolvedVocalGender,
+                            onSetGender: { store.setMappingVocalGender(for: keyTargets, gender: $0) }
+                        )
                     }
 
                     instrumentSection(mapping: mapping, keyTargets: keyTargets)
@@ -1394,32 +1323,6 @@ struct InstrumentMappingPanel: View {
                 )
             }
         }
-    }
-
-    // MARK: - Voice Configuration (Vocal Tracks)
-
-    @ViewBuilder
-    private func voiceConfigSection(profile: ProjectChannelProfile, keyTargets: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Gender")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Picker("Gender", selection: Binding(
-                    get: { store.mapping(for: profile).resolvedVocalGender },
-                    set: { store.setMappingVocalGender(for: keyTargets, gender: $0) }
-                )) {
-                    ForEach(VocalGender.allCases) { gender in
-                        Text(gender.title).tag(gender)
-                    }
-                }
-                .pickerStyle(.menu)
-            }
-        }
-        .padding(8)
-        .background(Color.blue.opacity(0.05))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 

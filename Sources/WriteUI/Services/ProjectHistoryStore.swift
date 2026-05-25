@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 struct ProjectFileSnapshot: Codable, Hashable, Sendable {
     var modificationDate: Date
@@ -127,14 +128,14 @@ final class ProjectHistoryStore: @unchecked Sendable {
     }
 
     private static let encoder: JSONEncoder = {
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return encoder
     }()
 
     private static let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
+        let decoder = JSONCoders.makeDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }()

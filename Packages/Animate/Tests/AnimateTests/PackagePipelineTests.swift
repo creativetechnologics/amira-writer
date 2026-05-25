@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import ProjectKit
 @testable import AnimateUI
 
 @available(macOS 26.0, *)
@@ -151,7 +152,7 @@ final class PackagePipelineTests: XCTestCase {
 
         let writtenManifestURL = plan.stagingDirectoryURL.appendingPathComponent("character-package.json")
         let manifestData = try Data(contentsOf: writtenManifestURL)
-        let writtenManifest = try JSONDecoder().decode(CharacterPackageManifest.self, from: manifestData)
+        let writtenManifest = try JSONCoders.makeDecoder().decode(CharacterPackageManifest.self, from: manifestData)
         XCTAssertEqual(writtenManifest.slug, "luke-hero")
         XCTAssertEqual(writtenManifest.id, packageID)
     }
@@ -1651,8 +1652,8 @@ final class PackagePipelineTests: XCTestCase {
     }
 
     private func writeManifest(_ manifest: CharacterPackageManifest, to directory: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let encoder = JSONCoders.makeEncoder()
+        encoder.outputFormatting.insert(.sortedKeys)
         let data = try encoder.encode(manifest)
         try data.write(to: directory.appendingPathComponent("character-package.json"))
     }

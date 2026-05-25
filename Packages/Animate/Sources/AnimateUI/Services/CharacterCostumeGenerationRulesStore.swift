@@ -177,7 +177,7 @@ enum CharacterCostumeGenerationRulesStore {
         let url = ProjectPaths(root: projectRoot).characterCostumeGenerationRulesJSON
         guard FileManager.default.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(CharacterCostumeGenerationRules.self, from: data) else {
+              let decoded = try? JSONCoders.makeDecoder().decode(CharacterCostumeGenerationRules.self, from: data) else {
             let fallback = CharacterCostumeGenerationRules.default.normalized()
             try? save(fallback, projectRoot: projectRoot)
             return fallback
@@ -195,7 +195,7 @@ enum CharacterCostumeGenerationRulesStore {
         if !FileManager.default.fileExists(atPath: directory.path) {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
-        let encoder = JSONEncoder()
+        let encoder = JSONCoders.makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(rules.normalized())
         try data.write(to: url, options: .atomic)
