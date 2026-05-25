@@ -165,6 +165,8 @@ struct AnimatePageView: View {
         timelinePaneHeight = Double(min(max(proposedHeight, minTimelineHeight), maxTimelineHeight))
     }
 
+    // MARK: - Inspector Tab
+
     private func inspectorPanel(for scene: AnimationScene) -> some View {
         VSplitView {
             sceneInspectorDeck(for: scene)
@@ -371,6 +373,8 @@ struct AnimatePageView: View {
         }
     }
 
+    // MARK: - Canvas Tab
+
     private func previewDeck(for scene: AnimationScene) -> some View {
         let segments = shotSegmentationService.shotSegments(for: scene)
         let activeShot = segments.first(where: \.containsCurrentFrame)
@@ -486,6 +490,8 @@ struct AnimatePageView: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
+
+    // MARK: - Timeline Tab
 
     private func timelineDeck(for scene: AnimationScene) -> some View {
         let audioSummary = sceneAudioTimelineSummary(for: scene)
@@ -1219,6 +1225,8 @@ struct AnimatePageView: View {
         selectedTimelineShot(in: scene)
     }
 
+    // MARK: - Transport Bar
+
     private func planningDock(for scene: AnimationScene) -> some View {
         VStack(spacing: 0) {
             workspaceHeader(
@@ -1519,6 +1527,8 @@ struct AnimatePageView: View {
             }
         }
     }
+
+    // MARK: - Scene Graph
 
     private func sceneGraph(for scene: AnimationScene) -> some View {
         let cast = sceneCharacters(for: scene)
