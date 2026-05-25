@@ -199,7 +199,7 @@ private func parseGitLogOutput(_ output: String?) -> [GitCommitEntry] {
             let shortHash = String(parts[1])
             let dateString = String(parts[2])
             let subject = String(parts[3]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let committedAt = ISO8601DateFormatter().date(from: dateString) else { return nil }
+            guard let committedAt = AmiraDateFormatter.parse(dateString) else { return nil }
             return GitCommitEntry(
                 hash: hash,
                 shortHash: shortHash,

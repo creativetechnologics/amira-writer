@@ -327,21 +327,12 @@ struct OWSSongDocument: Identifiable, Codable, @unchecked Sendable {
 
     // MARK: - JSON Parsing Helpers
 
-    private nonisolated(unsafe) static let iso8601Full: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-    private nonisolated(unsafe) static let iso8601Basic: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
+
 
     static func parseDate(_ value: Any?) -> Date {
         guard let str = value as? String else { return Date() }
-        if let d = iso8601Full.date(from: str) { return d }
-        return iso8601Basic.date(from: str) ?? Date()
+        if let d = AmiraDateFormatter.iso8601Full.date(from: str) { return d }
+        return AmiraDateFormatter.iso8601.date(from: str) ?? Date()
     }
 
     static func parseUUID(_ value: Any?) -> UUID? {
@@ -445,7 +436,7 @@ struct OWSSongDocument: Identifiable, Codable, @unchecked Sendable {
         root["title"] = doc.title
         root["canonicalTitle"] = doc.canonicalTitle
         root["notes"] = doc.notes
-        root["updatedAt"] = iso8601Basic.string(from: doc.updatedAt)
+        root["updatedAt"] = AmiraDateFormatter.iso8601.string(from: doc.updatedAt)
 
         // Patch instrument mappings
         if !doc.instrumentMappings.isEmpty,
@@ -462,7 +453,7 @@ struct OWSSongDocument: Identifiable, Codable, @unchecked Sendable {
             }) {
                 // Update existing version
                 versionArray[idx]["lyrics"] = docVersion.lyrics
-                versionArray[idx]["updatedAt"] = iso8601Basic.string(from: docVersion.updatedAt)
+                versionArray[idx]["updatedAt"] = AmiraDateFormatter.iso8601.string(from: docVersion.updatedAt)
 
                 // Patch playback snapshot if provided and this is the active version
                 if let playback, docVersion.id == doc.activeVersionID {
@@ -668,8 +659,7 @@ enum OWPProjectIO {
     }
 
     private static func workspaceSceneDocumentObject(from document: OWSSongDocument, playback: OWSPlaybackSnapshot?) -> [String: Any] {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
+        let formatter = AmiraDateFormatter.iso8601
         let encoder = JSONCoders.makeEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
@@ -5539,7 +5529,7 @@ final class ScoreStore {
             "lowEnergyWindowCount": report.lowEnergyWindowCount,
             "abruptDropoutCount": report.abruptDropoutCount,
             "nonSilentWindowPercent": report.nonSilentWindowPercent,
-            "checkedAt": ISO8601DateFormatter().string(from: Date())
+            "checkedAt": AmiraDateFormatter.iso8601.string(from: Date())
         ]
         do {
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])

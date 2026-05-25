@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 import simd
 
 /// Records real-time audio viseme analysis into a MotionClip.
@@ -67,7 +68,7 @@ final class AudioLipSyncRecorder {
             }
         }
 
-        let dateStr = ISO8601DateFormatter().string(from: startTime ?? Date())
+        let dateStr = AmiraDateFormatter.iso8601.string(from: startTime ?? Date())
 
         return MotionClip(
             id: UUID(),

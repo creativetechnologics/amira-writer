@@ -1392,7 +1392,7 @@ struct ReferenceContractResolver {
             )
             if score < 10 { continue }
 
-            let updatedAt = (item["updatedAt"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
+            let updatedAt = (item["updatedAt"] as? String).flatMap { AmiraDateFormatter.parse($0) }
             let label = firstNonEmpty(summary, shortCaption, origin, group, spec.backgroundName) ?? "liked semantic reference"
             let spatialGuidance: String? = {
                 switch candidateSpatialContext {

@@ -97,21 +97,9 @@ struct OWSSongDocument: Identifiable, Hashable, Sendable {
 
     // MARK: - Parse from raw JSON (extracts only lightweight fields)
 
-    nonisolated(unsafe) static let isoFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-
-    nonisolated(unsafe) static let isoFormatterBasic: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f
-    }()
-
     static func parseDate(_ value: Any?) -> Date {
         guard let str = value as? String else { return Date() }
-        return isoFormatter.date(from: str) ?? isoFormatterBasic.date(from: str) ?? Date()
+        return AmiraDateFormatter.iso8601Full.date(from: str) ?? AmiraDateFormatter.iso8601.date(from: str) ?? Date()
     }
 
     static func parseUUID(_ value: Any?) -> UUID? {
@@ -174,7 +162,7 @@ struct OWSSongDocument: Identifiable, Hashable, Sendable {
         root["title"] = doc.title
         root["canonicalTitle"] = doc.canonicalTitle
         root["notes"] = doc.notes
-        root["updatedAt"] = isoFormatter.string(from: doc.updatedAt)
+        root["updatedAt"] = AmiraDateFormatter.iso8601Full.string(from: doc.updatedAt)
 
         // Patch activeVersionID
         root["activeVersionID"] = doc.activeVersionID?.uuidString
@@ -187,7 +175,7 @@ struct OWSSongDocument: Identifiable, Hashable, Sendable {
                     ($0["id"] as? String) == docVersion.id.uuidString
                 }) {
                     versionArray[idx]["lyrics"] = docVersion.lyrics
-                    versionArray[idx]["updatedAt"] = isoFormatter.string(from: docVersion.updatedAt)
+                    versionArray[idx]["updatedAt"] = AmiraDateFormatter.iso8601Full.string(from: docVersion.updatedAt)
                 }
             }
 
@@ -197,8 +185,8 @@ struct OWSSongDocument: Identifiable, Hashable, Sendable {
                 var newVersionDict: [String: Any] = [
                     "id": docVersion.id.uuidString,
                     "label": docVersion.label,
-                    "createdAt": isoFormatter.string(from: docVersion.createdAt),
-                    "updatedAt": isoFormatter.string(from: docVersion.updatedAt),
+                    "createdAt": AmiraDateFormatter.iso8601Full.string(from: docVersion.createdAt),
+                    "updatedAt": AmiraDateFormatter.iso8601Full.string(from: docVersion.updatedAt),
                     "lyrics": docVersion.lyrics,
                     "saveType": docVersion.saveType.rawValue,
                     "isBookmarked": docVersion.isBookmarked,
@@ -236,7 +224,7 @@ struct OWSSongDocument: Identifiable, Hashable, Sendable {
 
         root["title"] = title
         root["canonicalTitle"] = canonicalTitle
-        root["updatedAt"] = isoFormatter.string(from: updatedAt)
+        root["updatedAt"] = AmiraDateFormatter.iso8601Full.string(from: updatedAt)
 
         let patched = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try patched.write(to: url, options: .atomic)
@@ -490,13 +478,13 @@ enum OWPProjectIO {
             "title": document.title,
             "canonicalTitle": document.canonicalTitle,
             "notes": document.notes,
-            "updatedAt": OWSSongDocument.isoFormatter.string(from: document.updatedAt),
+            "updatedAt": AmiraDateFormatter.iso8601Full.string(from: document.updatedAt),
             "versions": document.versions.map { version in
                 var result: [String: Any] = [
                     "id": version.id.uuidString,
                     "label": version.label,
-                    "createdAt": OWSSongDocument.isoFormatter.string(from: version.createdAt),
-                    "updatedAt": OWSSongDocument.isoFormatter.string(from: version.updatedAt),
+                    "createdAt": AmiraDateFormatter.iso8601Full.string(from: version.createdAt),
+                    "updatedAt": AmiraDateFormatter.iso8601Full.string(from: version.updatedAt),
                     "lyrics": version.lyrics,
                     "saveType": version.saveType.rawValue,
                     "isBookmarked": version.isBookmarked,
@@ -1123,7 +1111,7 @@ final class ScriptStore {
         let versionID = UUID()
         let sceneID = UUID()
         let now = Date()
-        let isoNow = OWSSongDocument.isoFormatter.string(from: now)
+        let isoNow = AmiraDateFormatter.iso8601Full.string(from: now)
 
         let newDoc = OWSSongDocument(
             songID: sceneID,

@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 /// Snapshot of a virtual-camera position inside the 3D map viewer, attached
 /// to a Gemini image-generation draft so the model gets a structured brief
@@ -64,7 +65,7 @@ struct MapViewPreset: Codable, Hashable, Sendable {
         }
 
         return MapViewPreset(
-            createdAtISO: (dict["created_at"] as? String) ?? ISO8601DateFormatter().string(from: Date()),
+            createdAtISO: (dict["created_at"] as? String) ?? AmiraDateFormatter.iso8601.string(from: Date()),
             name: (dict["name"] as? String) ?? "Map view",
             sourceMap: dict["source_map"] as? String,
             positionMetersXYZ: da(camera, "position_m"),

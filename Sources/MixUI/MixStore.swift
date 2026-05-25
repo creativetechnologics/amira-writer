@@ -6,20 +6,8 @@ import ProjectKit
 import QuartzCore
 
 private enum MixDateParser {
-    nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-
-    nonisolated(unsafe) private static let basic: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
-
     static func parse(_ value: String) -> Date? {
-        fractional.date(from: value) ?? basic.date(from: value)
+        AmiraDateFormatter.iso8601Full.date(from: value) ?? AmiraDateFormatter.iso8601.date(from: value)
     }
 }
 

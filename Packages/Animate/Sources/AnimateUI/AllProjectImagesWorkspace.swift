@@ -232,12 +232,8 @@ enum ImageLibraryMetadataSidecarService {
             .replacingOccurrences(of: "&amp;", with: "&")
     }
 
-    nonisolated(unsafe) private static let sharedISO8601Formatter: ISO8601DateFormatter = {
-        ISO8601DateFormatter()
-    }()
-
     private static func iso8601Formatter() -> ISO8601DateFormatter {
-        sharedISO8601Formatter
+        AmiraDateFormatter.iso8601
     }
 }
 

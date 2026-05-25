@@ -77,14 +77,10 @@ enum ProjectDatabaseBridge {
         return metadata
     }
 
-    nonisolated(unsafe) private static let debugLogFormatter: ISO8601DateFormatter = {
-        ISO8601DateFormatter()
-    }()
-
     private static func debugLog(_ message: String) {
         NSLog("%@", message)
         #if DEBUG
-        let line = "[\(debugLogFormatter.string(from: Date()))] \(message)\n"
+        let line = "[\(AmiraDateFormatter.iso8601.string(from: Date()))] \(message)\n"
         let logURL = URL(fileURLWithPath: "/tmp/animate-debug.log")
         if let handle = try? FileHandle(forWritingTo: logURL) {
             handle.seekToEndOfFile()

@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import ProjectKit
 
 final class RunPodMouthSyncLogger: @unchecked Sendable {
     static let shared = RunPodMouthSyncLogger()
@@ -609,7 +610,7 @@ final class RunPodMouthSyncService: ObservableObject {
                 let info: [String: Any] = [
                     "feature": "musetalk",
                     "podID": podID,
-                    "timestamp": ISO8601DateFormatter().string(from: Date()),
+                    "timestamp": AmiraDateFormatter.iso8601.string(from: Date()),
                     "pid": ProcessInfo.processInfo.processIdentifier
                 ]
                 if let data = try? JSONSerialization.data(withJSONObject: info) {

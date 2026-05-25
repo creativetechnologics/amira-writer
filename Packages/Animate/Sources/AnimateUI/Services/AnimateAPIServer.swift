@@ -2370,7 +2370,7 @@ final class AnimateAPIRouter {
     }
 
     private func isoString(_ date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
+        AmiraDateFormatter.iso8601.string(from: date)
     }
 
     private func apiError(_ message: String) -> NSError {
@@ -2447,8 +2447,7 @@ final class AnimateAPIRouter {
     }
 
     private func encodeMap3DSnapshot(_ snapshot: Map3DPipelineRunner.Snapshot) -> [String: Any] {
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let iso = AmiraDateFormatter.iso8601Full
         var payload: [String: Any] = [
             "state": snapshot.state.rawValue,
             "tail_log": snapshot.tailLog

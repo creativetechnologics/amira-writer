@@ -5156,12 +5156,7 @@ struct PlacesWorldBatchMonitorSnapshot {
     }
 
     private static func parsedDate(_ string: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: string) { return date }
-        let standard = ISO8601DateFormatter()
-        standard.formatOptions = [.withInternetDateTime]
-        return standard.date(from: string)
+        AmiraDateFormatter.parse(string)
     }
 
     private struct ParsedBatchMetadata {

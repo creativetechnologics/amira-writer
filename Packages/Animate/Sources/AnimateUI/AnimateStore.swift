@@ -7300,7 +7300,7 @@ hydrateRunPodSettings()
                 let normalizedCanonLibrary = persistedPlacesWorldMapCanonLibrary(worldMapCanonLibrary)
                 var canonPayload = placesWorldMapCanonRawPayload
                 canonPayload["schemaVersion"] = 1
-                canonPayload["updatedAt"] = ISO8601DateFormatter().string(from: Date())
+                canonPayload["updatedAt"] = AmiraDateFormatter.iso8601.string(from: Date())
 
                 var generatedRecordsPayload: [String: [String: Any]] = [:]
                 for override in normalizedCanonLibrary.recordOverrides {
@@ -7308,7 +7308,7 @@ hydrateRunPodSettings()
                     var entry: [String: Any] = [
                         "stablePath": override.canonicalPath,
                         "filenameStem": URL(fileURLWithPath: override.canonicalPath).deletingPathExtension().lastPathComponent,
-                        "updatedAt": ISO8601DateFormatter().string(from: override.updatedAt),
+                        "updatedAt": AmiraDateFormatter.iso8601.string(from: override.updatedAt),
                     ]
                     if let fingerprint = trimmedOrNil(override.contentFingerprint) {
                         entry["contentFingerprint"] = fingerprint
@@ -7339,7 +7339,7 @@ hydrateRunPodSettings()
                         entry["mapPlacementStatus"] = status
                     }
                     if let confirmedAt = override.mapPlacementConfirmedAt {
-                        entry["mapPlacementConfirmedAt"] = ISO8601DateFormatter().string(from: confirmedAt)
+                        entry["mapPlacementConfirmedAt"] = AmiraDateFormatter.iso8601.string(from: confirmedAt)
                     }
                     if let buildingAnchorNodeID = override.buildingAnchorNodeID {
                         entry["buildingAnchorNodeID"] = buildingAnchorNodeID.uuidString.uppercased()
@@ -7391,7 +7391,7 @@ hydrateRunPodSettings()
     }
 
     private func saveCanonicalSceneAnimationState(projectURL: URL, encoder: JSONEncoder) throws {
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = AmiraDateFormatter.iso8601.string(from: Date())
         let descriptorsByRelativePath = Dictionary(
             uniqueKeysWithValues: ScenePackageStore.discover(in: projectURL).map {
                 (ScenePackageStore.normalizeProjectRelativePath($0.projectRelativePath), $0)
@@ -8740,7 +8740,7 @@ hydrateRunPodSettings()
         let animateURL = try requireAnimateURL()
         guard let charIndex = characters.firstIndex(where: { $0.id == characterID }) else { return "" }
 
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = AmiraDateFormatter.iso8601.string(from: Date())
             .replacingOccurrences(of: ":", with: "")
         let filename = "\(filenameStem)-\(timestamp).png"
         let storedURL = try assetManager.writeCharacterImageData(
@@ -8887,7 +8887,7 @@ hydrateRunPodSettings()
         let animateURL = try requireAnimateURL()
         guard let placeIndex = backgrounds.firstIndex(where: { $0.id == placeID }) else { return "" }
 
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = AmiraDateFormatter.iso8601.string(from: Date())
             .replacingOccurrences(of: ":", with: "")
         let filename = "\(filenameStem)-\(timestamp).png"
         let placeSlug = PlacesScriptIndexService.fileStem(for: backgrounds[placeIndex].name)
@@ -8968,7 +8968,7 @@ hydrateRunPodSettings()
             .appendingPathComponent(kind.directoryName)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = AmiraDateFormatter.iso8601.string(from: Date())
             .replacingOccurrences(of: ":", with: "")
         let filename = "\(timestamp)-\(UUID().uuidString).png"
         let storedURL = directory.appendingPathComponent(filename)
@@ -9285,15 +9285,11 @@ hydrateRunPodSettings()
     }
 
     private var batchStatusFractionalDateFormatter: ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
+        AmiraDateFormatter.iso8601Full
     }
 
     private var batchStatusDateFormatter: ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
+        AmiraDateFormatter.iso8601
     }
 
     // MARK: - Inspiration Reference Image
@@ -10771,7 +10767,7 @@ hydrateRunPodSettings()
     ) throws -> CharacterLookDevelopmentVariant {
         let animateURL = try requireAnimateURL()
 
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = AmiraDateFormatter.iso8601.string(from: Date())
             .replacingOccurrences(of: ":", with: "")
         let filename = "\(filenameStem)-\(timestamp).png"
         let storedURL = try assetManager.writeCharacterImageData(
@@ -11415,7 +11411,7 @@ hydrateRunPodSettings()
         }
 
         let slot = characters[charIndex].lookDevelopmentSlots[slotIndex]
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = AmiraDateFormatter.iso8601.string(from: Date())
             .replacingOccurrences(of: ":", with: "")
         let filename = "\(slot.key)-\(timestamp).png"
         let storedURL = try assetManager.writeCharacterImageData(
@@ -13322,7 +13318,7 @@ hydrateRunPodSettings()
             .appendingPathComponent(recordID.uuidString.lowercased())
             .appendingPathComponent(workflow.rawValue)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+        let timestamp = AmiraDateFormatter.compact(Date())
         let storedURL = directory.appendingPathComponent("\(filenameStem)-\(timestamp).png")
         try data.write(to: storedURL)
         try writeGenerationMetadata(
@@ -13408,7 +13404,7 @@ hydrateRunPodSettings()
         }
 
         let animateURL = try requireAnimateURL()
-        let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+        let timestamp = AmiraDateFormatter.compact(Date())
         let outputRoot = ProjectPaths(root: animateURL.deletingLastPathComponent()).animateBackgroundLibraryEdits
             .appendingPathComponent("batches")
             .appendingPathComponent("\(timestamp)-\(workflow.rawValue)-edits", isDirectory: true)
@@ -16914,9 +16910,7 @@ hydrateRunPodSettings()
     }
 
     private static func apiCostumeGenerationTimestamp(from date: Date) -> String {
-        ISO8601DateFormatter()
-            .string(from: date)
-            .replacingOccurrences(of: ":", with: "")
+        AmiraDateFormatter.iso8601.string(from: date).replacingOccurrences(of: ":", with: "")
     }
 
     /// Returns camera shot types required for a given place based on scenes that use it.
@@ -17640,7 +17634,7 @@ hydrateRunPodSettings()
 
     private func isoDate(from value: Any?) -> Date? {
         guard let string = trimmedOrNil(value as? String) else { return nil }
-        return ISO8601DateFormatter().date(from: string)
+        return AmiraDateFormatter.parse(string)
     }
 
     private func worldMapPoint(from value: Any?) -> WorldMapPoint? {
@@ -17923,7 +17917,7 @@ hydrateRunPodSettings()
     ) {
         guard let animateDir = animateURL else { return }
         let payload: [String: Any] = [
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "timestamp": AmiraDateFormatter.iso8601.string(from: Date()),
             "action": action,
             "recordID": record.id.uuidString.uppercased(),
             "activePath": record.activePath,
@@ -18801,10 +18795,7 @@ hydrateRunPodSettings()
         let backupsURL = rigURL.deletingLastPathComponent().appendingPathComponent("backups")
         try FileManager.default.createDirectory(at: backupsURL, withIntermediateDirectories: true)
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let timestamp = formatter.string(from: Date())
-            .replacingOccurrences(of: ":", with: "-")
+        let timestamp = AmiraDateFormatter.compact(Date())
         let versionLabel = max(originalSchemaVersion, 0)
         let backupURL = backupsURL.appendingPathComponent("rig.pre-migration.v\(versionLabel).\(timestamp).json")
         try originalData.write(to: backupURL, options: .atomic)

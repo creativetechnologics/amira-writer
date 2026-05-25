@@ -1,4 +1,5 @@
 import Foundation
+import ProjectKit
 
 /// Integration with Tencent HY-Motion-1.0 for text-to-motion generation
 /// Uses the HuggingFace Space Gradio API as the inference backend
@@ -277,7 +278,7 @@ final class HunyuanMotionService: Sendable {
             "durationSeconds": result.durationSeconds,
             "seed": result.seed,
             "sourceURL": fbxURL.absoluteString,
-            "downloadedAt": ISO8601DateFormatter().string(from: Date()),
+            "downloadedAt": AmiraDateFormatter.iso8601.string(from: Date()),
             "provider": "HY-Motion-1.0 via HuggingFace Space"
         ]
         if let data = try? JSONSerialization.data(withJSONObject: metadata, options: .prettyPrinted) {

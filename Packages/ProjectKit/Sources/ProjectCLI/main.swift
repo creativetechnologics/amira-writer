@@ -366,8 +366,6 @@ struct ProjectCLI {
     }
 
     private static func isoString(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        AmiraDateFormatter.iso8601Full.string(from: date)
     }
 }

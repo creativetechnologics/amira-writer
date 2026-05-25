@@ -498,8 +498,7 @@ enum ImagePreferenceProfileService {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(artifact)
         try data.write(to: dir.appendingPathComponent("latest.json"), options: .atomic)
-        let stamp = ISO8601DateFormatter().string(from: artifact.generatedAt)
-            .replacingOccurrences(of: ":", with: "")
+        let stamp = AmiraDateFormatter.compact(artifact.generatedAt)
         try data.write(to: dir.appendingPathComponent("profile-\(stamp).json"), options: .atomic)
     }
 

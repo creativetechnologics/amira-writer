@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ProjectKit
 import SwiftUI
 import WebKit
 import os.log
@@ -464,7 +465,7 @@ final class Map3DDiagnostics: ObservableObject {
         let fm = FileManager.default
         let desktop = fm.urls(for: .desktopDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop")
-        let ts = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let ts = AmiraDateFormatter.compact(Date())
         let target = desktop.appendingPathComponent("map3d-diagnostics-\(ts).log")
         do {
             try joinedText.write(to: target, atomically: true, encoding: .utf8)
