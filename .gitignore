@@ -19,15 +19,36 @@ build.err
 # Claude Code per-machine session state
 .claude/
 
+# Other AI agent tool directories
+.codex/
+.codex-kimi-companion/
+.codex-kimi-share/
+.commandcode/
+.firecrawl/
+
 # Heavy research / demo outputs — kept on disk, not in git
 3D\ Research/
+Animation\ Research/
 Research/
+amira_automation_strategy_packet/
+previs-workshop/
 demos/
 Scripts/3d-map-pipeline/work/
 
 # Ephemeral demo screenshots dumped at repo root
 /amira-world-map-demo*.png
 /world-map-demo*.png
+/luke-visual-hull-viewer.png
+/amira-writer-ui-smoke*.png
+
+# AI agent artifacts
+LIBRETTO-AGENT-PROMPT.txt
+/Local\ State
+/api.txt
+
+# Misc research notes
+/image_intelligence_architecture_plan.md
+/LORA\ Gemini\ Info.md
 
 # Local server / pipeline logs
 *.log
