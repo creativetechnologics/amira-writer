@@ -61,11 +61,11 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         case sequencer
     }
 
-    private let audioQueue = DispatchQueue(label: "com.amira.score.playback", qos: .userInitiated)
+    let audioQueue = DispatchQueue(label: "com.amira.score.playback", qos: .userInitiated)
     /// Dedicated serial queue for AUv3 instantiation. Third-party instruments can take
     /// seconds to spin up their out-of-process host; keep that wait off the engine queue.
     private let audioUnitInstantiationQueue = DispatchQueue(label: "com.amira.score.audio-unit-instantiation", qos: .userInitiated)
-    private var engine = AVAudioEngine()
+    var engine = AVAudioEngine()
     /// Recreated for each playback session to guarantee clean tempo state.
     /// AVAudioSequencer can retain stale internal tempo maps across load() calls.
     private var sequencer: AVAudioSequencer?
@@ -142,18 +142,12 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     /// Base track pans (before automation), used as scale factors
     private var automationTrackPans: [UUID: Float] = [:]
 
-    // MARK: - Metronome
-    private var metronomeNode: AVAudioPlayerNode?
-    private var metronomeDownbeatBuffer: AVAudioPCMBuffer?
-    private var metronomeUpbeatBuffer: AVAudioPCMBuffer?
-    private var metronomeEnabled: Bool = false
-    private var metronomeVolume: Float = 0.7
-    private var metronomeCountInBars: Int = 0
-    /// Time signatures for metronome accent pattern. Set by ScoreStore before playback.
-    nonisolated(unsafe) var metronomeTimeSignatures: [TimeSignatureEvent] = []
     /// A/B loop region in ticks. When set, loop wraps within this range instead of the full song.
     nonisolated(unsafe) var loopRegionStartTick: Int? = nil
     nonisolated(unsafe) var loopRegionEndTick: Int? = nil
+
+    /// Extracted metronome engine.
+    lazy var metronome: MetronomeEngine = MetronomeEngine(parent: self)
 
     // MARK: - Silent Export
     /// When true, the hardware output AudioUnit volume is set to 0 after
@@ -1172,34 +1166,6 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         }
     }
 
-    // MARK: - Metronome API
-
-    /// Configure metronome settings. Called from ScoreStore when user changes metronome state.
-    func configureMetronome(enabled: Bool, volume: Float, countInBars: Int) {
-        audioQueue.async { [weak self] in
-            guard let self else { return }
-            self.metronomeEnabled = enabled
-            self.metronomeVolume = min(max(volume, 0), 1)
-            self.metronomeCountInBars = min(max(countInBars, 0), 4)
-
-            // Generate click buffers if needed
-            if enabled && self.metronomeDownbeatBuffer == nil {
-                self.metronomeDownbeatBuffer = MIDIPlaybackMetronomeSupport.makeClickBuffer(frequency: 1000, duration: 0.04, sampleRate: 44100)
-                self.metronomeUpbeatBuffer = MIDIPlaybackMetronomeSupport.makeClickBuffer(frequency: 800, duration: 0.04, sampleRate: 44100)
-            }
-        }
-    }
-
-    /// Update metronome volume during playback (real-time safe).
-    func setMetronomeVolume(_ volume: Float) {
-        let clamped = min(max(volume, 0), Float(1))
-        audioQueue.async { [weak self] in
-            guard let self else { return }
-            self.metronomeVolume = clamped
-            self.metronomeNode?.volume = clamped
-        }
-    }
-
     // MARK: - Recording API
 
     /// Start recording audio from the engine's input node to a WAV file.
@@ -1683,103 +1649,6 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
                 }
             }
             self.sendMixerNodes.removeAll()
-        }
-    }
-
-    // MARK: - Metronome Implementation
-
-    /// Setup metronome player node and connect to main mixer.
-    /// Must be called on audioQueue after engine is running.
-    private func setupMetronomeNodeOnAudioQueue() {
-        guard metronomeEnabled else { return }
-
-        // Use the engine's actual output sample rate for click buffers
-        let outputRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
-        let clickRate = outputRate > 0 ? outputRate : 44100.0
-
-        // Generate click buffers if not yet created (or if sample rate changed)
-        if metronomeDownbeatBuffer == nil || metronomeDownbeatBuffer?.format.sampleRate != clickRate {
-            metronomeDownbeatBuffer = MIDIPlaybackMetronomeSupport.makeClickBuffer(frequency: 1000, duration: 0.04, sampleRate: clickRate)
-        }
-        if metronomeUpbeatBuffer == nil || metronomeUpbeatBuffer?.format.sampleRate != clickRate {
-            metronomeUpbeatBuffer = MIDIPlaybackMetronomeSupport.makeClickBuffer(frequency: 800, duration: 0.04, sampleRate: clickRate)
-        }
-
-        let node = AVAudioPlayerNode()
-        engine.attach(node)
-        // Connect mono click to main mixer (engine auto-upmixes mono→stereo)
-        let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: clickRate, channels: 1, interleaved: false)
-        engine.connect(node, to: engine.mainMixerNode, format: monoFormat)
-        node.volume = metronomeVolume
-        node.play()
-        metronomeNode = node
-    }
-
-    /// Schedule metronome clicks for all beats from startTick to lengthTicks.
-    /// Uses the existing seconds(atTick:...) helper for tempo-map-aware positioning.
-    private func scheduleMetronomeClicks(
-        startTick: Int,
-        tempoMap: [TempoPoint],
-        ticksPerQuarter: Int,
-        lengthTicks: Int,
-        timeSignatures: [TimeSignatureEvent] = []
-    ) {
-        guard metronomeEnabled,
-              let node = metronomeNode,
-              let downbeatBuf = metronomeDownbeatBuffer,
-              let upbeatBuf = metronomeUpbeatBuffer else { return }
-
-        let tpq = max(1, ticksPerQuarter)
-        let startSeconds = seconds(atTick: startTick, tempoMap: tempoMap, ticksPerQuarter: tpq)
-
-        // Sort time signatures by tick for lookup
-        let sortedTimeSigs = timeSignatures.sorted { $0.tick < $1.tick }
-
-        // Get the render time of the player node's start
-        guard let nodeTime = node.lastRenderTime,
-              let playerTime = node.playerTime(forNodeTime: nodeTime) else { return }
-
-        let sampleRate = playerTime.sampleRate
-        let hostSampleTime = playerTime.sampleTime
-
-        // Schedule clicks at each beat position
-        var beatTick = startTick - (startTick % tpq)  // Align to beat boundary
-        if beatTick < startTick { beatTick += tpq }
-
-        while beatTick < lengthTicks {
-            let beatSeconds = seconds(atTick: beatTick, tempoMap: tempoMap, ticksPerQuarter: tpq)
-            let offsetSeconds = beatSeconds - startSeconds
-            guard offsetSeconds >= 0 else {
-                beatTick += tpq
-                continue
-            }
-
-            let sampleOffset = AVAudioFramePosition(offsetSeconds * sampleRate)
-            let scheduledTime = AVAudioTime(sampleTime: hostSampleTime + sampleOffset, atRate: sampleRate)
-
-            // Determine beats per bar from the active time signature at this tick
-            let beatsPerBar = MIDIPlaybackMetronomeSupport.activeBeatsPerBar(atTick: beatTick, timeSignatures: sortedTimeSigs)
-
-            // Determine if this is beat 1 of a bar
-            let barStartTick = MIDIPlaybackMetronomeSupport.barStartTickBefore(beatTick, timeSignatures: sortedTimeSigs, ticksPerQuarter: tpq)
-            let beatsFromBarStart = (beatTick - barStartTick) / tpq
-            let isDownbeat = beatsFromBarStart % beatsPerBar == 0
-            let buffer = isDownbeat ? downbeatBuf : upbeatBuf
-
-            node.scheduleBuffer(buffer, at: scheduledTime, options: [], completionHandler: nil)
-            beatTick += tpq
-        }
-    }
-
-    /// Tear down metronome node.
-    private func tearDownMetronomeOnAudioQueue() {
-        if let node = metronomeNode {
-            node.stop()
-            withEnginePaused {
-                engine.disconnectNodeOutput(node)
-                engine.detach(node)
-            }
-            metronomeNode = nil
         }
     }
 
@@ -3103,7 +2972,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
     /// then restart it afterward.  Prevents the IOThread from reading freed node
     /// buffers (EXC_BAD_ACCESS on com.apple.audio.IOThread.client).
     /// If the engine is already paused/stopped, the work runs directly with no restart.
-    private func withEnginePaused(_ work: () -> Void) {
+    func withEnginePaused(_ work: () -> Void) {
         _ = withEnginePausedReturningSuccess {
             work()
             return true
@@ -3487,13 +3356,13 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             installMeterTaps()
             startMeterPublishTimer()
 
-            setupMetronomeNodeOnAudioQueue()
-            scheduleMetronomeClicks(
+            metronome.setupMetronomeNodeOnAudioQueue()
+            metronome.scheduleMetronomeClicks(
                 startTick: clampedStartTick,
                 tempoMap: tempoMapForAutomation,
                 ticksPerQuarter: ticksPerQuarter,
                 lengthTicks: lengthTicks,
-                timeSignatures: metronomeTimeSignatures
+                timeSignatures: metronome.metronomeTimeSignatures
             )
 
             if isRecordingAudio && loopRecordingEnabled {
@@ -3627,13 +3496,13 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
             startMeterPublishTimer()
 
             // Setup and schedule metronome clicks
-            setupMetronomeNodeOnAudioQueue()
-            scheduleMetronomeClicks(
+            metronome.setupMetronomeNodeOnAudioQueue()
+            metronome.scheduleMetronomeClicks(
                 startTick: clampedStartTick,
                 tempoMap: tempoMapForAutomation,
                 ticksPerQuarter: ticksPerQuarter,
                 lengthTicks: lengthTicks,
-                timeSignatures: metronomeTimeSignatures
+                timeSignatures: metronome.metronomeTimeSignatures
             )
 
             // Start loop recording timer if recording + looping
@@ -4166,7 +4035,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
         return normalized
     }
 
-    private func seconds(
+    func seconds(
         atTick tick: Int,
         tempoMap: [TempoPoint],
         ticksPerQuarter: Int
@@ -4505,7 +4374,7 @@ final class MIDIPlaybackEngine: @unchecked Sendable {
 
         stopAutomationTimer()
         stopLoopRecordingTimer()
-        tearDownMetronomeOnAudioQueue()
+        metronome.tearDownMetronomeOnAudioQueue()
         stopLivePreviewOnAudioQueue()
         removeMeterTaps()
         stopMeterPublishTimer()

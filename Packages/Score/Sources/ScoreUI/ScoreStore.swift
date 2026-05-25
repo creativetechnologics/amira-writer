@@ -2924,7 +2924,7 @@ final class ScoreStore {
             AmiraLogger.log(.score, "  mapping \(pairKey) → \(mappingKey) [\(status)] muted=\(mapping?.muted ?? false) sourceType=\(String(describing: mapping?.effectiveSourceType))")
         }
 
-        playbackEngine.metronomeTimeSignatures = pianoRollTimeSignatures
+        playbackEngine.metronome.metronomeTimeSignatures = pianoRollTimeSignatures
         playbackEngine.loopRegionStartTick = loopRegionStart
         playbackEngine.loopRegionEndTick = loopRegionEnd
         // Apply practice tempo scale to tempo events (does not modify stored events)
@@ -5261,8 +5261,8 @@ final class ScoreStore {
             exportEngine.requireHardwareOutputMute = false
             exportEngine.muteHardwareOutput = false
         }
-        exportEngine.metronomeTimeSignatures = timeSignatures
-        exportEngine.configureMetronome(enabled: false, volume: 0, countInBars: 0)
+        exportEngine.metronome.metronomeTimeSignatures = timeSignatures
+        exportEngine.metronome.configureMetronome(enabled: false, volume: 0, countInBars: 0)
         exportEngine.setPreferredBufferFrames(preferredBufferFrames)
         exportEngine.setMasterVolume(masterVolume)
         let estimatedSeconds = Self.ticksToSecondsStatic(
