@@ -46,6 +46,11 @@ LIBRETTO-AGENT-PROMPT.txt
 /Local\ State
 /api.txt
 
+# Old handoff docs (kept on disk, not in git)
+/HANDOFF-3D-ENGINE-APRIL-2.md
+/HANDOFF-MODE-SWITCH-BUG.md
+/HANDOFF_generate_animated.md
+
 # Misc research notes
 /image_intelligence_architecture_plan.md
 /LORA\ Gemini\ Info.md
