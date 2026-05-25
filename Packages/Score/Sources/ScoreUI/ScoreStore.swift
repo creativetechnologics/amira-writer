@@ -1502,7 +1502,7 @@ final class ScoreStore {
     // MARK: - Persistence
 
     private static let externalWatchInterval: TimeInterval = 2.0
-    private var dirtySongPaths: Set<String> = []
+    var dirtySongPaths: Set<String> = []
     private var isSavingInternal: Bool = false
     private var lastSelectedMidiID: UUID?
     private var loadedMidiCache: [UUID: ParsedPianoRoll] = [:]
@@ -1960,7 +1960,7 @@ final class ScoreStore {
         }
     }
 
-    private func buildCurrentPlaybackSnapshot() -> OWSPlaybackSnapshot {
+    func buildCurrentPlaybackSnapshot() -> OWSPlaybackSnapshot {
         OWSPlaybackSnapshot(
             notes: pianoRollNotes,
             trackNames: pianoRollTrackNames,
@@ -4136,225 +4136,32 @@ final class ScoreStore {
         midiAIStatusMessage = "MidiAI not available in Score."
     }
 
-    // MARK: - Version Management
+    // MARK: - Version Manager
 
-    func selectPreviousMidi() {
-        guard let current = selectedMidiID, let idx = midiAssets.firstIndex(where: { $0.id == current }), idx > 0 else { return }
-        setSelectedMidi(id: midiAssets[idx - 1].id)
+    @ObservationIgnored private var _versionManager: VersionManager?
+    var versionManager: VersionManager {
+        if let vm = _versionManager { return vm }
+        let vm = VersionManager(parent: self)
+        _versionManager = vm
+        return vm
     }
 
-    func selectNextMidi() {
-        guard let current = selectedMidiID, let idx = midiAssets.firstIndex(where: { $0.id == current }), idx < midiAssets.count - 1 else { return }
-        setSelectedMidi(id: midiAssets[idx + 1].id)
-    }
-
-    func addSong(relativeTo referenceID: MidiAsset.ID?, position: SongInsertPosition) {
-        // Stub
-    }
-
-    func deleteSong(midiID: MidiAsset.ID) {
-        if let asset = songAssets.first(where: { $0.id == midiID }) {
-            dirtySongPaths.remove(asset.relativePath)
-        }
-        songAssets.removeAll { $0.id == midiID }
-        librettoFiles.removeAll { file in songAssets.allSatisfy { $0.relativePath != file.relativePath } }
-        if selectedMidiID == midiID { setSelectedMidi(id: songAssets.first?.id) }
-        isDirty = true
-    }
-
-    func snapshotSongVersion(for midiID: MidiAsset.ID, label: String? = nil, saveType: VersionSaveType = .snapshot, markDirty: Bool = true) {
-        guard let idx = songAssets.firstIndex(where: { $0.id == midiID }) else { return }
-        let songPath = songAssets[idx].relativePath
-
-        // Build a snapshot from current live state if this is the selected song
-        let playback: OWSPlaybackSnapshot?
-        if midiID == selectedMidiID {
-            playback = buildCurrentPlaybackSnapshot()
-        } else {
-            playback = songAssets[idx].document.activeVersion()?.playback
-        }
-
-        let now = Date()
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        let defaultLabel = label ?? "\(saveType == .autosave ? "Revision" : "Snapshot") \(formatter.string(from: now))"
-
-        let lyrics = librettoFiles.first(where: { $0.relativePath == songPath })?.content ?? ""
-
-        let version = OWSVersionPayload(
-            id: UUID(),
-            label: defaultLabel,
-            createdAt: now,
-            updatedAt: now,
-            lyrics: lyrics,
-            saveType: saveType,
-            userLabel: label,
-            isBookmarked: false,
-            playback: playback
-        )
-
-        songAssets[idx].document.versions.insert(version, at: 0)
-        songAssets[idx].document.normalize()
-        dirtySongPaths.insert(songPath)
-        if markDirty { isDirty = true }
-    }
-
-    func versions(for midiID: MidiAsset.ID) -> [MidiAsset] {
-        return []
-    }
-
-    func switchSongVersion(for midiID: MidiAsset.ID, to targetVersionID: MidiAsset.ID) {
-        // Stub — use rollbackToVersion for version switching
-    }
-
-    func versionHistory(for songPath: String) -> [OWSVersionPayload] {
-        guard let asset = songAssets.first(where: { $0.relativePath == songPath }) else { return [] }
-        return asset.document.versions.filter { $0.saveType != .autosave || $0.id == asset.document.activeVersionID }
-    }
-
-    func renameVersion(songPath: String, versionID: UUID, newLabel: String) {
-        guard let songIdx = songAssets.firstIndex(where: { $0.relativePath == songPath }),
-              let vIdx = songAssets[songIdx].document.versions.firstIndex(where: { $0.id == versionID }) else { return }
-        songAssets[songIdx].document.versions[vIdx].userLabel = newLabel
-        songAssets[songIdx].document.versions[vIdx].updatedAt = Date()
-        dirtySongPaths.insert(songPath)
-        isDirty = true
-    }
-
-    func toggleVersionBookmark(songPath: String, versionID: UUID) {
-        guard let songIdx = songAssets.firstIndex(where: { $0.relativePath == songPath }),
-              let vIdx = songAssets[songIdx].document.versions.firstIndex(where: { $0.id == versionID }) else { return }
-        songAssets[songIdx].document.versions[vIdx].isBookmarked.toggle()
-        dirtySongPaths.insert(songPath)
-        isDirty = true
-    }
-
-    func rollbackToVersion(songPath: String, versionID: UUID) {
-        guard let songIdx = songAssets.firstIndex(where: { $0.relativePath == songPath }),
-              let version = songAssets[songIdx].document.versions.first(where: { $0.id == versionID }),
-              let playback = version.playback else { return }
-
-        // If this is the currently selected song, restore live state
-        if songAssets[songIdx].id == selectedMidiID {
-            // Stop any active playback before mutating state
-            if isPlaying { stopPlayback() }
-
-            pianoRollNotes = playback.notes
-            pianoRollTrackNames = playback.trackNames
-            pianoRollChannelPrograms = playback.channelPrograms
-            pianoRollTrackChannelPrograms = playback.trackChannelPrograms
-            pianoRollLyricCues = playback.lyricCues
-            pianoRollLyricAlignments = playback.lyricAlignments ?? []
-            pianoRollAudioClips = playback.audioClips
-            pianoRollTempoEvents = playback.tempoEvents
-            ticksPerQuarter = max(1, playback.ticksPerQuarter)
-            pianoRollLengthTicks = max(playback.lengthTicks, ticksPerQuarter * 8)
-            tempoBPM = pianoRollTempoEvents.first?.bpm ?? 112
-            pianoRollTimeSignatures = playback.timeSignatureEvents ?? [TimeSignatureEvent(tick: 0, numerator: 4, denominator: 4)]
-            pianoRollKeySignatures = playback.keySignatureEvents ?? [KeySignatureEvent(tick: 0, sharpsFlats: 0, isMinor: false)]
-            pianoRollMarkers = playback.markers ?? []
-            channelPan = playback.channelPan ?? [:]
-            pianoRollAutomation = playback.automationData ?? PianoRollAutomationData()
-            scoreAnnotations = playback.scoreAnnotations ?? []
-
-            // Restore lyrics
-            if let libIdx = librettoFiles.firstIndex(where: { $0.relativePath == songPath }) {
-                librettoFiles[libIdx].content = version.lyrics
-            }
-
-            // Rebuild channel key mapping from restored track names and notes
-            pianoRollChannelKeyByTrackChannel = [:]
-            pianoRollChannelNames = [:]
-            for (trackIndex, name) in pianoRollTrackNames {
-                var channels = Set(pianoRollNotes.filter { $0.trackIndex == trackIndex }.map(\.channel))
-                // Ensure every named track has at least one entry even when empty
-                if channels.isEmpty { channels.insert(0) }
-                for ch in channels {
-                    let pairKey = "\(trackIndex):\(ch)"
-                    let baseKey = normalizedChannelKey(from: name, fallbackTrack: trackIndex, fallbackChannel: ch)
-                    pianoRollChannelKeyByTrackChannel[pairKey] = baseKey
-                    pianoRollChannelNames[ch] = name
-                }
-            }
-
-            // Merge document-level instrument mappings
-            if let songIdx = songAssets.firstIndex(where: { $0.relativePath == songPath }) {
-                for (k, v) in OWPProjectIO.normalizeProjectInstrumentMappings(songAssets[songIdx].document.instrumentMappings) {
-                    instrumentMappings[k] = v
-                }
-            }
-
-            // Clear stale override so persistCurrentMidiOverrideIfNeeded writes fresh data
-            pianoRollOverrides.removeValue(forKey: songPath)
-
-            // Clear undo stack — snapshots belong to the pre-rollback state
-            undoStack.removeAll()
-            redoStack.removeAll()
-            selectedNoteIDs.removeAll()
-
-            // Rebuild project channel registry with correct channel key mapping
-            rebuildProjectChannelRegistry()
-        }
-
-        // Update active version ID
-        songAssets[songIdx].document.activeVersionID = versionID
-        dirtySongPaths.insert(songPath)
-        isDirty = true
-    }
-
-    func deleteVersion(songPath: String, versionID: UUID) {
-        guard let songIdx = songAssets.firstIndex(where: { $0.relativePath == songPath }) else { return }
-
-        let wasActive = songAssets[songIdx].document.activeVersionID == versionID
-        let isSelectedSong = songAssets[songIdx].id == selectedMidiID
-
-        // If deleting the active version, switch to the next available version first
-        if wasActive {
-            let others = songAssets[songIdx].document.versions.filter { $0.id != versionID }
-            if let nextActive = others.first {
-                songAssets[songIdx].document.activeVersionID = nextActive.id
-            }
-        }
-
-        songAssets[songIdx].document.versions.removeAll { $0.id == versionID }
-        songAssets[songIdx].document.normalize()
-
-        // If the deleted version was active for the selected song, restore live state
-        // from the new active version so the UI doesn't show stale data.
-        if wasActive && isSelectedSong {
-            if let newActiveID = songAssets[songIdx].document.activeVersionID {
-                rollbackToVersion(songPath: songPath, versionID: newActiveID)
-            } else {
-                // No versions left — clear live state to avoid showing deleted data
-                pianoRollNotes.removeAll()
-                pianoRollTrackNames.removeAll()
-            }
-        }
-
-        dirtySongPaths.insert(songPath)
-        isDirty = true
-    }
-
-    var hasPreviousVersionForSelectedSong: Bool {
-        guard let path = selectedMidiAsset?.relativePath else { return false }
-        return versionHistory(for: path).count > 1
-    }
-
-    func restorePreviousVersionForSelectedSong() {
-        guard let path = selectedMidiAsset?.relativePath else { return }
-        let versions = versionHistory(for: path)
-        guard versions.count > 1 else { return }
-        // Rollback to the second version (previous)
-        rollbackToVersion(songPath: path, versionID: versions[1].id)
-    }
-
-    var selectedSongVersionLabel: String? {
-        guard let path = selectedMidiAsset?.relativePath,
-              let songAsset = songAssets.first(where: { $0.relativePath == path }),
-              let activeID = songAsset.document.activeVersionID,
-              let version = songAsset.document.versions.first(where: { $0.id == activeID }) else { return nil }
-        return version.displayName
-    }
+    func selectPreviousMidi() { versionManager.selectPreviousMidi() }
+    func selectNextMidi() { versionManager.selectNextMidi() }
+    func addSong(relativeTo referenceID: MidiAsset.ID?, position: SongInsertPosition) { versionManager.addSong(relativeTo: referenceID, position: position) }
+    func deleteSong(midiID: MidiAsset.ID) { versionManager.deleteSong(midiID: midiID) }
+    func snapshotSongVersion(for midiID: MidiAsset.ID, label: String? = nil, saveType: VersionSaveType = .snapshot, markDirty: Bool = true) { versionManager.snapshotSongVersion(for: midiID, label: label, saveType: saveType, markDirty: markDirty) }
+    func versions(for midiID: MidiAsset.ID) -> [MidiAsset] { versionManager.versions(for: midiID) }
+    func switchSongVersion(for midiID: MidiAsset.ID, to targetVersionID: MidiAsset.ID) { versionManager.switchSongVersion(for: midiID, to: targetVersionID) }
+    func versionHistory(for songPath: String) -> [OWSVersionPayload] { versionManager.versionHistory(for: songPath) }
+    func renameVersion(songPath: String, versionID: UUID, newLabel: String) { versionManager.renameVersion(songPath: songPath, versionID: versionID, newLabel: newLabel) }
+    func toggleVersionBookmark(songPath: String, versionID: UUID) { versionManager.toggleVersionBookmark(songPath: songPath, versionID: versionID) }
+    func deleteVersion(songPath: String, versionID: UUID) { versionManager.deleteVersion(songPath: songPath, versionID: versionID) }
+    func rollbackToVersion(songPath: String, versionID: UUID) { versionManager.rollbackToVersion(songPath: songPath, versionID: versionID) }
+    var hasPreviousVersionForSelectedSong: Bool { versionManager.hasPreviousVersionForSelectedSong }
+    func restorePreviousVersionForSelectedSong() { versionManager.restorePreviousVersionForSelectedSong() }
+    var selectedSongVersionLabel: String? { versionManager.selectedSongVersionLabel }
+    func removeAllAutosaves(for midiID: MidiAsset.ID) { versionManager.removeAllAutosaves(for: midiID) }
 
     // MARK: - Step Input
 
