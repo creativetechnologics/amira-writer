@@ -34,6 +34,8 @@ private func isWorldMapEligibleGeneratedRecord(_ record: GeneratedBackgroundLibr
 }
 
 @available(macOS 26.0, *)
+// MARK: - Top-level Composition
+
 struct PlacesWorldMapPoint: Hashable, Sendable {
     var x: CGFloat
     var y: CGFloat
@@ -2135,6 +2137,8 @@ final class PlacesWorldAutoPlacementModel: ObservableObject {
 }
 
 @available(macOS 26.0, *)
+// MARK: - Library Sidebar Panel
+
 struct PlacesWorldMapBrowserView: View {
     private enum ActiveDragInteraction {
         case pan(origin: CGSize)
@@ -3004,6 +3008,8 @@ private struct PlacesWorldCapturePinView: View {
 }
 
 @available(macOS 26.0, *)
+// MARK: - World Graph Editor Panel
+
 struct PlacesWorldCaptureInspectorCard: View {
     let capture: PlacesWorldbuildingSnapshot.Capture?
     let store: AnimateStore
@@ -3371,6 +3377,8 @@ private struct PlacesWorldPlacementReviewItem: Identifiable {
 }
 
 @available(macOS 26.0, *)
+// MARK: - World Graph Node Renderer
+
 struct PlacesWorldUnconfirmedPlacementSection: View {
     let store: AnimateStore
     let snapshot: PlacesWorldbuildingSnapshot
@@ -3876,6 +3884,8 @@ struct PlacesWorldUnconfirmedPlacementSection: View {
 }
 
 @available(macOS 26.0, *)
+// MARK: - World Generation Controls
+
 struct PlacesWorldCoverageDashboardView: View {
     private struct ExteriorCoverageGap: Identifiable {
         let place: BackgroundPlate
@@ -4419,6 +4429,8 @@ struct PlacesWorldCoverageDashboardView: View {
 }
 
 @available(macOS 26.0, *)
+// MARK: - Inspector Panel
+
 struct PlacesWorldRouteInspectorCard: View {
     let route: PlacesWorldbuildingSnapshot.Route?
     let flaggedReviewCount: Int
@@ -4518,6 +4530,8 @@ struct PlacesWorldRouteInspectorCard: View {
 }
 
 @available(macOS 26.0, *)
+// MARK: - Route Management Panel
+
 struct PlacesWorldNodeInspectorCard: View {
     let node: PlacesWorldbuildingSnapshot.Node?
     let store: AnimateStore
@@ -5190,6 +5204,8 @@ struct PlacesWorldBatchMonitorSnapshot {
 }
 
 @available(macOS 26.0, *)
+// MARK: - Node Properties Form
+
 struct PlacesWorldBatchMonitorSection: View {
     let store: AnimateStore
     let snapshot: PlacesWorldbuildingSnapshot
@@ -5590,6 +5606,8 @@ struct PlacesWorldBatchMonitorSection: View {
 }
 
 @available(macOS 26.0, *)
+// MARK: - Preview Providers
+
 struct PlacesWorldReviewQueueSection: View {
     let store: AnimateStore
     let snapshot: PlacesWorldbuildingSnapshot
