@@ -1254,30 +1254,12 @@ final class ScoreStore {
 
     // MARK: - API Server
 
-    @ObservationIgnored private(set) var apiServer: APIServer?
+    @ObservationIgnored var apiServer: APIServer?
     var apiServerEnabled: Bool = true
     var apiServerPort: UInt16 = 19847
-    func startAPIServer() {
-        AmiraLogger.log(.score, "startAPIServer: enabled=\(apiServerEnabled) existing=\(apiServer != nil) port=\(apiServerPort)")
-        guard apiServerEnabled, apiServer == nil else { return }
-        do {
-            let server = try APIServer(store: self, port: apiServerPort)
-            server.logHandler = { method, path, status, _ in
-                NSLog("[APIServer] %@ %@ → %d", method, path, status)
-            }
-            server.start()
-            apiServer = server
-            AmiraLogger.log(.score, "startAPIServer: OK on port \(apiServerPort)")
-        } catch {
-            AmiraLogger.log(.score, "startAPIServer: FAILED — \(error.localizedDescription)")
-            statusMessage = "API server failed to start: \(error.localizedDescription)"
-        }
-    }
+    func startAPIServer() { apiStore.startAPIServer() }
 
-    func stopAPIServer() {
-        apiServer?.stop()
-        apiServer = nil
-    }
+    func stopAPIServer() { apiStore.stopAPIServer() }
 
     // MARK: - LLM
 
@@ -1506,7 +1488,7 @@ final class ScoreStore {
     private var isSavingInternal: Bool = false
     private var lastSelectedMidiID: UUID?
     private var loadedMidiCache: [UUID: ParsedPianoRoll] = [:]
-    private var hydratedSongPaths: Set<String> = []
+    var hydratedSongPaths: Set<String> = []
     private var pendingPlaybackStartTask: Task<Void, Never>?
     private var deferredSelectionLoadTask: Task<Void, Never>?
     private var externalFileWatchWorkItem: DispatchWorkItem?
@@ -2978,7 +2960,7 @@ final class ScoreStore {
     // Tracks song IDs for which a deferred playback start has already been attempted this
     // selection. Cleared when selectedMidiID changes. Prevents infinite retry when a song
     // has been hydrated but genuinely contains no MIDI data.
-    private var deferredPlaybackAttempted: Set<MidiAsset.ID> = []
+    var deferredPlaybackAttempted: Set<MidiAsset.ID> = []
     // Tracks a one-time source-truth reload attempt for the current selection so an empty
     // in-memory/cache playback cannot permanently mask valid on-disk score data.
     private var sourcePlaybackReloadAttempted: Set<MidiAsset.ID> = []
@@ -4110,6 +4092,14 @@ final class ScoreStore {
         let mi = MusicIntelligenceStore(parent: self)
         _musicIntelligence = mi
         return mi
+    }
+
+    @ObservationIgnored private var _apiStore: APIStore?
+    var apiStore: APIStore {
+        if let a = _apiStore { return a }
+        let a = APIStore(parent: self)
+        _apiStore = a
+        return a
     }
 
     // MARK: - Step Input
