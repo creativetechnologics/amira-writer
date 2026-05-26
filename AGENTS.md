@@ -69,6 +69,25 @@
   - `history/OPERA-CONSOLIDATION-2026-03-21.md`
   - `history/OPERA-DEVELOPMENT-HISTORY-2026-03-21.md`
 
+## Codebase Professionalization (Completed 2026-05-25)
+
+**Canonical spec:** `docs/specs/2026-05-25-codebase-professionalization-plan.md`
+**Handoff:** `history/HANDOFF-2026-05-25-CODEBASE-PROFESSIONALIZATION.md`
+
+All 5 phases are complete:
+- **Phase 0:** ProjectKit utilities (DateFormatters, StringExtensions, AmiraLogger, ColorHex)
+- **Phase 1:** MIDIPlaybackEngine split into 4 sub-engines in `Stores/Audio/`
+- **Phase 2:** Directory reorg — 214 files moved from flat `Services/`/`Views/` into topic subdirectories
+- **Phase 3:** MARK sections added to 5 largest view files
+- **Phase 4A/4B:** ScoreStore → 5 sub-stores, AnimateStore → 9 sub-stores
+- **Phase 5:** `.swiftlint.yml` added, bridges renamed (Write/Score/AnimateProjectBridge), build clean
+
+**Extraction pattern for new stores:**
+- `@MainActor final class FooStore { unowned let parent: ParentClass; init(parent:) ... }`
+- Parent: `@ObservationIgnored private var _foo: FooStore?` + lazy computed `var foo: FooStore`
+- Facade: `func method() { foo.method() }` (one-line delegation)
+- Build is clean — 0 errors as of 2026-05-25
+
 ## Programmatic Interfaces (API)
 
 **Canonical doc:** `docs/API.md` — HTTP JSON API on `localhost:19847`, active once the app is open and on the Score page. Use this for WAV export (`/export/full-mix`), song/note/tempo/playback/mixer/version operations (~60 endpoints).
