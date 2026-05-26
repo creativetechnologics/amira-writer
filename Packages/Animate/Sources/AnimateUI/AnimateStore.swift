@@ -336,38 +336,10 @@ final class AnimateStore {
     }
 
     var canvasGenerations: [CanvasGeneration] = [] {
-        didSet {
-            canvasGenerationsNewestCacheIsValid = false
-            bumpCanvasGenerationsRevision()
-            bumpAllImagesContentRevision()
-        }
-    }
-    @ObservationIgnored private var canvasGenerationsNewestCache: [CanvasGeneration] = []
-    @ObservationIgnored private var canvasGenerationsNewestCacheSignature: Int = 0
-    @ObservationIgnored private var canvasGenerationsNewestCacheIsValid = false
-
-    /// Canvas generation galleries are rendered in several panes. Keep the
-    /// newest-first order cached so routine SwiftUI body refreshes do not keep
-    /// re-sorting the same gallery arrays.
-    func canvasGenerationsNewestFirst() -> [CanvasGeneration] {
-        let signature = canvasGenerationsSortSignature()
-        if !canvasGenerationsNewestCacheIsValid || signature != canvasGenerationsNewestCacheSignature {
-            canvasGenerationsNewestCache = canvasGenerations.sorted { $0.createdAt > $1.createdAt }
-            canvasGenerationsNewestCacheSignature = signature
-            canvasGenerationsNewestCacheIsValid = true
-        }
-        return canvasGenerationsNewestCache
+        didSet { canvas.bumpCanvasGenerationsRevision(); canvasGenerationsRevision &+= 1; bumpAllImagesContentRevision() }
     }
 
-    private func canvasGenerationsSortSignature() -> Int {
-        var hasher = Hasher()
-        hasher.combine(canvasGenerations.count)
-        for generation in canvasGenerations {
-            hasher.combine(generation.id)
-            hasher.combine(generation.createdAt)
-        }
-        return hasher.finalize()
-    }
+    func canvasGenerationsNewestFirst() -> [CanvasGeneration] { canvas.canvasGenerationsNewestFirst() }
 
     // MARK: - Imagine State
 
@@ -19910,13 +19882,20 @@ hydrateRunPodSettings()
     func importVideoToTimeline(url: URL) async {}
     func exportClipAsBVH(clipID: UUID) {}
     func cancelVideoImport() {}
+    func stepFrame(delta: Int) { currentFrame = max(0, currentFrame + delta) }
+
+    @ObservationIgnored private var _canvas: CanvasGenerationStore?
+    var canvas: CanvasGenerationStore {
+        if let c = _canvas { return c }
+        let c = CanvasGenerationStore(parent: self)
+        _canvas = c
+        return c
+    }
 }
 
 // MARK: - Motion Clip Management (Phase 3)
 extension AnimateStore {
-    func addMotionClip(_ clip: MotionClip) {
-        motionClips.append(clip)
-    }
+    func addMotionClip(_ clip: MotionClip) { motionClips.append(clip) }
 
     // MARK: - NLA Motion Clip Placement
 
