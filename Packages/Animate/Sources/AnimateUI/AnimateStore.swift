@@ -19684,10 +19684,7 @@ hydrateRunPodSettings()
 
     // MARK: - Missing Members (stubs for view compilation)
 
-    var cancelVideoImport: Bool {
-        get { false }
-        set {}
-    }
+    func cancelVideoImport() {}
     func importVideoToTimeline(url: URL) async {}
     func exportClipAsBVH(clipID: UUID) {}
     func stepFrame(delta: Int) { currentFrame = max(0, currentFrame + delta) }
