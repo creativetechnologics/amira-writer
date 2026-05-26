@@ -19900,6 +19900,16 @@ hydrateRunPodSettings()
         _imagineGallery = g
         return g
     }
+
+    // MARK: - Missing Members (stubs for view compilation)
+
+    var cancelVideoImport: Bool {
+        get { false }
+        set {}
+    }
+    func importVideoToTimeline(url: URL) async {}
+    func exportClipAsBVH(clipID: UUID) {}
+    func cancelVideoImport() {}
 }
 
 // MARK: - Motion Clip Management (Phase 3)
