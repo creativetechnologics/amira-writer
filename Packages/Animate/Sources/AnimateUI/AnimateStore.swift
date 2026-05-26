@@ -6608,7 +6608,7 @@ hydrateRunPodSettings()
         }
     }
 
-    private func setSemanticCue(
+    func setSemanticCue(
         _ rawValue: String?,
         trackSuffix: String,
         for characterName: String,
@@ -12318,13 +12318,9 @@ hydrateRunPodSettings()
         return node.id
     }
 
-    func updateWorldNodeSequenceIndex(_ sequenceIndex: Int, nodeID: UUID) {
-        guard let index = placesWorkflowLibrary.worldGraph.nodes.firstIndex(where: { $0.id == nodeID }) else { return }
-        placesWorkflowLibrary.worldGraph.nodes[index].sequenceIndex = max(0, sequenceIndex)
-        scheduleDebouncedSave(writePlaces: true)
-    }
+    func updateWorldNodeSequenceIndex(_ sequenceIndex: Int, nodeID: UUID) { places.updateWorldNodeSequenceIndex(sequenceIndex, nodeID: nodeID) }
 
-    private func adoptGeneratedBackgroundRecords(for placeID: UUID, nodeID: UUID) {
+    func adoptGeneratedBackgroundRecords(for placeID: UUID, nodeID: UUID) {
         for index in placesWorkflowLibrary.generatedImageRecords.indices where placesWorkflowLibrary.generatedImageRecords[index].linkedPlaceID == placeID {
             if placesWorkflowLibrary.generatedImageRecords[index].worldNodeID == nil {
                 placesWorkflowLibrary.generatedImageRecords[index].worldNodeID = nodeID
@@ -14671,192 +14667,7 @@ hydrateRunPodSettings()
     }
 
     /// Set the star rating (0-5) for a place image. 0 clears the rating.
-    func setPlaceImageRating(path: String, rating: Int, placeID: UUID) {
-        guard let idx = backgrounds.firstIndex(where: { $0.id == placeID }) else { return }
-        let clamped = max(0, min(5, rating))
-        if clamped == 0 {
-            backgrounds[idx].imageRatings.removeValue(forKey: path)
-        } else {
-            backgrounds[idx].imageRatings[path] = clamped
-        }
-        mutateImageLibrarySidecar(for: path) { metadata in
-            metadata.rating = clamped == 0 ? nil : clamped
-        }
-        scheduleDebouncedSave(writePlaces: true)
-    }
-
-    /// Remove a place image by path AND move the underlying file to macOS
-    /// Trash (recoverable). Used by right-click Move File to Trash in the
-    /// Places photorealistic / animated gallery.
-    @discardableResult
-    func movePlaceImageToTrash(path: String, placeID: UUID, workflow: PlaceWorkflowMode) -> Bool {
-        guard let index = backgrounds.firstIndex(where: { $0.id == placeID }) else { return false }
-        let absoluteURL = resolvedCharacterAssetURL(for: path)
-        switch workflow {
-        case .photorealistic:
-            backgrounds[index].imagePaths.removeAll(where: { $0 == path })
-            if backgrounds[index].approvedImagePath == path {
-                backgrounds[index].approvedImagePath = nil
-            }
-            if let approvedPath = backgrounds[index].approvedImagePath {
-                backgrounds[index].filename = URL(fileURLWithPath: approvedPath).lastPathComponent
-                backgrounds[index].sourceURL = resolvedCharacterAssetURL(for: approvedPath)
-            } else {
-                backgrounds[index].filename = ""
-                backgrounds[index].sourceURL = nil
-            }
-        case .animated:
-            backgrounds[index].animatedImagePaths.removeAll(where: { $0 == path })
-            if backgrounds[index].animatedApprovedImagePath == path {
-                backgrounds[index].animatedApprovedImagePath = nil
-            }
-        }
-        scheduleDebouncedSave(writePlaces: true)
-
-        if let url = absoluteURL, FileManager.default.fileExists(atPath: url.path) {
-            do {
-                var resultingURL: NSURL? = nil
-                try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
-            } catch {
-                AppLog.log("STORE", "trashItem failed for place image \(url.path): \(error.localizedDescription)")
-                return false
-            }
-        }
-        return true
-    }
-
-    /// Remove any project image by path from every collection that might
-    /// reference it AND move the underlying file to macOS Trash. Returns
-    /// `true` if the file was trashed (or already gone), `false` if the
-    /// trash operation itself failed.
-    @discardableResult
-    func moveAnyProjectImageToTrash(path: String, resolvedPath: String? = nil) -> Bool {
-        let absoluteURL = resolvedCharacterAssetURL(for: path)
-            ?? resolvedPath.map { URL(fileURLWithPath: $0) }
-            ?? URL(fileURLWithPath: path)
-
-        var candidates = Set([path])
-        if let resolvedPath { candidates.insert(resolvedPath) }
-        candidates.insert(absoluteURL.path)
-        if let normalized = normalizedMediaPath(path) { candidates.insert(normalized) }
-
-        let pathSet = candidates
-
-        // Backgrounds (Places)
-        for i in backgrounds.indices {
-            backgrounds[i].imagePaths.removeAll { pathSet.contains($0) }
-            backgrounds[i].animatedImagePaths.removeAll { pathSet.contains($0) }
-            if let approved = backgrounds[i].approvedImagePath, pathSet.contains(approved) {
-                backgrounds[i].approvedImagePath = nil
-            }
-            if let approvedAnim = backgrounds[i].animatedApprovedImagePath, pathSet.contains(approvedAnim) {
-                backgrounds[i].animatedApprovedImagePath = nil
-            }
-        }
-
-        // Characters
-        for i in characters.indices {
-            characters[i].inspirationImagePaths.removeAll { pathSet.contains($0) }
-            characters[i].curatedInspirationImagePaths.removeAll { pathSet.contains($0) }
-            characters[i].referenceImagePaths.removeAll { pathSet.contains($0) }
-            characters[i].animatedImagePaths.removeAll { pathSet.contains($0) }
-            characters[i].masterReferenceSourceImagePaths.removeAll { pathSet.contains($0) }
-            if let p = characters[i].inspirationReferenceImagePath, pathSet.contains(p) {
-                characters[i].inspirationReferenceImagePath = nil
-            }
-            if let p = characters[i].profileImagePath, pathSet.contains(p) {
-                characters[i].profileImagePath = nil
-            }
-            characters[i].masterReferenceSheetVariants.removeAll { pathSet.contains($0.imagePath) }
-            characters[i].headTurnaroundSheetVariants.removeAll { pathSet.contains($0.imagePath) }
-            for slotIndex in characters[i].headTurnaroundSlots.indices {
-                characters[i].headTurnaroundSlots[slotIndex].variants.removeAll {
-                    pathSet.contains($0.imagePath)
-                }
-            }
-            for slotIndex in characters[i].lookDevelopmentSlots.indices {
-                characters[i].lookDevelopmentSlots[slotIndex].variants.removeAll {
-                    pathSet.contains($0.imagePath)
-                }
-            }
-            for costumeIndex in characters[i].costumeReferenceSets.indices {
-                characters[i].costumeReferenceSets[costumeIndex].sheetVariants.removeAll {
-                    pathSet.contains($0.imagePath)
-                }
-                for slotIdx in characters[i].costumeReferenceSets[costumeIndex].fullBodySlots.indices {
-                    characters[i].costumeReferenceSets[costumeIndex].fullBodySlots[slotIdx].variants.removeAll {
-                        pathSet.contains($0.imagePath)
-                    }
-                }
-                for accessoryIdx in characters[i].costumeReferenceSets[costumeIndex].accessorySlots.indices {
-                    characters[i].costumeReferenceSets[costumeIndex].accessorySlots[accessoryIdx].variants.removeAll {
-                        pathSet.contains($0.imagePath)
-                    }
-                }
-            }
-        }
-
-        // Generated background library records
-        placesWorkflowLibrary.generatedImageRecords.removeAll { record in
-            if pathSet.contains(record.activePath) { return true }
-            return record.duplicatePaths.contains { pathSet.contains($0) }
-        }
-
-        // Canvas generations
-        canvasGenerations.removeAll { pathSet.contains($0.imagePath) }
-
-        // Scene shot frame generation paths
-        for sceneIndex in scenes.indices {
-            for shotIndex in scenes[sceneIndex].shots.indices {
-                guard var fg = scenes[sceneIndex].shots[shotIndex].shotFrameGeneration else { continue }
-                if let p = fg.firstFrameImagePath, pathSet.contains(p) { fg.firstFrameImagePath = nil }
-                if let p = fg.lastFrameImagePath, pathSet.contains(p) { fg.lastFrameImagePath = nil }
-                fg.firstFrameVariants.removeAll { pathSet.contains($0) }
-                fg.lastFrameVariants.removeAll { pathSet.contains($0) }
-                scenes[sceneIndex].shots[shotIndex].shotFrameGeneration = fg
-            }
-        }
-
-        // Imagine scene galleries (persisted separately in galleries.json)
-        var galleriesChanged = false
-        for (sceneID, var galleries) in imagineSceneGalleries {
-            for galleryIndex in galleries.indices {
-                galleries[galleryIndex].beginningImagePaths.removeAll { pathSet.contains($0) }
-                galleries[galleryIndex].middleImagePaths.removeAll { pathSet.contains($0) }
-                galleries[galleryIndex].endImagePaths.removeAll { pathSet.contains($0) }
-                if let p = galleries[galleryIndex].selectedBeginningPath, pathSet.contains(p) {
-                    galleries[galleryIndex].selectedBeginningPath = nil
-                }
-                if let p = galleries[galleryIndex].selectedMiddlePath, pathSet.contains(p) {
-                    galleries[galleryIndex].selectedMiddlePath = nil
-                }
-                if let p = galleries[galleryIndex].selectedEndPath, pathSet.contains(p) {
-                    galleries[galleryIndex].selectedEndPath = nil
-                }
-            }
-            imagineSceneGalleries[sceneID] = galleries
-            galleriesChanged = true
-        }
-
-        if galleriesChanged, let owpURL {
-            let allGalleries = imagineSceneGalleries.values.flatMap { $0 }
-            try? ImagineProjectStorage.saveGalleries(allGalleries, owpURL: owpURL)
-        }
-
-        save()
-
-        // Trash the underlying file.
-        if FileManager.default.fileExists(atPath: absoluteURL.path) {
-            do {
-                var resultingURL: NSURL? = nil
-                try FileManager.default.trashItem(at: absoluteURL, resultingItemURL: &resultingURL)
-            } catch {
-                AppLog.log("STORE", "moveAnyProjectImageToTrash failed for \(absoluteURL.path): \(error.localizedDescription)")
-                return false
-            }
-        }
-        return true
-    }
+    func setPlaceImageRating(path: String, rating: Int, placeID: UUID) { places.setPlaceImageRating(path: path, rating: rating, placeID: placeID) }
 
     func deletePlace(_ placeID: UUID) {
         backgrounds.removeAll { $0.id == placeID }
@@ -19879,7 +19690,6 @@ hydrateRunPodSettings()
     }
     func importVideoToTimeline(url: URL) async {}
     func exportClipAsBVH(clipID: UUID) {}
-    func cancelVideoImport() {}
     func stepFrame(delta: Int) { currentFrame = max(0, currentFrame + delta) }
 
     @ObservationIgnored private var _canvas: CanvasGenerationStore?
@@ -19888,6 +19698,30 @@ hydrateRunPodSettings()
         let c = CanvasGenerationStore(parent: self)
         _canvas = c
         return c
+    }
+
+    @ObservationIgnored private var _places: PlacesStore?
+    var places: PlacesStore {
+        if let p = _places { return p }
+        let p = PlacesStore(parent: self)
+        _places = p
+        return p
+    }
+
+    @ObservationIgnored private var _charExpr: CharacterExpressionStore?
+    var charExpr: CharacterExpressionStore {
+        if let ce = _charExpr { return ce }
+        let ce = CharacterExpressionStore(parent: self)
+        _charExpr = ce
+        return ce
+    }
+
+    @ObservationIgnored private var _scenePlayback: ScenePlaybackStore?
+    var scenePlayback: ScenePlaybackStore {
+        if let sp = _scenePlayback { return sp }
+        let sp = ScenePlaybackStore(parent: self)
+        _scenePlayback = sp
+        return sp
     }
 }
 
