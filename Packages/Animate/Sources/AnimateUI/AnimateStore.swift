@@ -724,21 +724,20 @@ final class AnimateStore {
 
     // MARK: - Gemini
 
+    @ObservationIgnored private var _generationSettings: GenerationSettingsStore?
+    var generationSettings: GenerationSettingsStore {
+        if let g = _generationSettings { return g }
+        let g = GenerationSettingsStore(parent: self)
+        _generationSettings = g
+        return g
+    }
+
     /// Running total of all Gemini API calls made in this session.
     var geminiAPICallCount: Int = 0
     /// Rolling log of the last 100 Gemini API calls (date, endpoint, source).
     var geminiAPICallLog: [(date: Date, endpoint: String, source: String)] = []
 
-    /// Record a Gemini API call for auditing and display.
-    func logGeminiAPICall(endpoint: String, source: String) {
-        geminiAPICallCount += 1
-        geminiAPICallLog.append((date: Date(), endpoint: endpoint, source: source))
-        // Keep only the last 100 entries to bound memory usage.
-        if geminiAPICallLog.count > 100 {
-            geminiAPICallLog.removeFirst(geminiAPICallLog.count - 100)
-        }
-        print("[AnimateStore] Gemini API call #\(geminiAPICallCount): \(source) → \(endpoint)")
-    }
+    func logGeminiAPICall(endpoint: String, source: String) { generationSettings.logGeminiAPICall(endpoint: endpoint, source: source) }
 
     var geminiAPIKey: String = "" {
         didSet {
