@@ -19892,6 +19892,14 @@ hydrateRunPodSettings()
         batchProcessingActive = false
         batchProcessingCurrentSceneID = nil
     }
+
+    @ObservationIgnored private var _imagineGallery: ImagineGalleryStore?
+    var imagineGallery: ImagineGalleryStore {
+        if let g = _imagineGallery { return g }
+        let g = ImagineGalleryStore(parent: self)
+        _imagineGallery = g
+        return g
+    }
 }
 
 // MARK: - Motion Clip Management (Phase 3)
@@ -19916,31 +19924,9 @@ extension AnimateStore {
 
     // MARK: - Imagine Gallery Management
 
-    func loadImagineGalleries() {
-        guard let owpURL = fileOWPURL else { return }
-        let projectPath = owpURL.path
-        imagineSceneGalleries = [:]
-        Task { [weak self, owpURL, projectPath] in
-            let byScene = await Task.detached(priority: .utility) { () -> [UUID: [ImagineSceneShotGallery]] in
-                let stored = ImagineProjectStorage.loadGalleries(owpURL: owpURL)
-                var grouped: [UUID: [ImagineSceneShotGallery]] = [:]
-                for gallery in stored {
-                    grouped[gallery.sceneID, default: []].append(gallery)
-                }
-                return grouped
-            }.value
+    func loadImagineGalleries() { imagineGallery.loadImagineGalleries() }
 
-            guard let self else { return }
-            guard self.fileOWPURL?.path == projectPath else { return }
-            self.imagineSceneGalleries = byScene
-        }
-    }
-
-    func saveImagineGalleries() {
-        guard let owpURL = fileOWPURL else { return }
-        let all = imagineSceneGalleries.values.flatMap { $0 }
-        try? ImagineProjectStorage.saveGalleries(Array(all), owpURL: owpURL)
-    }
+    func saveImagineGalleries() { imagineGallery.saveImagineGalleries() }
 
     func refreshImagineGalleryFromDisk(sceneID: UUID) {
         guard let owpURL = fileOWPURL,
