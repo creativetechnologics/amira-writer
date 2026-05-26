@@ -933,7 +933,15 @@ final class AnimateStore {
     private let runPodAccountService = RunPodAccountService()
     private let sceneAutomationPlanner = SceneAutomationPlanner()
     let audioPlayer = AnimationAudioPlayer()
-    
+
+    @ObservationIgnored private var _audio: AudioTimelineStore?
+    var audio: AudioTimelineStore {
+        if let a = _audio { return a }
+        let a = AudioTimelineStore(parent: self)
+        _audio = a
+        return a
+    }
+
     // MARK: - Image Intelligence (Phase 1-6)
     
     @ObservationIgnored private var imageIntelligenceStore: ImageIntelligenceStore?
@@ -19509,19 +19517,9 @@ hydrateRunPodSettings()
 
     // MARK: - Audio Playback
 
-    /// Load the scene's default audio file into the audio player.
-    func loadSceneAudio() {
-        guard let audioURL = suggestedExportAudioURL() else {
-            audioPlayer.unload()
-            return
-        }
-        audioPlayer.load(url: audioURL)
-    }
+    func loadSceneAudio() { audio.loadSceneAudio() }
 
-    /// Sync audio player to the current animation frame (call from display link).
-    func syncAudioToCurrentFrame() {
-        audioPlayer.syncToFrame(currentFrame)
-    }
+    func syncAudioToCurrentFrame() { audio.syncAudioToCurrentFrame() }
 
     // MARK: - Camera Choreography
 
