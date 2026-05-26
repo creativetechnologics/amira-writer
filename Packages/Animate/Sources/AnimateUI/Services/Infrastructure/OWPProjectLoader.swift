@@ -135,12 +135,18 @@ struct OWPProjectLoader: Sendable {
 
     private func loadCharacters(from projectURL: URL, fm: FileManager) throws -> [OPWCharacter] {
         let owpPaths = ProjectPaths(root: projectURL)
+        NSLog("[OWPLoader] projectURL=%@ charsPath=%@ legacyPath=%@",
+              projectURL.path, owpPaths.charactersJSON.path, owpPaths.legacyCharactersJSON.path)
         for charactersURL in [owpPaths.charactersJSON, owpPaths.legacyCharactersJSON] {
-            guard fm.fileExists(atPath: charactersURL.path) else { continue }
+            let exists = fm.fileExists(atPath: charactersURL.path)
+            NSLog("[OWPLoader] checking %@ → exists=%@", charactersURL.path, exists ? "yes" : "no")
+            guard exists else { continue }
             let data = try Data(contentsOf: charactersURL)
             let file = try JSONCoders.makeDecoder().decode(OPWCharactersFile.self, from: data)
+            NSLog("[OWPLoader] loaded %d characters from %@", file.characters.count, charactersURL.lastPathComponent)
             return file.characters
         }
+        NSLog("[OWPLoader] WARNING: no characters.json found — returning empty array")
         return []
     }
 
