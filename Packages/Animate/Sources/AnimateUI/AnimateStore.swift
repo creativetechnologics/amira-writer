@@ -19691,6 +19691,8 @@ hydrateRunPodSettings()
     func importVideoToTimeline(url: URL) async {}
     func exportClipAsBVH(clipID: UUID) {}
     func stepFrame(delta: Int) { currentFrame = max(0, currentFrame + delta) }
+    func moveAnyProjectImageToTrash(path: String, resolvedPath: String) {}
+    func movePlaceImageToTrash(path: String, placeID: UUID, workflow: PlaceWorkflowMode) {}
 
     @ObservationIgnored private var _canvas: CanvasGenerationStore?
     var canvas: CanvasGenerationStore {

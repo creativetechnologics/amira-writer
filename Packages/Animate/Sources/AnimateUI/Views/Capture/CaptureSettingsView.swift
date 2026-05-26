@@ -13,9 +13,9 @@ struct CaptureSettingsView: View {
 
             Toggle("Enhanced Tracking (slower)", isOn: $useEnhancedTracking)
                 .help("Uses DWPose model for 133-keypoint whole-body tracking including hands and face. Requires DWPose.mlmodelc in the app bundle.")
-                .onChange(of: useEnhancedTracking) { newValue in
+                .onChange(of: useEnhancedTracking) {
                     do {
-                        let mode: CaptureTrackingMode = newValue ? .enhanced : .standard
+                        let mode: CaptureTrackingMode = useEnhancedTracking ? .enhanced : .standard
                         try store.setTrackingMode(mode)
                         errorMessage = nil
                     } catch {
