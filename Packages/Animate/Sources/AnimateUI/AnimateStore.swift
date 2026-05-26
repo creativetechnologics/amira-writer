@@ -6681,12 +6681,12 @@ hydrateRunPodSettings()
 
     func openOWP(url: URL, skipBackgroundRefresh: Bool = false) async {
         guard !isLoadingProject else {
-            NSLog("[openOWP] SKIPPED — isLoadingProject is true (url=%@)", url.path)
+            AmiraLogger.log(.animate, "openOWP SKIPPED — isLoadingProject=true url=\(url.path)")
             return
         }
 
         let signpostToken = PerfSignposts.begin(.projectOpen, url.lastPathComponent)
-        NSLog("[openOWP] START — url=%@", url.path)
+        AmiraLogger.log(.animate, "openOWP START url=\(url.path)")
 
         let previousOWPURL = owpURL
         isLoadingProject = true
@@ -6845,13 +6845,13 @@ hydrateRunPodSettings()
              // 6. Sync characters with OWP characters.json.
             // Decode every rig.json in parallel once, then share the result
             // with both syncs so we're not decoding rigs twice back-to-back.
-            NSLog("[openOWP] OWP characters loaded: %d", result.characters.count)
+            AmiraLogger.log(.animate, "openOWP OWP characters count: \(result.characters.count)")
             let prefetchedPersistedCharacters = await persistedCharactersOnDiskAsync()
             syncCharactersFromOWP(
                 result.characters,
                 prefetchedPersistedCharacters: prefetchedPersistedCharacters
             )
-            NSLog("[openOWP] After sync — AnimateUI characters count: %d", characters.count)
+            AmiraLogger.log(.animate, "openOWP after sync: AnimateUI characters=\(characters.count)")
             recoverMissingPersistedCharactersIfNeeded(
                 prefetchedPersistedCharacters: prefetchedPersistedCharacters
             )
@@ -6939,7 +6939,7 @@ hydrateRunPodSettings()
                 startExternalFileWatch()
             }
         } catch {
-            NSLog("[openOWP] ERROR — %@", error.localizedDescription)
+            AmiraLogger.log(.animate, "openOWP ERROR: \(error.localizedDescription)")
             loadErrorMessage = error.localizedDescription
             statusMessage = "Error opening project: \(error.localizedDescription)"
         }

@@ -135,19 +135,35 @@ struct OWPProjectLoader: Sendable {
 
     private func loadCharacters(from projectURL: URL, fm: FileManager) throws -> [OPWCharacter] {
         let owpPaths = ProjectPaths(root: projectURL)
-        NSLog("[OWPLoader] projectURL=%@ charsPath=%@ legacyPath=%@",
-              projectURL.path, owpPaths.charactersJSON.path, owpPaths.legacyCharactersJSON.path)
+        log("projectURL=\(projectURL.path)")
+        log("charsPath=\(owpPaths.charactersJSON.path)")
+        log("legacyPath=\(owpPaths.legacyCharactersJSON.path)")
         for charactersURL in [owpPaths.charactersJSON, owpPaths.legacyCharactersJSON] {
             let exists = fm.fileExists(atPath: charactersURL.path)
-            NSLog("[OWPLoader] checking %@ → exists=%@", charactersURL.path, exists ? "yes" : "no")
+            log("checking \(charactersURL.path) → exists=\(exists)")
             guard exists else { continue }
             let data = try Data(contentsOf: charactersURL)
             let file = try JSONCoders.makeDecoder().decode(OPWCharactersFile.self, from: data)
-            NSLog("[OWPLoader] loaded %d characters from %@", file.characters.count, charactersURL.lastPathComponent)
+            log("loaded \(file.characters.count) characters from \(charactersURL.lastPathComponent)")
             return file.characters
         }
-        NSLog("[OWPLoader] WARNING: no characters.json found — returning empty array")
+        log("WARNING: no characters.json found → returning empty array")
         return []
+    }
+
+    private func log(_ msg: String) {
+        let ts = AmiraDateFormatter.iso8601.string(from: Date())
+        let line = "[\(ts)] [OWPLoader] \(msg)\n"
+        let url = URL(fileURLWithPath: "/tmp/opera-debug.log")
+        if let data = line.data(using: .utf8) {
+            if let fh = try? FileHandle(forWritingTo: url) {
+                _ = try? fh.seekToEnd()
+                try? fh.write(contentsOf: data)
+                try? fh.close()
+            } else {
+                try? data.write(to: url, options: [.atomic])
+            }
+        }
     }
 
     private func loadIndex(from projectURL: URL, fm: FileManager) throws -> OWPIndexFile? {
