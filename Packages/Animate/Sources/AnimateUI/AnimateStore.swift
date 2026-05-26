@@ -3238,7 +3238,7 @@ hydrateRunPodSettings()
             guard scenes[index].shots.isEmpty else { continue }
 
             let scene = scenes[index]
-            guard let songData = await ProjectDatabaseBridge.hydrateSongData(
+            guard let songData = await AnimateProjectBridge.hydrateSongData(
                 projectURL: owpURL,
                 relativePath: scene.owpSongPath
             ) else { continue }
@@ -3277,7 +3277,7 @@ hydrateRunPodSettings()
         for index in scenes.indices {
             let scene = scenes[index]
             oldShotCount += scene.shots.count
-            guard let songData = await ProjectDatabaseBridge.hydrateSongData(
+            guard let songData = await AnimateProjectBridge.hydrateSongData(
                 projectURL: owpURL,
                 relativePath: scene.owpSongPath
             ) else {
@@ -3387,7 +3387,7 @@ hydrateRunPodSettings()
     /// Reload scene data from Animate/scenes.json on disk, preserving authored shot data.
     func reloadScenesFromDisk() {
         guard let projectURL = fileOWPURL else { return }
-        let savedScenes = ProjectDatabaseBridge.loadSavedScenesFromDisk(projectURL: projectURL)
+        let savedScenes = AnimateProjectBridge.loadSavedScenesFromDisk(projectURL: projectURL)
         var reloadedCount = 0
 
         for index in scenes.indices {
@@ -5540,12 +5540,12 @@ hydrateRunPodSettings()
             "index.json",
             "Characters/characters.json",
             "characters.json",
-            ProjectDatabaseBridge.animateMetadataPath,
-            ProjectDatabaseBridge.animatePlacesPath,
-            ProjectDatabaseBridge.animatePlacesWorkflowPath,
-            ProjectDatabaseBridge.animatedLookPromptPath,
-            ProjectDatabaseBridge.characterPackageSelectionsPath,
-            ProjectDatabaseBridge.shotPresetsPath
+            AnimateProjectBridge.animateMetadataPath,
+            AnimateProjectBridge.animatePlacesPath,
+            AnimateProjectBridge.animatePlacesWorkflowPath,
+            AnimateProjectBridge.animatedLookPromptPath,
+            AnimateProjectBridge.characterPackageSelectionsPath,
+            AnimateProjectBridge.shotPresetsPath
         ] {
             let fileURL = projectURL.appendingPathComponent(path)
             if let snapshot = fileSnapshot(for: fileURL) {
@@ -5659,7 +5659,7 @@ hydrateRunPodSettings()
             if let sceneIndex = self.scenes.firstIndex(where: { $0.owpSongPath == relativePath }),
                self.scenes[sceneIndex].shots.isEmpty,
                let owpURL = self.fileOWPURL,
-               let songData = await ProjectDatabaseBridge.hydrateSongData(
+               let songData = await AnimateProjectBridge.hydrateSongData(
                    projectURL: owpURL, relativePath: relativePath
                ) {
                 let lyrics = songData.extractLyrics().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5686,7 +5686,7 @@ hydrateRunPodSettings()
             guard let self else { return }
 
             switch path {
-            case ProjectDatabaseBridge.animateMetadataPath:
+            case AnimateProjectBridge.animateMetadataPath:
                 let fileURL = projectURL.appendingPathComponent(path)
                 let decoded = (try? Data(contentsOf: fileURL))
                     .flatMap { try? JSONCoders.makeDecoder().decode(AnimateMetadata.self, from: $0) }
@@ -5698,8 +5698,8 @@ hydrateRunPodSettings()
                     self.markAgentUpdated()
                     self.statusMessage = "Reloaded external project changes"
                 }
-            case ProjectDatabaseBridge.animateScenesPath:
-                let savedScenes = ProjectDatabaseBridge.loadSavedScenesFromDisk(projectURL: projectURL)
+            case AnimateProjectBridge.animateScenesPath:
+                let savedScenes = AnimateProjectBridge.loadSavedScenesFromDisk(projectURL: projectURL)
                 await MainActor.run {
                     for index in self.scenes.indices {
                         guard let savedScene = savedScenes[self.scenes[index].owpSongPath] else { continue }
@@ -5722,7 +5722,7 @@ hydrateRunPodSettings()
                         Task { await self.loadSongData(for: selectedScene) }
                     }
                 }
-            case ProjectDatabaseBridge.animatePlacesPath, ProjectDatabaseBridge.animatePlacesWorkflowPath:
+            case AnimateProjectBridge.animatePlacesPath, AnimateProjectBridge.animatePlacesWorkflowPath:
                 await MainActor.run {
                     guard let animateDir = self.animateURL else { return }
                     self.backgrounds = self.loadPlacesPreservingCurrent(from: animateDir)
@@ -5734,13 +5734,13 @@ hydrateRunPodSettings()
                     self.markAgentUpdated()
                     self.statusMessage = "Reloaded external project changes"
                 }
-            case ProjectDatabaseBridge.animatedLookPromptPath:
+            case AnimateProjectBridge.animatedLookPromptPath:
                 await MainActor.run {
                     self.syncMasterAnimatedLookPromptFromProject(projectURL)
                     self.markAgentUpdated(paths: [path])
                     self.statusMessage = "Reloaded animated look prompt"
                 }
-            case ProjectDatabaseBridge.characterPackageSelectionsPath:
+            case AnimateProjectBridge.characterPackageSelectionsPath:
                 let manifest = characterPackageSelectionStore
                     .load(from: ProjectPaths(root: projectURL).animate)
                 await MainActor.run {
@@ -5748,7 +5748,7 @@ hydrateRunPodSettings()
                     self.markAgentUpdated()
                     self.statusMessage = "Reloaded external project changes"
                 }
-            case ProjectDatabaseBridge.shotPresetsPath:
+            case AnimateProjectBridge.shotPresetsPath:
                 let manifest = sceneShotPresetStore.load(from: ProjectPaths(root: projectURL).animate)
                 await MainActor.run {
                     self.shotPresets = self.sortedShotPresets(manifest.presets)
@@ -6720,7 +6720,7 @@ hydrateRunPodSettings()
 
         do {
             // 1. Load OWP data from disk
-            let result = try await ProjectDatabaseBridge.loadAnimateProject(url: url)
+            let result = try await AnimateProjectBridge.loadAnimateProject(url: url)
             let effectiveProjectURL = result.workingProjectURL
             let hasLocalMirror = fm.fileExists(atPath: effectiveProjectURL.path)
             workingOWPURL = effectiveProjectURL
@@ -6758,7 +6758,7 @@ hydrateRunPodSettings()
             fps = animateMetadata?.fps ?? 24
 
             // Load character package selections from disk
-            if let manifest = ProjectDatabaseBridge.loadCharacterPackageSelectionsFromDisk(projectURL: effectiveProjectURL) {
+            if let manifest = AnimateProjectBridge.loadCharacterPackageSelectionsFromDisk(projectURL: effectiveProjectURL) {
                 activePackageIDsByCharacterSlug = manifest.activePackageIDsByCharacterSlug
             } else {
                 activePackageIDsByCharacterSlug = characterPackageSelectionStore
@@ -6767,7 +6767,7 @@ hydrateRunPodSettings()
             }
 
             // Load shot presets from disk
-            if let manifest = ProjectDatabaseBridge.loadShotPresetsFromDisk(projectURL: effectiveProjectURL) {
+            if let manifest = AnimateProjectBridge.loadShotPresetsFromDisk(projectURL: effectiveProjectURL) {
                 shotPresets = sortedShotPresets(manifest.presets)
             } else {
                 shotPresets = sortedShotPresets(sceneShotPresetStore.load(from: animateDir).presets)
@@ -7331,7 +7331,7 @@ hydrateRunPodSettings()
         guard let owpURL = fileOWPURL else { return }
 
         do {
-            if let songData = await ProjectDatabaseBridge.hydrateSongData(
+            if let songData = await AnimateProjectBridge.hydrateSongData(
                 projectURL: owpURL,
                 relativePath: scene.owpSongPath
             ) {
@@ -17008,7 +17008,7 @@ hydrateRunPodSettings()
             self.pendingAnimatedLookPromptProjectURL = nil
             let writeResult: Result<Void, Error> = await Task.detached(priority: .utility) {
                 do {
-                    try ProjectDatabaseBridge.saveAnimatedLookPromptToDisk(value, projectURL: url)
+                    try AnimateProjectBridge.saveAnimatedLookPromptToDisk(value, projectURL: url)
                     return .success(())
                 } catch {
                     return .failure(error)
@@ -17024,7 +17024,7 @@ hydrateRunPodSettings()
     }
 
     private func syncMasterAnimatedLookPromptFromProject(_ projectURL: URL) {
-        let prompt = ProjectDatabaseBridge.loadAnimatedLookPromptFromDisk(projectURL: projectURL) ?? ""
+        let prompt = AnimateProjectBridge.loadAnimatedLookPromptFromDisk(projectURL: projectURL) ?? ""
         UserDefaults.standard.set(prompt, forKey: AnimatedLookPromptSettings.masterPromptDefaultsKey)
     }
 

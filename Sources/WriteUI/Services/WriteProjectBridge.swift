@@ -2,7 +2,7 @@ import Foundation
 import ProjectKit
 
 @available(macOS 26.0, *)
-enum ProjectDatabaseBridge {
+enum WriteProjectBridge {
     static let metadataPaths = ["Metadata/project.json", "project.json"]
     static let charactersPaths = ["Characters/characters.json", "characters.json"]
     static let scratchpadPath = "Write/libretto-scratchpad.txt"

@@ -12,7 +12,7 @@ enum PlacesScriptIndexService {
         var results: [PlacesScriptSceneRequirement] = []
 
         for scene in scenes {
-            let lyrics = await ProjectDatabaseBridge
+            let lyrics = await AnimateProjectBridge
                 .hydrateSongData(projectURL: projectURL, relativePath: scene.owpSongPath)?
                 .extractLyrics() ?? ""
             let locations = extractLocations(from: lyrics, fallbackSceneName: scene.name)

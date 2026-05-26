@@ -1809,7 +1809,7 @@ final class ScoreStore {
         hasPendingAgentChanges = false
         showsRecentAgentUpdate = false
         do {
-            let loaded = try await ProjectDatabaseBridge.loadScoreProject(url: url)
+            let loaded = try await ScoreProjectBridge.loadScoreProject(url: url)
             let meta = loaded.metadata
             let stubs = loaded.stubs
             let isStandalone = url.pathExtension.lowercased() == "ows"
@@ -2077,7 +2077,7 @@ final class ScoreStore {
 
         for path in [
             OWPProjectIO.projectMetadataFile,
-            ProjectDatabaseBridge.legacyMetadataPath,
+            ScoreProjectBridge.legacyMetadataPath,
             OWPProjectIO.projectInstrumentsFile,
             OWPProjectIO.legacyProjectInstrumentsFile,
         ] {
@@ -2244,7 +2244,7 @@ final class ScoreStore {
     private func handleExternalProjectStateChange(path: String, projectURL: URL) {
         beginAgentSync()
 
-        if path == OWPProjectIO.projectMetadataFile || path == ProjectDatabaseBridge.legacyMetadataPath {
+        if path == OWPProjectIO.projectMetadataFile || path == ScoreProjectBridge.legacyMetadataPath {
             if let metadata = loadProjectMetadataFromDisk(projectURL: projectURL) {
                 self.metadata = metadata
             }
@@ -2266,7 +2266,7 @@ final class ScoreStore {
     }
 
     private func loadProjectMetadataFromDisk(projectURL: URL) -> ProjectMetadata? {
-        for path in [OWPProjectIO.projectMetadataFile, ProjectDatabaseBridge.legacyMetadataPath] {
+        for path in [OWPProjectIO.projectMetadataFile, ScoreProjectBridge.legacyMetadataPath] {
             let fileURL = projectURL.appendingPathComponent(path)
             guard FileManager.default.fileExists(atPath: fileURL.path),
                   let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe),

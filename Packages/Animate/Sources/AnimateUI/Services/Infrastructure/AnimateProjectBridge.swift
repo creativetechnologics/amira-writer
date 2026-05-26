@@ -1,7 +1,7 @@
 import Foundation
 import ProjectKit
 
-enum ProjectDatabaseBridge {
+enum AnimateProjectBridge {
     static let animateMetadataPath = "Animate/animate.json"
     /// Wave D: moved from Animate/scenes.json to Scenes/scenes.json.
     static let animateScenesPath = "Scenes/scenes.json"
@@ -284,7 +284,7 @@ enum ProjectDatabaseBridge {
             )
             try data.write(to: fileURL)
         } catch {
-            print("[ProjectDatabaseBridge] ⚠️ Failed to save manifest: \(error.localizedDescription)")
+            print("[AnimateProjectBridge] ⚠️ Failed to save manifest: \(error.localizedDescription)")
         }
     }
 

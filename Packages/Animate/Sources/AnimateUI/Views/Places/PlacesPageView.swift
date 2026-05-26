@@ -879,7 +879,7 @@ private extension PlacesPageView {
     func ensure3DRegistryScaffolding() { }
 
     func reveal3DRegistryRoot() {
-        reveal3DRelativePath(ProjectDatabaseBridge.animate3DRegistryRootPath)
+        reveal3DRelativePath(AnimateProjectBridge.animate3DRegistryRootPath)
     }
 
     func reveal3DRelativePath(_ relativePath: String) {

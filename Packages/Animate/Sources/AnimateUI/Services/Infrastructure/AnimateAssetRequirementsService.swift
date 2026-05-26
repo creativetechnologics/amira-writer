@@ -17,7 +17,7 @@ struct AnimateAssetRequirementsService {
             if scene.id == store.selectedSceneID {
                 songData = store.currentSongData
             } else if let projectURL {
-                songData = await ProjectDatabaseBridge.hydrateSongData(projectURL: projectURL, relativePath: scene.owpSongPath)
+                songData = await AnimateProjectBridge.hydrateSongData(projectURL: projectURL, relativePath: scene.owpSongPath)
             } else {
                 songData = nil
             }

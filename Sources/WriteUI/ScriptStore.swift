@@ -785,7 +785,7 @@ final class ScriptStore {
                 stubs = phase1.stubs
                 loaded = nil
             } else {
-                let result = try await ProjectDatabaseBridge.loadWriterProject(url: url)
+                let result = try await WriteProjectBridge.loadWriterProject(url: url)
                 loaded = result
                 meta = result.metadata
                 stubs = result.stubs
@@ -893,7 +893,7 @@ final class ScriptStore {
 
             if !externallyChangedPaths.isEmpty {
                 let changedSongPaths = externallyChangedPaths.filter {
-                    $0 != ProjectDatabaseBridge.scratchpadPath
+                    $0 != WriteProjectBridge.scratchpadPath
                         && !Self.isLyricIterationRelativePath($0)
                 }
                 for path in changedSongPaths {
@@ -1435,7 +1435,7 @@ final class ScriptStore {
                 .deletingPathExtension()
                 .appendingPathExtension("scratchpad.txt")
         }
-        return projectURL.appendingPathComponent(ProjectDatabaseBridge.scratchpadPath)
+        return projectURL.appendingPathComponent(WriteProjectBridge.scratchpadPath)
     }
 
     private func loadScratchpad(from projectURL: URL) async {
@@ -1473,7 +1473,7 @@ final class ScriptStore {
             try scratchpadDocumentText.write(to: fileURL, atomically: true, encoding: .utf8)
             if let snapshot = fileSnapshot(for: fileURL) {
                 lastKnownModDates["__scratchpad__"] = snapshot.modificationDate
-                lastKnownFileSnapshots[ProjectDatabaseBridge.scratchpadPath] = snapshot
+                lastKnownFileSnapshots[WriteProjectBridge.scratchpadPath] = snapshot
             }
             isScratchpadDirty = false
             refreshSaveIndicator()
@@ -1932,7 +1932,7 @@ final class ScriptStore {
         let scratchpadURL = scratchpadFileURL(for: projectURL)
         if let snapshot = fileSnapshot(for: scratchpadURL) {
             lastKnownModDates["__scratchpad__"] = snapshot.modificationDate
-            lastKnownFileSnapshots[ProjectDatabaseBridge.scratchpadPath] = snapshot
+            lastKnownFileSnapshots[WriteProjectBridge.scratchpadPath] = snapshot
         }
 
         for file in lyricIterationFiles {
@@ -1987,7 +1987,7 @@ final class ScriptStore {
             assetsByPath[stub.relativePath]
                 ?? OWSSongAsset(
                     relativePath: stub.relativePath,
-                    document: ProjectDatabaseBridge.makePlaceholderDocument(from: stub)
+                    document: WriteProjectBridge.makePlaceholderDocument(from: stub)
                 )
         }
         librettoFiles = stubs.map { stub in
@@ -2063,13 +2063,13 @@ final class ScriptStore {
 
         let scratchpadURL = scratchpadFileURL(for: url)
         if let snapshot = fileSnapshot(for: scratchpadURL) {
-            let lastKnown = lastKnownFileSnapshots[ProjectDatabaseBridge.scratchpadPath]
+            let lastKnown = lastKnownFileSnapshots[WriteProjectBridge.scratchpadPath]
             if lastKnown == nil {
                 lastKnownModDates["__scratchpad__"] = snapshot.modificationDate
-                lastKnownFileSnapshots[ProjectDatabaseBridge.scratchpadPath] = snapshot
+                lastKnownFileSnapshots[WriteProjectBridge.scratchpadPath] = snapshot
             } else if snapshot != lastKnown! {
                 lastKnownModDates["__scratchpad__"] = snapshot.modificationDate
-                lastKnownFileSnapshots[ProjectDatabaseBridge.scratchpadPath] = snapshot
+                lastKnownFileSnapshots[WriteProjectBridge.scratchpadPath] = snapshot
                 if let data = try? Data(contentsOf: scratchpadURL),
                    let text = String(data: data, encoding: .utf8),
                    text != scratchpadDocumentText {
@@ -2083,8 +2083,8 @@ final class ScriptStore {
                     appendProjectHistory(
                         kind: .externalReload,
                         title: "Reloaded scratchpad from disk",
-                        message: ProjectDatabaseBridge.scratchpadPath,
-                        relativePaths: [ProjectDatabaseBridge.scratchpadPath]
+                        message: WriteProjectBridge.scratchpadPath,
+                        relativePaths: [WriteProjectBridge.scratchpadPath]
                     )
                     refreshGitHistory()
                     markAgentUpdated()
@@ -2423,7 +2423,7 @@ final class ScriptStore {
 
         let scratchpadURL = scratchpadFileURL(for: projectURL)
         if let snapshot = fileSnapshot(for: scratchpadURL) {
-            snapshots[ProjectDatabaseBridge.scratchpadPath] = snapshot
+            snapshots[WriteProjectBridge.scratchpadPath] = snapshot
         }
 
         for stub in stubs {

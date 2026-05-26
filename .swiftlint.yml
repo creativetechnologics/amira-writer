@@ -1,0 +1,45 @@
+disabled_rules:
+  - trailing_comma
+  - todo
+opt_in_rules:
+  - empty_count
+  - first_where
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - missing_docs
+  - operator_usage_whitespace
+  - overridden_super_call
+  - private_action
+  - private_outlet
+  - prohibited_super_call
+  - sorted_first_last
+  - vertical_whitespace
+  - weak_delegate
+excluded:
+  - .build
+  - build
+  - .claude
+  - Packages/Score/.build
+  - Packages/ProjectKit/.build
+file_length:
+  warning: 500
+  error: 1000
+function_body_length:
+  warning: 60
+  error: 120
+type_body_length:
+  warning: 300
+  error: 600
+cyclomatic_complexity:
+  warning: 15
+  error: 25
+identifier_name:
+  excluded:
+    - id
+    - x
+    - y
+    - z
+    - r
+    - g
+    - b
+    - a

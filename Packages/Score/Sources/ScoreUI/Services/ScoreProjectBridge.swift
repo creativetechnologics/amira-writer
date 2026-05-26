@@ -1,7 +1,7 @@
 import Foundation
 import ProjectKit
 
-enum ProjectDatabaseBridge {
+enum ScoreProjectBridge {
     static let scoreActorID = ProjectClientIdentity.actorID(for: "score")
     static let legacyScoreActorID = ProjectClientIdentity.actorID(for: "amira-score")
     static let scoreActorIDs: Set<String> = [scoreActorID, legacyScoreActorID]
