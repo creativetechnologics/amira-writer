@@ -1,6 +1,47 @@
 import Foundation
 import CoreGraphics
 
+enum LegacyFlexibleDateDecoding {
+    static func decodeIfPresent<Key: CodingKey>(
+        from container: KeyedDecodingContainer<Key>,
+        forKey key: Key
+    ) -> Date? {
+        if let date = try? container.decodeIfPresent(Date.self, forKey: key) {
+            return date
+        }
+
+        if let seconds = try? container.decodeIfPresent(Double.self, forKey: key) {
+            // Legacy rigs were written by Swift's default Date encoding, which
+            // stores seconds since Apple's 2001 reference date. The current
+            // JSONCoders use ISO-8601 strings, so accept both.
+            return Date(timeIntervalSinceReferenceDate: seconds)
+        }
+
+        if let seconds = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return Date(timeIntervalSinceReferenceDate: TimeInterval(seconds))
+        }
+
+        if let rawString = try? container.decodeIfPresent(String.self, forKey: key) {
+            let trimmed = rawString.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let numeric = Double(trimmed) {
+                return Date(timeIntervalSinceReferenceDate: numeric)
+            }
+            let fractionalFormatter = ISO8601DateFormatter()
+            fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = fractionalFormatter.date(from: trimmed) {
+                return date
+            }
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            if let date = formatter.date(from: trimmed) {
+                return date
+            }
+        }
+
+        return nil
+    }
+}
+
 struct CropRect: Codable, Sendable, Hashable {
     var x: Double
     var y: Double
@@ -106,7 +147,8 @@ struct CharacterLookDevelopmentVariant: Identifiable, Codable, Sendable, Hashabl
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         imagePath = try c.decodeIfPresent(String.self, forKey: .imagePath) ?? ""
         prompt = try c.decodeIfPresent(String.self, forKey: .prompt) ?? ""
-        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date(timeIntervalSinceReferenceDate: 0)
+        createdAt = LegacyFlexibleDateDecoding.decodeIfPresent(from: c, forKey: .createdAt)
+            ?? Date(timeIntervalSinceReferenceDate: 0)
         aspectRatio = try c.decodeIfPresent(String.self, forKey: .aspectRatio) ?? "1:1"
         imageSize = try c.decodeIfPresent(String.self, forKey: .imageSize) ?? "2K"
         model = try c.decodeIfPresent(String.self, forKey: .model) ?? ""

@@ -547,11 +547,12 @@ struct CharacterInspirationBatchJob: Identifiable, Codable, Sendable, Hashable {
         outputRootPath = try c.decodeIfPresent(String.self, forKey: .outputRootPath) ?? ""
         state = try c.decodeIfPresent(String.self, forKey: .state) ?? "JOB_STATE_PENDING"
         promptCount = try c.decodeIfPresent(Int.self, forKey: .promptCount) ?? 0
-        submittedAt = try c.decodeIfPresent(Date.self, forKey: .submittedAt) ?? Date(timeIntervalSinceReferenceDate: 0)
-        lastCheckedAt = try c.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
-        remoteUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .remoteUpdatedAt)
-        remoteStartedAt = try c.decodeIfPresent(Date.self, forKey: .remoteStartedAt)
-        remoteFinishedAt = try c.decodeIfPresent(Date.self, forKey: .remoteFinishedAt)
+        submittedAt = LegacyFlexibleDateDecoding.decodeIfPresent(from: c, forKey: .submittedAt)
+            ?? Date(timeIntervalSinceReferenceDate: 0)
+        lastCheckedAt = LegacyFlexibleDateDecoding.decodeIfPresent(from: c, forKey: .lastCheckedAt)
+        remoteUpdatedAt = LegacyFlexibleDateDecoding.decodeIfPresent(from: c, forKey: .remoteUpdatedAt)
+        remoteStartedAt = LegacyFlexibleDateDecoding.decodeIfPresent(from: c, forKey: .remoteStartedAt)
+        remoteFinishedAt = LegacyFlexibleDateDecoding.decodeIfPresent(from: c, forKey: .remoteFinishedAt)
         remoteSuccessfulCount = try c.decodeIfPresent(Int.self, forKey: .remoteSuccessfulCount)
         downloadedImagePaths = try c.decodeIfPresent([String].self, forKey: .downloadedImagePaths) ?? []
         autoImportedImagePaths = try c.decodeIfPresent([String].self, forKey: .autoImportedImagePaths) ?? []
@@ -931,6 +932,15 @@ struct Character3DModel: Codable, Identifiable, Sendable {
     var notes: String = ""
     var dateAdded: Date = Date()
 
+    enum CodingKeys: String, CodingKey {
+        case id
+        case costumeName
+        case modelFileName
+        case modelFormat
+        case notes
+        case dateAdded
+    }
+
     init(
         id: UUID = UUID(),
         costumeName: String,
@@ -945,6 +955,17 @@ struct Character3DModel: Codable, Identifiable, Sendable {
         self.modelFormat = modelFormat
         self.notes = notes
         self.dateAdded = dateAdded
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        costumeName = try c.decodeIfPresent(String.self, forKey: .costumeName) ?? ""
+        modelFileName = try c.decodeIfPresent(String.self, forKey: .modelFileName) ?? ""
+        modelFormat = try c.decodeIfPresent(String.self, forKey: .modelFormat) ?? ""
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        dateAdded = LegacyFlexibleDateDecoding.decodeIfPresent(from: c, forKey: .dateAdded)
+            ?? Date(timeIntervalSinceReferenceDate: 0)
     }
 }
 

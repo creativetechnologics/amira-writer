@@ -5784,6 +5784,7 @@ hydrateRunPodSettings()
                 await MainActor.run {
                     if let slug = self.characterSlugForRigRelativePath(path),
                        let persisted = self.loadPersistedCharacterState(for: slug) {
+                        self.invalidateAssetURLCache()
                         if let index = self.characters.firstIndex(where: {
                             $0.assetFolderSlug == slug || $0.storageSlug == slug || $0.owpSlug == slug
                         }) {
@@ -7128,9 +7129,8 @@ hydrateRunPodSettings()
             let ms = Int(Date().timeIntervalSince(saveStart) * 1000)
             AppLog.log("STORE", "save(writePlaces: \(writePlaces)) — \(characters.count) chars, \(ms) ms")
         }
-        let wasSyncingBeforeCheck = isAgentSyncInProgress
         checkForExternalProjectChanges()
-        guard !wasSyncingBeforeCheck, !hasPendingAgentChanges else {
+        guard !isAgentSyncInProgress, !hasPendingAgentChanges else {
             statusMessage = "Detected newer agent changes. Reloading them before saving."
             return
         }
@@ -7160,8 +7160,14 @@ hydrateRunPodSettings()
             }
             try saveCanonicalSceneAnimationState(projectURL: savePaths.root, encoder: encoder)
 
-            // Save each character state to Animate/characters/{slug}/rig.json
-            for character in characters {
+            // Save each character state to Characters/{slug}/rig.json. Before
+            // writing, protect against catastrophic image/reference loss: if a
+            // stale in-memory character has far fewer reference assets than the
+            // rig currently on disk, preserve the richer on-disk reference
+            // workflow fields instead of overwriting them with empty arrays.
+            let charactersToPersist = characters.map { characterProtectedAgainstDestructiveAssetLossForSave($0) }
+            characters = charactersToPersist
+            for character in charactersToPersist {
                 let charDir = savePaths.characterFolder(slug: character.assetFolderSlug)
                 try fm.createDirectory(at: charDir, withIntermediateDirectories: true)
                 let rigData = try encoder.encode(persistedCharacter(character))
@@ -18445,17 +18451,17 @@ hydrateRunPodSettings()
     }
 
     private func characterRigURL(for slug: String) -> URL? {
-        var directURL: URL?
+        let normalizedSlug = slug.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSlug.isEmpty else { return nil }
+
+        var candidateURLs: [URL] = []
         if let animateURL {
             let candidate = ProjectPaths(root: animateURL.deletingLastPathComponent())
-                .characterRigJSON(slug: slug)
+                .characterRigJSON(slug: normalizedSlug)
             if FileManager.default.fileExists(atPath: candidate.path) {
-                directURL = candidate
+                candidateURLs.append(candidate)
             }
         }
-
-        var matchedOWPRigURL: URL?
-        var fallbackRigURL: URL?
 
         for rigURL in persistedCharacterRigURLsOnDisk() {
             guard let data = try? Data(contentsOf: rigURL),
@@ -18464,26 +18470,48 @@ hydrateRunPodSettings()
                 continue
             }
 
+            let folderSlug = rigURL.deletingLastPathComponent().lastPathComponent
             let rawOWPSlug = (payload["owpSlug"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let rawStorageSlug = (payload["storageSlug"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-            if rawOWPSlug == slug {
-                if !rawStorageSlug.isEmpty,
-                   rigURL.deletingLastPathComponent().lastPathComponent == rawStorageSlug {
-                    return rigURL
-                }
-                matchedOWPRigURL = matchedOWPRigURL ?? rigURL
-                continue
-            }
-
-            if rawStorageSlug == slug || rigURL.deletingLastPathComponent().lastPathComponent == slug {
-                fallbackRigURL = fallbackRigURL ?? rigURL
+            if rawOWPSlug == normalizedSlug
+                || rawStorageSlug == normalizedSlug
+                || folderSlug == normalizedSlug {
+                candidateURLs.append(rigURL)
             }
         }
 
-        return matchedOWPRigURL ?? fallbackRigURL ?? directURL
+        var seen = Set<String>()
+        let uniqueCandidates = candidateURLs.filter { candidate in
+            seen.insert(candidate.standardizedFileURL.path).inserted
+        }
+        guard !uniqueCandidates.isEmpty else { return nil }
+
+        func score(for candidate: URL) -> Int {
+            let fallback = candidate.deletingLastPathComponent().lastPathComponent
+            return bestPersistedCharacterState(forRigURL: candidate, fallbackSlug: fallback)
+                .map(characterReferenceAssetScore) ?? 0
+        }
+
+        return uniqueCandidates.max { lhs, rhs in
+            let lhsScore = score(for: lhs)
+            let rhsScore = score(for: rhs)
+            if lhsScore != rhsScore {
+                return lhsScore < rhsScore
+            }
+
+            let lhsFolder = lhs.deletingLastPathComponent().lastPathComponent
+            let rhsFolder = rhs.deletingLastPathComponent().lastPathComponent
+            let lhsIsExactFolder = lhsFolder == normalizedSlug
+            let rhsIsExactFolder = rhsFolder == normalizedSlug
+            if lhsIsExactFolder != rhsIsExactFolder {
+                return !lhsIsExactFolder && rhsIsExactFolder
+            }
+
+            return lhs.path < rhs.path
+        }
     }
 
     private func schemaVersionForCharacterRigData(_ data: Data) -> Int {
@@ -18530,7 +18558,112 @@ hydrateRunPodSettings()
         try data.write(to: rigURL, options: .atomic)
     }
 
-    private func decodePersistedCharacterState(at rigURL: URL, fallbackSlug: String) -> AnimationCharacter? {
+    private func decodeLossyRigValue<Value: Decodable>(_ type: Value.Type, from rawValue: Any?) -> Value? {
+        guard let rawValue,
+              JSONSerialization.isValidJSONObject(["value": rawValue]),
+              let data = try? JSONSerialization.data(withJSONObject: ["value": rawValue]),
+              let wrapper = try? JSONCoders.makeDecoder().decode([String: Value].self, from: data) else {
+            return nil
+        }
+        return wrapper["value"]
+    }
+
+    private func decodeLossyRigArray<Value: Decodable>(_ type: Value.Type, from rawValue: Any?) -> [Value] {
+        guard let rawArray = rawValue as? [Any] else { return [] }
+        return rawArray.compactMap { item in
+            decodeLossyRigValue(Value.self, from: item)
+        }
+    }
+
+    private func stringArrayFromRawRig(_ payload: [String: Any], key: String) -> [String] {
+        (payload[key] as? [Any])?.compactMap { $0 as? String } ?? []
+    }
+
+    private func uuidFromRawRig(_ payload: [String: Any], key: String) -> UUID? {
+        if let uuid = payload[key] as? UUID { return uuid }
+        if let string = payload[key] as? String { return UUID(uuidString: string) }
+        return nil
+    }
+
+    private func decodeLegacyCharacterRigLossy(
+        from rigData: Data,
+        rigURL: URL,
+        fallbackSlug: String
+    ) -> AnimationCharacter? {
+        guard let payload = try? JSONSerialization.jsonObject(with: rigData) as? [String: Any] else {
+            return nil
+        }
+
+        let fallbackName = fallbackSlug
+            .replacingOccurrences(of: "-", with: " ")
+            .capitalized
+        let name = (payload["name"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let owpSlug = (payload["owpSlug"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let storageSlug = (payload["storageSlug"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var character = AnimationCharacter(
+            schemaVersion: schemaVersionForCharacterRigData(rigData),
+            id: uuidFromRawRig(payload, key: "id") ?? UUID(),
+            sortOrder: payload["sortOrder"] as? Int,
+            name: name?.isEmpty == false ? name! : fallbackName,
+            description: payload["description"] as? String ?? "",
+            owpSlug: owpSlug?.isEmpty == false ? owpSlug! : fallbackSlug,
+            storageSlug: storageSlug?.isEmpty == false ? storageSlug : fallbackSlug,
+            renderMode: decodeLossyRigValue(CharacterCanvasRenderMode.self, from: payload["renderMode"]),
+            preferredViewAngle: decodeLossyRigValue(AngleView.self, from: payload["preferredViewAngle"]),
+            parts: decodeLossyRigArray(RigPart.self, from: payload["parts"]),
+            profileImagePath: payload["profileImagePath"] as? String,
+            backstory: payload["backstory"] as? String ?? "",
+            personality: payload["personality"] as? String ?? "",
+            notes: payload["notes"] as? String ?? "",
+            promptNotes: payload["promptNotes"] as? String ?? payload["description"] as? String ?? "",
+            defaultWardrobeType: decodeLossyRigValue(CharacterWardrobeType.self, from: payload["defaultWardrobeType"]) ?? .soldier,
+            genderType: decodeLossyRigValue(CharacterGenderType.self, from: payload["genderType"]) ?? .person,
+            age: payload["age"] as? Int,
+            inspirationImagePaths: stringArrayFromRawRig(payload, key: "inspirationImagePaths"),
+            curatedInspirationImagePaths: stringArrayFromRawRig(payload, key: "curatedInspirationImagePaths"),
+            reviewedInspirationImagePaths: Set(stringArrayFromRawRig(payload, key: "reviewedInspirationImagePaths")),
+            inspirationReferenceImagePath: payload["inspirationReferenceImagePath"] as? String,
+            inspirationRatings: payload["inspirationRatings"] as? [String: Int],
+            inspirationNotes: payload["inspirationNotes"] as? [String: String],
+            inspirationRejectedPaths: Set(stringArrayFromRawRig(payload, key: "inspirationRejectedPaths")),
+            inspirationBatchJobs: decodeLossyRigArray(CharacterInspirationBatchJob.self, from: payload["inspirationBatchJobs"]),
+            referenceImagePaths: stringArrayFromRawRig(payload, key: "referenceImagePaths"),
+            animatedImagePaths: stringArrayFromRawRig(payload, key: "animatedImagePaths"),
+            shotReferenceImages: decodeLossyRigArray(CharacterShotReferenceImage.self, from: payload["shotReferenceImages"]),
+            lookDevelopmentSlots: decodeLossyRigArray(CharacterLookDevelopmentSlot.self, from: payload["lookDevelopmentSlots"]),
+            masterReferenceSheetPrompt: payload["masterReferenceSheetPrompt"] as? String ?? "",
+            masterReferenceSourceImagePaths: stringArrayFromRawRig(payload, key: "masterReferenceSourceImagePaths"),
+            masterReferenceSheetVariants: decodeLossyRigArray(CharacterLookDevelopmentVariant.self, from: payload["masterReferenceSheetVariants"]),
+            approvedMasterReferenceSheetVariantID: uuidFromRawRig(payload, key: "approvedMasterReferenceSheetVariantID"),
+            headTurnaroundSheetPrompt: payload["headTurnaroundSheetPrompt"] as? String ?? "",
+            headTurnaroundSheetVariants: decodeLossyRigArray(CharacterLookDevelopmentVariant.self, from: payload["headTurnaroundSheetVariants"]),
+            approvedHeadTurnaroundSheetVariantID: uuidFromRawRig(payload, key: "approvedHeadTurnaroundSheetVariantID"),
+            headTurnaroundSlots: decodeLossyRigArray(CharacterPoseSlot.self, from: payload["headTurnaroundSlots"]),
+            expressionReferenceSets: decodeLossyRigArray(CharacterExpressionReferenceSet.self, from: payload["expressionReferenceSets"]),
+            costumeReferenceSets: decodeLossyRigArray(CharacterCostumeReferenceSet.self, from: payload["costumeReferenceSets"]),
+            models3D: decodeLossyRigArray(Character3DModel.self, from: payload["models3D"]),
+            activeLORAFilename: payload["activeLORAFilename"] as? String,
+            activeLORATriggerWord: payload["activeLORATriggerWord"] as? String,
+            activeLORAWeight: payload["activeLORAWeight"] as? Double
+        )
+
+        character = normalizedPersistedCharacterState(character, fallbackSlug: fallbackSlug)
+        AppLog.log(
+            "STORE",
+            "Lossy-decoded legacy character rig at \(rigURL.path) with reference score \(characterReferenceAssetScore(character))"
+        )
+        return character
+    }
+
+    private func decodePersistedCharacterState(
+        at rigURL: URL,
+        fallbackSlug: String,
+        allowMigrationWrite: Bool = true
+    ) -> AnimationCharacter? {
         guard FileManager.default.fileExists(atPath: rigURL.path) else {
             return nil
         }
@@ -18544,7 +18677,7 @@ hydrateRunPodSettings()
             let normalized = normalizedPersistedCharacterState(decoded, fallbackSlug: fallbackSlug)
             let originalSchemaVersion = schemaVersionForCharacterRigData(rigData)
 
-            if originalSchemaVersion < AnimationCharacter.currentSchemaVersion {
+            if allowMigrationWrite, originalSchemaVersion < AnimationCharacter.currentSchemaVersion {
                 do {
                     let backupURL = try backupCharacterRigBeforeMigration(
                         rigURL: rigURL,
@@ -18560,8 +18693,64 @@ hydrateRunPodSettings()
 
             return normalized
         } catch {
-            print("AnimateStore: failed to decode character rig at \(rigURL.path): \(error)")
-            return nil
+            AppLog.log("STORE", "Failed to decode character rig at \(rigURL.path): \(String(reflecting: error))")
+            return decodeLegacyCharacterRigLossy(
+                from: rigData,
+                rigURL: rigURL,
+                fallbackSlug: fallbackSlug
+            )
+        }
+    }
+
+    private func characterRigRecoveryCandidateURLs(for rigURL: URL) -> [URL] {
+        let fm = FileManager.default
+        let characterDir = rigURL.deletingLastPathComponent()
+        let backupsDir = characterDir.appendingPathComponent("backups", isDirectory: true)
+        var candidates: [URL] = [rigURL]
+
+        if let items = try? fm.contentsOfDirectory(
+            at: characterDir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            candidates.append(contentsOf: items.filter { url in
+                let name = url.lastPathComponent
+                return name.hasPrefix("rig.restore-source-") && name.hasSuffix(".json")
+                    || name.hasPrefix("rig.sync-conflict-") && name.hasSuffix(".json")
+            })
+        }
+
+        if let backupItems = try? fm.contentsOfDirectory(
+            at: backupsDir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            candidates.append(contentsOf: backupItems.filter { $0.pathExtension == "json" })
+        }
+
+        var seen = Set<String>()
+        return candidates
+            .filter { seen.insert($0.standardizedFileURL.path).inserted }
+            .sorted { lhs, rhs in
+                if lhs == rigURL { return true }
+                if rhs == rigURL { return false }
+                if lhs.lastPathComponent == "latest-pre-migration-rig.json" { return true }
+                if rhs.lastPathComponent == "latest-pre-migration-rig.json" { return false }
+                return lhs.lastPathComponent > rhs.lastPathComponent
+            }
+    }
+
+    private func bestPersistedCharacterState(forRigURL rigURL: URL, fallbackSlug: String) -> AnimationCharacter? {
+        let decodedCandidates = characterRigRecoveryCandidateURLs(for: rigURL).compactMap { candidateURL -> AnimationCharacter? in
+            decodePersistedCharacterState(
+                at: candidateURL,
+                fallbackSlug: fallbackSlug,
+                allowMigrationWrite: candidateURL.standardizedFileURL == rigURL.standardizedFileURL
+            )
+        }
+        guard !decodedCandidates.isEmpty else { return nil }
+        return decodedCandidates.max {
+            characterReferenceAssetScore($0) < characterReferenceAssetScore($1)
         }
     }
 
@@ -18570,80 +18759,24 @@ hydrateRunPodSettings()
         let fallback = rigURL.deletingLastPathComponent().lastPathComponent.isEmpty
             ? slug
             : rigURL.deletingLastPathComponent().lastPathComponent
-        return decodePersistedCharacterState(at: rigURL, fallbackSlug: fallback)
+        return bestPersistedCharacterState(forRigURL: rigURL, fallbackSlug: fallback)
     }
 
     private func persistedCharactersOnDisk() -> [AnimationCharacter] {
         persistedCharacterRigURLsOnDisk().compactMap { rigURL in
-            decodePersistedCharacterState(
-                at: rigURL,
+            bestPersistedCharacterState(
+                forRigURL: rigURL,
                 fallbackSlug: rigURL.deletingLastPathComponent().lastPathComponent
             )
         }
     }
 
-    /// Parallel variant: reads + JSON-decodes each `rig.json` on a detached task,
-    /// then fans back in on the MainActor to normalize + migrate in order. Migration
-    /// writes stay on the MainActor because they touch backup state on disk under the
-    /// project. The speed-up is the file I/O + initial JSON decode done concurrently.
+    /// Async facade retained for callers that already await project hydration.
+    /// Character rigs are intentionally decoded through `persistedCharactersOnDisk()`
+    /// so decode failures can use the same lossy legacy fallback and recovery
+    /// candidates (`rig.restore-source-*`, `rig.sync-conflict-*`, backups).
     private func persistedCharactersOnDiskAsync() async -> [AnimationCharacter] {
-        let rigURLs = persistedCharacterRigURLsOnDisk()
-        guard !rigURLs.isEmpty else { return [] }
-
-        struct RawRig: Sendable {
-            let index: Int
-            let rigURL: URL
-            let data: Data
-            let decoded: AnimationCharacter
-            let fallbackSlug: String
-        }
-
-        let raws: [RawRig] = await withTaskGroup(of: RawRig?.self) { group in
-            for (index, rigURL) in rigURLs.enumerated() {
-                let fallback = rigURL.deletingLastPathComponent().lastPathComponent
-                group.addTask(priority: .userInitiated) {
-                    guard FileManager.default.fileExists(atPath: rigURL.path),
-                          let data = try? Data(contentsOf: rigURL),
-                          let decoded = try? JSONCoders.makeDecoder().decode(AnimationCharacter.self, from: data) else {
-                        return nil
-                    }
-                    return RawRig(
-                        index: index,
-                        rigURL: rigURL,
-                        data: data,
-                        decoded: decoded,
-                        fallbackSlug: fallback
-                    )
-                }
-            }
-            var out: [RawRig] = []
-            for await item in group {
-                if let item { out.append(item) }
-            }
-            return out.sorted { $0.index < $1.index }
-        }
-
-        var output: [AnimationCharacter] = []
-        output.reserveCapacity(raws.count)
-        for raw in raws {
-            let normalized = normalizedPersistedCharacterState(raw.decoded, fallbackSlug: raw.fallbackSlug)
-            let originalSchemaVersion = schemaVersionForCharacterRigData(raw.data)
-            if originalSchemaVersion < AnimationCharacter.currentSchemaVersion {
-                do {
-                    _ = try backupCharacterRigBeforeMigration(
-                        rigURL: raw.rigURL,
-                        originalData: raw.data,
-                        originalSchemaVersion: originalSchemaVersion
-                    )
-                    try writeMigratedCharacterRig(normalized, to: raw.rigURL)
-                    print("AnimateStore: migrated character rig at \(raw.rigURL.path) to schema v\(AnimationCharacter.currentSchemaVersion)")
-                } catch {
-                    print("AnimateStore: failed to migrate character rig at \(raw.rigURL.path): \(error)")
-                }
-            }
-            output.append(normalized)
-        }
-        return output
+        persistedCharactersOnDisk()
     }
 
     @MainActor
@@ -18742,6 +18875,114 @@ hydrateRunPodSettings()
         return didChange
     }
 
+    private func characterReferenceAssetScore(_ character: AnimationCharacter) -> Int {
+        func variantCount(_ variants: [CharacterLookDevelopmentVariant]) -> Int {
+            variants.count
+        }
+
+        func poseSlotVariantCount(_ slots: [CharacterPoseSlot]) -> Int {
+            slots.reduce(0) { $0 + $1.variants.count }
+        }
+
+        func accessorySlotVariantCount(_ slots: [CharacterAccessorySlot]) -> Int {
+            slots.reduce(0) { $0 + $1.variants.count }
+        }
+
+        let costumeScore = character.costumeReferenceSets.reduce(0) { partial, set in
+            partial
+                + set.costumeReferenceImagePaths.count
+                + set.generatedVariationImagePaths.count
+                + variantCount(set.sheetVariants) * 4
+                + poseSlotVariantCount(set.fullBodySlots) * 3
+                + accessorySlotVariantCount(set.accessorySlots) * 3
+        }
+
+        let expressionScore = character.expressionReferenceSets.reduce(0) { partial, set in
+            partial + variantCount(set.variants) * 3
+        }
+
+        let lookDevelopmentScore = character.lookDevelopmentSlots.reduce(0) { partial, slot in
+            partial + variantCount(slot.variants) * 3
+        }
+
+        return (character.profileImagePath == nil ? 0 : 2)
+            + (character.inspirationReferenceImagePath == nil ? 0 : 1)
+            + character.inspirationImagePaths.count
+            + character.curatedInspirationImagePaths.count * 2
+            + character.referenceImagePaths.count * 2
+            + character.animatedImagePaths.count * 3
+            + character.masterReferenceSourceImagePaths.count * 2
+            + variantCount(character.masterReferenceSheetVariants) * 5
+            + variantCount(character.headTurnaroundSheetVariants) * 5
+            + poseSlotVariantCount(character.headTurnaroundSlots) * 3
+            + expressionScore
+            + lookDevelopmentScore
+            + costumeScore
+    }
+
+    private func characterReferenceAssetLossLooksDestructive(
+        currentScore: Int,
+        persistedScore: Int
+    ) -> Bool {
+        guard persistedScore > currentScore else { return false }
+        if currentScore == 0 { return true }
+        if persistedScore >= currentScore + 10 { return true }
+        return persistedScore >= currentScore * 2
+    }
+
+    private func characterProtectedAgainstDestructiveAssetLossForSave(
+        _ character: AnimationCharacter
+    ) -> AnimationCharacter {
+        let persistedCharacter = loadPersistedCharacterState(for: character.owpSlug)
+            ?? loadPersistedCharacterState(for: character.assetFolderSlug)
+        guard let persistedCharacter else { return character }
+
+        let currentScore = characterReferenceAssetScore(character)
+        let persistedScore = characterReferenceAssetScore(persistedCharacter)
+        guard characterReferenceAssetLossLooksDestructive(
+            currentScore: currentScore,
+            persistedScore: persistedScore
+        ) else {
+            return character
+        }
+
+        var protected = character
+
+        protected.profileImagePath = persistedCharacter.profileImagePath
+        protected.inspirationImagePaths = persistedCharacter.inspirationImagePaths
+        protected.curatedInspirationImagePaths = persistedCharacter.curatedInspirationImagePaths
+        protected.reviewedInspirationImagePaths = persistedCharacter.reviewedInspirationImagePaths
+        protected.inspirationReferenceImagePath = persistedCharacter.inspirationReferenceImagePath
+        protected.inspirationRatings = persistedCharacter.inspirationRatings
+        protected.inspirationNotes = persistedCharacter.inspirationNotes
+        protected.inspirationRejectedPaths = persistedCharacter.inspirationRejectedPaths
+        protected.inspirationBatchJobs = persistedCharacter.inspirationBatchJobs
+        protected.referenceImagePaths = persistedCharacter.referenceImagePaths
+        protected.animatedImagePaths = persistedCharacter.animatedImagePaths
+        protected.shotReferenceImages = persistedCharacter.shotReferenceImages
+        protected.lookDevelopmentSlots = persistedCharacter.lookDevelopmentSlots
+
+        protected.masterReferenceSheetPrompt = persistedCharacter.masterReferenceSheetPrompt
+        protected.masterReferenceSourceImagePaths = persistedCharacter.masterReferenceSourceImagePaths
+        protected.masterReferenceSheetVariants = persistedCharacter.masterReferenceSheetVariants
+        protected.approvedMasterReferenceSheetVariantID = persistedCharacter.approvedMasterReferenceSheetVariantID
+
+        protected.headTurnaroundSheetPrompt = persistedCharacter.headTurnaroundSheetPrompt
+        protected.headTurnaroundSheetVariants = persistedCharacter.headTurnaroundSheetVariants
+        protected.approvedHeadTurnaroundSheetVariantID = persistedCharacter.approvedHeadTurnaroundSheetVariantID
+        protected.headTurnaroundSlots = persistedCharacter.headTurnaroundSlots
+
+        protected.expressionReferenceSets = persistedCharacter.expressionReferenceSets
+        protected.costumeReferenceSets = persistedCharacter.costumeReferenceSets
+        protected.models3D = persistedCharacter.models3D
+
+        AppLog.log(
+            "STORE",
+            "Preserved richer on-disk character reference assets for \(character.name) while saving (memory score \(currentScore), disk score \(persistedScore))"
+        )
+        return protected
+    }
+
     private func syncCharactersFromOWP(
         _ sourceCharacters: [OPWCharacter],
         prefetchedPersistedCharacters: [AnimationCharacter]? = nil
@@ -18751,12 +18992,20 @@ hydrateRunPodSettings()
         let persistedCharacters = prefetchedPersistedCharacters ?? persistedCharactersOnDisk()
         let persistedByOWPSlug = persistedCharacters.reduce(into: [String: AnimationCharacter]()) { partialResult, character in
             let key = character.owpSlug.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty, partialResult[key] == nil else { return }
+            guard !key.isEmpty else { return }
+            if let current = partialResult[key],
+               characterReferenceAssetScore(current) >= characterReferenceAssetScore(character) {
+                return
+            }
             partialResult[key] = character
         }
         let persistedByStorageSlug = persistedCharacters.reduce(into: [String: AnimationCharacter]()) { partialResult, character in
             let key = character.assetFolderSlug.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty, partialResult[key] == nil else { return }
+            guard !key.isEmpty else { return }
+            if let current = partialResult[key],
+               characterReferenceAssetScore(current) >= characterReferenceAssetScore(character) {
+                return
+            }
             partialResult[key] = character
         }
 
@@ -18771,6 +19020,11 @@ hydrateRunPodSettings()
             let sourceName = sourceCharacter.name.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if var existing = existingBySlug[slug] {
+                let persistedCharacter = persistedByOWPSlug[slug] ?? persistedByStorageSlug[slug]
+                if let persistedCharacter,
+                   characterReferenceAssetScore(persistedCharacter) > characterReferenceAssetScore(existing) {
+                    existing = persistedCharacter
+                }
                 let persistedName = existing.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 let resolvedName = persistedName.isEmpty ? sourceName : persistedName
                 let defaultCostumeSetsByName = Dictionary(
@@ -19031,9 +19285,38 @@ hydrateRunPodSettings()
             updatedCharacters.append(persistedCharacter)
         }
 
-        // Keep unknown local characters so external manifest edits never destroy local in-memory work.
-        for existing in characters where !seenSlugs.contains(existing.owpSlug) {
+        // Keep genuinely unknown local characters so external manifest edits
+        // never destroy local in-memory work. Do not keep stale duplicates that
+        // share an ID or storage slug with an OWP-backed character: that was
+        // causing old "johnny"/"luke"/"mark"/"matt"/"new-character" in-memory
+        // rows to be saved after the canonical rows and overwrite restored
+        // reference-workflow assets with empty arrays.
+        var representedCharacterIDs = Set(updatedCharacters.map(\.id))
+        var representedOWPSlugs = Set(
+            updatedCharacters.map { $0.owpSlug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { !$0.isEmpty }
+        )
+        var representedStorageSlugs = Set(
+            updatedCharacters.map { $0.assetFolderSlug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { !$0.isEmpty }
+        )
+        for existing in characters {
+            let existingOWPSlug = existing.owpSlug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let existingStorageSlug = existing.assetFolderSlug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !representedCharacterIDs.contains(existing.id),
+                  (existingOWPSlug.isEmpty || !representedOWPSlugs.contains(existingOWPSlug)),
+                  (existingStorageSlug.isEmpty || !representedStorageSlugs.contains(existingStorageSlug))
+            else {
+                continue
+            }
             updatedCharacters.append(existing)
+            representedCharacterIDs.insert(existing.id)
+            if !existingOWPSlug.isEmpty {
+                representedOWPSlugs.insert(existingOWPSlug)
+            }
+            if !existingStorageSlug.isEmpty {
+                representedStorageSlugs.insert(existingStorageSlug)
+            }
         }
 
         characters = updatedCharacters.sorted {
