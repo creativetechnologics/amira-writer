@@ -102,6 +102,25 @@ private final class OperaAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[Phase1cHook] applicationDidFinishLaunching entered")
+        // MARK: Debug: write a marker file immediately
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let markerURL = homeDir.appendingPathComponent("Library/Logs/amira-diag.txt")
+        try? "launched at \(Date())\n".data(using: .utf8)?.write(to: markerURL)
+        NSLog("[Phase1cHook] Marker written to %@", markerURL.path)
+        // MARK: Debug auto-open project
+        if let projectPath = ProcessInfo.processInfo.environment["AMIRA_DEBUG_PROJECT_PATH"] {
+            let envMarker = homeDir.appendingPathComponent("Library/Logs/amira-diag-env.txt")
+            try? "AMIRA_DEBUG_PROJECT_PATH=\(projectPath)\n".data(using: .utf8)?.write(to: envMarker)
+            NSLog("[Phase1cHook] Auto-open project: %@", projectPath)
+            let url = URL(fileURLWithPath: projectPath)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                NotificationCenter.default.post(
+                    name: OperaShellSignals.openProjectFromURL,
+                    object: nil,
+                    userInfo: ["url": url]
+                )
+            }
+        }
         // MARK: Headless Full-Mix export hook
         // Triggered when the app is launched with:
         //   AMIRA_HEADLESS_FULLMIX_EXPORT=/absolute/path/to/output.wav

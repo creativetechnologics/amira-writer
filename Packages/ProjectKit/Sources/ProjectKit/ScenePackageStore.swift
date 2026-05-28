@@ -56,7 +56,13 @@ public enum ScenePackageStore {
     }
 
     public static func isScenePackageSceneJSON(_ url: URL) -> Bool {
-        url.lastPathComponent == sceneFileName
+        // New layout: Write/ directory with .md files
+        if url.pathExtension == "md" &&
+           url.deletingLastPathComponent().lastPathComponent == "Write" {
+            return true
+        }
+        // Legacy layout: Scenes/<slug>/scene.json
+        return url.lastPathComponent == sceneFileName
             && url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == scenesDirectoryName
     }
 
@@ -64,10 +70,55 @@ public enum ScenePackageStore {
         in projectURL: URL,
         fileManager fm: FileManager = .default
     ) -> [Descriptor] {
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let diagURL = homeDir.appendingPathComponent("Library/Logs/amira-diag-discover.txt")
+        func diag(_ msg: String) {
+            if let handle = try? FileHandle(forWritingTo: diagURL) {
+                handle.seekToEndOfFile()
+                try? handle.write(contentsOf: (msg + "\n").data(using: .utf8)!)
+                try? handle.close()
+            } else {
+                try? (msg + "\n").data(using: .utf8)?.write(to: diagURL)
+            }
+        }
+        diag("=== discover() called with projectURL=\(projectURL.path) ===")
         let scenesRoot = scenesRoot(in: projectURL)
         var descriptors: [Descriptor] = []
-        var seenSceneJSONPaths: Set<String> = []
+        var seenPaths: Set<String> = []
 
+        // 1) Try the new project-root scene-index.json first
+        let projectIndex = ProjectPaths(root: projectURL).root.appendingPathComponent("scene-index.json")
+        let indexExists = fm.fileExists(atPath: projectIndex.path)
+        diag("projectIndex=\(projectIndex.path) exists=\(indexExists)")
+        if indexExists,
+           let obj = jsonObject(at: projectIndex) as? [String: Any],
+           let entries = obj["scenes"] as? [[String: Any]] {
+            diag("project-root index found with \(entries.count) entries")
+            for (index, entry) in entries.enumerated() {
+                let id = uuid(entry["id"]) ?? UUID()
+                let title = string(entry["title"]) ?? "Untitled"
+                let order = int(entry["order"]) ?? index
+                let canon = title.lowercased()
+                let sceneDir = scenesRoot.appendingPathComponent(title, isDirectory: true)
+                let sceneJSON = ProjectPaths(root: projectURL).write.appendingPathComponent("\(title).md")
+                guard seenPaths.insert(sceneJSON.standardizedFileURL.path).inserted else { continue }
+                descriptors.append(Descriptor(
+                    id: id,
+                    title: title,
+                    canonicalTitle: canon,
+                    projectRelativePath: "Write/\(title).md",
+                    order: order,
+                    sceneDirectoryURL: sceneDir,
+                    sceneJSONURL: sceneJSON,
+                    fileSize: fileSizeOf(sceneJSON),
+                    updatedAt: string(entry["updatedAt"])
+                ))
+            }
+            return descriptors.sorted { $0.order < $1.order }
+        }
+        diag("project-root index NOT found or invalid, falling back to legacy Scenes/ scan")
+
+        // 2) Fallback: old Scenes/<slug>/scene.json + Scenes/scene-index.json
         if let indexObject = jsonObject(at: sceneIndexURL(in: projectURL)) as? [String: Any],
            let entries = indexObject["scenes"] as? [[String: Any]] {
             for (index, entry) in entries.enumerated() {
@@ -78,7 +129,7 @@ public enum ScenePackageStore {
                 ) else {
                     continue
                 }
-                guard seenSceneJSONPaths.insert(sceneJSONURL.standardizedFileURL.path).inserted else { continue }
+                guard seenPaths.insert(sceneJSONURL.standardizedFileURL.path).inserted else { continue }
                 let root = jsonObject(at: sceneJSONURL) as? [String: Any]
                 if let descriptor = makeDescriptor(
                     sceneJSONURL: sceneJSONURL,
@@ -91,6 +142,7 @@ public enum ScenePackageStore {
             }
         }
 
+        // 3) Legacy filesystem scan
         if let enumerator = fm.enumerator(
             at: scenesRoot,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -98,7 +150,7 @@ public enum ScenePackageStore {
         ) {
             while let fileURL = enumerator.nextObject() as? URL {
                 guard fileURL.lastPathComponent == sceneFileName else { continue }
-                guard seenSceneJSONPaths.insert(fileURL.standardizedFileURL.path).inserted else { continue }
+                guard seenPaths.insert(fileURL.standardizedFileURL.path).inserted else { continue }
                 let root = jsonObject(at: fileURL) as? [String: Any]
                 if let descriptor = makeDescriptor(
                     sceneJSONURL: fileURL,
@@ -111,10 +163,14 @@ public enum ScenePackageStore {
             }
         }
 
-        return descriptors.sorted { lhs, rhs in
+        let result = descriptors.sorted { lhs, rhs in
             if lhs.order != rhs.order { return lhs.order < rhs.order }
             return lhs.projectRelativePath.localizedStandardCompare(rhs.projectRelativePath) == .orderedAscending
         }
+        if result.isEmpty {
+            diag("discover() returning \(result.count) descriptors — NO SCENES FOUND")
+        }
+        return result
     }
 
     public static func sceneJSONURL(
@@ -259,6 +315,100 @@ public enum ScenePackageStore {
 
         let data = try JSONSerialization.data(withJSONObject: sceneRoot, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: sceneJSONURL, options: .atomic)
+    }
+
+    /// Read a scene from the new project-root layout (scene-index.json + Write/<title>.md).
+    /// Returns a JSON object compatible with `OWSSongDocument.fromJSON`.
+    public static func workspaceDocumentDataFromWriteMarkdown(
+        markdownURL: URL,
+        projectURL: URL
+    ) throws -> Data {
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let diagURL = homeDir.appendingPathComponent("Library/Logs/amira-diag-load.txt")
+        func diag(_ msg: String) {
+            if let handle = try? FileHandle(forWritingTo: diagURL) {
+                handle.seekToEndOfFile()
+                try? handle.write(contentsOf: (msg + "\n").data(using: .utf8)!)
+                try? handle.close()
+            }
+        }
+        let indexURL = ProjectPaths(root: projectURL).root.appendingPathComponent("scene-index.json")
+        diag("workspaceDocumentDataFromWriteMarkdown: markdown=\(markdownURL.path)")
+        diag("  indexURL=\(indexURL.path) exists=\(FileManager.default.fileExists(atPath: indexURL.path))")
+
+        guard let index = jsonObject(at: indexURL) as? [String: Any],
+              let entries = index["scenes"] as? [[String: Any]] else {
+            diag("  FAILED to read scene-index.json")
+            throw NSError(
+                domain: "ScenePackageStore",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "scene-index.json not found or invalid"]
+            )
+        }
+
+        let filename = markdownURL.lastPathComponent
+        let titleFromFile = (filename as NSString).deletingPathExtension
+        diag("  filename=\(filename) titleFromFile=\(titleFromFile)")
+        diag("  scene-index has \(entries.count) entries")
+
+        guard let entry = entries.first(where: { e in
+            if let t = e["title"] as? String {
+                let match = t == titleFromFile
+                if !match {
+                    diag("  title mismatch: \"\(t)\" != \"\(titleFromFile)\"")
+                }
+                return match
+            }
+            return false
+        }) else {
+            diag("  FAILED to find scene in index: \"\(titleFromFile)\"")
+            throw NSError(
+                domain: "ScenePackageStore",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "Scene not found in index: \(filename)"]
+            )
+        }
+
+        guard let sceneID = entry["id"] as? String else {
+            throw NSError(domain: "ScenePackageStore", code: 5, userInfo: nil)
+        }
+        let title = string(entry["title"]) ?? titleFromFile
+        let order = int(entry["order"]) ?? 0
+
+        let fileContent = (try? String(contentsOf: markdownURL, encoding: .utf8)) ?? ""
+        let lyrics = stripFrontmatter(from: fileContent)
+        let now = AmiraDateFormatter.iso8601Full.string(from: Date())
+
+        var versionDict: [String: Any] = [
+            "id": UUID().uuidString,
+            "label": "Current Draft",
+            "createdAt": now,
+            "updatedAt": now,
+            "lyrics": lyrics,
+            "saveType": "imported",
+            "isBookmarked": false,
+        ]
+
+        // Try to load playback from Score/<title>/score.playback.json
+        let scorePlaybackURL = ProjectPaths(root: projectURL).scorePlaybackJSON(title: titleFromFile)
+        if let playbackData = try? Data(contentsOf: scorePlaybackURL),
+           let playbackJSON = try? JSONSerialization.jsonObject(with: playbackData) {
+            versionDict["playback"] = playbackJSON
+            versionDict["playbackSnapshot"] = playbackJSON
+        }
+
+        let root: [String: Any] = [
+            "songID": sceneID,
+            "title": title,
+            "canonicalTitle": title.lowercased(),
+            "notes": "",
+            "updatedAt": now,
+            "activeVersionID": versionDict["id"] as? String ?? UUID().uuidString,
+            "versions": [versionDict],
+        ]
+        let result = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        diag("  SUCCESS: returned \(result.count) bytes, lyrics=\(lyrics.count) chars")
+        return result
     }
 
     public static func activeVersionDirectory(sceneJSONURL: URL) -> URL? {
@@ -483,6 +633,22 @@ public enum ScenePackageStore {
         default:
             return nil
         }
+    }
+
+    private static func fileSizeOf(_ url: URL) -> Int64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else { return 0 }
+        return (attrs[.size] as? Int64) ?? 0
+    }
+
+    /// Strip YAML frontmatter (delimited by `---`) from markdown content.
+    /// Returns the body only, or the full content if no frontmatter is found.
+    private static func stripFrontmatter(from content: String) -> String {
+        guard content.hasPrefix("---") else { return content }
+        let afterFirst = content.dropFirst(3).drop(while: { $0 == "\n" || $0 == "\r" })
+        guard let endRange = afterFirst.range(of: "\n---") else { return content }
+        let body = afterFirst[endRange.upperBound...]
+            .trimmingCharacters(in: .newlines)
+        return body
     }
 
     private static func slugify(_ raw: String) -> String {

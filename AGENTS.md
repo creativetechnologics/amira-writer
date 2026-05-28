@@ -1,5 +1,20 @@
 # Amira Writer Instructions
 
+## MANDATORY: Real App Bundle Deployment
+
+If you change Swift code, package resources, app metadata, or anything Gary will test in the GUI, you are not done until the runnable app bundle in `/Volumes/Storage VIII/Programming/!Applications/Amira Writer.app` has been rebuilt and verified.
+
+- Use exactly `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-app.sh`.
+- Do not stop after `swift build`, `swift test`, Xcode build products, or `.build/release/Opera`; those do not update the app Gary launches.
+- Do not copy, install, or deploy to `~/Applications`, `/Applications`, Gary's laptop, or Gary's MacBook. The server-side `!Applications` folder is the only deploy target; Syncthing handles device propagation.
+- After every deploy, verify the actual deployed app bundle and executable timestamps:
+  - `stat -f '%Sm %N' '/Volumes/Storage VIII/Programming/!Applications/Amira Writer.app'`
+  - `stat -f '%Sm %N' '/Volumes/Storage VIII/Programming/!Applications/Amira Writer.app/Contents/MacOS/Opera'`
+- The executable is named `Opera`, not `Amira Writer`. Checking the wrong binary path is a common false-positive.
+- If the timestamp did not change, the build did not deploy. Fix that before reporting success.
+- If Gary is testing on a laptop/MacBook, remember he is launching a synced copy from that device's `~/Programming/!Applications`; do not control or relaunch that app unless he explicitly asks.
+- Full runbook: `docs/runbooks/app-bundle-deployment.md`.
+
 ## IMPORTANT: Novotro Project Server is DEPRECATED
 
 **The Novotro Project Server is abandoned and will never be used again.**
@@ -49,10 +64,11 @@
   - `swift test -c release`
 - Bundle build:
   - `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-app.sh`
-- Remote deploy to Gary's user Applications folders:
+- App deploy:
   - `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-app.sh`
-  - This installs locally, then deploys to both `gary@Garys-Laptop.local:~/Applications/` and `gary@Garys-MacBook.local:~/Applications/` by default.
-  - Use `--local-only` to skip remote deployment when needed.
+  - This installs only to `/Volumes/Storage VIII/Programming/!Applications/Amira Writer.app`.
+  - Do not deploy to Gary's user Applications folders or remote machines; Syncthing propagates the `!Applications` bundle to device-local `~/Programming/!Applications`.
+  - Always verify the deployed bundle and `Contents/MacOS/Opera` timestamps before reporting success.
 
 ## App Control Permission Boundary
 

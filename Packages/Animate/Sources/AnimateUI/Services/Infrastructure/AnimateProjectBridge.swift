@@ -99,12 +99,28 @@ enum AnimateProjectBridge {
     private static func loadSavedScenesFromScenePackages(projectURL: URL) -> [String: AnimateSceneData] {
         var result: [String: AnimateSceneData] = [:]
         for descriptor in ScenePackageStore.discover(in: projectURL) {
-            let activeVersionDirectory = ScenePackageStore.activeVersionDirectory(sceneJSONURL: descriptor.sceneJSONURL)
-            let shots = activeVersionDirectory.map(loadScenePackageShots(in:)) ?? []
-            var sceneData = loadScenePackageAnimationData(
-                in: descriptor.sceneDirectoryURL,
-                fallbackPath: descriptor.projectRelativePath
-            ) ?? AnimateSceneData(
+            let isNewLayout = FileManager.default.fileExists(
+                atPath: descriptor.sceneDirectoryURL.appendingPathComponent("animation.json").path
+            )
+            let shots: [AnimationSceneShot]
+            let sceneData: AnimateSceneData?
+
+            if isNewLayout {
+                shots = loadNewLayoutShots(in: descriptor.sceneDirectoryURL)
+                sceneData = loadScenePackageAnimationData(
+                    in: descriptor.sceneDirectoryURL,
+                    fallbackPath: descriptor.projectRelativePath
+                )
+            } else {
+                let activeVersionDirectory = ScenePackageStore.activeVersionDirectory(sceneJSONURL: descriptor.sceneJSONURL)
+                shots = activeVersionDirectory.map(loadScenePackageShots(in:)) ?? []
+                sceneData = loadScenePackageAnimationData(
+                    in: descriptor.sceneDirectoryURL,
+                    fallbackPath: descriptor.projectRelativePath
+                )
+            }
+
+            var data = sceneData ?? AnimateSceneData(
                 owsSongPath: descriptor.projectRelativePath,
                 backgroundID: nil,
                 characterIDs: [],
@@ -112,16 +128,43 @@ enum AnimateProjectBridge {
                 tracks: [:],
                 shots: shots
             )
-            sceneData.owsSongPath = descriptor.projectRelativePath
+            data.owsSongPath = descriptor.projectRelativePath
             if !shots.isEmpty {
-                sceneData.shots = shots
+                data.shots = shots
             }
-            result[descriptor.projectRelativePath] = sceneData
+            result[descriptor.projectRelativePath] = data
         }
         if !result.isEmpty {
             debugLog("[Animate] loadSavedScenes: recovered \(result.count) canonical scene packages, total shots=\(result.values.reduce(0) { $0 + $1.shots.count })")
         }
         return result
+    }
+
+    private static func loadNewLayoutShots(in sceneDirectoryURL: URL) -> [AnimationSceneShot] {
+        let fileURL = sceneDirectoryURL.appendingPathComponent("shots.json")
+        guard let data = try? Data(contentsOf: fileURL),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawShots = root["shots"] as? [[String: Any]] else {
+            return []
+        }
+        return rawShots.enumerated().compactMap { index, raw in
+            let name = string(raw["name"])
+                ?? string(raw["label"])
+                ?? "Shot \(index + 1)"
+            let timing = raw["timing"] as? [String: Any]
+            let startFrame = int(timing?["startFrame"]) ?? (index * 120)
+            let endFrame = int(timing?["endFrame"]) ?? max(startFrame, ((index + 1) * 120) - 1)
+            let notes = string(raw["notes"])
+                ?? string(raw["direction"])
+                ?? string(raw["action"])
+                ?? ""
+            return AnimationSceneShot(
+                name: name,
+                startFrame: startFrame,
+                endFrame: endFrame,
+                notes: notes
+            )
+        }
     }
 
     private static func loadScenePackageAnimationData(

@@ -599,7 +599,16 @@ enum OWPProjectIO {
 
     nonisolated static func loadSongAsync(stub: SongStub) async throws -> OWSSongAsset {
         let data: Data
-        if ScenePackageStore.isScenePackageSceneJSON(stub.fileURL) {
+        let isScenePackage = ScenePackageStore.isScenePackageSceneJSON(stub.fileURL)
+        let isMarkdown = stub.fileURL.pathExtension.lowercased() == "md"
+        
+        if isMarkdown {
+            let projectURL = stub.fileURL.deletingLastPathComponent().deletingLastPathComponent()
+            data = try ScenePackageStore.workspaceDocumentDataFromWriteMarkdown(
+                markdownURL: stub.fileURL,
+                projectURL: projectURL
+            )
+        } else if isScenePackage {
             data = try ScenePackageStore.makeWorkspaceSceneDocumentData(sceneJSONURL: stub.fileURL)
         } else {
             data = try Data(contentsOf: stub.fileURL, options: .mappedIfSafe)
@@ -645,7 +654,14 @@ enum OWPProjectIO {
         for song in songs {
             let destination = packageURL.appendingPathComponent(song.relativePath)
             let playback = playbackByPath[song.relativePath]
-            if let sceneJSONURL = ScenePackageStore.sceneJSONURL(forProjectRelativePath: song.relativePath, in: packageURL) {
+
+            if song.relativePath.hasPrefix("Write/") {
+                try saveSceneToNewLayout(
+                    song: song,
+                    packageURL: packageURL,
+                    playback: playback
+                )
+            } else if let sceneJSONURL = ScenePackageStore.sceneJSONURL(forProjectRelativePath: song.relativePath, in: packageURL) {
                 try ScenePackageStore.patchScenePackageFromWorkspaceSceneDocumentObject(
                     sceneJSONURL: sceneJSONURL,
                     sceneDocumentRoot: workspaceSceneDocumentObject(from: song.document, playback: playback)
@@ -656,6 +672,53 @@ enum OWPProjectIO {
         }
 
         writeCLAUDEmd(to: packageURL)
+    }
+
+    private static func saveSceneToNewLayout(
+        song: OWSSongAsset,
+        packageURL: URL,
+        playback: OWSPlaybackSnapshot?
+    ) throws {
+        guard let activeVersion = song.document.activeVersion() else { return }
+
+        // 1) Write lyrics to Write/<title>.md
+        let markdownURL = packageURL.appendingPathComponent(song.relativePath)
+        let mdDir = markdownURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: mdDir, withIntermediateDirectories: true)
+
+        let body = activeVersion.lyrics
+        let content = """
+        ---
+        scene_id: \"\(song.document.songID.uuidString)\"
+        title: \"\(song.document.title)\"
+        order: \(getSceneOrder(for: song, in: packageURL))
+        ---
+
+        \(body)
+        """
+        try Data(content.utf8).write(to: markdownURL, options: .atomic)
+
+        // 2) Write playback to Score/<title>/score.playback.json
+        let title = song.document.title
+        if let playback {
+            let encoder = JSONCoders.makeEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(playback)
+            let scoreDir = ProjectPaths(root: packageURL).scorePlaybackJSON(title: title)
+            let parent = scoreDir.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+            try data.write(to: scoreDir, options: .atomic)
+        }
+    }
+
+    private static func getSceneOrder(for song: OWSSongAsset, in projectURL: URL) -> Int {
+        let indexPath = projectURL.appendingPathComponent("scene-index.json")
+        guard let data = try? Data(contentsOf: indexPath),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = obj["scenes"] as? [[String: Any]],
+              let entry = entries.first(where: { ($0["id"] as? String) == song.document.songID.uuidString }),
+              let order = entry["order"] as? Int else { return 0 }
+        return order
     }
 
     private static func workspaceSceneDocumentObject(from document: OWSSongDocument, playback: OWSPlaybackSnapshot?) -> [String: Any] {

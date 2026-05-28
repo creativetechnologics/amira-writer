@@ -50,6 +50,11 @@ public struct ProjectPaths: Sendable {
         root.appendingPathComponent("Write", isDirectory: true)
     }
 
+    /// `<project>/Score/`
+    public var score: URL {
+        root.appendingPathComponent("Score", isDirectory: true)
+    }
+
     /// `<project>/Mix/`
     public var mix: URL {
         root.appendingPathComponent("Mix", isDirectory: true)
@@ -83,6 +88,41 @@ public struct ProjectPaths: Sendable {
     /// `<project>/_Archive/`  (retired/archived data)
     public var archive: URL {
         root.appendingPathComponent("_Archive", isDirectory: true)
+    }
+
+    /// `<project>/Write/_versions/`  (versioned script snapshots)
+    public var writeVersions: URL {
+        write.appendingPathComponent("_versions", isDirectory: true)
+    }
+
+    /// `<project>/Write/_versions/<title>/`
+    public func writeSceneVersions(title: String) -> URL {
+        writeVersions.appendingPathComponent(title, isDirectory: true)
+    }
+
+    /// `<project>/Score/<title>/`
+    public func scoreSceneDirectory(title: String) -> URL {
+        score.appendingPathComponent(title, isDirectory: true)
+    }
+
+    /// `<project>/Score/<title>/score.playback.json`
+    public func scorePlaybackJSON(title: String) -> URL {
+        scoreSceneDirectory(title: title).appendingPathComponent("score.playback.json")
+    }
+
+    /// `<project>/Scenes/<title>/`
+    public func scenesSceneDirectory(title: String) -> URL {
+        scenes.appendingPathComponent(title, isDirectory: true)
+    }
+
+    /// `<project>/Scenes/<title>/animation.json`
+    public func scenesAnimationJSON(title: String) -> URL {
+        scenesSceneDirectory(title: title).appendingPathComponent("animation.json")
+    }
+
+    /// `<project>/Scenes/<title>/shots.json`
+    public func scenesShotsJSON(title: String) -> URL {
+        scenesSceneDirectory(title: title).appendingPathComponent("shots.json")
     }
 
     /// `<project>/SoundFonts/`

@@ -12,6 +12,7 @@ public final class WriteWorkspaceController: ObservableObject {
     @Published public private(set) var saveIndicator: SaveIndicatorState = .idle
     @Published public private(set) var activeProjectPath: String?
     @Published public private(set) var selectedScenePath: String?
+    @ObservationIgnored private var obsidianSyncService: WriteObsidianSyncService?
 
     public init() {
         activeProjectPath = store.projectURL?.standardizedFileURL.path
@@ -25,10 +26,24 @@ public final class WriteWorkspaceController: ObservableObject {
 
     public func suspendBackgroundWork() {
         store.suspendBackgroundWork()
+        obsidianSyncService?.stop()
     }
 
     public func resumeBackgroundWork() {
         store.resumeBackgroundWork()
+        if obsidianSyncService == nil {
+            ensureObsidianSyncService()
+        }
+        obsidianSyncService?.start()
+    }
+
+    private func ensureObsidianSyncService() {
+        guard let projectURL = store.projectURL?.standardizedFileURL else { return }
+        let service = WriteObsidianSyncService(projectURL: projectURL)
+        obsidianSyncService = service
+        store.onDidSave = { [weak self] in
+            self?.obsidianSyncService?.syncNow()
+        }
     }
 
     public func isProjectDisplayReady(_ projectURL: URL) -> Bool {

@@ -406,7 +406,16 @@ enum OWPProjectIO {
 
     nonisolated static func loadSongAsync(stub: SongStub) async throws -> OWSSongAsset {
         let data: Data
-        if ScenePackageStore.isScenePackageSceneJSON(stub.fileURL) {
+        let isScenePackage = ScenePackageStore.isScenePackageSceneJSON(stub.fileURL)
+        let isMarkdown = stub.fileURL.pathExtension.lowercased() == "md"
+
+        if isMarkdown {
+            let projectURL = stub.fileURL.deletingLastPathComponent().deletingLastPathComponent()
+            data = try ScenePackageStore.workspaceDocumentDataFromWriteMarkdown(
+                markdownURL: stub.fileURL,
+                projectURL: projectURL
+            )
+        } else if isScenePackage {
             data = try ScenePackageStore.makeWorkspaceSceneDocumentData(sceneJSONURL: stub.fileURL)
         } else {
             data = try Data(contentsOf: stub.fileURL, options: .mappedIfSafe)
@@ -750,6 +759,9 @@ final class ScriptStore {
     // MARK: - Load Project
 
     func loadProject(url: URL) async {
+        let diagURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/amira-diag-loadproject.txt")
+        try? "loadProject START: \(url.path)\n".data(using: .utf8)?.write(to: diagURL)
+        
         AmiraLogger.log(.write, "loadProject START url=\(url.path)")
         guard !isLoadingProject else {
             AmiraLogger.log(.write, "loadProject SKIPPED: already loading")
@@ -791,6 +803,8 @@ final class ScriptStore {
                 stubs = result.stubs
             }
 
+            try? "After loading: stubs=\(stubs.count) paths=\(stubs.map { $0.relativePath }.prefix(3).joined(separator: ", "))\n".data(using: .utf8)?.write(to: diagURL)
+
             let effectiveProjectURL = loaded?.workingProjectURL ?? url
             let previousHistoryState = projectHistoryStore.loadState(for: url)
             let currentSnapshot = trackedFileSnapshots(for: effectiveProjectURL, stubs: stubs)
@@ -801,6 +815,7 @@ final class ScriptStore {
                     to: currentSnapshot
                 )
             let externallyChangedPathSet = Set(externallyChangedPaths)
+            AmiraLogger.log(.write, "loadProject: stubs=\(stubs.count) externallyChanged=\(externallyChangedPaths.count) hydratedScenePaths=\(loaded?.hydratedScenePaths.count ?? 0)")
 
             self.projectURL = url
             self.workingProjectURL = effectiveProjectURL
@@ -874,8 +889,12 @@ final class ScriptStore {
                 primaryPath: songAssets.first?.relativePath,
                 externallyChangedPaths: externallyChangedPaths
             )
+            
+            let stubByPath = Dictionary(uniqueKeysWithValues: stubs.map { ($0.relativePath, $0) })
+            
             for path in eagerHydrationPaths {
-                guard let hydratedAsset = await hydrateScene(path: path) else { continue }
+                guard let stub = stubByPath[path] else { continue }
+                guard let hydratedAsset = await hydrateScene(path: path, stub: stub) else { continue }
                 if externallyChangedPathSet.contains(path) {
                     var promotedAsset = hydratedAsset
                     _ = preferMostRecentlyUpdatedVersionIfNeeded(in: &promotedAsset.document)
@@ -923,6 +942,8 @@ final class ScriptStore {
     }
 
     // MARK: - Save
+
+    var onDidSave: (() -> Void)?
 
     func save() {
         guard let url = fileProjectURL, !isSaving else { return }
@@ -1020,6 +1041,8 @@ final class ScriptStore {
                     } else {
                         self.persistProjectHistoryState()
                     }
+
+                    self.onDidSave?()
                 }
             }
         }
@@ -2570,10 +2593,8 @@ final class ScriptStore {
     }
 
     private func hydrateScene(path: String) async -> OWSSongAsset? {
-        await hydrateScene(
-            path: path,
-            stub: songStubs.first(where: { $0.relativePath == path })
-        )
+        let stub = songStubs.first(where: { $0.relativePath == path })
+        return await hydrateScene(path: path, stub: stub)
     }
 
     private func hydrateScene(
