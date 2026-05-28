@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import ProjectKit
 
 @MainActor
 final class WriteObsidianSyncService {
@@ -6,6 +8,7 @@ final class WriteObsidianSyncService {
     let destinationURL: URL
     private var isActive = false
     private var workItem: DispatchWorkItem?
+    private var activeObserver: NSObjectProtocol?
 
     static let syncInterval: TimeInterval = 5
 
@@ -13,20 +16,76 @@ final class WriteObsidianSyncService {
         let resolvedProject = projectURL.resolvingSymlinksInPath()
         let projectName = resolvedProject.lastPathComponent
         let writeURL = resolvedProject.appendingPathComponent("Write", isDirectory: true)
+
+        guard FileManager.default.fileExists(atPath: writeURL.path) else {
+            AmiraLogger.log(.write, "Obsidian sync: Write/ directory not found at \(writeURL.path)")
+            return nil
+        }
+
+        guard let obsidianBase = Self.findObsidianVaultWriteDir(for: resolvedProject) else {
+            AmiraLogger.log(.write, "Obsidian sync: no matching Obsidian vault found for project '\(projectName)'")
+            return nil
+        }
+
+        self.sourceURL = writeURL
+        self.destinationURL = obsidianBase
+        AmiraLogger.log(.write, "Obsidian sync: \(writeURL.path) ↔ \(obsidianBase.path)")
+    }
+
+    /// Search for an Obsidian iCloud vault whose folder name matches the project name.
+    /// Tries exact match first, then prefix (before first " - "), then falls back to
+    /// any vault whose name is a prefix of the project name.
+    private static func findObsidianVaultWriteDir(for projectURL: URL) -> URL? {
+        let projectName = projectURL.lastPathComponent
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let obsidianBase = home
+        let obsidianDocs = home
             .appendingPathComponent("Library")
             .appendingPathComponent("Mobile Documents")
             .appendingPathComponent("iCloud~md~obsidian")
             .appendingPathComponent("Documents")
-            .appendingPathComponent(projectName)
-            .appendingPathComponent("Write")
 
-        guard FileManager.default.fileExists(atPath: writeURL.path),
-              FileManager.default.fileExists(atPath: obsidianBase.path) else { return nil }
+        let namesToTry: [String] = {
+            var seen = Set<String>()
+            return [
+                projectName,
+                projectName.components(separatedBy: " - ").first,
+            ].compactMap { name in
+                guard let name, !seen.contains(name) else { return nil }
+                seen.insert(name)
+                return name
+            }
+        }()
 
-        self.sourceURL = writeURL
-        self.destinationURL = obsidianBase
+        // Try exact name matches first
+        for name in namesToTry {
+            let candidate = obsidianDocs
+                .appendingPathComponent(name)
+                .appendingPathComponent("Write")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+
+        // Fallback: scan all vaults for one whose name is a prefix of the project name
+        guard let vaults = try? FileManager.default.contentsOfDirectory(
+            at: obsidianDocs,
+            includingPropertiesForKeys: nil,
+            options: .skipsHiddenFiles
+        ) else { return nil }
+
+        let projectLower = projectName.lowercased()
+        for vault in vaults {
+            let vaultName = vault.lastPathComponent
+            if vaultName.lowercased() == projectLower { continue } // already tried exact
+            if projectLower.hasPrefix(vaultName.lowercased()) {
+                let candidate = vault.appendingPathComponent("Write")
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+        }
+
+        return nil
     }
 
     /// Testing initializer — inject arbitrary source/destination URLs directly.
@@ -39,12 +98,32 @@ final class WriteObsidianSyncService {
         guard !isActive else { return }
         isActive = true
         scheduleSync()
+        addActiveObserver()
     }
 
     func stop() {
         isActive = false
         workItem?.cancel()
         workItem = nil
+        removeActiveObserver()
+    }
+
+    private func addActiveObserver() {
+        removeActiveObserver()
+        activeObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.syncNow()
+        }
+    }
+
+    private func removeActiveObserver() {
+        if let observer = activeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            activeObserver = nil
+        }
     }
 
     func syncNow() {
@@ -138,8 +217,13 @@ final class WriteObsidianSyncService {
     }
 
     private func copyFile(from source: URL, to destination: URL) {
-        try? FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(at: destination)
-        try? FileManager.default.copyItem(at: source, to: destination)
+        let fm = FileManager.default
+        try? fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? fm.removeItem(at: destination)
+        do {
+            try fm.copyItem(at: source, to: destination)
+        } catch {
+            AmiraLogger.log(.write, "Obsidian sync copy failed: \(error.localizedDescription) from=\(source.lastPathComponent) to=\(destination.path)")
+        }
     }
 }

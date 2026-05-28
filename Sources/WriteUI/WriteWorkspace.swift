@@ -31,18 +31,17 @@ public final class WriteWorkspaceController: ObservableObject {
 
     public func resumeBackgroundWork() {
         store.resumeBackgroundWork()
-        if obsidianSyncService == nil {
-            ensureObsidianSyncService()
-        }
+        ensureObsidianSyncService()
         obsidianSyncService?.start()
     }
 
     private func ensureObsidianSyncService() {
         guard let projectURL = store.projectURL?.standardizedFileURL else { return }
-        let service = WriteObsidianSyncService(projectURL: projectURL)
-        obsidianSyncService = service
-        store.onDidSave = { [weak self] in
-            self?.obsidianSyncService?.syncNow()
+        if let service = WriteObsidianSyncService(projectURL: projectURL) {
+            obsidianSyncService = service
+            store.onDidSave = { [weak self] in
+                self?.obsidianSyncService?.syncNow()
+            }
         }
     }
 
@@ -71,7 +70,7 @@ public final class WriteWorkspaceController: ObservableObject {
            store.projectURL?.standardizedFileURL.path == normalizedPath,
            store.presentedLoadError == nil {
             activeProjectPath = normalizedPath
-            store.resumeBackgroundWork()
+            resumeBackgroundWork()
             return nil
         }
 
@@ -87,6 +86,7 @@ public final class WriteWorkspaceController: ObservableObject {
            store.presentedLoadError == nil {
             loadedProjectPath = normalizedPath
             activeProjectPath = normalizedPath
+            resumeBackgroundWork()
             return nil
         }
 
