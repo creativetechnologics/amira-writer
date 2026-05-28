@@ -56,13 +56,15 @@ If you change Swift code, package resources, app metadata, or anything Gary will
 
 ## Build And Deploy
 
+**CRITICAL — Bash Timeouts:** All build, test, and deploy commands must use `timeout=600000` (10 minutes) on bash tool calls. The Swift compiler and code-signing can take 2-5 minutes for a clean build. Commands that time out before completion waste cycles and stall the session.
+
 - Fast local loop (preferred for day-to-day iteration):
   - `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-opera-dev.sh`
-- Local build:
+- Local build (always use timeout=600000):
   - `swift build -c release --product Opera`
-- Local tests:
+- Local tests (always use timeout=600000):
   - `swift test -c release`
-- Bundle build:
+- Bundle build (always use timeout=600000):
   - `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-app.sh`
 - App deploy:
   - `/Volumes/Storage VIII/Programming/Amira Writer/Scripts/build-app.sh`
