@@ -1,5 +1,7 @@
+import SwiftUI
 import XCTest
 @testable import WriteUI
+import ProjectKit
 
 @available(macOS 26.0, *)
 final class ProjectSettingsTests: XCTestCase {

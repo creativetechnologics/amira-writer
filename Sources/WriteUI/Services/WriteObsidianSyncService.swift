@@ -2,16 +2,17 @@ import Foundation
 
 @MainActor
 final class WriteObsidianSyncService {
-    private let sourceURL: URL
-    private let destinationURL: URL
+    let sourceURL: URL
+    let destinationURL: URL
     private var isActive = false
     private var workItem: DispatchWorkItem?
 
     static let syncInterval: TimeInterval = 5
 
     init?(projectURL: URL) {
-        let projectName = projectURL.lastPathComponent
-        let writeURL = projectURL.appendingPathComponent("Write", isDirectory: true)
+        let resolvedProject = projectURL.resolvingSymlinksInPath()
+        let projectName = resolvedProject.lastPathComponent
+        let writeURL = resolvedProject.appendingPathComponent("Write", isDirectory: true)
         let home = FileManager.default.homeDirectoryForCurrentUser
         let obsidianBase = home
             .appendingPathComponent("Library")
@@ -26,6 +27,12 @@ final class WriteObsidianSyncService {
 
         self.sourceURL = writeURL
         self.destinationURL = obsidianBase
+    }
+
+    /// Testing initializer — inject arbitrary source/destination URLs directly.
+    init(sourceURL: URL, destinationURL: URL) {
+        self.sourceURL = sourceURL.resolvingSymlinksInPath()
+        self.destinationURL = destinationURL.resolvingSymlinksInPath()
     }
 
     func start() {
@@ -87,6 +94,11 @@ final class WriteObsidianSyncService {
         }
     }
 
+    /// Exposed for testing only.
+    func enumerateForTesting(url: URL) -> [(relPath: String, date: Date)] {
+        enumerateFiles(at: url).map { ($0.relPath, $0.date) }
+    }
+
     private struct FileEntry {
         let url: URL
         let relPath: String
@@ -111,9 +123,18 @@ final class WriteObsidianSyncService {
     }
 
     private func relPath(from base: URL, to url: URL) -> String {
-        var basePath = base.path
+        var basePath = base.resolvingSymlinksInPath().path
         if !basePath.hasSuffix("/") { basePath += "/" }
-        return String(url.path.dropFirst(basePath.count))
+        var filePath = url.resolvingSymlinksInPath().path
+        if filePath.hasPrefix(basePath) {
+            return String(filePath.dropFirst(basePath.count))
+        }
+        // Fallback: try without symlink resolution if matching failed
+        filePath = url.path
+        if filePath.hasPrefix(basePath) {
+            return String(filePath.dropFirst(basePath.count))
+        }
+        return url.lastPathComponent
     }
 
     private func copyFile(from source: URL, to destination: URL) {
